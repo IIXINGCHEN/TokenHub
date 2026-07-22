@@ -4,7 +4,7 @@ import { findProvider, modelCapabilitySummary, modelPriceSummary, modelRouteDefa
 import { formatTime, modelToForm, routeStrategyLabel } from "../domain/formatting";
 import { providerTypeLabel, resourceTypeLabel } from "../domain/labels";
 import { tx } from "../i18n/runtime";
-import { adminDelete, adminMutate, createModelRoutes, modelPayload, providerPayload, providerResourcePayload, providerResourceToForm, providerResourceUpdatePayload, providerUpdatePayload, routePayload } from "./payloads";
+import { adminDelete, adminMutate, createModelRoutes, modelPayload, providerPayload, providerResourcePayload, providerResourceToForm, providerResourceUpdatePayload, providerUpdatePayload, routePayload, testProviderAvailability } from "./payloads";
 import { ModelNameCell, ModelRouteProviders, providerTypeOptions, StatusPill } from "../shared/ui";
 
 export function providerConfig(): ResourceConfig<Provider> {
@@ -48,8 +48,8 @@ export function providerConfig(): ResourceConfig<Provider> {
       },
       {
         label: "测试",
-        title: "检测 Provider 可用性",
-        run: (ctx, item) => adminMutate(ctx, `/api/admin/providers/${item.id}/test`, "POST", {}),
+        title: "检测 Provider 可用性；Codex 订阅使用 Luna 中等推理标准速度真实测试",
+        run: testProviderAvailability,
         doneMessage: (item) => `${item.name} 检测完成`,
       },
     ],

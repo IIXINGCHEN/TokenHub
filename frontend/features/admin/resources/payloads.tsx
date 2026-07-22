@@ -607,6 +607,29 @@ export async function adminMutate(ctx: ApiContext, path: string, method: "POST" 
   }
 }
 
+export async function testProviderAvailability(ctx: ApiContext, provider: { id: string }) {
+  const resourcesResp = await adminFetch(ctx, "/api/admin/provider-resources");
+  if (!resourcesResp.ok) throw new Error(await readAdminError(resourcesResp, tx("读取 Provider 账号资源")));
+  const payload = (await resourcesResp.json()) as { data?: ProviderResource[] };
+  const subscription = (payload.data ?? []).find((resource) =>
+    resource.provider_id === provider.id && resource.resource_type === "openai_subscription" && resource.status === "active",
+  );
+  if (!subscription) {
+    await adminMutate(ctx, `/api/admin/providers/${provider.id}/test`, "POST", {});
+    return;
+  }
+  const testResp = await adminFetch(ctx, `/api/admin/provider-resources/${subscription.id}/test`, {
+    method: "POST",
+    body: JSON.stringify({
+      model: "gpt-5.6-luna",
+      reasoning_effort: "medium",
+      speed: "standard",
+      prompt: "请用一句话确认 Codex 连接正常。",
+    }),
+  });
+  if (!testResp.ok) throw new Error(await readAdminError(testResp, tx("Codex Luna 中等推理标准测试")));
+}
+
 export async function adminDelete(ctx: ApiContext, path: string) {
   const resp = await adminFetch(ctx, path, { method: "DELETE" });
   if (!resp.ok && resp.status !== 204) throw new Error(await readAdminError(resp, operationLabel("DELETE", path)));

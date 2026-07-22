@@ -29,6 +29,7 @@ import (
 type Server struct {
 	store                    Store
 	adapters                 map[string]ProviderAdapter
+	codexSubscription        CodexSubscriptionAdapter
 	mux                      *http.ServeMux
 	config                   Config
 	providerAccountOAuthFlow *providerAccountOAuthSessionStore
@@ -41,6 +42,10 @@ func New(store Store) *Server {
 func NewWithConfig(store Store, config Config) *Server {
 	client := &http.Client{Timeout: 120 * time.Second}
 	openai := OpenAICompatibleAdapter{Client: client}
+	codexSubscription := CodexSubscriptionAdapter{
+		Client:             client,
+		RefreshCredentials: store.RefreshProviderResourceCredentials,
+	}
 	s := &Server{
 		store: store,
 		adapters: map[string]ProviderAdapter{
@@ -54,6 +59,7 @@ func NewWithConfig(store Store, config Config) *Server {
 			ProviderAnthropic:        AnthropicAdapter{Client: client},
 			ProviderGemini:           GeminiAdapter{Client: client},
 		},
+		codexSubscription:        codexSubscription,
 		mux:                      http.NewServeMux(),
 		config:                   config,
 		providerAccountOAuthFlow: newProviderAccountOAuthSessionStore(),
@@ -366,6 +372,10 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if req.Stream {
+		s.handleStreamingResponses(w, r, routed, req)
+		return
+	}
 	resp, route, usage, attempts, err := s.executeRoutedResponses(r, routed, req)
 	if err != nil {
 		s.finishFailedRoutedCall(r, routed, attempts, err)
@@ -463,7 +473,7 @@ func (s *Server) executeRoutedResponses(r *http.Request, routed RoutedCall, req 
 		if err != nil {
 			return nil, Usage{}, err
 		}
-		adapter, err := s.adapterForRoute(route)
+		adapter, err := s.responsesAdapterForRoute(route)
 		if err != nil {
 			return nil, Usage{}, err
 		}
@@ -623,6 +633,13 @@ func (s *Server) adapterForRoute(route RouteSelection) (ProviderAdapter, error) 
 		return nil, NewHTTPError(503, "provider_adapter_missing", "Provider adapter is not registered")
 	}
 	return adapter, nil
+}
+
+func (s *Server) responsesAdapterForRoute(route RouteSelection) (ProviderAdapter, error) {
+	if route.Resource != nil && isOpenAIAccountResource(route.Resource.ResourceType) {
+		return s.codexSubscription, nil
+	}
+	return s.adapterForRoute(route)
 }
 
 func (s *Server) planRouteOrder(call CallContext, routes []RouteSelection) []RouteSelection {
@@ -2987,8 +3004,22 @@ func (s *Server) handleAdminProviderResourceNested(w http.ResponseWriter, r *htt
 		}
 		return
 	}
-	if len(parts) != 2 || (parts[1] != "health" && parts[1] != "test") {
+	if len(parts) != 2 || (parts[1] != "health" && parts[1] != "test" && parts[1] != "refresh-token" && parts[1] != "quota") {
 		writeError(w, r, NewHTTPError(404, "not_found", "Not found"))
+		return
+	}
+	if parts[1] == "quota" {
+		if r.Method != http.MethodGet {
+			writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+			return
+		}
+		quota, err := s.queryOpenAIAccountQuota(r.Context(), parts[0])
+		if err != nil {
+			writeError(w, r, err)
+			return
+		}
+		s.recordAdminAudit(r, user, "query_quota", "provider_resource", parts[0], "", quota)
+		writeJSON(w, http.StatusOK, quota)
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -2996,6 +3027,28 @@ func (s *Server) handleAdminProviderResourceNested(w http.ResponseWriter, r *htt
 		return
 	}
 	if parts[1] == "test" {
+		if resource, ok := s.providerResourceByID(parts[0]); ok && isOpenAIAccountResource(resource.ResourceType) {
+			var req codexSubscriptionTestRequest
+			if err := decodeJSON(r, &req); err != nil {
+				writeError(w, r, NewHTTPError(400, "invalid_request", err.Error()))
+				return
+			}
+			result, err := s.testCodexSubscription(r.Context(), parts[0], req)
+			if err != nil {
+				writeError(w, r, err)
+				return
+			}
+			s.recordAdminAudit(r, user, "test", "provider_resource", parts[0], "", map[string]any{
+				"healthy":          true,
+				"model":            result.Model,
+				"reasoning_effort": result.ReasoningEffort,
+				"speed":            result.Speed,
+				"latency_ms":       result.LatencyMS,
+				"usage":            result.Usage,
+			})
+			writeJSON(w, http.StatusOK, result)
+			return
+		}
 		resource, err := s.store.TestProviderResource(parts[0])
 		if err != nil {
 			writeError(w, r, err)

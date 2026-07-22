@@ -745,6 +745,7 @@ export function AdminConsole() {
             <CrudView
               config={activeConfig}
               data={data}
+              api={api}
               items={pagedItems}
               monitorItems={filteredItems}
               totalItems={filteredItems.length}
@@ -816,6 +817,7 @@ export function AdminConsole() {
           catalog={data.providerCatalog}
           standardModels={data.models}
           routes={data.routes}
+          resources={data.providerResources.filter((resource) => resource.provider_id === providerEditItem.id)}
           loading={loading}
           onClose={() => setProviderEditItem(null)}
           onSaved={async () => {

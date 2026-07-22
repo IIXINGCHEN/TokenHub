@@ -3198,6 +3198,7 @@ func TestOpenAIProviderAccountOAuthGenerateAuthURLAndCallback(t *testing.T) {
 	}
 	if authURL.Host != "auth.openai.com" ||
 		authURL.Query().Get("client_id") != openAIAccountOAuthClientID ||
+		authURL.Query().Get("redirect_uri") != openAIAccountOAuthRedirectURI ||
 		authURL.Query().Get("code_challenge_method") != "S256" ||
 		authURL.Query().Get("codex_cli_simplified_flow") != "true" ||
 		authURL.Query().Get("state") != payload.State {
@@ -3238,7 +3239,7 @@ func TestOpenAIProviderAccountOAuthExchangeCode(t *testing.T) {
 		if r.FormValue("grant_type") != "authorization_code" ||
 			r.FormValue("client_id") != openAIAccountOAuthClientID ||
 			r.FormValue("code") != "oauth-code" ||
-			!strings.Contains(r.FormValue("redirect_uri"), "/api/admin/provider-account-oauth/openai/oauth/callback") ||
+			r.FormValue("redirect_uri") != openAIAccountOAuthRedirectURI ||
 			r.FormValue("code_verifier") == "" {
 			t.Fatalf("unexpected token form: %s", r.Form.Encode())
 		}

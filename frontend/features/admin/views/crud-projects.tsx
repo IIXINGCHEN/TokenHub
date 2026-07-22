@@ -1,13 +1,13 @@
 import { Plus, Search, Trash2, UserRoundCheck, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { type AdminResource, type AppData, type Project, type Provider, type ProviderResource, type ReportExportHistoryItem, type RequestLog, type ResourceAction, type ResourceConfig, type ToolbarAction } from "../core/types";
+import { type AdminResource, type ApiContext, type AppData, type Project, type Provider, type ProviderResource, type ReportExportHistoryItem, type RequestLog, type ResourceAction, type ResourceConfig, type ToolbarAction } from "../core/types";
 import { notificationChannelLabel } from "../domain/catalog";
 import { projectMembersForProject, providerRoutesFor, stringifyValue } from "../domain/entities";
 import { activeRouteCount, formatNumber, formatTime } from "../domain/formatting";
 import { approvalTriggerLabel, enumValueLabel, providerTypeLabel, reportDatasetLabel, roleLabel } from "../domain/labels";
 import { countWithUnit, languageLocale, tx } from "../i18n/runtime";
 import { reportExportDefinitions } from "../resources/governance-config";
-import { pendingProjectQuotaApproval, projectQuotaIssue, projectQuotaPolicy, projectQuotaValues, requestProjectQuotaIncrease, saveProjectQuota } from "../resources/payloads";
+import { adminFetch, pendingProjectQuotaApproval, projectQuotaIssue, projectQuotaPolicy, projectQuotaValues, readAdminError, requestProjectQuotaIncrease, saveProjectQuota } from "../resources/payloads";
 import { DataSection, SimpleTable, StatusPill } from "../shared/ui";
 import { ModelCategoryTabs, NotificationChannelTabs } from "./model-catalog";
 import { latencyDisplay, requestLogFailed } from "./overview";
@@ -16,6 +16,7 @@ import { APIKeyFlowHint, EntityTable, PaginationControls, type PaginationState, 
 export function CrudView<T>({
   config,
   data,
+  api,
   items,
   monitorItems = items,
   totalItems,
@@ -36,6 +37,7 @@ export function CrudView<T>({
 }: {
   config: ResourceConfig<T>;
   data: AppData;
+  api?: ApiContext;
   items: T[];
   monitorItems?: T[];
   totalItems: number;
@@ -95,7 +97,7 @@ export function CrudView<T>({
           onChange={onCategoryFilter}
         />
       ) : null}
-      {config.view === "providers" ? <ProviderAvailabilityMonitor data={data} providers={monitorItems as Provider[]} /> : null}
+      {config.view === "providers" ? <ProviderAvailabilityMonitor api={api} data={data} providers={monitorItems as Provider[]} /> : null}
       {config.view === "notification-channels" ? (
         <NotificationChannelTabs
           data={data}
@@ -192,8 +194,69 @@ export type ProviderMonitorRow = {
   trend: ProviderTrendTone[];
 };
 
-export function ProviderAvailabilityMonitor({ data, providers }: { data: AppData; providers: Provider[] }) {
+type OpenAIQuotaWindow = {
+  used_percent: number;
+  reset_after_seconds: number;
+  reset_at: number;
+};
+
+type OpenAIAccountQuota = {
+  plan_type?: string;
+  rate_limit?: {
+    allowed: boolean;
+    limit_reached: boolean;
+    primary_window?: OpenAIQuotaWindow;
+  };
+};
+
+type ProviderQuotaState = {
+  loading?: boolean;
+  quota?: OpenAIAccountQuota;
+  error?: string;
+};
+
+export function ProviderAvailabilityMonitor({ api, data, providers }: { api?: ApiContext; data: AppData; providers: Provider[] }) {
+  const [quotaStates, setQuotaStates] = useState<Record<string, ProviderQuotaState>>({});
+  const subscriptionResources = data.providerResources.filter((resource) =>
+    providers.some((provider) => provider.id === resource.provider_id) && resource.resource_type === "openai_subscription",
+  );
+  const subscriptionResourceKey = subscriptionResources.map((resource) => `${resource.id}:${resource.updated_at ?? ""}`).sort().join("|");
+
+  useEffect(() => {
+    if (!api || subscriptionResources.length === 0) return;
+    let cancelled = false;
+    setQuotaStates((current) => {
+      const next = { ...current };
+      for (const resource of subscriptionResources) next[resource.id] = { ...next[resource.id], loading: true, error: "" };
+      return next;
+    });
+    for (const resource of subscriptionResources) {
+      adminFetch(api, `/api/admin/provider-resources/${resource.id}/quota`)
+        .then(async (resp) => {
+          if (!resp.ok) throw new Error(await readAdminError(resp, tx("查询 Codex 套餐")));
+          return (await resp.json()) as OpenAIAccountQuota;
+        })
+        .then((quota) => {
+          if (cancelled) return;
+          setQuotaStates((current) => ({ ...current, [resource.id]: { quota } }));
+        })
+        .catch((error) => {
+          if (cancelled) return;
+          setQuotaStates((current) => ({
+            ...current,
+            [resource.id]: { error: error instanceof Error ? error.message : tx("套餐查询失败") },
+          }));
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+    // Resource IDs and updated_at form the refresh contract; provider data arrays are re-created on every load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api?.baseURL, api?.adminToken, subscriptionResourceKey]);
+
   if (providers.length === 0) return null;
+
   const rows = providerMonitorRows(data, providers);
   const summary = providerMonitorSummary(rows);
   return (
@@ -217,6 +280,7 @@ export function ProviderAvailabilityMonitor({ data, providers }: { data: AppData
               <th>{tx("服务商 / 通道")}</th>
               <th>{tx("综合状态")}</th>
               <th>{tx("基础监控 · L1/L2")}</th>
+              <th>{tx("Codex 套餐")}</th>
               <th>{tx("真实监控 · L3")}</th>
               <th>{tx("真实延迟")}</th>
               <th>{tx("24H 可用率")}</th>
@@ -249,6 +313,7 @@ export function ProviderAvailabilityMonitor({ data, providers }: { data: AppData
                   <ProviderProbeLine tone={row.basicPrimaryTone} detail={row.basicPrimaryDetail} />
                   <ProviderProbeLine tone={row.basicSecondaryTone} detail={row.basicSecondaryDetail} />
                 </td>
+                <td><ProviderCodexQuota quotaStates={quotaStates} resources={row.resources} /></td>
                 <td>
                   <ProviderProbeLine tone={row.realTone} detail={row.realDetail} />
                   <small className="provider-monitor-subtle">{row.observed24h ? tx("真实请求样本") : tx("无请求样本")}</small>
@@ -279,6 +344,57 @@ export function ProviderAvailabilityMonitor({ data, providers }: { data: AppData
       </div>
     </section>
   );
+}
+
+export function ProviderCodexQuota({ quotaStates, resources }: { quotaStates: Record<string, ProviderQuotaState>; resources: ProviderResource[] }) {
+  const subscriptions = resources.filter((resource) => resource.resource_type === "openai_subscription" && resource.status === "active");
+  if (subscriptions.length === 0) return <span className="provider-codex-quota na">-</span>;
+  const states = subscriptions.map((resource) => ({ resource, state: quotaStates[resource.id] }));
+  if (states.some(({ state }) => state?.loading)) {
+    return <span className="provider-codex-quota loading">{tx("查询中")}</span>;
+  }
+  const available = states.filter(({ state }) => state?.quota).map(({ resource, state }) => ({ resource, quota: state!.quota! }));
+  if (available.length === 0) {
+    const error = states.find(({ state }) => state?.error)?.state?.error;
+    return <span className="provider-codex-quota error" title={error}>{tx("查询失败")}</span>;
+  }
+  const limiting = available.reduce((lowest, current) => {
+    const lowestRemaining = quotaRemainingPercent(lowest.quota);
+    const currentRemaining = quotaRemainingPercent(current.quota);
+    return currentRemaining < lowestRemaining ? current : lowest;
+  });
+  const remaining = quotaRemainingPercent(limiting.quota);
+  const plan = limiting.quota.plan_type || limiting.resource.credential_summary?.plan_type || "-";
+  const limited = limiting.quota.rate_limit?.limit_reached || limiting.quota.rate_limit?.allowed === false;
+  return (
+    <div className={`provider-codex-quota ${limited ? "limited" : "available"}`}>
+      <strong>{formatQuotaPercent(remaining)}%</strong>
+      <span>{plan} · {quotaResetLabel(limiting.quota.rate_limit?.primary_window)}</span>
+      {available.length > 1 ? <small>{available.length} {tx("个账号，显示最低余量")}</small> : null}
+    </div>
+  );
+}
+
+function quotaRemainingPercent(quota: OpenAIAccountQuota) {
+  const used = quota.rate_limit?.primary_window?.used_percent;
+  if (!Number.isFinite(used)) return quota.rate_limit?.allowed === false ? 0 : 100;
+  return clampNumber(100 - Number(used), 0, 100);
+}
+
+function quotaResetLabel(window?: OpenAIQuotaWindow) {
+  if (!window) return tx("无重置信息");
+  if (window.reset_at > 0) {
+    return new Date(window.reset_at * 1000).toLocaleString(languageLocale(), { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  }
+  if (window.reset_after_seconds > 0) {
+    const hours = Math.ceil(window.reset_after_seconds / 3600);
+    return hours > 1 ? `${hours} ${tx("小时后重置")}` : tx("1 小时内重置");
+  }
+  return tx("即将重置");
+}
+
+function formatQuotaPercent(value: number) {
+  return String(Math.round(value * 10) / 10);
 }
 
 export function ProviderProbeLine({ tone, detail }: { tone: ProviderProbeTone; detail: string }) {

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -544,11 +545,70 @@ type PlaygroundRouteAttempt struct {
 }
 
 type ResponsesRequest struct {
-	Model       string   `json:"model"`
-	Input       any      `json:"input"`
-	Stream      bool     `json:"stream,omitempty"`
-	MaxTokens   int      `json:"max_output_tokens,omitempty"`
-	Temperature *float64 `json:"temperature,omitempty"`
+	Model        string              `json:"model"`
+	Input        any                 `json:"input"`
+	Stream       bool                `json:"stream,omitempty"`
+	MaxTokens    int                 `json:"max_output_tokens,omitempty"`
+	Temperature  *float64            `json:"temperature,omitempty"`
+	Instructions string              `json:"instructions,omitempty"`
+	Store        *bool               `json:"store,omitempty"`
+	Reasoning    *ResponsesReasoning `json:"reasoning,omitempty"`
+	ServiceTier  string              `json:"service_tier,omitempty"`
+	raw          map[string]json.RawMessage
+}
+
+type ResponsesReasoning struct {
+	Effort string `json:"effort,omitempty"`
+	Mode   string `json:"mode,omitempty"`
+}
+
+// UnmarshalJSON keeps fields TokenHub does not interpret so the Responses API
+// remains a transparent protocol surface for tools and future request fields.
+func (r *ResponsesRequest) UnmarshalJSON(data []byte) error {
+	type requestAlias ResponsesRequest
+	var decoded requestAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*r = ResponsesRequest(decoded)
+	r.raw = raw
+	return nil
+}
+
+func (r ResponsesRequest) MarshalJSON() ([]byte, error) {
+	type requestAlias ResponsesRequest
+	if r.raw == nil {
+		return json.Marshal(requestAlias(r))
+	}
+	raw := make(map[string]json.RawMessage, len(r.raw)+8)
+	for key, value := range r.raw {
+		raw[key] = value
+	}
+	setRawJSONField(raw, "model", r.Model, r.Model != "")
+	setRawJSONField(raw, "input", r.Input, r.Input != nil)
+	setRawJSONField(raw, "stream", r.Stream, true)
+	setRawJSONField(raw, "max_output_tokens", r.MaxTokens, r.MaxTokens != 0)
+	setRawJSONField(raw, "temperature", r.Temperature, r.Temperature != nil)
+	setRawJSONField(raw, "instructions", r.Instructions, r.Instructions != "")
+	setRawJSONField(raw, "store", r.Store, r.Store != nil)
+	setRawJSONField(raw, "reasoning", r.Reasoning, r.Reasoning != nil)
+	setRawJSONField(raw, "service_tier", r.ServiceTier, r.ServiceTier != "")
+	return json.Marshal(raw)
+}
+
+func setRawJSONField(raw map[string]json.RawMessage, key string, value any, present bool) {
+	if !present {
+		delete(raw, key)
+		return
+	}
+	encoded, err := json.Marshal(value)
+	if err == nil {
+		raw[key] = encoded
+	}
 }
 
 type EmbeddingsRequest struct {

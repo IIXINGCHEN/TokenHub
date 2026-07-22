@@ -1,7 +1,7 @@
 import { AlertCircle, Boxes, Check, Copy, KeyRound, Plus, Search, Send, Server, Settings, UserRoundCheck } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { clearPendingProviderAccountOAuthSession, consumePendingProviderAccountOAuthResult, hasPendingProviderAccountOAuthResult, parseProviderAccountOAuthResult, providerAccountOAuthCallbackURL, type ProviderAccountOAuthGenerateResponse, type ProviderAccountOAuthResult, readPendingProviderAccountOAuthSession, savePendingProviderAccountOAuthSession } from "../core/session";
-import { type ApiContext, type FieldConfig, type Model, type ModelRoute, type Provider, type ProviderCatalogEntry, type ProviderCredentialMode } from "../core/types";
+import { type ApiContext, type FieldConfig, type Model, type ModelRoute, type Provider, type ProviderCatalogEntry, type ProviderCredentialMode, type ProviderResource } from "../core/types";
 import { buildCustomProviderCatalogEntry, canonicalModelNameForUI, catalogModelCategoryOptions, modelCategory, modelCategoryForCatalog, modelCategoryLabel, providerEntryCategoryCount, providerEntrySupportsCategory } from "../domain/catalog";
 import { compactNumber, formatModelPrice, modelCapabilities } from "../domain/formatting";
 import { enumOptionLabel, providerTypeLabel } from "../domain/labels";
@@ -11,6 +11,66 @@ import { assertProviderAccountResourceReady, defaultProviderResourceName, provid
 import { ReviewItem } from "../shared/modals";
 import { providerTypeOptions } from "../shared/ui";
 
+const openAIAccountOAuthRedirectURI = "http://localhost:1455/auth/callback";
+
+type OpenAIQuotaWindow = {
+  used_percent: number;
+  limit_window_seconds: number;
+  reset_after_seconds: number;
+  reset_at: number;
+};
+
+type OpenAIAccountQuota = {
+  account_id?: string;
+  email?: string;
+  plan_type?: string;
+  rate_limit?: {
+    allowed: boolean;
+    limit_reached: boolean;
+    primary_window?: OpenAIQuotaWindow;
+    secondary_window?: OpenAIQuotaWindow;
+  };
+  additional_rate_limits?: Array<{
+    limit_name: string;
+    metered_feature: string;
+    rate_limit?: {
+      allowed: boolean;
+      limit_reached: boolean;
+      primary_window?: OpenAIQuotaWindow;
+      secondary_window?: OpenAIQuotaWindow;
+    };
+  }>;
+  rate_limit_reset_credits?: { available_count: number };
+  fetched_at: number;
+};
+
+type CodexSubscriptionTestResult = {
+  resource_id: string;
+  model: string;
+  reasoning_effort: string;
+  speed: "standard" | "fast";
+  upstream_service_tier?: string;
+  output_text: string;
+  latency_ms: number;
+  usage: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
+};
+
+const codexSubscriptionModels = [
+  ["gpt-5.6-sol", "5.6 Sol"],
+  ["gpt-5.6-terra", "5.6 Terra"],
+  ["gpt-5.6-luna", "5.6 Luna"],
+  ["gpt-5.5", "5.5"],
+  ["gpt-5.4", "5.4"],
+  ["gpt-5.4-mini", "5.4 Mini"],
+  ["gpt-5.3-codex-spark", "5.3 Codex Spark"],
+] as const;
+
+const codexReasoningEfforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
 export function ProviderUpsertModal({
   mode,
   provider,
@@ -18,6 +78,7 @@ export function ProviderUpsertModal({
   catalog,
   standardModels,
   routes = [],
+  resources = [],
   loading,
   onClose,
   onSaved,
@@ -31,6 +92,7 @@ export function ProviderUpsertModal({
   catalog: ProviderCatalogEntry[];
   standardModels: Model[];
   routes?: ModelRoute[];
+  resources?: ProviderResource[];
   loading: boolean;
   onClose: () => void;
   onSaved: () => Promise<void>;
@@ -72,6 +134,13 @@ export function ProviderUpsertModal({
   const [accountOAuthCallback, setAccountOAuthCallback] = useState("");
   const [accountOAuthStatus, setAccountOAuthStatus] = useState("");
   const [accountOAuthBusy, setAccountOAuthBusy] = useState(false);
+  const [accountQuotaBusyID, setAccountQuotaBusyID] = useState("");
+  const [accountQuotaError, setAccountQuotaError] = useState("");
+  const [accountQuotas, setAccountQuotas] = useState<Record<string, OpenAIAccountQuota>>({});
+  const [codexTestValues, setCodexTestValues] = useState({ model: "gpt-5.6-luna", reasoning_effort: "medium", speed: "standard", prompt: "" });
+  const [codexTestBusyID, setCodexTestBusyID] = useState("");
+  const [codexTestError, setCodexTestError] = useState("");
+  const [codexTestResults, setCodexTestResults] = useState<Record<string, CodexSubscriptionTestResult>>({});
   const [createStep, setCreateStep] = useState(0);
   const createSteps = useMemo(() => providerCreateWizardSteps(), []);
   const lastCreateStep = createSteps.length - 1;
@@ -80,6 +149,10 @@ export function ProviderUpsertModal({
   const existingRouteModels = useMemo(
     () => new Set(routes.filter((route) => provider && route.provider_id === provider.id).map((route) => route.model_name)),
     [provider, routes],
+  );
+  const subscriptionResources = useMemo(
+    () => resources.filter((resource) => resource.resource_type === "openai_subscription"),
+    [resources],
   );
 
   const categoryCatalog = useMemo(
@@ -352,7 +425,7 @@ export function ProviderUpsertModal({
       const generated = (await resp.json()) as ProviderAccountOAuthGenerateResponse;
       savePendingProviderAccountOAuthSession({ session_id: generated.session_id, state: generated.state });
       window.open(generated.auth_url, "_blank", "noopener,noreferrer");
-      setAccountOAuthStatus(tx("已打开 OpenAI/Codex 授权页，授权完成后会自动回填账号 Token。"));
+      setAccountOAuthStatus(tx("已打开 OpenAI/Codex 授权页。授权后请复制浏览器地址栏中的完整 localhost callback URL，并粘贴到回调结果。"));
       setError("");
     } catch (err) {
       if (isAuthExpiredError(err)) return;
@@ -365,13 +438,47 @@ export function ProviderUpsertModal({
   }
 
   async function copyProviderAccountCallbackURL() {
-    if (!accountCallbackURL) return;
     try {
-      await navigator.clipboard.writeText(accountCallbackURL);
-      setAccountOAuthStatus(tx("已复制回调地址。"));
+      await navigator.clipboard.writeText(openAIAccountOAuthRedirectURI);
+      setAccountOAuthStatus(tx("已复制 OpenAI 固定回调地址。"));
     } catch {
-      setAccountOAuthCallback(accountCallbackURL);
-      setAccountOAuthStatus(accountCallbackURL);
+      setAccountOAuthCallback(openAIAccountOAuthRedirectURI);
+      setAccountOAuthStatus(openAIAccountOAuthRedirectURI);
+    }
+  }
+
+  async function queryAccountQuota(resource: ProviderResource) {
+    setAccountQuotaBusyID(resource.id);
+    setAccountQuotaError("");
+    try {
+      const resp = await adminFetch(api, `/api/admin/provider-resources/${resource.id}/quota`);
+      if (!resp.ok) throw new Error(await readAdminError(resp, tx("查询订阅额度")));
+      const quota = (await resp.json()) as OpenAIAccountQuota;
+      setAccountQuotas((current) => ({ ...current, [resource.id]: quota }));
+    } catch (err) {
+      if (isAuthExpiredError(err)) return;
+      setAccountQuotaError(err instanceof Error ? err.message : tx("查询订阅额度失败"));
+    } finally {
+      setAccountQuotaBusyID("");
+    }
+  }
+
+  async function testCodexSubscription(resource: ProviderResource) {
+    setCodexTestBusyID(resource.id);
+    setCodexTestError("");
+    try {
+      const resp = await adminFetch(api, `/api/admin/provider-resources/${resource.id}/test`, {
+        method: "POST",
+        body: JSON.stringify(codexTestValues),
+      });
+      if (!resp.ok) throw new Error(await readAdminError(resp, tx("测试 Codex Subscription")));
+      const result = (await resp.json()) as CodexSubscriptionTestResult;
+      setCodexTestResults((current) => ({ ...current, [resource.id]: result }));
+    } catch (err) {
+      if (isAuthExpiredError(err)) return;
+      setCodexTestError(err instanceof Error ? err.message : tx("Codex Subscription 测试失败"));
+    } finally {
+      setCodexTestBusyID("");
     }
   }
 
@@ -770,22 +877,22 @@ export function ProviderUpsertModal({
                       <label className="field provider-account-auth-wide">
                         <span>{tx("OpenAI/Codex 授权")}</span>
                         <div className="field-action-row">
-                          <input readOnly value={accountCallbackURL} />
+                          <input readOnly value={openAIAccountOAuthRedirectURI} />
                           <button className="secondary-button" onClick={openProviderAccountAuthorization} type="button" disabled={accountOAuthBusy}>
                             <Send size={14} />
                             {tx(accountOAuthBusy ? "授权中" : "打开授权")}
                           </button>
                         </div>
-                        <small>{tx("点击后由后端生成授权地址；授权完成会带 code 回到本页并自动换取 Token。")}</small>
+                        <small>{tx("点击后由后端生成授权地址。OpenAI 固定回调到 localhost:1455；无需该端口实际启动服务。")}</small>
                       </label>
                       <label className="field provider-account-auth-wide">
                         <span>{tx("回调结果")}</span>
                         <textarea
                           value={accountOAuthCallback}
                           onChange={(event) => parseAccountOAuthCallback(event.target.value)}
-                          placeholder="http://localhost:3000/providers?provider_account_oauth=1&code=..."
+                          placeholder="http://localhost:1455/auth/callback?code=...&state=..."
                         />
-                        <small>{tx("如果授权页没有自动跳回本页，把完整 callback URL 或 URL fragment 粘贴到这里。")}</small>
+                        <small>{tx("授权完成后，即使 localhost 页面显示无法访问，也请复制地址栏中的完整 callback URL 粘贴到这里。")}</small>
                       </label>
                       <div className="provider-account-auth-actions">
                         <button className="secondary-button" onClick={parseAccountOAuthCallbackNow} type="button">
@@ -794,7 +901,7 @@ export function ProviderUpsertModal({
                         </button>
                         <button className="secondary-button" onClick={copyProviderAccountCallbackURL} type="button">
                           <Copy size={14} />
-                          {tx("复制回调地址")}
+                          {tx("复制固定回调地址")}
                         </button>
                         <div className={accountTokenSummary.ready ? "provider-account-token-status ready" : "provider-account-token-status"}>
                           {accountTokenSummary.ready ? <Check size={15} /> : <AlertCircle size={15} />}
@@ -842,6 +949,141 @@ export function ProviderUpsertModal({
                     {tx("保存后不会写入上游凭据，可稍后通过编辑 Provider 或账号集成补齐。")}
                   </p>
                 )}
+              </section>
+            ) : null}
+            {mode === "edit" && subscriptionResources.length > 0 ? (
+              <section className="provider-quota-panel">
+                <div className="wizard-panel-head">
+                  <h3>{tx("订阅额度")}</h3>
+                  <p>{tx("实时查询 ChatGPT/Codex 套餐用量和重置时间；不会显示虚构的美元余额。")}</p>
+                </div>
+                <div className="provider-quota-list">
+                  {subscriptionResources.map((resource) => {
+                    const quota = accountQuotas[resource.id];
+                    const primary = quota?.rate_limit?.primary_window;
+                    const secondary = quota?.rate_limit?.secondary_window;
+                    const accountLabel = resource.credential_summary?.account_email || resource.credential_summary?.account_id || resource.name;
+                    return (
+                      <article className="provider-quota-card" key={resource.id}>
+                        <div className="provider-quota-card-head">
+                          <div>
+                            <strong>{resource.name}</strong>
+                            <span>{accountLabel}</span>
+                          </div>
+                          <button className="secondary-button" disabled={accountQuotaBusyID === resource.id} onClick={() => void queryAccountQuota(resource)} type="button">
+                            {tx(accountQuotaBusyID === resource.id ? "查询中" : quota ? "刷新额度" : "查询额度")}
+                          </button>
+                        </div>
+                        {quota ? (
+                          <div className="provider-quota-grid">
+                            <QuotaMetric label="套餐" value={quota.plan_type || resource.credential_summary?.plan_type || "-"} />
+                            <QuotaMetric label="状态" value={quota.rate_limit?.limit_reached ? "已达上限" : quota.rate_limit?.allowed ? "可用" : "不可用"} />
+                            <QuotaMetric label="主窗口使用率" value={primary ? `${formatQuotaPercent(primary.used_percent)}%` : "-"} />
+                            <QuotaMetric label="主窗口重置" value={quotaWindowResetLabel(primary)} />
+                            {secondary ? <QuotaMetric label="次窗口使用率" value={`${formatQuotaPercent(secondary.used_percent)}%`} /> : null}
+                            {secondary ? <QuotaMetric label="次窗口重置" value={quotaWindowResetLabel(secondary)} /> : null}
+                            {quota.rate_limit_reset_credits ? <QuotaMetric label="重置额度" value={String(quota.rate_limit_reset_credits.available_count)} /> : null}
+                            <QuotaMetric label="查询时间" value={new Date(quota.fetched_at * 1000).toLocaleString()} />
+                          </div>
+                        ) : (
+                          <p className="provider-credential-note">{tx("点击查询后显示该真实账号当前的套餐额度。")}</p>
+                        )}
+                      </article>
+                    );
+                  })}
+                </div>
+                {accountQuotaError ? <p className="provider-quota-error">{accountQuotaError}</p> : null}
+              </section>
+            ) : null}
+            {mode === "edit" && subscriptionResources.length > 0 ? (
+              <section className="provider-quota-panel provider-codex-test-panel">
+                <div className="wizard-panel-head">
+                  <h3>{tx("Codex 真实请求测试")}</h3>
+                  <p>{tx("选择模型、推理强度和速度后，直接使用该订阅账号调用 Codex Responses；该操作会消耗真实套餐额度。")}</p>
+                </div>
+                <div className="provider-codex-test-controls">
+                  <label className="field">
+                    <span>{tx("模型")}</span>
+                    <select
+                      disabled={codexTestValues.speed === "fast"}
+                      value={codexTestValues.model}
+                      onChange={(event) => setCodexTestValues((current) => ({ ...current, model: event.target.value }))}
+                    >
+                      {codexSubscriptionModels.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                    </select>
+                    {codexTestValues.speed === "fast" ? <small>{tx("快速模式测试已锁定 5.6 家族中成本最低的 Luna。")}</small> : null}
+                  </label>
+                  <label className="field">
+                    <span>{tx("推理强度")}</span>
+                    <select value={codexTestValues.reasoning_effort} onChange={(event) => setCodexTestValues((current) => ({ ...current, reasoning_effort: event.target.value }))}>
+                      {codexReasoningEfforts.map((value) => <option key={value} value={value}>{value}</option>)}
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>{tx("速度")}</span>
+                    <select
+                      value={codexTestValues.speed}
+                      onChange={(event) => {
+                        const speed = event.target.value;
+                        setCodexTestValues((current) => ({ ...current, speed, model: speed === "fast" ? "gpt-5.6-luna" : current.model }));
+                      }}
+                    >
+                      <option value="standard">{tx("标准")}</option>
+                      <option value="fast">{tx("快速（仅 5.6 Luna 测试）")}</option>
+                    </select>
+                  </label>
+                  <label className="field provider-codex-test-prompt">
+                    <span>{tx("真实提示词")}</span>
+                    <textarea
+                      rows={3}
+                      value={codexTestValues.prompt}
+                      onChange={(event) => setCodexTestValues((current) => ({ ...current, prompt: event.target.value }))}
+                      placeholder={tx("输入要真实发送给 Codex 的内容")}
+                    />
+                  </label>
+                </div>
+                <div className="provider-quota-list">
+                  {subscriptionResources.map((resource) => {
+                    const result = codexTestResults[resource.id];
+                    return (
+                      <article className="provider-quota-card" key={resource.id}>
+                        <div className="provider-quota-card-head">
+                          <div>
+                            <strong>{resource.name}</strong>
+                            <span>{resource.credential_summary?.account_email || resource.credential_summary?.account_id || resource.id}</span>
+                          </div>
+                          <button
+                            className="primary-button"
+                            disabled={codexTestBusyID === resource.id || !codexTestValues.prompt.trim()}
+                            onClick={() => void testCodexSubscription(resource)}
+                            type="button"
+                          >
+                            <Send size={14} />
+                            {tx(codexTestBusyID === resource.id ? "正在真实调用" : "发送真实测试")}
+                          </button>
+                        </div>
+                        {result ? (
+                          <div className="provider-codex-test-result">
+                            <div className="provider-quota-grid">
+                              <QuotaMetric label="模型" value={result.model} />
+                              <QuotaMetric label="推理强度" value={result.reasoning_effort} />
+                              <QuotaMetric label="请求速度" value={result.speed === "fast" ? "快速" : "标准"} />
+                              <QuotaMetric label="上游 Service Tier" value={result.upstream_service_tier || "未返回"} />
+                              <QuotaMetric label="耗时" value={`${result.latency_ms} ms`} />
+                              <QuotaMetric label="输入 Token" value={String(result.usage.prompt_tokens)} />
+                              <QuotaMetric label="输出 Token" value={String(result.usage.completion_tokens)} />
+                              <QuotaMetric label="总 Token" value={String(result.usage.total_tokens)} />
+                            </div>
+                            <pre>{result.output_text}</pre>
+                          </div>
+                        ) : (
+                          <p className="provider-credential-note">{tx("填写提示词后发送；返回内容来自真实 Codex 上游，不使用 Mock。")}</p>
+                        )}
+                      </article>
+                    );
+                  })}
+                </div>
+                {codexTestError ? <p className="provider-quota-error">{codexTestError}</p> : null}
               </section>
             ) : null}
             {mode === "edit" || createStep === 1 ? (
@@ -977,6 +1219,29 @@ export function ProviderUpsertModal({
       </form>
     </div>
   );
+}
+
+function QuotaMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="provider-quota-metric">
+      <span>{tx(label)}</span>
+      <strong>{tx(value)}</strong>
+    </div>
+  );
+}
+
+function formatQuotaPercent(value: number) {
+  return Number.isFinite(value) ? String(Math.round(value * 10) / 10) : "0";
+}
+
+function quotaWindowResetLabel(window?: OpenAIQuotaWindow) {
+  if (!window) return "-";
+  if (window.reset_at > 0) return new Date(window.reset_at * 1000).toLocaleString();
+  if (window.reset_after_seconds > 0) {
+    const minutes = Math.ceil(window.reset_after_seconds / 60);
+    return minutes >= 60 ? `${Math.ceil(minutes / 60)} ${tx("小时后")}` : `${minutes} ${tx("分钟后")}`;
+  }
+  return "-";
 }
 
 export function ProviderInlineField({

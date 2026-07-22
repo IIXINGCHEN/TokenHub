@@ -421,6 +421,117 @@
   padding-top: 10px;
 }
 
+.provider-quota-panel {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--surface-soft);
+}
+
+.provider-quota-list {
+  margin-top: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.provider-quota-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--surface);
+}
+
+.provider-quota-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.provider-quota-card-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.provider-quota-card-head strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.provider-quota-card-head span {
+  color: var(--muted-strong);
+  font-size: 11px;
+}
+
+.provider-quota-grid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.provider-quota-metric {
+  min-width: 0;
+  border-radius: 7px;
+  padding: 8px;
+  display: grid;
+  gap: 4px;
+  background: var(--surface-soft);
+}
+
+.provider-quota-metric span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.provider-quota-metric strong {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.provider-quota-error {
+  margin: 10px 0 0;
+  color: var(--neg);
+  font-size: 11px;
+}
+
+.provider-codex-test-controls {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.provider-codex-test-prompt {
+  grid-column: 1 / -1;
+}
+
+.provider-codex-test-prompt textarea {
+  min-height: 76px;
+  resize: vertical;
+}
+
+.provider-codex-test-result {
+  margin-top: 10px;
+}
+
+.provider-codex-test-result pre {
+  margin: 10px 0 0;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .provider-account-auth-grid {
   margin-top: 10px;
   display: grid;

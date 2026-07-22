@@ -270,23 +270,23 @@
 
 .provider-monitor-table {
   width: 100%;
-  min-width: 940px;
+  min-width: 1100px;
   table-layout: fixed;
 }
 
 .provider-monitor-table th:nth-child(1),
 .provider-monitor-table td:nth-child(1) {
-  width: 25%;
+  width: 21%;
 }
 
 .provider-monitor-table th:nth-child(2),
 .provider-monitor-table td:nth-child(2) {
-  width: 12%;
+  width: 11%;
 }
 
 .provider-monitor-table th:nth-child(3),
 .provider-monitor-table td:nth-child(3) {
-  width: 14%;
+  width: 13%;
 }
 
 .provider-monitor-table th:nth-child(4),
@@ -295,17 +295,22 @@
 }
 
 .provider-monitor-table th:nth-child(5),
-.provider-monitor-table td:nth-child(5),
+.provider-monitor-table td:nth-child(5) {
+  width: 12%;
+}
+
 .provider-monitor-table th:nth-child(6),
 .provider-monitor-table td:nth-child(6),
 .provider-monitor-table th:nth-child(7),
-.provider-monitor-table td:nth-child(7) {
-  width: 8%;
-}
-
+.provider-monitor-table td:nth-child(7),
 .provider-monitor-table th:nth-child(8),
 .provider-monitor-table td:nth-child(8) {
-  width: 12%;
+  width: 7%;
+}
+
+.provider-monitor-table th:nth-child(9),
+.provider-monitor-table td:nth-child(9) {
+  width: 9%;
 }
 
 .provider-monitor-table th {
@@ -449,6 +454,39 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 13px;
   white-space: nowrap;
+}
+
+.provider-codex-quota {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.provider-codex-quota strong {
+  color: #059669;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.provider-codex-quota span,
+.provider-codex-quota small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-codex-quota.limited strong,
+.provider-codex-quota.error {
+  color: #e11d48;
+}
+
+.provider-codex-quota.loading,
+.provider-codex-quota.na {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 .provider-quality-score {
