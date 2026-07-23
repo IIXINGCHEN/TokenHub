@@ -76,8 +76,9 @@ Edit `deploy/.env` before starting:
 - `TOKENHUB_ADMIN_TOKEN`: Admin API bootstrap token. Use a random value of at least 32 bytes.
 - `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD`: Password used only when creating the initial `admin` user. Use at least 12 bytes.
 - `TOKENHUB_SECRET_KEY`: Backend secret key. Use a random value of at least 32 bytes and keep it stable.
+- `TOKENHUB_IMAGE_TAG`: Shared backend and frontend image tag. Default: `latest`.
 - `TOKENHUB_PUBLIC_BASE_URL`: Public backend URL shown to users.
-- `NEXT_PUBLIC_API_BASE_URL`: Backend URL used by the browser admin console.
+- `TOKENHUB_API_BASE_URL`: Backend URL used by the browser admin console. The frontend server reads it at runtime. The deprecated `NEXT_PUBLIC_API_BASE_URL` remains a fallback for one compatibility cycle.
 - `TOKENHUB_BACKEND_PORT`: Host port for the backend. Default: `8080`.
 - `TOKENHUB_FRONTEND_PORT`: Host port for the admin console. Default: `3000`.
 
@@ -87,9 +88,9 @@ Start the stack from the repository root:
 ./deploy/install.sh
 ```
 
-The script validates the Compose environment before building. Validation errors name every unsafe variable without printing its value. If Compose fails and a backend container created or restarted by that attempt is exited, restarting, dead, or unhealthy, the script prints up to 100 backend log lines from that attempt. Failures outside the backend do not export unrelated backend logs.
+The script validates the Compose environment, pulls the published images, and starts the containers without building locally. If the images cannot be pulled during the initial GHCR rollout, it falls back to building from the local checkout. Validation errors name every unsafe variable without printing their values. If Compose fails and a backend container created or restarted by that attempt is exited, restarting, dead, or unhealthy, the script prints up to 100 backend log lines from that attempt. Failures outside the backend do not export unrelated backend logs.
 
-Validate without building or starting containers:
+Validate without pulling or starting containers:
 
 ```bash
 ./deploy/install.sh --check-only
@@ -97,7 +98,28 @@ Validate without building or starting containers:
 
 Use a different environment file with `./deploy/install.sh --env-file /path/to/deploy.env`.
 
-### Optional server-side build acceleration
+### Published image lifecycle
+
+GitHub Actions publishes `ghcr.io/astaxie/tokenhub-backend` and `ghcr.io/astaxie/tokenhub-frontend` for `linux/amd64` and `linux/arm64`.
+
+- Publishing a GitHub Release builds the exact semantic-version tag. A non-prerelease also updates the major-minor tag and `latest`.
+- `workflow_dispatch` can publish `edge` or an isolated `manual-*` tag. It cannot overwrite release or `latest` tags.
+- Pull requests do not build or push container images.
+- Merges to `main` do not publish images.
+
+Each image is first pushed under a run-specific staging tag. The workflow verifies that both multi-platform images exist before promoting either one to the requested release tags. Both images must use the same `TOKENHUB_IMAGE_TAG`. For reproducible production deployments, pin an exact release tag instead of relying on `latest`.
+
+The first GHCR publication creates private packages. The repository owner must make both packages public before anonymous deployments can pull them. Until then, a deployment using the default `latest` tag remains usable by automatically falling back to a local source build. If an explicit `TOKENHUB_IMAGE_TAG` cannot be pulled, the installer exits instead of labeling current source as that version.
+
+### Optional local build
+
+Build from the current checkout instead of pulling published images:
+
+```bash
+./deploy/install.sh --build
+```
+
+The following acceleration settings apply only to local source builds.
 
 The project Dockerfiles do not hard-code regional package mirrors. If your server has slow access to Docker Hub, npm, or Go module sources, configure acceleration on the deployment host instead of editing Dockerfiles.
 
@@ -130,7 +152,7 @@ The compose file starts:
 - Backend on `http://localhost:8080`
 - Frontend on `http://localhost:3000`
 - SQLite data stored in the named Docker volume `tokenhub-data`
-- Model catalog mounted from `data/model-catalog.yaml`
+- Model catalog included in the selected backend image
 
 Check status:
 
@@ -196,8 +218,8 @@ Only use `down -v` when you intentionally want to delete local data.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `NEXT_PUBLIC_API_BASE_URL` | `http://localhost:8080` | Backend Admin API URL |
-| `NEXT_PUBLIC_APP_NAME` | `TokenHub` | Display name |
+| `TOKENHUB_API_BASE_URL` | `http://localhost:8080` | Backend Admin API URL read by the frontend server at runtime |
+| `NEXT_PUBLIC_API_BASE_URL` | empty | Deprecated compatibility fallback; migrate to `TOKENHUB_API_BASE_URL` |
 
 ## Data and Backups
 
@@ -218,17 +240,15 @@ Recommended production setup:
 
 ## Model Catalog
 
-The deployment mounts the repository file `data/model-catalog.yaml` into the backend container as `/app/catalog/model-catalog.yaml`.
+Published backend images include the matching `data/model-catalog.yaml` at `/app/catalog/model-catalog.yaml`. Default deployments use this copy so the backend binary and catalog always come from the same image version.
 
-To update the standard catalog:
-
-1. Edit `data/model-catalog.yaml`.
-2. Restart the backend container.
-3. Open `Model Catalog` in the admin console and confirm the entries.
+To mount a custom catalog explicitly:
 
 ```bash
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml restart tokenhub-backend
+./deploy/install.sh --model-catalog /absolute/path/to/model-catalog.yaml
 ```
+
+The custom mount intentionally overrides the image catalog and is therefore managed separately from `TOKENHUB_IMAGE_TAG`. After updating that file, restart the backend container and confirm the entries in `Model Catalog`.
 
 ## Reverse Proxy
 
