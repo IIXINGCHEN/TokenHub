@@ -73,6 +73,21 @@ func TestConfigParsesTrustedProxyCIDRs(t *testing.T) {
 	}
 }
 
+func TestConfigParsesClusterCoordinationSettings(t *testing.T) {
+	t.Setenv("TOKENHUB_CORS_ALLOWED_ORIGINS", "https://console.example.com,https://admin.example.com")
+	t.Setenv("TOKENHUB_IN_FLIGHT_LEASE_TTL_SECONDS", "45")
+	t.Setenv("TOKENHUB_CLUSTER_LOCK_TTL_SECONDS", "60")
+	t.Setenv("TOKENHUB_GRACEFUL_SHUTDOWN_SECONDS", "90")
+
+	config := ConfigFromEnv()
+	if len(config.CORSAllowedOrigins) != 2 {
+		t.Fatalf("expected two CORS origins, got %#v", config.CORSAllowedOrigins)
+	}
+	if config.InFlightLeaseTTLSeconds != 45 || config.ClusterLockTTLSeconds != 60 || config.GracefulShutdownSeconds != 90 {
+		t.Fatalf("unexpected cluster settings: %+v", config)
+	}
+}
+
 func TestProductionConfigRejectsPlaceholderCredentials(t *testing.T) {
 	config := Config{
 		Environment:            "prod",

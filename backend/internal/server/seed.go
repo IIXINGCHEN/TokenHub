@@ -1,12 +1,28 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"time"
 )
 
 const defaultProjectID = "prj_default"
+
+// RunStartupBootstrap reapplies idempotent startup data on every process start
+// while serializing replicas through a cluster-wide lease. The contextual
+// store makes lease loss cancel the database operations still in progress.
+func RunStartupBootstrap(ctx context.Context, store *GormStore, config Config) error {
+	operation := "bootstrap-base"
+	seed := BootstrapBaseDataWithConfig
+	if config.SeedDemo {
+		operation = "bootstrap-demo"
+		seed = SeedDemoDataWithConfig
+	}
+	return store.RunClusterOperation(ctx, operation, func(leaseCtx context.Context) error {
+		return seed(store.WithContext(leaseCtx), config)
+	})
+}
 
 func SeedDemoData(store Store) error {
 	return SeedDemoDataWithConfig(store, ConfigFromEnv())
@@ -717,7 +733,7 @@ func seedMockUsage(store Store) {
 			continue
 		}
 		modelName := "gpt-4.1-mini"
-		call, err := store.StartCall(project, key, modelName)
+		call, err := store.StartCall(context.Background(), project, key, modelName)
 		if err != nil {
 			store.RecordRejectedRequest(project, key, modelName, http.StatusTooManyRequests, "quota_exceeded", mockIP(i), "mock-seed/1.0")
 			continue

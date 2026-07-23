@@ -20,6 +20,9 @@ type Config struct {
 	SeedDemo                 bool
 	ResourceFailureThreshold int
 	ResourceCooldownSeconds  int
+	InFlightLeaseTTLSeconds  int
+	ClusterLockTTLSeconds    int
+	GracefulShutdownSeconds  int
 	DBMaxOpenConns           int
 	DBMaxIdleConns           int
 	DBConnMaxLifetimeMinutes int
@@ -40,6 +43,9 @@ func ConfigFromEnv() Config {
 		SeedDemo:                 getenvBool("TOKENHUB_SEED_DEMO", false),
 		ResourceFailureThreshold: getenvInt("TOKENHUB_RESOURCE_FAILURE_THRESHOLD", 3),
 		ResourceCooldownSeconds:  getenvInt("TOKENHUB_RESOURCE_COOLDOWN_SECONDS", 300),
+		InFlightLeaseTTLSeconds:  getenvInt("TOKENHUB_IN_FLIGHT_LEASE_TTL_SECONDS", 300),
+		ClusterLockTTLSeconds:    getenvInt("TOKENHUB_CLUSTER_LOCK_TTL_SECONDS", 180),
+		GracefulShutdownSeconds:  getenvInt("TOKENHUB_GRACEFUL_SHUTDOWN_SECONDS", 150),
 		DBMaxOpenConns:           getenvInt("TOKENHUB_DB_MAX_OPEN_CONNS", 25),
 		DBMaxIdleConns:           getenvInt("TOKENHUB_DB_MAX_IDLE_CONNS", 5),
 		DBConnMaxLifetimeMinutes: getenvInt("TOKENHUB_DB_CONN_MAX_LIFETIME_MINUTES", 30),

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -43,14 +44,15 @@ const (
 )
 
 var (
-	ErrInvalidAPIKey     = NewHTTPError(401, "invalid_api_key", "Invalid API key")
-	ErrAPIKeyDisabled    = NewHTTPError(403, "api_key_disabled", "API key is disabled")
-	ErrAPIKeyExpired     = NewHTTPError(403, "api_key_expired", "API key has expired")
-	ErrModelNotAllowed   = NewHTTPError(403, "model_not_allowed", "Model is not allowed for this API key")
-	ErrRateLimitExceeded = NewHTTPError(429, "rate_limit_exceeded", "Rate limit exceeded")
-	ErrQuotaExceeded     = NewHTTPError(429, "quota_exceeded", "Quota exceeded")
-	ErrBudgetExceeded    = NewHTTPError(429, "budget_exceeded", "Budget exceeded")
-	ErrProviderMissing   = NewHTTPError(503, "provider_unavailable", "No available provider route")
+	ErrInvalidAPIKey         = NewHTTPError(401, "invalid_api_key", "Invalid API key")
+	ErrAPIKeyDisabled        = NewHTTPError(403, "api_key_disabled", "API key is disabled")
+	ErrAPIKeyExpired         = NewHTTPError(403, "api_key_expired", "API key has expired")
+	ErrModelNotAllowed       = NewHTTPError(403, "model_not_allowed", "Model is not allowed for this API key")
+	ErrRateLimitExceeded     = NewHTTPError(429, "rate_limit_exceeded", "Rate limit exceeded")
+	ErrQuotaExceeded         = NewHTTPError(429, "quota_exceeded", "Quota exceeded")
+	ErrBudgetExceeded        = NewHTTPError(429, "budget_exceeded", "Budget exceeded")
+	ErrProviderMissing       = NewHTTPError(503, "provider_unavailable", "No available provider route")
+	ErrCoordinationLeaseLost = NewHTTPError(503, "coordination_lease_lost", "Cluster coordination lease was lost")
 )
 
 type HTTPError struct {
@@ -651,11 +653,12 @@ type RoutedCall struct {
 }
 
 type CallContext struct {
-	RequestID string
-	Project   Project
-	Key       APIKey
-	Model     Model
-	StartedAt time.Time
+	RequestID      string
+	Project        Project
+	Key            APIKey
+	Model          Model
+	StartedAt      time.Time
+	requestContext context.Context
 }
 
 func NewID(prefix string) string {

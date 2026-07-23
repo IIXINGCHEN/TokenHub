@@ -234,8 +234,8 @@ func consumeCodexResponsesStream(body io.Reader, destination io.Writer) (map[str
 }
 
 func (s *Server) handleStreamingResponses(w http.ResponseWriter, r *http.Request, routed RoutedCall, request ResponsesRequest) {
-	resp, route, _, attempts, err := executeRoutedWithStore(s.store, routed, func(route RouteSelection) (*http.Response, Usage, error) {
-		prepared, err := s.prepareRouteForUpstream(r.Context(), route)
+	resp, route, _, attempts, err := executeRoutedWithStore(r.Context(), s.store, routed, func(ctx context.Context, route RouteSelection) (*http.Response, Usage, error) {
+		prepared, err := s.prepareRouteForUpstream(ctx, route)
 		if err != nil {
 			return nil, Usage{}, err
 		}
@@ -247,7 +247,7 @@ func (s *Server) handleStreamingResponses(w http.ResponseWriter, r *http.Request
 		if !ok {
 			return nil, Usage{}, NewHTTPError(http.StatusBadRequest, "responses_stream_unsupported", "Streaming Responses is currently available through Codex Subscription resources")
 		}
-		opened, err := codex.OpenResponses(r.Context(), prepared.Provider, prepared.ProviderModel, request, r.Header)
+		opened, err := codex.OpenResponses(ctx, prepared.Provider, prepared.ProviderModel, request, r.Header)
 		if isCodexModelUnsupportedError(err) {
 			s.removeCodexResourceModel(routeResourceID(route), route.ProviderModel)
 		}

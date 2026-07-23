@@ -46,6 +46,23 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.postgres.yml up -
 
 For detailed PostgreSQL configuration, see the [PostgreSQL Setup Guide](postgresql-setup.md).
 
+### Multi-instance deployment with remote PostgreSQL
+
+Use `deploy/docker-compose.remote-postgres.yml` when PostgreSQL is managed outside this Compose project. It adds an Nginx gateway in front of scalable backend and frontend services and does not start a local database.
+
+Set the remote `TOKENHUB_DATABASE_URL`, public gateway URL, production secrets, and trusted proxy CIDR, then run:
+
+```bash
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.remote-postgres.yml up -d \
+  --scale tokenhub-backend=3 \
+  --scale tokenhub-frontend=2
+```
+
+All replicas must use the same `TOKENHUB_SECRET_KEY`. Size `TOKENHUB_DB_MAX_OPEN_CONNS` per replica so the combined pool remains below the PostgreSQL connection limit. Never share a SQLite file between backend replicas.
+
+Run the real two-instance PostgreSQL E2E suite with `./deploy/test-multi-instance.sh`.
+
 ## Docker Compose
 
 Create a deployment environment file:
@@ -156,6 +173,7 @@ Only use `down -v` when you intentionally want to delete local data.
 | `TOKENHUB_HTTP_ADDR` | `:8080` | Backend listen address |
 | `TOKENHUB_PUBLIC_BASE_URL` | `http://localhost:8080` | Public backend URL shown to users |
 | `TOKENHUB_TRUSTED_PROXY_CIDRS` | empty | Comma-separated proxy IPs or CIDRs allowed to supply `X-Forwarded-For` |
+| `TOKENHUB_CORS_ALLOWED_ORIGINS` | public URL | Comma-separated browser origins allowed to call the backend |
 | `TOKENHUB_ADMIN_TOKEN` | `change-me-tokenhub-admin-token` | Bootstrap admin token for Admin API access |
 | `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD` | `change-me-tokenhub-admin-password` | Password for the initial `admin` user; must be changed before production startup |
 | `TOKENHUB_SECRET_KEY` | `change-me-tokenhub-secret-key` | Backend secret key |
@@ -166,6 +184,10 @@ Only use `down -v` when you intentionally want to delete local data.
 | `TOKENHUB_LOG_LEVEL` | `info` | Log level |
 | `TOKENHUB_RESOURCE_FAILURE_THRESHOLD` | `3` | Provider resource failure threshold before cooldown |
 | `TOKENHUB_RESOURCE_COOLDOWN_SECONDS` | `300` | Provider resource cooldown seconds |
+| `TOKENHUB_IN_FLIGHT_LEASE_TTL_SECONDS` | `300` | Expiry and renewal basis for cluster-wide concurrency leases |
+| `TOKENHUB_CLUSTER_LOCK_TTL_SECONDS` | `180` | Expiry and renewal basis for cluster coordination locks |
+| `TOKENHUB_GRACEFUL_SHUTDOWN_SECONDS` | `150` | Maximum time to drain in-flight requests during shutdown |
+| `TOKENHUB_STOP_GRACE_PERIOD` | `180s` | Compose grace period before Docker force-stops the backend |
 | `TOKENHUB_DB_MAX_OPEN_CONNS` | `25` | Maximum open database connections (PostgreSQL only) |
 | `TOKENHUB_DB_MAX_IDLE_CONNS` | `5` | Maximum idle database connections (PostgreSQL only) |
 | `TOKENHUB_DB_CONN_MAX_LIFETIME_MINUTES` | `30` | Maximum connection lifetime in minutes (PostgreSQL only) |
@@ -216,3 +238,5 @@ For production, place TokenHub behind HTTPS and forward:
 - `/v1/*` and `/api/admin/*` traffic to the backend service.
 
 Set request body and streaming timeouts high enough for long model responses.
+
+Use `/livez` for liveness and `/readyz` for readiness. `/readyz` and the backwards-compatible `/healthz` return `503` when the database is unavailable.

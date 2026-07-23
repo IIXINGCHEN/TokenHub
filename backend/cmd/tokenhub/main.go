@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/joho/godotenv"
 	"tokenhub/backend/internal/server"
@@ -22,22 +26,46 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if config.SeedDemo {
-		if err := server.SeedDemoDataWithConfig(store, config); err != nil {
-			log.Fatal(err)
-		}
-	} else if err := server.BootstrapBaseDataWithConfig(store, config); err != nil {
+	if err := server.RunStartupBootstrap(context.Background(), store, config); err != nil {
 		log.Fatal(err)
 	}
 
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: server.NewWithConfig(store, config).Handler(),
+		Addr:              addr,
+		Handler:           server.NewWithConfig(store, config).Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	log.Printf("tokenhub backend listening on %s", addr)
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatal(err)
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- srv.ListenAndServe()
+	}()
+
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	select {
+	case err := <-serveErr:
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+		return
+	case <-signalCtx.Done():
+	}
+
+	shutdownTimeout := time.Duration(config.GracefulShutdownSeconds) * time.Second
+	if shutdownTimeout <= 0 {
+		shutdownTimeout = 150 * time.Second
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("tokenhub graceful shutdown failed: %v", err)
+		_ = srv.Close()
+	}
+	if err := <-serveErr; err != nil && err != http.ErrServerClosed {
+		log.Printf("tokenhub server stopped with error: %v", err)
 	}
 }
 

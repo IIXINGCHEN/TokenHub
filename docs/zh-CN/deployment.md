@@ -46,6 +46,23 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.postgres.yml up -
 
 PostgreSQL 的详细配置见 [PostgreSQL 设置指南](../postgresql-setup.md)。
 
+### 使用远端 PostgreSQL 的多实例部署
+
+数据库由 Compose 项目之外的平台托管时，使用 `deploy/docker-compose.remote-postgres.yml`。该配置在可扩容的前后端服务前提供 Nginx 网关，并且不会启动本地数据库。
+
+配置远端 `TOKENHUB_DATABASE_URL`、公网网关地址、生产密钥和可信代理 CIDR 后运行：
+
+```bash
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.remote-postgres.yml up -d \
+  --scale tokenhub-backend=3 \
+  --scale tokenhub-frontend=2
+```
+
+所有实例必须使用相同的 `TOKENHUB_SECRET_KEY`。`TOKENHUB_DB_MAX_OPEN_CONNS` 是单实例连接数，需要确保所有实例的连接池总和低于 PostgreSQL 限制。不得让多个后端实例共享 SQLite 文件。
+
+使用 `./deploy/test-multi-instance.sh` 运行真实的双实例 PostgreSQL E2E 测试。
+
 ## Docker Compose
 
 创建部署环境变量文件：
@@ -156,6 +173,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_HTTP_ADDR` | `:8080` | 后端监听地址 |
 | `TOKENHUB_PUBLIC_BASE_URL` | `http://localhost:8080` | 展示给用户的后端地址 |
 | `TOKENHUB_TRUSTED_PROXY_CIDRS` | 空 | 允许提供 `X-Forwarded-For` 的代理 IP 或 CIDR，逗号分隔 |
+| `TOKENHUB_CORS_ALLOWED_ORIGINS` | 公网地址 | 允许调用后端的浏览器 Origin，逗号分隔 |
 | `TOKENHUB_ADMIN_TOKEN` | `change-me-tokenhub-admin-token` | Admin API 启动访问 Token |
 | `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD` | `change-me-tokenhub-admin-password` | 初始 `admin` 用户密码；生产启动前必须修改 |
 | `TOKENHUB_SECRET_KEY` | `change-me-tokenhub-secret-key` | 后端密钥 |
@@ -166,6 +184,10 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_LOG_LEVEL` | `info` | 日志级别 |
 | `TOKENHUB_RESOURCE_FAILURE_THRESHOLD` | `3` | Provider 资源进入冷却前的失败阈值 |
 | `TOKENHUB_RESOURCE_COOLDOWN_SECONDS` | `300` | Provider 资源冷却秒数 |
+| `TOKENHUB_IN_FLIGHT_LEASE_TTL_SECONDS` | `300` | 集群并发租约的过期时间及续租周期基准 |
+| `TOKENHUB_CLUSTER_LOCK_TTL_SECONDS` | `180` | 集群协调锁的过期时间及续租周期基准 |
+| `TOKENHUB_GRACEFUL_SHUTDOWN_SECONDS` | `150` | 停机时等待在途请求完成的最长秒数 |
+| `TOKENHUB_STOP_GRACE_PERIOD` | `180s` | Docker 强制停止后端前的 Compose 宽限时间 |
 
 ## 前端环境变量
 
@@ -213,3 +235,5 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml restart token
 - `/v1/*` 和 `/api/admin/*` 流量到后端服务。
 
 长文本生成和流式响应可能耗时较长，请合理设置请求体大小和超时时间。
+
+存活探针使用 `/livez`，就绪探针使用 `/readyz`。数据库不可用时，`/readyz` 和向后兼容的 `/healthz` 会返回 `503`。
