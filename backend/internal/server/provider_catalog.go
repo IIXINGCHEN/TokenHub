@@ -180,21 +180,22 @@ func normalizeProviderCatalogModel(raw map[string]any) ProviderCatalogModel {
 		}
 	}
 	model := ProviderCatalogModel{
-		ID:                  id,
-		Name:                name,
-		DisplayName:         displayName,
-		CanonicalName:       canonicalModelName(id, displayName),
-		Category:            inferModelCategory(id, displayName),
-		Family:              firstNonEmpty(catalogStringField(raw, "family"), inferModelFamily(id)),
-		Type:                modelType,
-		ContextWindow:       int64(catalogNumberField(limit, "context")),
-		MaxOutputTokens:     int64(catalogNumberField(limit, "output")),
-		InputPriceUSDPer1M:  catalogNumberField(cost, "input"),
-		OutputPriceUSDPer1M: catalogNumberField(cost, "output"),
-		InputModalities:     catalogStringSliceField(modalities, "input"),
-		OutputModalities:    catalogStringSliceField(modalities, "output"),
-		LastUpdated:         catalogStringField(raw, "last_updated"),
-		Metadata:            metadata,
+		ID:                     id,
+		Name:                   name,
+		DisplayName:            displayName,
+		CanonicalName:          canonicalModelName(id, displayName),
+		Category:               inferModelCategory(id, displayName),
+		Family:                 firstNonEmpty(catalogStringField(raw, "family"), inferModelFamily(id)),
+		Type:                   modelType,
+		ContextWindow:          int64(catalogNumberField(limit, "context")),
+		MaxOutputTokens:        int64(catalogNumberField(limit, "output")),
+		InputPriceUSDPer1M:     catalogNumberField(cost, "input"),
+		CacheReadPriceUSDPer1M: catalogNumberField(cost, "cache_read"),
+		OutputPriceUSDPer1M:    catalogNumberField(cost, "output"),
+		InputModalities:        catalogStringSliceField(modalities, "input"),
+		OutputModalities:       catalogStringSliceField(modalities, "output"),
+		LastUpdated:            catalogStringField(raw, "last_updated"),
+		Metadata:               metadata,
 	}
 	model.Capabilities = catalogModelCapabilities(raw, model)
 	model.SupportedParameters = catalogModelParameters(raw, model)

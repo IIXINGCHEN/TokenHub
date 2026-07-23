@@ -125,7 +125,7 @@ export function providerResourceToForm(item: ProviderResource) {
 }
 
 export function modelPayload(values: Record<string, string>) {
-  const payload = numberPayload(values, ["context_window", "input_price_usd_per_1m", "output_price_usd_per_1m", "embedding_price_usd_per_1m"]);
+  const payload = numberPayload(values, ["context_window", "input_price_usd_per_1m", "cache_read_price_usd_per_1m", "output_price_usd_per_1m", "embedding_price_usd_per_1m"]);
   payload.category = values.category || inferModelCategoryText(values.name || values.family || "");
   payload.capabilities = splitList(values.capabilities);
   payload.supported_parameters = splitList(values.supported_parameters);

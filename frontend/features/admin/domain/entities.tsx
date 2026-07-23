@@ -459,12 +459,14 @@ export function providerCostDetailRows(data: AppData) {
       id,
       request_count: 0,
       input_tokens: 0,
+      cached_input_tokens: 0,
       output_tokens: 0,
       total_tokens: 0,
       estimated_cost_usd: 0,
     };
     current.request_count += row.request_count;
     current.input_tokens += row.input_tokens;
+    current.cached_input_tokens = (current.cached_input_tokens ?? 0) + (row.cached_input_tokens ?? 0);
     current.output_tokens += row.output_tokens;
     current.total_tokens += row.total_tokens;
     current.estimated_cost_usd += row.estimated_cost_usd;

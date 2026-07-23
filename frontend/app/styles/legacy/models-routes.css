@@ -783,6 +783,58 @@
   color: var(--muted);
 }
 
+.model-cache-price {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: help;
+  outline: none;
+}
+
+.model-cache-price svg {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.model-cache-price::after {
+  position: absolute;
+  z-index: 20;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  width: max-content;
+  max-width: 300px;
+  border: 1px solid rgb(255 255 255 / 0.12);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #172033;
+  box-shadow: 0 8px 24px rgb(15 23 42 / 0.2);
+  color: #f8fafc;
+  content: attr(data-tooltip);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+  opacity: 0;
+  pointer-events: none;
+  text-align: left;
+  transform: translate(-50%, 4px);
+  transition: opacity 120ms ease, transform 120ms ease, visibility 120ms ease;
+  visibility: hidden;
+  white-space: normal;
+}
+
+.model-cache-price:hover::after,
+.model-cache-price:focus::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  visibility: visible;
+}
+
+.model-cache-price.estimated .model-price-number {
+  border-bottom: 1px dashed currentColor;
+}
+
 .model-context-cell {
   display: grid;
   gap: 2px;

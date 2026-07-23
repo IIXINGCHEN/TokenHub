@@ -177,7 +177,7 @@ export function modelCatalogPriceRow(model: Model, data: AppData, readOnly: bool
   const category = modelCategory(model);
   const inputPrice = modelCatalogInputPrice(model);
   const outputPrice = model.output_price_usd_per_1m || undefined;
-  const cacheReadPrice = modelCachedReadPrice(model);
+  const cacheRead = modelCacheReadPriceInfo(model);
   const monthlyCost = modelEstimatedMonthlyCost(model);
   const priceIndex = monthlyCost > 0 && baseline > 0 ? monthlyCost / baseline : 0;
   const availability = modelAvailabilitySummary(model, data, readOnly);
@@ -190,7 +190,9 @@ export function modelCatalogPriceRow(model: Model, data: AppData, readOnly: bool
     categoryLabel: modelCategoryLabel(category),
     inputPrice,
     outputPrice,
-    cacheReadPrice,
+    cacheReadPrice: cacheRead.price,
+    cacheReadPriceSource: cacheRead.source,
+    cacheReadPriceHint: modelCacheReadPriceHint(cacheRead),
     monthlyCost,
     priceIndex,
     contextLabel: model.context_window ? modelCatalogCompactNumber(model.context_window) : "-",
@@ -208,23 +210,52 @@ export function modelCatalogInputPrice(model: Model) {
   return undefined;
 }
 
-export function modelCachedReadPrice(model: Model) {
-  const configured = readModelMetadataNumber(model, [
+export type ModelCacheReadPriceInfo = {
+  price?: number;
+  source: "configured" | "estimated" | "unavailable";
+  ratio?: number;
+};
+
+export const defaultCacheReadEstimateRatio = 0.10;
+export const deepSeekCacheReadEstimateRatio = 0.02;
+export const deepSeekV4ProCacheReadRatio = 1 / 120;
+
+export function modelCacheReadPriceInfo(model: Model): ModelCacheReadPriceInfo {
+  const configured = model.cache_read_price_usd_per_1m || readModelMetadataNumber(model, [
     "cached_input_price_usd_per_1m",
     "cache_read_price_usd_per_1m",
     "cached_read_price_usd_per_1m",
   ]);
-  if (configured > 0) return configured;
+  if (configured > 0) return { price: configured, source: "configured" };
   const input = model.input_price_usd_per_1m || 0;
-  if (!input || model.modality === "embedding") return undefined;
+  if (!input || model.modality === "embedding") return { source: "unavailable" };
   const category = modelCategory(model);
-  const cacheHint = [model.name, model.family, ...(model.capabilities ?? []), ...(model.supported_parameters ?? [])]
-    .join(" ")
-    .toLowerCase();
-  const commonlyCached = ["openai", "claude", "gemini", "deepseek"].includes(category)
-    || cacheHint.includes("cache")
-    || cacheHint.includes("prompt");
-  return commonlyCached ? input * 0.25 : undefined;
+  const deepSeekV4Pro = `${model.name} ${model.family ?? ""}`.toLowerCase().includes("v4-pro");
+  const ratio = category !== "deepseek"
+    ? defaultCacheReadEstimateRatio
+    : deepSeekV4Pro
+      ? deepSeekV4ProCacheReadRatio
+      : deepSeekCacheReadEstimateRatio;
+  return { price: input * ratio, source: "estimated", ratio };
+}
+
+export function modelCachedReadPrice(model: Model) {
+  return modelCacheReadPriceInfo(model).price;
+}
+
+export function modelCacheReadPriceHint(info: ModelCacheReadPriceInfo) {
+  if (info.source === "configured") {
+    return `${tx("已配置缓存读价")} $${modelCatalogMoney(info.price || 0)}/1M Token；${tx("命中缓存的输入 Token 按此价格估算成本。")}`;
+  }
+  if (info.source === "estimated") {
+    return `${tx("未配置缓存读价，当前按标准输入价的")} ${cacheReadEstimatePercent(info.ratio || 0)} ${tx("估算；建议按上游实际价格配置。")}`;
+  }
+  return tx("缺少标准输入价，无法估算缓存读价。");
+}
+
+export function cacheReadEstimatePercent(ratio: number) {
+  const percent = ratio * 100;
+  return `${Number.isInteger(percent) ? percent.toFixed(0) : percent.toFixed(2)}%`;
 }
 
 export function readModelMetadataNumber(model: Model, keys: string[]) {

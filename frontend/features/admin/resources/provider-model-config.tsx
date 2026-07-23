@@ -222,6 +222,13 @@ export function modelConfig(): ResourceConfig<Model> {
       { key: "modality", label: "能力", type: "select", options: ["chat", "embedding", "image", "video", "audio", "ocr", "rerank"], required: true },
       { key: "context_window", label: "上下文窗口", type: "number" },
       { key: "input_price_usd_per_1m", label: "输入价 USD/1M", type: "number" },
+      {
+        key: "cache_read_price_usd_per_1m",
+        label: "缓存读价 USD/1M",
+        type: "number",
+        placeholder: "可选，留空时按同类模型常见比例估算",
+        help: "配置值优先用于成本计算；留空时 DeepSeek V4 Pro 按约 0.83%、其他 DeepSeek 按 2%、其余模型按 10% 估算。",
+      },
       { key: "output_price_usd_per_1m", label: "输出价 USD/1M", type: "number" },
       { key: "embedding_price_usd_per_1m", label: "Embedding 价 USD/1M", type: "number" },
       { key: "capabilities", label: "能力标签，逗号分隔" },

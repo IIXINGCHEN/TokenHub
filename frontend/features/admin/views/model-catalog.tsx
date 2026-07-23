@@ -1,4 +1,4 @@
-import { AlertCircle, Boxes, ChevronDown, Gauge, GripVertical, Plus, Search, Trash2 } from "lucide-react";
+import { AlertCircle, Boxes, ChevronDown, CircleHelp, Gauge, GripVertical, Plus, Search, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { type AppData, type Model, type ModelRoute, type Provider, type ResourceAction, type ResourceConfig, type ViewKey } from "../core/types";
 import { filterModelCatalog, hasThirdPartyRoute, modelCapabilityLabel, modelCatalogCapabilityTabs, modelCatalogCategories, modelCatalogFilterLabel, modelCategory, modelCategoryInitial, modelCategoryLabel, modelCategoryTabs, notificationChannelTabs, priceMetric } from "../domain/catalog";
@@ -273,7 +273,19 @@ export function ModelCatalogPriceTable({
                 </td>
                 <td><strong className="model-price-number">{modelCatalogPriceValue(row.inputPrice)}</strong></td>
                 <td><strong className="model-price-number output">{modelCatalogPriceValue(row.outputPrice)}</strong></td>
-                <td><strong className={row.cacheReadPrice ? "model-price-number" : "model-price-number muted"}>{modelCatalogPriceValue(row.cacheReadPrice)}</strong></td>
+                <td>
+                  <span
+                    aria-label={row.cacheReadPriceHint}
+                    className={`model-cache-price ${row.cacheReadPriceSource}`}
+                    data-tooltip={row.cacheReadPriceHint}
+                    tabIndex={0}
+                  >
+                    <strong className={row.cacheReadPrice ? "model-price-number" : "model-price-number muted"}>
+                      {modelCatalogPriceValue(row.cacheReadPrice)}
+                    </strong>
+                    <CircleHelp aria-hidden="true" size={13} />
+                  </span>
+                </td>
                 <td>
                   <div className="model-context-cell">
                     <strong>{row.contextLabel}</strong>

@@ -1,6 +1,71 @@
 package server
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
+
+func TestPriceUsageAppliesConfiguredCacheReadPrice(t *testing.T) {
+	model := Model{
+		Modality:               "chat",
+		InputPriceUSDPer1M:     2,
+		CacheReadPriceUSDPer1M: 0.5,
+		OutputPriceUSDPer1M:    8,
+	}
+	usage := priceUsage(model, Usage{
+		PromptTokens:      1000,
+		CachedInputTokens: 400,
+		CompletionTokens:  100,
+	})
+
+	if math.Abs(usage.CostUSD-0.0022) > 1e-12 {
+		t.Fatalf("cost = %.12f, want 0.0022", usage.CostUSD)
+	}
+	if usage.TotalTokens != 1100 {
+		t.Fatalf("total tokens = %d, want 1100", usage.TotalTokens)
+	}
+}
+
+func TestEffectiveCacheReadPriceUsesCategoryEstimateWhenUnconfigured(t *testing.T) {
+	tests := []struct {
+		name  string
+		model Model
+		want  float64
+	}{
+		{
+			name:  "default ten percent",
+			model: Model{Name: "gpt-test", Category: "openai", InputPriceUSDPer1M: 2},
+			want:  0.2,
+		},
+		{
+			name:  "deepseek two percent",
+			model: Model{Name: "deepseek-test", Category: "deepseek", InputPriceUSDPer1M: 2},
+			want:  0.04,
+		},
+		{
+			name:  "deepseek v4 pro current ratio",
+			model: Model{Name: "deepseek-v4-pro", Category: "deepseek", InputPriceUSDPer1M: 2},
+			want:  2.0 / 120,
+		},
+		{
+			name: "legacy metadata remains supported",
+			model: Model{
+				Name:               "legacy",
+				InputPriceUSDPer1M: 2,
+				Metadata:           map[string]string{"cached_input_price_usd_per_1m": "0.3"},
+			},
+			want: 0.3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := effectiveCacheReadPriceUSDPer1M(tt.model); math.Abs(got-tt.want) > 1e-12 {
+				t.Fatalf("effective cache price = %.12f, want %.12f", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestDeleteAdminUserProtectsLastActivePlatformAdmin(t *testing.T) {
 	store := NewMemoryStore()
