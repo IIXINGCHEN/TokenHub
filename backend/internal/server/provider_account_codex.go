@@ -8,34 +8,40 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
 const (
-	openAICodexBaseURL       = "https://chatgpt.com/backend-api/codex"
-	openAICodexResponsesURL  = openAICodexBaseURL + "/responses"
-	openAICodexModelsURL     = openAICodexBaseURL + "/models"
-	openAICodexVersion       = "0.145.0"
-	openAICodexUserAgent     = "codex_cli_rs/0.145.0 (Mac OS 15.0.0; arm64) xterm-256color"
-	openAICodexInstructions  = "You are Codex, a coding agent. Follow the user's request and return a clear, accurate result."
-	openAICodexFastTestModel = "gpt-5.6-luna"
+	openAICodexBaseURL           = "https://chatgpt.com/backend-api/codex"
+	openAICodexResponsesURL      = openAICodexBaseURL + "/responses"
+	openAICodexModelsURL         = openAICodexBaseURL + "/models"
+	openAICodexVersion           = "0.145.0"
+	openAICodexUserAgent         = "codex_cli_rs/0.145.0 (Mac OS 15.0.0; arm64) xterm-256color"
+	openAICodexFastTestModel     = "gpt-5.6-luna"
+	openAICodexMaxRequestRetries = 4
+	openAICodexStreamIdleTimeout = 5 * time.Minute
 )
 
 type CodexSubscriptionAdapter struct {
 	Client             *http.Client
 	RefreshCredentials func(context.Context, string, bool) (ProviderResourceCredentials, error)
 	ModelsURL          string
+	QuotaURL           string
+	MaxRequestRetries  int
 }
 
-type codexSubscriptionTestRequest struct {
+type ProviderProbeRequest struct {
 	Model           string `json:"model"`
 	ReasoningEffort string `json:"reasoning_effort"`
 	Speed           string `json:"speed"`
 	Prompt          string `json:"prompt"`
 }
 
-type codexSubscriptionTestResponse struct {
+type ProviderProbeResult struct {
 	ResourceID          string         `json:"resource_id"`
 	Model               string         `json:"model"`
 	ReasoningEffort     string         `json:"reasoning_effort"`
@@ -47,25 +53,21 @@ type codexSubscriptionTestResponse struct {
 	Response            map[string]any `json:"response"`
 }
 
-func (a CodexSubscriptionAdapter) Chat(context.Context, Provider, string, ChatCompletionRequest) (any, Usage, error) {
-	return nil, Usage{}, NewHTTPError(http.StatusBadRequest, "codex_subscription_endpoint_unsupported", "Codex Subscription supports the Responses API")
-}
-
-func (a CodexSubscriptionAdapter) ChatStream(context.Context, Provider, string, ChatCompletionRequest, io.Writer) (Usage, error) {
-	return Usage{}, NewHTTPError(http.StatusBadRequest, "codex_subscription_endpoint_unsupported", "Codex Subscription supports the Responses API")
-}
-
-func (a CodexSubscriptionAdapter) Embeddings(context.Context, Provider, string, EmbeddingsRequest) (any, Usage, error) {
-	return nil, Usage{}, NewHTTPError(http.StatusBadRequest, "codex_subscription_endpoint_unsupported", "Codex Subscription supports the Responses API")
-}
+type codexSubscriptionTestRequest = ProviderProbeRequest
+type codexSubscriptionTestResponse = ProviderProbeResult
 
 func (a CodexSubscriptionAdapter) Responses(ctx context.Context, provider Provider, providerModel string, request ResponsesRequest) (any, Usage, error) {
-	resp, err := a.OpenResponses(ctx, provider, providerModel, request, nil)
+	return a.ResponsesWithHeaders(ctx, provider, providerModel, request, nil)
+}
+
+func (a CodexSubscriptionAdapter) ResponsesWithHeaders(ctx context.Context, provider Provider, providerModel string, request ResponsesRequest, incoming http.Header) (any, Usage, error) {
+	resp, err := a.OpenResponses(ctx, provider, providerModel, request, incoming)
 	if err != nil {
 		return nil, Usage{}, err
 	}
 	defer resp.Body.Close()
 	response, outputText, usage, err := consumeCodexResponsesStream(resp.Body, nil)
+	applyCodexResponseMetadata(&usage, resp.Header)
 	if err != nil {
 		return nil, usage, err
 	}
@@ -95,18 +97,55 @@ func (a CodexSubscriptionAdapter) OpenResponses(ctx context.Context, provider Pr
 	if err != nil {
 		return nil, err
 	}
-	resp, err := a.openResponsesWithCredentials(ctx, creds, providerModel, request, incoming)
-	if err == nil || AsHTTPError(err).Status != http.StatusUnauthorized {
+	endpoint, err := codexResponsesEndpoint(provider)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := a.openResponsesWithRetry(ctx, endpoint, creds, providerModel, request, incoming)
+	if err == nil || providerErrorDisposition(err) != ProviderErrorAuthBroken {
 		return resp, err
 	}
 	creds, refreshErr := a.RefreshCredentials(ctx, resourceID, true)
 	if refreshErr != nil {
 		return nil, refreshErr
 	}
-	return a.openResponsesWithCredentials(ctx, creds, providerModel, request, incoming)
+	return a.openResponsesWithRetry(ctx, endpoint, creds, providerModel, request, incoming)
 }
 
-func (a CodexSubscriptionAdapter) openResponsesWithCredentials(ctx context.Context, creds ProviderResourceCredentials, providerModel string, request ResponsesRequest, incoming http.Header) (*http.Response, error) {
+func (a CodexSubscriptionAdapter) openResponsesWithRetry(ctx context.Context, endpoint string, creds ProviderResourceCredentials, providerModel string, request ResponsesRequest, incoming http.Header) (*http.Response, error) {
+	maxRetries := a.MaxRequestRetries
+	if maxRetries <= 0 {
+		maxRetries = openAICodexMaxRequestRetries
+	}
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		resp, err := a.openResponsesWithCredentials(ctx, endpoint, creds, providerModel, request, incoming)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		if providerErrorDisposition(err) != ProviderErrorTransientSame || attempt == maxRetries {
+			return nil, err
+		}
+		delay := providerErrorRetryAfter(err)
+		if delay <= 0 {
+			delay = time.Duration(100*(1<<attempt)) * time.Millisecond
+		}
+		if delay > 2*time.Second {
+			delay = 2 * time.Second
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return nil, lastErr
+}
+
+func (a CodexSubscriptionAdapter) openResponsesWithCredentials(ctx context.Context, endpoint string, creds ProviderResourceCredentials, providerModel string, request ResponsesRequest, incoming http.Header) (*http.Response, error) {
 	accessToken := strings.TrimSpace(creds.AccessToken)
 	accountID := strings.TrimSpace(creds.AccountID)
 	if accessToken == "" {
@@ -123,54 +162,134 @@ func (a CodexSubscriptionAdapter) openResponsesWithCredentials(ctx context.Conte
 		}}
 	}
 	request.Stream = true
-	store := false
-	request.Store = &store
-	if strings.TrimSpace(request.Instructions) == "" {
-		request.Instructions = openAICodexInstructions
+	if request.Store == nil {
+		store := false
+		request.Store = &store
 	}
 	if strings.EqualFold(strings.TrimSpace(request.ServiceTier), "fast") {
 		request.ServiceTier = "priority"
 	}
+	applyCodexRequestEnvelope(&request, incoming)
 	payload, err := json.Marshal(request)
 	if err != nil {
 		return nil, NewHTTPError(http.StatusBadRequest, "invalid_request", err.Error())
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, openAICodexResponsesURL, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return nil, NewHTTPError(http.StatusBadGateway, "codex_request_failed", err.Error())
 	}
-	req.Host = "chatgpt.com"
+	if parsed, parseErr := url.Parse(endpoint); parseErr == nil && strings.EqualFold(parsed.Hostname(), "chatgpt.com") {
+		req.Host = parsed.Host
+	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("ChatGPT-Account-ID", accountID)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("OpenAI-Beta", "responses=experimental")
-	req.Header.Set("Originator", "codex_cli_rs")
-	req.Header.Set("User-Agent", openAICodexUserAgent)
-	req.Header.Set("Version", openAICodexVersion)
-	for _, key := range []string{"session_id", "conversation_id", "x-codex-turn-metadata", "accept-language"} {
-		if value := strings.TrimSpace(incoming.Get(key)); value != "" {
-			req.Header.Set(key, value)
-		}
-	}
+	applyCodexRequestHeaders(req.Header, incoming)
 	client := a.Client
 	if client == nil {
 		client = http.DefaultClient
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, NewHTTPError(http.StatusBadGateway, "codex_request_failed", fmt.Sprintf("Codex request failed: %v", err))
+		return nil, &ProviderInvocationError{
+			Err:         NewHTTPError(http.StatusBadGateway, "codex_request_failed", fmt.Sprintf("Codex request failed: %v", err)),
+			Disposition: ProviderErrorTransientSame,
+		}
 	}
 	if resp.StatusCode >= http.StatusBadRequest {
 		defer resp.Body.Close()
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
-		message := strings.TrimSpace(string(data))
-		if message == "" {
-			message = http.StatusText(resp.StatusCode)
-		}
-		return nil, NewHTTPError(resp.StatusCode, "codex_upstream_error", message)
+		return nil, classifyCodexHTTPError(resp.StatusCode, resp.Header, data)
 	}
+	resp.Body = newIdleTimeoutReadCloser(resp.Body, openAICodexStreamIdleTimeout)
 	return resp, nil
+}
+
+type idleTimeoutReadCloser struct {
+	source   io.ReadCloser
+	timeout  time.Duration
+	timerMu  sync.Mutex
+	timer    *time.Timer
+	timedOut atomic.Bool
+}
+
+func newIdleTimeoutReadCloser(source io.ReadCloser, timeout time.Duration) io.ReadCloser {
+	if source == nil || timeout <= 0 {
+		return source
+	}
+	reader := &idleTimeoutReadCloser{source: source, timeout: timeout}
+	reader.resetTimer()
+	return reader
+}
+
+func (r *idleTimeoutReadCloser) Read(buffer []byte) (int, error) {
+	count, err := r.source.Read(buffer)
+	if count > 0 {
+		r.resetTimer()
+	}
+	if err != nil && r.timedOut.Load() {
+		return count, NewHTTPError(http.StatusGatewayTimeout, "codex_stream_idle_timeout", "Codex stream was idle for too long")
+	}
+	return count, err
+}
+
+func (r *idleTimeoutReadCloser) Close() error {
+	r.timerMu.Lock()
+	if r.timer != nil {
+		r.timer.Stop()
+		r.timer = nil
+	}
+	r.timerMu.Unlock()
+	return r.source.Close()
+}
+
+func (r *idleTimeoutReadCloser) resetTimer() {
+	r.timerMu.Lock()
+	defer r.timerMu.Unlock()
+	if r.timer == nil {
+		r.timer = time.AfterFunc(r.timeout, func() {
+			r.timedOut.Store(true)
+			_ = r.source.Close()
+		})
+		return
+	}
+	r.timer.Reset(r.timeout)
+}
+
+func codexResponsesEndpoint(provider Provider) (string, error) {
+	baseURL := strings.TrimSpace(provider.BaseURL)
+	if baseURL == "" {
+		return openAICodexResponsesURL, nil
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", NewHTTPError(http.StatusBadRequest, "codex_base_url_invalid", "Codex base URL must be an absolute URL")
+	}
+	if parsed.Scheme != "https" && !strings.EqualFold(parsed.Hostname(), "localhost") {
+		return "", NewHTTPError(http.StatusBadRequest, "codex_base_url_invalid", "Codex base URL must use HTTPS")
+	}
+	if err := validateCodexEndpointHost(provider, parsed); err != nil {
+		return "", err
+	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	if !strings.HasSuffix(parsed.Path, "/responses") {
+		parsed.Path += "/responses"
+	}
+	return parsed.String(), nil
+}
+
+func validateCodexEndpointHost(provider Provider, endpoint *url.URL) error {
+	hostname := strings.ToLower(strings.TrimSpace(endpoint.Hostname()))
+	if hostname == "chatgpt.com" || hostname == "localhost" || hostname == "127.0.0.1" || hostname == "::1" {
+		return nil
+	}
+	for _, allowed := range strings.Split(provider.Options["allowed_codex_hosts"], ",") {
+		if hostname == strings.ToLower(strings.TrimSpace(allowed)) {
+			return nil
+		}
+	}
+	return NewHTTPError(http.StatusBadRequest, "codex_endpoint_host_not_allowed", "Codex Subscription credentials cannot be sent to this host")
 }
 
 func consumeCodexResponsesStream(body io.Reader, destination io.Writer) (map[string]any, string, Usage, error) {
@@ -234,7 +353,10 @@ func consumeCodexResponsesStream(body io.Reader, destination io.Writer) (map[str
 }
 
 func (s *Server) handleStreamingResponses(w http.ResponseWriter, r *http.Request, routed RoutedCall, request ResponsesRequest) {
-	resp, route, _, attempts, err := executeRoutedWithStore(r.Context(), s.store, routed, func(ctx context.Context, route RouteSelection) (*http.Response, Usage, error) {
+	streamStarted := false
+	attemptNumber := 0
+	response, route, usage, attempts, err := executeRoutedWithStore(r.Context(), s.store, routed, func(ctx context.Context, route RouteSelection) (map[string]any, Usage, error) {
+		attemptNumber++
 		prepared, err := s.prepareRouteForUpstream(ctx, route)
 		if err != nil {
 			return nil, Usage{}, err
@@ -243,62 +365,73 @@ func (s *Server) handleStreamingResponses(w http.ResponseWriter, r *http.Request
 		if err != nil {
 			return nil, Usage{}, err
 		}
-		codex, ok := adapter.(CodexSubscriptionAdapter)
+		streamAdapter, ok := adapter.(ResponsesStreamOpener)
 		if !ok {
-			return nil, Usage{}, NewHTTPError(http.StatusBadRequest, "responses_stream_unsupported", "Streaming Responses is currently available through Codex Subscription resources")
+			return nil, Usage{}, NewHTTPError(http.StatusBadRequest, "adapter_capability_unsupported", "Provider adapter does not support streaming Responses")
 		}
-		opened, err := codex.OpenResponses(ctx, prepared.Provider, prepared.ProviderModel, request, r.Header)
+		opened, err := streamAdapter.OpenResponses(ctx, prepared.Provider, prepared.ProviderModel, request, r.Header)
 		if isCodexModelUnsupportedError(err) {
 			s.removeCodexResourceModel(routeResourceID(route), route.ProviderModel)
 		}
-		return opened, Usage{}, err
+		if err != nil {
+			return nil, Usage{}, err
+		}
+		defer opened.Body.Close()
+		w.Header().Set("content-type", "text/event-stream")
+		w.Header().Set("cache-control", "no-cache")
+		w.Header().Set("connection", "keep-alive")
+		w.Header().Set("x-accel-buffering", "no")
+		w.Header().Set("x-request-id", routed.Call.RequestID)
+		writeCodexResponseHeaders(w.Header(), opened.Header)
+		s.writeRouteHeaders(w, routed.Call, prepared, attemptNumber)
+		w.WriteHeader(http.StatusOK)
+		streamStarted = true
+		response, _, usage, streamErr := consumeCodexResponsesStream(opened.Body, w)
+		applyCodexResponseMetadata(&usage, opened.Header)
+		if streamErr != nil {
+			return response, usage, &ProviderInvocationError{
+				Err:         streamErr,
+				Disposition: ProviderErrorStreamCommitted,
+			}
+		}
+		return response, usage, nil
 	})
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, attempts, err)
+		if streamStarted {
+			httpErr := AsHTTPError(err)
+			s.store.RecordRouteAttempts(routed.Call.RequestID, attempts)
+			s.store.FinishCall(routed.Call, route, usage, httpErr.Status, httpErr.Code, s.clientIP(r), r.UserAgent())
+		} else {
+			s.finishFailedRoutedCall(r, routed, attempts, err)
+		}
 		s.recordRequestPayload(routed.Call.RequestID, request, auditErrorPayload(err, routed.Call.RequestID))
-		writeError(w, r, err)
+		if !streamStarted {
+			writeError(w, r, err)
+		}
 		return
 	}
-	defer resp.Body.Close()
-	w.Header().Set("content-type", "text/event-stream")
-	w.Header().Set("cache-control", "no-cache")
-	w.Header().Set("connection", "keep-alive")
-	w.Header().Set("x-accel-buffering", "no")
-	w.Header().Set("x-request-id", routed.Call.RequestID)
-	s.writeRouteHeaders(w, routed.Call, route, len(attempts))
-	w.WriteHeader(http.StatusOK)
-	response, _, usage, streamErr := consumeCodexResponsesStream(resp.Body, w)
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
 	}
 	s.store.MarkRouteUsed(route.Route.ID)
 	s.store.MarkProviderResourceUsed(routeResourceID(route))
 	s.store.RecordRouteAttempts(routed.Call.RequestID, attempts)
-	if streamErr != nil {
-		httpErr := AsHTTPError(streamErr)
-		s.store.FinishCall(routed.Call, route, usage, httpErr.Status, httpErr.Code, s.clientIP(r), r.UserAgent())
-		s.recordRequestPayload(routed.Call.RequestID, request, auditErrorPayload(streamErr, routed.Call.RequestID))
-		return
-	}
 	s.store.FinishCall(routed.Call, route, usage, http.StatusOK, "", s.clientIP(r), r.UserAgent())
 	s.recordRequestPayload(routed.Call.RequestID, request, response)
 }
 
 func codexStreamEventError(event map[string]any) error {
-	message := "Codex response failed"
+	payload := map[string]any{"message": "Codex response failed"}
 	if errorPayload, ok := event["error"].(map[string]any); ok {
-		if value, ok := errorPayload["message"].(string); ok && strings.TrimSpace(value) != "" {
-			message = value
-		}
+		payload = errorPayload
 	}
 	if response, ok := event["response"].(map[string]any); ok {
 		if errorPayload, ok := response["error"].(map[string]any); ok {
-			if value, ok := errorPayload["message"].(string); ok && strings.TrimSpace(value) != "" {
-				message = value
-			}
+			payload = errorPayload
 		}
 	}
-	return NewHTTPError(http.StatusBadGateway, "codex_response_failed", message)
+	encoded, _ := json.Marshal(map[string]any{"error": payload})
+	return classifyCodexHTTPError(http.StatusBadGateway, nil, encoded)
 }
 
 func codexResponseOutputText(response map[string]any) string {
@@ -322,44 +455,44 @@ func codexResponseOutputText(response map[string]any) string {
 	return result.String()
 }
 
-func (s *Server) testCodexSubscription(ctx context.Context, resourceID string, request codexSubscriptionTestRequest) (codexSubscriptionTestResponse, error) {
-	resource, ok := s.providerResourceByID(resourceID)
-	if !ok {
-		return codexSubscriptionTestResponse{}, NewHTTPError(http.StatusNotFound, "provider_resource_not_found", "Provider resource not found")
+func (a CodexSubscriptionAdapter) DefaultProbeRequest() ProviderProbeRequest {
+	return ProviderProbeRequest{
+		Model:           openAICodexFastTestModel,
+		ReasoningEffort: "medium",
+		Speed:           "standard",
+		Prompt:          "Reply with exactly one short sentence confirming that the Codex connection works.",
 	}
-	if !isOpenAIAccountResource(resource.ResourceType) {
-		return codexSubscriptionTestResponse{}, NewHTTPError(http.StatusBadRequest, "provider_resource_test_unsupported", "This real test is only available for Codex Subscription resources")
-	}
+}
+
+func (a CodexSubscriptionAdapter) Probe(ctx context.Context, provider Provider, resource ProviderResource, request ProviderProbeRequest) (ProviderProbeResult, error) {
+	defaults := a.DefaultProbeRequest()
 	request.Model = strings.TrimSpace(request.Model)
 	request.ReasoningEffort = strings.ToLower(strings.TrimSpace(request.ReasoningEffort))
 	request.Speed = strings.ToLower(strings.TrimSpace(request.Speed))
 	request.Prompt = strings.TrimSpace(request.Prompt)
-	catalog, err := s.queryOpenAICodexModels(ctx, resourceID)
-	if err != nil {
-		return codexSubscriptionTestResponse{}, err
+	if request.Model == "" {
+		request.Model = defaults.Model
 	}
-	model, ok := codexCatalogModelByID(catalog.Models, request.Model)
-	if !ok {
-		return codexSubscriptionTestResponse{}, NewHTTPError(http.StatusBadRequest, "codex_model_invalid", "Select a supported Codex model")
-	}
-	if !stringInList(request.ReasoningEffort, strings.Split(model.Metadata["supported_reasoning_levels"], ",")) {
-		return codexSubscriptionTestResponse{}, NewHTTPError(http.StatusBadRequest, "codex_reasoning_effort_invalid", "Select a supported reasoning effort")
+	if request.ReasoningEffort == "" {
+		request.ReasoningEffort = defaults.ReasoningEffort
 	}
 	if request.Speed == "" {
-		request.Speed = "standard"
-	}
-	if request.Speed != "standard" && request.Speed != "fast" {
-		return codexSubscriptionTestResponse{}, NewHTTPError(http.StatusBadRequest, "codex_speed_invalid", "Speed must be standard or fast")
-	}
-	if request.Speed == "fast" && request.Model != openAICodexFastTestModel {
-		return codexSubscriptionTestResponse{}, NewHTTPError(http.StatusBadRequest, "codex_fast_test_model_blocked", "Fast-mode tests are restricted to the lower-cost gpt-5.6-luna model")
+		request.Speed = defaults.Speed
 	}
 	if request.Prompt == "" {
-		return codexSubscriptionTestResponse{}, NewHTTPError(http.StatusBadRequest, "codex_prompt_missing", "Enter a real prompt before testing")
+		request.Prompt = defaults.Prompt
 	}
-	provider, ok := s.providerByID(resource.ProviderID)
-	if !ok {
-		return codexSubscriptionTestResponse{}, NewHTTPError(http.StatusNotFound, "provider_not_found", "Provider not found")
+	if models, _, cached := codexResourceCachedModels(&resource); cached && !codexModelInList(request.Model, models) {
+		return ProviderProbeResult{}, NewHTTPError(http.StatusBadRequest, "codex_model_invalid", "Select a supported Codex model")
+	}
+	if !stringInList(request.ReasoningEffort, []string{"none", "minimal", "low", "medium", "high", "xhigh"}) {
+		return ProviderProbeResult{}, NewHTTPError(http.StatusBadRequest, "codex_reasoning_effort_invalid", "Select a supported reasoning effort")
+	}
+	if request.Speed != "standard" && request.Speed != "fast" {
+		return ProviderProbeResult{}, NewHTTPError(http.StatusBadRequest, "codex_speed_invalid", "Speed must be standard or fast")
+	}
+	if request.Speed == "fast" && request.Model != openAICodexFastTestModel {
+		return ProviderProbeResult{}, NewHTTPError(http.StatusBadRequest, "codex_fast_test_model_blocked", "Fast-mode tests are restricted to the lower-cost gpt-5.6-luna model")
 	}
 	if provider.Options == nil {
 		provider.Options = map[string]string{}
@@ -377,20 +510,18 @@ func (s *Server) testCodexSubscription(ctx context.Context, resourceID string, r
 		responsesRequest.ServiceTier = "priority"
 	}
 	startedAt := time.Now()
-	resp, err := s.codexSubscription.OpenResponses(ctx, provider, request.Model, responsesRequest, nil)
+	resp, err := a.OpenResponses(ctx, provider, request.Model, responsesRequest, nil)
 	if err != nil {
-		_, _ = s.store.SetProviderResourceHealth(resourceID, false)
-		return codexSubscriptionTestResponse{}, err
+		return ProviderProbeResult{}, err
 	}
 	defer resp.Body.Close()
 	response, outputText, usage, err := consumeCodexResponsesStream(resp.Body, nil)
+	applyCodexResponseMetadata(&usage, resp.Header)
 	if err != nil {
-		_, _ = s.store.SetProviderResourceHealth(resourceID, false)
-		return codexSubscriptionTestResponse{}, err
+		return ProviderProbeResult{}, err
 	}
-	_, _ = s.store.SetProviderResourceHealth(resourceID, true)
-	return codexSubscriptionTestResponse{
-		ResourceID:          resourceID,
+	return ProviderProbeResult{
+		ResourceID:          resource.ID,
 		Model:               request.Model,
 		ReasoningEffort:     request.ReasoningEffort,
 		Speed:               request.Speed,

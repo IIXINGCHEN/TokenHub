@@ -20,7 +20,11 @@ func RunStartupBootstrap(ctx context.Context, store *GormStore, config Config) e
 		seed = SeedDemoDataWithConfig
 	}
 	return store.RunClusterOperation(ctx, operation, func(leaseCtx context.Context) error {
-		return seed(store.WithContext(leaseCtx), config)
+		contextual := store.WithContext(leaseCtx)
+		if err := contextual.NormalizeProviderAdapterTypes(leaseCtx); err != nil {
+			return err
+		}
+		return seed(contextual, config)
 	})
 }
 

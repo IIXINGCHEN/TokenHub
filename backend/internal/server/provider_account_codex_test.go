@@ -81,6 +81,66 @@ func TestCodexSubscriptionModelsUsesLiveVisibleCatalog(t *testing.T) {
 	}
 }
 
+func TestCodexModelCatalogUsesETagAndPersistedSnapshot(t *testing.T) {
+	store := NewMemoryStore()
+	provider := store.AddProvider(Provider{
+		ID:      "prv_models_etag",
+		Name:    "Codex Models ETag",
+		Type:    ProviderOpenAICodex,
+		Status:  StatusActive,
+		Healthy: true,
+	})
+	resource, err := store.AddProviderResource(ProviderResource{
+		ID:           "rsrc_models_etag",
+		ProviderID:   provider.ID,
+		Name:         "ETag Account",
+		ResourceType: ProviderResourceOpenAISubscription,
+		Status:       StatusActive,
+		Healthy:      true,
+		Credentials:  &ProviderResourceCredentials{AccessToken: "access_etag", AccountID: "account_etag"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := 0
+	server := New(store)
+	server.codexSubscription.ModelsURL = "https://chatgpt.example/backend-api/codex/models"
+	server.codexSubscription.Client = &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		requests++
+		if requests == 2 {
+			if req.Header.Get("If-None-Match") != `"models-v1"` {
+				t.Fatalf("model ETag was not sent: %#v", req.Header)
+			}
+			return &http.Response{
+				StatusCode: http.StatusNotModified,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("")),
+				Request:    req,
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Etag": []string{`"models-v1"`}},
+			Body: io.NopCloser(strings.NewReader(
+				`{"models":[{"slug":"gpt-etag","display_name":"GPT ETag","visibility":"list","supported_in_api":true,"priority":1,"minimal_client_version":[0,145,0]}]}`,
+			)),
+			Request: req,
+		}, nil
+	})}
+	first, err := server.queryOpenAICodexModels(context.Background(), resource.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := server.queryOpenAICodexModels(context.Background(), resource.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 || first.ETag != `"models-v1"` || second.Source != "openai-codex-cache" ||
+		len(second.Models) != 1 || second.Models[0].Metadata["minimal_client_version"] != "0.145.0" {
+		t.Fatalf("unexpected ETag model snapshots: requests=%d first=%+v second=%+v", requests, first, second)
+	}
+}
+
 func TestCodexRouteFilteringUsesPerAccountModels(t *testing.T) {
 	store := NewMemoryStore()
 	provider := store.AddProvider(Provider{
@@ -135,7 +195,7 @@ func TestCodexRouteFilteringUsesPerAccountModels(t *testing.T) {
 	}
 }
 
-func TestCodexRouteFilteringRefreshesEachAccountCatalog(t *testing.T) {
+func TestCodexRouteFilteringUsesPersistedAccountCatalog(t *testing.T) {
 	store := NewMemoryStore()
 	provider := store.AddProvider(Provider{
 		ID:      "prv_codex_live_pool",
@@ -185,7 +245,9 @@ func TestCodexRouteFilteringRefreshesEachAccountCatalog(t *testing.T) {
 
 	server := New(store)
 	server.codexSubscription.ModelsURL = "https://chatgpt.example/backend-api/codex/models"
+	modelRequests := 0
 	server.codexSubscription.Client = &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		modelRequests++
 		model := "gpt-5.6-luna"
 		if req.Header.Get("ChatGPT-Account-ID") == "account_live_sol" {
 			model = "gpt-5.6-sol"
@@ -198,6 +260,14 @@ func TestCodexRouteFilteringRefreshesEachAccountCatalog(t *testing.T) {
 			Request:    req,
 		}, nil
 	})}
+	for _, resourceID := range []string{"rsrc_codex_live_sol", "rsrc_codex_live_luna"} {
+		if _, err := server.queryOpenAICodexModels(context.Background(), resourceID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if modelRequests != 2 {
+		t.Fatalf("expected one control-plane model refresh per account, got %d", modelRequests)
+	}
 
 	routes, err := store.SelectRouteCandidates("gpt-5.6-sol")
 	if err != nil {
@@ -209,6 +279,9 @@ func TestCodexRouteFilteringRefreshesEachAccountCatalog(t *testing.T) {
 	}
 	if len(filtered) != 1 || routeResourceID(filtered[0]) != "rsrc_codex_live_sol" {
 		t.Fatalf("expected only live Sol account, got %+v", filtered)
+	}
+	if modelRequests != 2 {
+		t.Fatalf("request routing must not refresh remote models, got %d total model requests", modelRequests)
 	}
 	for _, resource := range store.ListProviderResources() {
 		models, fetchedAt, cached := codexResourceCachedModels(&resource)
@@ -295,7 +368,6 @@ func TestCodexUnsupportedModelFailsOverAndUpdatesAccountModels(t *testing.T) {
 			Request:    req,
 		}, nil
 	})}
-	server.adapters[ProviderOpenAICodex] = server.codexSubscription
 
 	routes, err := store.SelectRouteCandidates("gpt-5.6-sol")
 	if err != nil {
@@ -333,6 +405,674 @@ func TestCodexUnsupportedModelFailsOverAndUpdatesAccountModels(t *testing.T) {
 	}
 	if updated.FailureCount != 0 {
 		t.Fatalf("model entitlement mismatch should not degrade account health: %+v", updated)
+	}
+}
+
+func TestCodexSessionAffinityPersistsRebindsAndPreservesProtocol(t *testing.T) {
+	store := NewMemoryStore()
+	project := store.CreateProject(Project{Name: "Codex Session Project", Status: StatusActive})
+	_, secret, err := store.CreateAPIKey(project.ID, APIKey{
+		Name:    "Codex Session Key",
+		Allowed: []string{"gpt-session"},
+		Status:  StatusActive,
+	}, "thk_codex_session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := store.AddProvider(Provider{
+		ID:      "prv_codex_session",
+		Name:    "Codex Session Provider",
+		Type:    ProviderOpenAICodex,
+		BaseURL: openAICodexBaseURL,
+		Status:  StatusActive,
+		Healthy: true,
+	})
+	for _, account := range []string{"account_session_a", "account_session_b"} {
+		if _, err := store.AddProviderResource(ProviderResource{
+			ID:           "rsrc_" + account,
+			ProviderID:   provider.ID,
+			Name:         account,
+			ResourceType: ProviderResourceOpenAISubscription,
+			Status:       StatusActive,
+			Healthy:      true,
+			Weight:       100,
+			Options:      codexCapabilityOptionsForTest("gpt-session"),
+			Credentials: &ProviderResourceCredentials{
+				AccessToken: "access_" + account,
+				AccountID:   account,
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store.AddModel(Model{Name: "gpt-session", Category: "codex", Family: "codex", Modality: "chat", Status: StatusActive})
+	store.AddRoute(ModelRoute{
+		ID:            "route_codex_session",
+		ModelName:     "gpt-session",
+		ProviderID:    provider.ID,
+		ProviderModel: "gpt-session",
+		Status:        StatusActive,
+		Weight:        100,
+	})
+
+	var accountCalls []string
+	quotaAccount := ""
+	transport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		account := req.Header.Get("ChatGPT-Account-ID")
+		accountCalls = append(accountCalls, account)
+		if req.Header.Get("session-id") != "session-root" {
+			t.Fatalf("session-id was not forwarded: %#v", req.Header)
+		}
+		if req.Header.Get("thread-id") == "" {
+			t.Fatalf("thread-id was not forwarded: %#v", req.Header)
+		}
+		if account == quotaAccount {
+			return &http.Response{
+				StatusCode: http.StatusTooManyRequests,
+				Header: http.Header{
+					"X-Codex-Rate-Limit-Reached-Type": []string{"primary"},
+				},
+				Body:    io.NopCloser(strings.NewReader(`{"error":{"code":"usage_limit_reached","message":"Codex usage limit reached"}}`)),
+				Request: req,
+			}, nil
+		}
+		stream := strings.Join([]string{
+			"event: response.completed",
+			`data: {"type":"response.completed","response":{"id":"resp_session","status":"completed","model":"gpt-session","output":[],"usage":{"input_tokens":12,"input_tokens_details":{"cached_tokens":8,"cache_write_tokens":2},"output_tokens":3,"output_tokens_details":{"reasoning_tokens":1},"total_tokens":15}}}`,
+			"",
+		}, "\n")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				"Content-Type":                 []string{"text/event-stream"},
+				"X-Codex-Turn-State":           []string{"turn-state-real"},
+				"X-Codex-Primary-Used-Percent": []string{"25"},
+				"X-Request-Id":                 []string{"upstream-session-request"},
+				"Openai-Model":                 []string{"gpt-session-served"},
+				"X-Models-Etag":                []string{`"models-session"`},
+			},
+			Body:    io.NopCloser(strings.NewReader(stream)),
+			Request: req,
+		}, nil
+	})
+
+	newServer := func() *Server {
+		server := NewWithConfig(store, Config{AdminToken: "dev_admin_token", SecretKey: "session-affinity-secret"})
+		server.codexSubscription.Client = &http.Client{Transport: transport}
+		server.codexSubscription.MaxRequestRetries = 1
+		return server
+	}
+	invoke := func(server *Server, threadID string) *httptest.ResponseRecorder {
+		t.Helper()
+		body := strings.NewReader(`{"model":"gpt-session","input":[{"role":"user","content":[{"type":"input_text","text":"real session request"}]}],"stream":false,"client_metadata":{"session_id":"session-root"}}`)
+		req := httptest.NewRequest(http.MethodPost, "/v1/responses", body)
+		req.Header.Set("Authorization", "Bearer "+secret)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("session-id", "session-root")
+		req.Header.Set("thread-id", threadID)
+		rr := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rr, req)
+		return rr
+	}
+
+	server := newServer()
+	first := invoke(server, "thread-root")
+	if first.Code != http.StatusOK {
+		t.Fatalf("first Codex response failed: %d %s", first.Code, first.Body.String())
+	}
+	if first.Header().Get("X-Codex-Turn-State") != "turn-state-real" ||
+		first.Header().Get("X-Tokenhub-Upstream-Request-Id") != "upstream-session-request" ||
+		first.Header().Get("X-Request-Id") == "" {
+		t.Fatalf("Codex response headers were not preserved: %#v", first.Header())
+	}
+	if len(accountCalls) != 1 {
+		t.Fatalf("expected one first request, got %v", accountCalls)
+	}
+	firstAccount := accountCalls[0]
+
+	second := invoke(server, "thread-subagent")
+	if second.Code != http.StatusOK {
+		t.Fatalf("subagent Codex response failed: %d %s", second.Code, second.Body.String())
+	}
+	if accountCalls[len(accountCalls)-1] != firstAccount {
+		t.Fatalf("same Session changed account across Thread IDs: %v", accountCalls)
+	}
+
+	restarted := newServer()
+	third := invoke(restarted, "thread-after-restart")
+	if third.Code != http.StatusOK {
+		t.Fatalf("restarted Codex response failed: %d %s", third.Code, third.Body.String())
+	}
+	if accountCalls[len(accountCalls)-1] != firstAccount {
+		t.Fatalf("same Session changed account after server restart: %v", accountCalls)
+	}
+
+	quotaAccount = firstAccount
+	beforeFailover := len(accountCalls)
+	failover := invoke(restarted, "thread-hard-failover")
+	if failover.Code != http.StatusOK {
+		t.Fatalf("quota failover failed: %d %s", failover.Code, failover.Body.String())
+	}
+	failoverCalls := accountCalls[beforeFailover:]
+	if len(failoverCalls) != 2 || failoverCalls[0] != firstAccount || failoverCalls[1] == firstAccount {
+		t.Fatalf("expected one hard-failure rebind: %v", failoverCalls)
+	}
+	reboundAccount := failoverCalls[1]
+
+	afterRebind := invoke(restarted, "thread-after-rebind")
+	if afterRebind.Code != http.StatusOK {
+		t.Fatalf("post-rebind request failed: %d %s", afterRebind.Code, afterRebind.Body.String())
+	}
+	if accountCalls[len(accountCalls)-1] != reboundAccount {
+		t.Fatalf("Session switched back after successful rebind: %v", accountCalls)
+	}
+
+	var bindings []AdapterSessionBinding
+	if err := store.db.Find(&bindings).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(bindings) != 1 || bindings[0].Generation != 2 || bindings[0].ResourceID != "rsrc_"+reboundAccount {
+		t.Fatalf("unexpected durable Session binding: %+v", bindings)
+	}
+	if strings.Contains(bindings[0].AffinityKeyHash, "session-root") {
+		t.Fatalf("raw Session ID leaked into binding: %+v", bindings[0])
+	}
+	records := store.ListUsageRecords()
+	if len(records) == 0 {
+		t.Fatal("Codex usage was not persisted")
+	}
+	lastUsage := records[len(records)-1]
+	if lastUsage.CachedInputTokens != 8 || lastUsage.CacheWriteTokens != 2 || lastUsage.ReasoningTokens != 1 {
+		t.Fatalf("extended Codex usage was not persisted: %+v", lastUsage)
+	}
+	resources := store.ListProviderResources()
+	var observed *ProviderResourceObservation
+	for _, resource := range resources {
+		if resource.ID == "rsrc_"+reboundAccount {
+			observed = resource.Observation
+		}
+	}
+	if observed == nil || observed.RateLimitHeaders["x-codex-primary-used-percent"] != "25" ||
+		observed.UpstreamRequestID != "upstream-session-request" ||
+		observed.ServedModel != "gpt-session-served" {
+		t.Fatalf("Codex response observation was not persisted: %+v", observed)
+	}
+}
+
+func TestCodexSessionIdentifierPriority(t *testing.T) {
+	var request ResponsesRequest
+	if err := json.Unmarshal([]byte(`{"model":"gpt-test","input":[],"prompt_cache_key":"cache-session","client_metadata":{"session_id":"metadata-session"}}`), &request); err != nil {
+		t.Fatal(err)
+	}
+	headers := make(http.Header)
+	headers.Set("session-id", "header-session")
+	headers.Set("thread-id", "thread-fallback")
+	identifier, ok := codexSessionIdentifier(headers, request)
+	if !ok || identifier != "header-session" {
+		t.Fatalf("expected header Session priority, got %q %v", identifier, ok)
+	}
+	headers.Del("session-id")
+	identifier, ok = codexSessionIdentifier(headers, request)
+	if !ok || identifier != "metadata-session" {
+		t.Fatalf("expected client_metadata Session priority, got %q %v", identifier, ok)
+	}
+}
+
+func TestCodexResponsesLiteEnvelopePreservesReasoningFields(t *testing.T) {
+	var request ResponsesRequest
+	if err := json.Unmarshal([]byte(`{"model":"gpt-test","input":[],"reasoning":{"effort":"medium","summary":"auto"}}`), &request); err != nil {
+		t.Fatal(err)
+	}
+	headers := make(http.Header)
+	headers.Set("x-openai-internal-codex-responses-lite", "true")
+	applyCodexRequestEnvelope(&request, headers)
+
+	payload, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	reasoning := mapFromAny(decoded["reasoning"])
+	if reasoning["effort"] != "medium" || reasoning["summary"] != "auto" || reasoning["context"] != "all_turns" {
+		t.Fatalf("Codex Responses Lite envelope lost reasoning fields: %#v", reasoning)
+	}
+}
+
+func TestCodexSessionBindingCommitsAfterClientCancellation(t *testing.T) {
+	store := NewMemoryStore()
+	provider := store.AddProvider(Provider{
+		ID:      "prv_cancelled_session",
+		Name:    "Cancelled Session",
+		Type:    ProviderOpenAICodex,
+		Status:  StatusActive,
+		Healthy: true,
+	})
+	resource, err := store.AddProviderResource(ProviderResource{
+		ID:           "rsrc_cancelled_session",
+		ProviderID:   provider.ID,
+		Name:         "Cancelled Session Account",
+		ResourceType: ProviderResourceOpenAISubscription,
+		Status:       StatusActive,
+		Healthy:      true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	routed := RoutedCall{
+		Affinity: &RequestAffinity{
+			AdapterType: ProviderOpenAICodex,
+			Kind:        AffinityKindCodexSession,
+			KeyHash:     "cancelled-client-affinity",
+		},
+		Routes: []RouteSelection{{
+			Provider: provider,
+			Resource: &resource,
+			Route:    ModelRoute{ID: "route_cancelled_session", ProviderID: provider.ID, Status: StatusActive},
+		}},
+	}
+	_, _, _, _, err = executeRoutedWithStore(ctx, store, routed, func(context.Context, RouteSelection) (map[string]any, Usage, error) {
+		cancel()
+		return map[string]any{"status": "completed"}, Usage{}, nil
+	})
+	if err != nil {
+		t.Fatalf("successful response did not commit after client cancellation: %v", err)
+	}
+	var bindings []AdapterSessionBinding
+	if err := store.db.Find(&bindings).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(bindings) != 1 || bindings[0].ResourceID != resource.ID {
+		t.Fatalf("durable Session binding missing after client cancellation: %+v", bindings)
+	}
+}
+
+func TestCodexCompactPreservesSessionAndUpstreamMetadata(t *testing.T) {
+	store := NewMemoryStore()
+	project := store.CreateProject(Project{Name: "Compact Project", Status: StatusActive})
+	_, secret, err := store.CreateAPIKey(project.ID, APIKey{
+		Name:    "Compact Key",
+		Allowed: []string{"gpt-compact"},
+		Status:  StatusActive,
+	}, "thk_compact_real")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := store.AddProvider(Provider{
+		ID:      "prv_compact",
+		Name:    "Codex Compact",
+		Type:    ProviderOpenAICodex,
+		BaseURL: "https://chatgpt.example/backend-api/codex",
+		Status:  StatusActive,
+		Healthy: true,
+		Options: map[string]string{"allowed_codex_hosts": "chatgpt.example"},
+	})
+	resource, err := store.AddProviderResource(ProviderResource{
+		ID:           "rsrc_compact",
+		ProviderID:   provider.ID,
+		Name:         "Compact Account",
+		ResourceType: ProviderResourceOpenAISubscription,
+		Status:       StatusActive,
+		Healthy:      true,
+		Options:      codexCapabilityOptionsForTest("gpt-compact-upstream"),
+		Credentials:  &ProviderResourceCredentials{AccessToken: "access_compact", AccountID: "account_compact"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.AddModel(Model{Name: "gpt-compact", Modality: "chat", Status: StatusActive})
+	store.AddRoute(ModelRoute{
+		ID:            "route_compact",
+		ModelName:     "gpt-compact",
+		ProviderID:    provider.ID,
+		ProviderModel: "gpt-compact-upstream",
+		Status:        StatusActive,
+	})
+
+	server := NewWithConfig(store, Config{AdminToken: "dev_admin_token", SecretKey: "compact-secret"})
+	server.codexSubscription.Client = &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/backend-api/codex/responses/compact" {
+			t.Fatalf("unexpected compact path: %s", req.URL.Path)
+		}
+		if req.Header.Get("session-id") != "session-compact" || req.Header.Get("Authorization") != "Bearer access_compact" {
+			t.Fatalf("compact protocol headers missing: %#v", req.Header)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["model"] != "gpt-compact-upstream" || payload["instructions"] != "preserve this" {
+			t.Fatalf("compact request was rewritten incorrectly: %#v", payload)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				"Content-Type":       []string{"application/json"},
+				"X-Codex-Turn-State": []string{"compact-turn-state"},
+				"X-Request-Id":       []string{"upstream-compact-request"},
+			},
+			Body:    io.NopCloser(strings.NewReader(`{"output":[{"type":"message","role":"assistant","content":[]}]}`)),
+			Request: req,
+		}, nil
+	})}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses/compact", strings.NewReader(
+		`{"model":"gpt-compact","input":[],"instructions":"preserve this","client_metadata":{"session_id":"session-compact"}}`,
+	))
+	req.Header.Set("Authorization", "Bearer "+secret)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("session-id", "session-compact")
+	rr := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("compact request failed: %d %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-Codex-Turn-State") != "compact-turn-state" ||
+		rr.Header().Get("X-Tokenhub-Upstream-Request-Id") != "upstream-compact-request" {
+		t.Fatalf("compact response metadata missing: %#v", rr.Header())
+	}
+	var bindings []AdapterSessionBinding
+	if err := store.db.Find(&bindings).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(bindings) != 1 || bindings[0].ResourceID != resource.ID {
+		t.Fatalf("compact request did not use durable Session affinity: %+v", bindings)
+	}
+	descriptor, ok := server.adapterRegistry.Describe(ProviderOpenAICodex)
+	if !ok || !adapterSupports(descriptor, AdapterCapabilityCompact) || adapterSupports(descriptor, AdapterCapabilityWebSocket) {
+		t.Fatalf("Codex capabilities are not truthful: %+v", descriptor)
+	}
+}
+
+func TestProviderMonitoringUsesBackendProbeAndCachedQuota(t *testing.T) {
+	store := NewMemoryStore()
+	provider := store.AddProvider(Provider{
+		ID:      "prv_monitoring",
+		Name:    "Codex Monitoring",
+		Type:    ProviderOpenAICodex,
+		Status:  StatusActive,
+		Healthy: true,
+	})
+	resource, err := store.AddProviderResource(ProviderResource{
+		ID:           "rsrc_monitoring",
+		ProviderID:   provider.ID,
+		Name:         "Monitoring Account",
+		ResourceType: ProviderResourceOpenAISubscription,
+		Status:       StatusActive,
+		Healthy:      true,
+		Credentials:  &ProviderResourceCredentials{AccessToken: "access_monitoring", AccountID: "account_monitoring"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.RecordProviderObservation(ProviderObservation{
+		ProviderID:  provider.ID,
+		ResourceID:  resource.ID,
+		AdapterType: provider.Type,
+		Source:      "active_probe",
+		Operation:   "responses",
+		Success:     true,
+		LatencyMS:   321,
+	})
+	quotaCalls := 0
+	server := New(store)
+	server.codexSubscription.QuotaURL = "https://chatgpt.example/backend-api/wham/usage"
+	server.codexSubscription.Client = &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		quotaCalls++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(
+				`{"plan_type":"pro","rate_limit":{"allowed":true,"limit_reached":false,"primary_window":{"used_percent":25,"reset_at":1999999999}}}`,
+			)),
+			Request: req,
+		}, nil
+	})}
+	invoke := func() []ProviderMonitoringSnapshot {
+		request := httptest.NewRequest(http.MethodGet, "/api/admin/providers/monitoring", nil)
+		request.Header.Set("Authorization", "Bearer dev_admin_token")
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("monitoring request failed: %d %s", response.Code, response.Body.String())
+		}
+		var payload struct {
+			Data []ProviderMonitoringSnapshot `json:"data"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+			t.Fatal(err)
+		}
+		return payload.Data
+	}
+	first := invoke()
+	second := invoke()
+	if quotaCalls != 1 {
+		t.Fatalf("quota cache did not prevent duplicate upstream requests: %d", quotaCalls)
+	}
+	if len(first) != 1 || len(second) != 1 {
+		t.Fatalf("unexpected monitoring snapshots: first=%+v second=%+v", first, second)
+	}
+	snapshot := first[0]
+	if snapshot.State != "healthy" || snapshot.ActiveProbe.Source != "active_probe" ||
+		snapshot.ActiveProbe.LatencyMS != 321 || snapshot.Quota.RemainingPercent != 75 ||
+		snapshot.Quota.SuccessfulAccounts != 1 {
+		t.Fatalf("monitoring did not preserve source semantics or quota: %+v", snapshot)
+	}
+}
+
+func TestProviderMonitoringRecoversFromHistoricalFailure(t *testing.T) {
+	now := time.Now().UTC()
+	signal := observationMonitoringSignal(now, "gateway_request", []ProviderObservation{
+		{Success: false, ErrorCode: "internal_error", ObservedAt: now.Add(-time.Minute)},
+		{Success: true, ObservedAt: now},
+	})
+	if signal.State != "degraded" || signal.SuccessRate != 50 {
+		t.Fatalf("a successful latest request must recover Functional Down: %+v", signal)
+	}
+}
+
+func TestProviderTestUsesCodexDefaultProbeProfile(t *testing.T) {
+	store := NewMemoryStore()
+	provider := store.AddProvider(Provider{
+		ID:      "prv_default_probe",
+		Name:    "Codex Default Probe",
+		Type:    ProviderOpenAICodex,
+		Status:  StatusActive,
+		Healthy: true,
+	})
+	if _, err := store.AddProviderResource(ProviderResource{
+		ID:           "rsrc_default_probe",
+		ProviderID:   provider.ID,
+		Name:         "Default Probe Account",
+		ResourceType: ProviderResourceOpenAISubscription,
+		Status:       StatusActive,
+		Healthy:      true,
+		Credentials:  &ProviderResourceCredentials{AccessToken: "access_probe", AccountID: "account_probe"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	server := New(store)
+	server.codexSubscription.Client = &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		var payload map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		reasoning, _ := payload["reasoning"].(map[string]any)
+		if payload["model"] != openAICodexFastTestModel || payload["service_tier"] != nil || reasoning["effort"] != "medium" {
+			t.Fatalf("unexpected default probe profile: %#v", payload)
+		}
+		stream := strings.Join([]string{
+			"event: response.output_text.delta",
+			`data: {"type":"response.output_text.delta","delta":"Codex connection works."}`,
+			"",
+			"event: response.completed",
+			`data: {"type":"response.completed","response":{"id":"resp_probe","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}`,
+			"",
+		}, "\n")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(stream)),
+			Request:    req,
+		}, nil
+	})}
+	request := httptest.NewRequest(http.MethodPost, "/api/admin/providers/"+provider.ID+"/test", strings.NewReader(`{}`))
+	request.Header.Set("Authorization", "Bearer dev_admin_token")
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("provider probe failed: %d %s", response.Code, response.Body.String())
+	}
+	var result ProviderProbeBatchResult
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Succeeded != 1 || result.Failed != 0 || !result.Healthy ||
+		len(result.Results) != 1 || result.Results[0].Speed != "standard" {
+		t.Fatalf("unexpected provider probe result: %+v", result)
+	}
+}
+
+func TestProviderAdapterCompatibilityAndLegacyMigration(t *testing.T) {
+	store := NewMemoryStore()
+	codex := store.AddProvider(Provider{
+		ID:      "prv_strict_codex",
+		Name:    "Strict Codex",
+		Type:    ProviderOpenAICodex,
+		Status:  StatusActive,
+		Healthy: true,
+	})
+	if _, err := store.AddProviderResource(ProviderResource{
+		ProviderID:   codex.ID,
+		Name:         "Invalid API Key",
+		ResourceType: ProviderResourceAPIKey,
+		Status:       StatusActive,
+		Healthy:      true,
+	}); AsHTTPError(err).Code != "provider_adapter_resource_conflict" {
+		t.Fatalf("Codex Provider accepted API-key resource: %v", err)
+	}
+	openAIWithKey := store.AddProvider(Provider{
+		ID:      "prv_strict_openai",
+		Name:    "Strict OpenAI",
+		Type:    ProviderOpenAI,
+		APIKey:  "upstream-real-key",
+		Status:  StatusActive,
+		Healthy: true,
+	})
+	if _, err := store.AddProviderResource(ProviderResource{
+		ProviderID:   openAIWithKey.ID,
+		Name:         "Invalid Subscription",
+		ResourceType: ProviderResourceOpenAISubscription,
+		Status:       StatusActive,
+		Healthy:      true,
+	}); AsHTTPError(err).Code != "provider_adapter_resource_conflict" {
+		t.Fatalf("OpenAI API Provider accepted subscription resource: %v", err)
+	}
+	emptyOpenAI := store.AddProvider(Provider{
+		ID:      "prv_auto_codex",
+		Name:    "Auto Codex",
+		Type:    ProviderOpenAI,
+		Status:  StatusActive,
+		Healthy: true,
+	})
+	if _, err := store.AddProviderResource(ProviderResource{
+		ProviderID:   emptyOpenAI.ID,
+		Name:         "First Subscription",
+		ResourceType: ProviderResourceOpenAISubscription,
+		Status:       StatusActive,
+		Healthy:      true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	normalized, ok := integrationProvider(store, emptyOpenAI.ID)
+	if !ok || normalized.Type != ProviderOpenAICodex || normalized.BaseURL != openAICodexBaseURL {
+		t.Fatalf("empty OpenAI Provider was not normalized to Codex: %+v", normalized)
+	}
+
+	legacy := store.AddProvider(Provider{
+		ID:       "prv_legacy_mixed",
+		Name:     "Legacy Mixed",
+		Type:     ProviderOpenAI,
+		APIKey:   "legacy-upstream-key",
+		Status:   StatusActive,
+		Healthy:  true,
+		Priority: 3,
+	})
+	direct := ProviderResource{
+		ID:           "rsrc_legacy_direct",
+		ProviderID:   legacy.ID,
+		Name:         "Legacy Direct",
+		ResourceType: ProviderResourceAPIKey,
+		Status:       StatusActive,
+		Healthy:      true,
+	}
+	subscription := ProviderResource{
+		ID:           "rsrc_legacy_subscription",
+		ProviderID:   legacy.ID,
+		Name:         "Legacy Subscription",
+		ResourceType: ProviderResourceOpenAISubscription,
+		Status:       StatusActive,
+		Healthy:      true,
+	}
+	if err := store.db.Create(&direct).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.Create(&subscription).Error; err != nil {
+		t.Fatal(err)
+	}
+	store.AddModel(Model{Name: "gpt-legacy-codex", Category: "codex", Family: "codex", Modality: "chat", Status: StatusActive})
+	store.AddRoute(ModelRoute{
+		ID:                 "route_legacy_subscription",
+		ModelName:          "gpt-legacy-codex",
+		ProviderID:         legacy.ID,
+		ProviderResourceID: subscription.ID,
+		ProviderModel:      "gpt-legacy-codex",
+		Status:             StatusActive,
+	})
+	store.AddRoute(ModelRoute{
+		ID:            "route_legacy_generic",
+		ModelName:     "gpt-legacy-codex",
+		ProviderID:    legacy.ID,
+		ProviderModel: "gpt-legacy-codex",
+		Status:        StatusActive,
+	})
+	if err := store.NormalizeProviderAdapterTypes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	providersAfterFirst := store.ListProviders()
+	routesAfterFirst := store.ListRoutes()
+	if err := store.NormalizeProviderAdapterTypes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.ListProviders()) != len(providersAfterFirst) || len(store.ListRoutes()) != len(routesAfterFirst) {
+		t.Fatalf("legacy migration is not idempotent: providers %d/%d routes %d/%d",
+			len(providersAfterFirst), len(store.ListProviders()), len(routesAfterFirst), len(store.ListRoutes()))
+	}
+	var splitProvider Provider
+	for _, provider := range store.ListProviders() {
+		if provider.Type == ProviderOpenAICodex && provider.ID != emptyOpenAI.ID && provider.ID != codex.ID {
+			splitProvider = provider
+		}
+	}
+	if splitProvider.ID == "" {
+		t.Fatal("mixed legacy Provider was not split")
+	}
+	migratedSubscription, ok := integrationProviderResource(store, subscription.ID)
+	if !ok || migratedSubscription.ProviderID != splitProvider.ID {
+		t.Fatalf("subscription resource was not moved to Codex Provider: %+v", migratedSubscription)
+	}
+	migratedRoutes := 0
+	for _, route := range store.ListRoutes() {
+		if route.ProviderID == splitProvider.ID {
+			migratedRoutes++
+		}
+	}
+	if migratedRoutes != 2 {
+		t.Fatalf("expected resource route and cloned generic route on split Provider, got %d", migratedRoutes)
 	}
 }
 

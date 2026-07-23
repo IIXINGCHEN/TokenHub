@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"strings"
 	"time"
 )
@@ -181,6 +182,7 @@ type ProviderCatalogEntry struct {
 	CategoryCounts map[string]int         `json:"category_counts,omitempty"`
 	ModelsCount    int                    `json:"models_count"`
 	Source         string                 `json:"source"`
+	ETag           string                 `json:"etag,omitempty"`
 	Models         []ProviderCatalogModel `json:"models,omitempty"`
 }
 
@@ -245,6 +247,7 @@ type ProviderResource struct {
 	Credentials       *ProviderResourceCredentials `json:"credentials,omitempty" gorm:"-"`
 	CredentialBlob    string                       `json:"-" gorm:"column:credential_blob"`
 	CredentialSummary map[string]string            `json:"credential_summary,omitempty" gorm:"-"`
+	Observation       *ProviderResourceObservation `json:"observation,omitempty" gorm:"-"`
 	FailureCount      int                          `json:"failure_count"`
 	CooldownUntil     *time.Time                   `json:"cooldown_until,omitempty"`
 	LastUsedAt        *time.Time                   `json:"last_used_at,omitempty"`
@@ -303,10 +306,18 @@ type ModelRoute struct {
 }
 
 type Usage struct {
-	PromptTokens     int64   `json:"prompt_tokens"`
-	CompletionTokens int64   `json:"completion_tokens"`
-	TotalTokens      int64   `json:"total_tokens"`
-	CostUSD          float64 `json:"estimated_cost_usd,omitempty"`
+	PromptTokens          int64       `json:"prompt_tokens"`
+	CachedInputTokens     int64       `json:"cached_input_tokens,omitempty"`
+	CacheWriteInputTokens int64       `json:"cache_write_input_tokens,omitempty"`
+	CompletionTokens      int64       `json:"completion_tokens"`
+	ReasoningOutputTokens int64       `json:"reasoning_output_tokens,omitempty"`
+	TotalTokens           int64       `json:"total_tokens"`
+	CostUSD               float64     `json:"estimated_cost_usd,omitempty"`
+	UpstreamRequestID     string      `json:"upstream_request_id,omitempty"`
+	ServedModel           string      `json:"served_model,omitempty"`
+	ModelETag             string      `json:"model_etag,omitempty"`
+	Transport             string      `json:"transport,omitempty"`
+	ResponseHeaders       http.Header `json:"-"`
 }
 
 type UsageRecord struct {
@@ -318,7 +329,10 @@ type UsageRecord struct {
 	ProviderID         string    `json:"provider_id" gorm:"index"`
 	ProviderResourceID string    `json:"provider_resource_id,omitempty" gorm:"index"`
 	InputTokens        int64     `json:"input_tokens"`
+	CachedInputTokens  int64     `json:"cached_input_tokens,omitempty"`
+	CacheWriteTokens   int64     `json:"cache_write_input_tokens,omitempty"`
 	OutputTokens       int64     `json:"output_tokens"`
+	ReasoningTokens    int64     `json:"reasoning_output_tokens,omitempty"`
 	TotalTokens        int64     `json:"total_tokens"`
 	CostUSD            float64   `json:"estimated_cost_usd"`
 	CreatedAt          time.Time `json:"created_at"`
@@ -333,6 +347,10 @@ type RequestLog struct {
 	ProviderID         string    `json:"provider_id,omitempty" gorm:"index"`
 	ProviderResourceID string    `json:"provider_resource_id,omitempty" gorm:"index"`
 	ProviderModel      string    `json:"provider_model,omitempty"`
+	UpstreamRequestID  string    `json:"upstream_request_id,omitempty"`
+	ServedModel        string    `json:"served_model,omitempty"`
+	ModelETag          string    `json:"model_etag,omitempty"`
+	Transport          string    `json:"transport,omitempty"`
 	StatusCode         int       `json:"status_code"`
 	ErrorCode          string    `json:"error_code,omitempty"`
 	LatencyMS          int64     `json:"latency_ms"`
@@ -561,8 +579,9 @@ type ResponsesRequest struct {
 }
 
 type ResponsesReasoning struct {
-	Effort string `json:"effort,omitempty"`
-	Mode   string `json:"mode,omitempty"`
+	Effort  string `json:"effort,omitempty"`
+	Mode    string `json:"mode,omitempty"`
+	Context string `json:"context,omitempty"`
 }
 
 // UnmarshalJSON keeps fields TokenHub does not interpret so the Responses API
@@ -598,14 +617,35 @@ func (r ResponsesRequest) MarshalJSON() ([]byte, error) {
 	setRawJSONField(raw, "temperature", r.Temperature, r.Temperature != nil)
 	setRawJSONField(raw, "instructions", r.Instructions, r.Instructions != "")
 	setRawJSONField(raw, "store", r.Store, r.Store != nil)
-	setRawJSONField(raw, "reasoning", r.Reasoning, r.Reasoning != nil)
+	if r.Reasoning != nil {
+		setResponsesReasoningField(raw, *r.Reasoning)
+	}
 	setRawJSONField(raw, "service_tier", r.ServiceTier, r.ServiceTier != "")
 	return json.Marshal(raw)
 }
 
+func setResponsesReasoningField(raw map[string]json.RawMessage, reasoning ResponsesReasoning) {
+	merged := map[string]any{}
+	if existing, ok := raw["reasoning"]; ok {
+		_ = json.Unmarshal(existing, &merged)
+	}
+	if reasoning.Effort != "" {
+		merged["effort"] = reasoning.Effort
+	}
+	if reasoning.Mode != "" {
+		merged["mode"] = reasoning.Mode
+	}
+	if reasoning.Context != "" {
+		merged["context"] = reasoning.Context
+	}
+	encoded, err := json.Marshal(merged)
+	if err == nil {
+		raw["reasoning"] = encoded
+	}
+}
+
 func setRawJSONField(raw map[string]json.RawMessage, key string, value any, present bool) {
 	if !present {
-		delete(raw, key)
 		return
 	}
 	encoded, err := json.Marshal(value)
@@ -648,8 +688,9 @@ type RouteAttempt struct {
 }
 
 type RoutedCall struct {
-	Call   CallContext
-	Routes []RouteSelection
+	Call     CallContext
+	Routes   []RouteSelection
+	Affinity *RequestAffinity
 }
 
 type CallContext struct {
@@ -658,6 +699,7 @@ type CallContext struct {
 	Key            APIKey
 	Model          Model
 	StartedAt      time.Time
+	Affinity       *RequestAffinity
 	requestContext context.Context
 }
 

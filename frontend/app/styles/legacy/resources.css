@@ -352,6 +352,10 @@
   background: #e11d48;
 }
 
+.provider-monitor-avatar.unknown {
+  background: #64748b;
+}
+
 .provider-monitor-name strong {
   display: block;
   color: var(--text);
@@ -399,6 +403,11 @@
 .provider-monitor-status.down {
   background: #fff1f2;
   color: #e11d48;
+}
+
+.provider-monitor-status.unknown {
+  background: #f1f5f9;
+  color: #64748b;
 }
 
 .provider-monitor-status i,

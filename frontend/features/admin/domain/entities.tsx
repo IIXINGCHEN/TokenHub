@@ -142,23 +142,16 @@ export function providerSelectOptions(data: AppData) {
     }));
 }
 
-export function providerDisplayName(provider: Provider, resources: ProviderResource[]) {
-  const usesCodexSubscription = resources.some((resource) =>
-    resource.provider_id === provider.id && resource.resource_type === "openai_subscription",
-  );
-  return usesCodexSubscription ? "OpenAI Codex" : provider.name || provider.id;
+export function providerDisplayName(provider: Provider, _resources: ProviderResource[]) {
+  return provider.name || provider.id;
 }
 
-export function providerDisplayType(provider: Provider, resources: ProviderResource[]) {
-  return resources.some((resource) =>
-    resource.provider_id === provider.id && resource.resource_type === "openai_subscription",
-  ) ? "openai_codex" : provider.type;
+export function providerDisplayType(provider: Provider, _resources: ProviderResource[]) {
+  return provider.type;
 }
 
-export function providerDisplayBaseURL(provider: Provider, resources: ProviderResource[]) {
-  return providerDisplayType(provider, resources) === "openai_codex"
-    ? codexSubscriptionBaseURL
-    : provider.base_url || "local mock";
+export function providerDisplayBaseURL(provider: Provider, _resources: ProviderResource[]) {
+  return provider.base_url || "local mock";
 }
 
 export function roleSelectOptions(data: AppData) {

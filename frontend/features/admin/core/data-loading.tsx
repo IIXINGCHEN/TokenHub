@@ -17,6 +17,7 @@ export type LoadPlan = {
   timeseries: boolean;
   users: boolean;
   providerCatalog: boolean;
+  providerMonitoring: boolean;
   resources: string[];
 };
 
@@ -41,6 +42,7 @@ export function emptyLoadPlan(): LoadPlan {
     timeseries: false,
     users: false,
     providerCatalog: false,
+    providerMonitoring: false,
     resources: [],
   };
 }
@@ -106,6 +108,7 @@ export function loadPlanForView(user: AdminUser, view: ViewKey): LoadPlan {
       plan.auditEvents = canViewAdminAudit(user);
       plan.breakdown = can("usage") || can("billing");
       plan.providerCatalog = true;
+      plan.providerMonitoring = true;
       break;
     case "models":
       plan.overview = true;
@@ -210,6 +213,7 @@ export function mergeLoadedData(current: AppData, loaded: LoadedData): AppData {
     timeseries: loaded.timeseries ?? current.timeseries,
     keys: loaded.keys ?? current.keys,
     providerCatalog: loaded.providerCatalog ?? current.providerCatalog,
+    providerMonitoring: loaded.providerMonitoring ?? current.providerMonitoring,
     resources: loaded.resources ? { ...current.resources, ...loaded.resources } : current.resources,
   };
 }

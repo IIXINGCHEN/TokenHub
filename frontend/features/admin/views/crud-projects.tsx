@@ -1,7 +1,7 @@
 import { Plus, RefreshCw, Search, Trash2, UserRoundCheck, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { type AdminResource, type ApiContext, type AppData, type AuditEvent, type Project, type Provider, type ProviderResource, type ReportExportHistoryItem, type RequestLog, type ResourceAction, type ResourceConfig, type ToolbarAction } from "../core/types";
+import { type AdminResource, type ApiContext, type AppData, type AuditEvent, type OpenAIAccountQuota, type OpenAIQuotaWindow, type Project, type Provider, type ProviderMonitoringSnapshot, type ProviderQuotaSummary, type ProviderResource, type ReportExportHistoryItem, type RequestLog, type ResourceAction, type ResourceConfig, type ToolbarAction } from "../core/types";
 import { notificationChannelLabel } from "../domain/catalog";
 import { projectMembersForProject, providerDisplayName, providerDisplayType, providerRoutesFor, stringifyValue } from "../domain/entities";
 import { activeRouteCount, formatNumber, formatTime } from "../domain/formatting";
@@ -168,7 +168,7 @@ export function CrudView<T>({
   );
 }
 
-export type ProviderMonitorTone = "healthy" | "degraded" | "down";
+export type ProviderMonitorTone = "healthy" | "degraded" | "down" | "unknown";
 
 export type ProviderProbeTone = "ok" | "warn" | "down" | "na";
 
@@ -201,97 +201,53 @@ export type ProviderMonitorRow = {
   availability24h: number;
   observed24h: boolean;
   sampleSource: ProviderMonitorSampleSource;
+  quota: ProviderQuotaSummary;
   qualityScore: number;
   trend: ProviderTrendTone[];
 };
 
-type OpenAIQuotaWindow = {
-  used_percent: number;
-  reset_after_seconds: number;
-  reset_at: number;
-};
-
-type OpenAIAccountQuota = {
-  plan_type?: string;
-  rate_limit?: {
-    allowed: boolean;
-    limit_reached: boolean;
-    primary_window?: OpenAIQuotaWindow;
-  };
-};
-
-type ProviderQuotaState = {
-  loading?: boolean;
-  quota?: OpenAIAccountQuota;
-  error?: string;
-};
-
 export function ProviderAvailabilityMonitor({ api, data, providers }: { api?: ApiContext; data: AppData; providers: Provider[] }) {
-  const [quotaStates, setQuotaStates] = useState<Record<string, ProviderQuotaState>>({});
-  const subscriptionResources = data.providerResources.filter((resource) =>
-    providers.some((provider) => provider.id === resource.provider_id) && resource.resource_type === "openai_subscription",
-  );
-  const subscriptionResourceKey = subscriptionResources.map((resource) => `${resource.id}:${resource.updated_at ?? ""}`).sort().join("|");
+  const [quotaOverrides, setQuotaOverrides] = useState<Record<string, ProviderQuotaSummary>>({});
+  const [quotaRefreshing, setQuotaRefreshing] = useState<Record<string, boolean>>({});
 
   async function refreshQuota(resource: ProviderResource) {
     if (!api) return;
-    setQuotaStates((current) => ({
-      ...current,
-      [resource.id]: { ...current[resource.id], loading: true, error: "" },
-    }));
+    setQuotaRefreshing((current) => ({ ...current, [resource.id]: true }));
     try {
-      const resp = await adminFetch(api, `/api/admin/provider-resources/${resource.id}/quota`);
+      const resp = await adminFetch(api, `/api/admin/provider-resources/${resource.id}/quota?refresh=true`);
       if (!resp.ok) throw new Error(await readAdminError(resp, tx("查询 Codex 套餐")));
       const quota = (await resp.json()) as OpenAIAccountQuota;
-      setQuotaStates((current) => ({ ...current, [resource.id]: { quota } }));
+      const snapshot = data.providerMonitoring.find((item) => item.provider.id === resource.provider_id);
+      if (snapshot) {
+        setQuotaOverrides((current) => ({
+          ...current,
+          [resource.provider_id]: updateProviderQuotaSummary(
+            current[resource.provider_id] ?? snapshot.quota,
+            resource,
+            quota,
+          ),
+        }));
+      }
     } catch (error) {
-      setQuotaStates((current) => ({
-        ...current,
-        [resource.id]: {
-          ...current[resource.id],
-          loading: false,
-          error: error instanceof Error ? error.message : tx("套餐查询失败"),
-        },
-      }));
+      const snapshot = data.providerMonitoring.find((item) => item.provider.id === resource.provider_id);
+      if (snapshot) {
+        setQuotaOverrides((current) => ({
+          ...current,
+          [resource.provider_id]: updateProviderQuotaSummaryError(
+            current[resource.provider_id] ?? snapshot.quota,
+            resource,
+            error instanceof Error ? error.message : tx("套餐查询失败"),
+          ),
+        }));
+      }
+    } finally {
+      setQuotaRefreshing((current) => ({ ...current, [resource.id]: false }));
     }
   }
 
-  useEffect(() => {
-    if (!api || subscriptionResources.length === 0) return;
-    let cancelled = false;
-    setQuotaStates((current) => {
-      const next = { ...current };
-      for (const resource of subscriptionResources) next[resource.id] = { ...next[resource.id], loading: true, error: "" };
-      return next;
-    });
-    for (const resource of subscriptionResources) {
-      adminFetch(api, `/api/admin/provider-resources/${resource.id}/quota`)
-        .then(async (resp) => {
-          if (!resp.ok) throw new Error(await readAdminError(resp, tx("查询 Codex 套餐")));
-          return (await resp.json()) as OpenAIAccountQuota;
-        })
-        .then((quota) => {
-          if (cancelled) return;
-          setQuotaStates((current) => ({ ...current, [resource.id]: { quota } }));
-        })
-        .catch((error) => {
-          if (cancelled) return;
-          setQuotaStates((current) => ({
-            ...current,
-            [resource.id]: { error: error instanceof Error ? error.message : tx("套餐查询失败") },
-          }));
-        });
-    }
-    return () => {
-      cancelled = true;
-    };
-    // Resource IDs and updated_at form the refresh contract; provider data arrays are re-created on every load.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api?.baseURL, api?.adminToken, subscriptionResourceKey]);
-
   if (providers.length === 0) return null;
 
-  const rows = providerMonitorRows(data, providers);
+  const rows = providerMonitorRowsFromSnapshots(data, providers, quotaOverrides);
   const summary = providerMonitorSummary(rows);
   return (
     <section className="provider-monitor-card" aria-label={tx("Provider 可用性监控")}>
@@ -305,6 +261,7 @@ export function ProviderAvailabilityMonitor({ api, data, providers }: { api?: Ap
           <span><strong>{summary.healthy}</strong>{tx("正常")}</span>
           <span><strong>{summary.degraded}</strong>{tx("降级")}</span>
           <span><strong>{summary.down}</strong>{tx("故障")}</span>
+          <span><strong>{summary.unknown}</strong>{tx("待观测")}</span>
         </div>
       </div>
       <div className="provider-monitor-table-wrap">
@@ -347,17 +304,15 @@ export function ProviderAvailabilityMonitor({ api, data, providers }: { api?: Ap
                   <ProviderProbeLine tone={row.basicPrimaryTone} detail={row.basicPrimaryDetail} />
                   <ProviderProbeLine tone={row.basicSecondaryTone} detail={row.basicSecondaryDetail} />
                 </td>
-                <td><ProviderCodexQuota quotaStates={quotaStates} resources={row.resources} onRefresh={refreshQuota} /></td>
+                <td><ProviderCodexQuota quota={row.quota} refreshing={quotaRefreshing} resources={row.resources} onRefresh={refreshQuota} /></td>
                 <td>
                   <ProviderProbeLine tone={row.realTone} detail={row.realDetail} />
                   <small className="provider-monitor-subtle">
-                    {row.sampleSource === "codex_test"
-                      ? tx(row.observed24h ? "Codex 专用测试" : "无 Codex 测试样本")
-                      : tx(row.observed24h ? "网关请求样本" : "无网关请求样本")}
+                    {tx(row.observed24h ? "后端统一观测快照" : "等待真实测试或网关请求")}
                   </small>
                 </td>
                 <td><strong className="provider-monitor-metric">{latencyDisplay(row.latencyMS)}</strong></td>
-                <td><strong className="provider-monitor-metric">{providerPercent(row.availability24h)}</strong></td>
+                <td><strong className="provider-monitor-metric">{row.observed24h ? providerPercent(row.availability24h) : "-"}</strong></td>
                 <td>
                   <div className="provider-quality-score">
                     <strong>{row.qualityScore}</strong>
@@ -378,18 +333,20 @@ export function ProviderAvailabilityMonitor({ api, data, providers }: { api?: Ap
         <span><i className="success" />{tx("正常")}</span>
         <span><i className="warning" />{tx("降级/慢响应")}</span>
         <span><i className="failure" />{tx("故障")}</span>
-        <em>{tx("Codex 监控来自专用真实测试；普通 Provider 监控来自网关请求日志。")}</em>
+        <em>{tx("综合状态由后端区分配置、主动测试、真实请求与套餐来源。")}</em>
       </div>
     </section>
   );
 }
 
 export function ProviderCodexQuota({
-  quotaStates,
+  quota,
+  refreshing,
   resources,
   onRefresh,
 }: {
-  quotaStates: Record<string, ProviderQuotaState>;
+  quota: ProviderQuotaSummary;
+  refreshing: Record<string, boolean>;
   resources: ProviderResource[];
   onRefresh: (resource: ProviderResource) => void;
 }) {
@@ -414,25 +371,15 @@ export function ProviderCodexQuota({
     if (closeTimer.current) clearTimeout(closeTimer.current);
   }, []);
 
-  const subscriptions = resources.filter((resource) => resource.resource_type === "openai_subscription" && resource.status === "active");
-  if (subscriptions.length === 0) return <span className="provider-codex-quota na">-</span>;
-  const states = subscriptions.map((resource) => ({ resource, state: quotaStates[resource.id] }));
-  if (states.every(({ state }) => state?.loading || !state)) {
-    return <span className="provider-codex-quota loading">{tx("查询中")}</span>;
-  }
-  const available = states.filter(({ state }) => state?.quota).map(({ resource, state }) => ({ resource, quota: state!.quota! }));
-  if (available.length === 0) {
-    const error = states.find(({ state }) => state?.error)?.state?.error;
+  if (!quota.supported) return <span className="provider-codex-quota na">-</span>;
+  const accounts = quota.accounts ?? [];
+  if (accounts.length === 0 || quota.successful_accounts === 0) {
+    const error = accounts.find((account) => account.error_code)?.error_code;
     return <span className="provider-codex-quota error" title={error}>{tx("查询失败")}</span>;
   }
-  const limiting = available.reduce((lowest, current) => {
-    const lowestRemaining = quotaRemainingPercent(lowest.quota);
-    const currentRemaining = quotaRemainingPercent(current.quota);
-    return currentRemaining < lowestRemaining ? current : lowest;
-  });
-  const remaining = quotaRemainingPercent(limiting.quota);
-  const plan = limiting.quota.plan_type || limiting.resource.credential_summary?.plan_type || "-";
-  const limited = limiting.quota.rate_limit?.limit_reached || limiting.quota.rate_limit?.allowed === false;
+  const remaining = quota.remaining_percent ?? 100;
+  const plan = quota.plan_type || "-";
+  const limited = quota.limit_reached;
   return (
     <div className="provider-codex-quota-wrap" onMouseLeave={schedulePopoverClose}>
       <button
@@ -443,8 +390,8 @@ export function ProviderCodexQuota({
         type="button"
       >
         <strong>{formatQuotaPercent(remaining)}%</strong>
-        <span>{plan} · {quotaResetLabel(limiting.quota.rate_limit?.primary_window)}</span>
-        <small>{subscriptions.length} {tx("个账号，显示最低余量")}</small>
+        <span>{plan} · {quotaSummaryResetLabel(quota.earliest_reset_at)}</span>
+        <small>{accounts.length} {tx("个账号，显示最低余量")}</small>
       </button>
       {popoverPosition && typeof document !== "undefined" ? createPortal(
         <div
@@ -455,29 +402,30 @@ export function ProviderCodexQuota({
           role="tooltip"
           style={popoverPosition}
         >
-          {states.map(({ resource, state }) => {
-            const quota = state?.quota;
-            const accountLabel = resource.credential_summary?.account_email || resource.credential_summary?.account_id || resource.name;
-            const accountPlan = quota?.plan_type || resource.credential_summary?.plan_type || "-";
-            const accountLimited = quota?.rate_limit?.limit_reached || quota?.rate_limit?.allowed === false;
+          {accounts.map((account) => {
+            const resource = resources.find((item) => item.id === account.resource_id);
+            const accountQuota = account.quota;
+            const accountLabel = resource?.credential_summary?.account_email || resource?.credential_summary?.account_id || account.resource_name;
+            const accountPlan = accountQuota?.plan_type || resource?.credential_summary?.plan_type || "-";
+            const accountLimited = accountQuota?.rate_limit?.limit_reached || accountQuota?.rate_limit?.allowed === false;
             return (
-              <div className="provider-codex-account" key={resource.id}>
+              <div className="provider-codex-account" key={account.resource_id}>
                 <div>
                   <strong title={accountLabel}>{accountLabel}</strong>
-                  {quota ? (
+                  {accountQuota ? (
                     <span className={accountLimited ? "limited" : ""}>
-                      {accountPlan} · {formatQuotaPercent(quotaRemainingPercent(quota))}% · {quotaResetLabel(quota.rate_limit?.primary_window)}
+                      {accountPlan} · {formatQuotaPercent(quotaRemainingPercent(accountQuota))}% · {quotaResetLabel(accountQuota.rate_limit?.primary_window)}
                     </span>
                   ) : (
-                    <span className={state?.error ? "limited" : ""} title={state?.error}>
-                      {state?.loading ? tx("查询中") : tx("查询失败")}
+                    <span className="limited" title={account.error_code}>
+                      {refreshing[account.resource_id] ? tx("查询中") : account.error_code || tx("查询失败")}
                     </span>
                   )}
                 </div>
                 <button
                   aria-label={`${tx("刷新额度")} ${accountLabel}`}
-                  disabled={state?.loading}
-                  onClick={() => onRefresh(resource)}
+                  disabled={!resource || refreshing[account.resource_id]}
+                  onClick={() => resource && onRefresh(resource)}
                   type="button"
                 >
                   <RefreshCw size={13} />
@@ -510,8 +458,41 @@ function quotaResetLabel(window?: OpenAIQuotaWindow) {
   return tx("即将重置");
 }
 
+function quotaSummaryResetLabel(resetAt?: number) {
+  if (!resetAt) return tx("无重置信息");
+  return new Date(resetAt * 1000).toLocaleString(languageLocale(), { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
 function formatQuotaPercent(value: number) {
   return String(Math.round(value * 10) / 10);
+}
+
+function updateProviderQuotaSummary(summary: ProviderQuotaSummary, resource: ProviderResource, quota: OpenAIAccountQuota): ProviderQuotaSummary {
+  const accounts = (summary.accounts ?? []).filter((account) => account.resource_id !== resource.id);
+  accounts.push({ resource_id: resource.id, resource_name: resource.name, quota });
+  return recalculateProviderQuotaSummary({ ...summary, accounts });
+}
+
+function updateProviderQuotaSummaryError(summary: ProviderQuotaSummary, resource: ProviderResource, errorCode: string): ProviderQuotaSummary {
+  const accounts = (summary.accounts ?? []).filter((account) => account.resource_id !== resource.id);
+  accounts.push({ resource_id: resource.id, resource_name: resource.name, error_code: errorCode });
+  return recalculateProviderQuotaSummary({ ...summary, accounts });
+}
+
+function recalculateProviderQuotaSummary(summary: ProviderQuotaSummary): ProviderQuotaSummary {
+  const successful = (summary.accounts ?? []).filter((account) => account.quota);
+  const limiting = successful.reduce<typeof successful[number] | undefined>((lowest, current) => {
+    if (!lowest) return current;
+    return quotaRemainingPercent(current.quota!) < quotaRemainingPercent(lowest.quota!) ? current : lowest;
+  }, undefined);
+  return {
+    ...summary,
+    successful_accounts: successful.length,
+    failed_accounts: (summary.accounts?.length ?? 0) - successful.length,
+    remaining_percent: limiting?.quota ? quotaRemainingPercent(limiting.quota) : undefined,
+    limit_reached: successful.some((account) => account.quota?.rate_limit?.limit_reached || account.quota?.rate_limit?.allowed === false),
+    plan_type: limiting?.quota?.plan_type,
+  };
 }
 
 export function ProviderProbeLine({ tone, detail }: { tone: ProviderProbeTone; detail: string }) {
@@ -522,6 +503,74 @@ export function ProviderProbeLine({ tone, detail }: { tone: ProviderProbeTone; d
       <small>{detail}</small>
     </span>
   );
+}
+
+export function providerMonitorRowsFromSnapshots(
+  data: AppData,
+  providers: Provider[],
+  quotaOverrides: Record<string, ProviderQuotaSummary> = {},
+): ProviderMonitorRow[] {
+  const providerIDs = new Set(providers.map((provider) => provider.id));
+  return data.providerMonitoring
+    .filter((snapshot) => providerIDs.has(snapshot.provider.id))
+    .map((snapshot) => providerMonitorRowFromSnapshot(data, snapshot, quotaOverrides[snapshot.provider.id]))
+    .sort((left, right) => (left.provider.priority - right.provider.priority) || left.provider.name.localeCompare(right.provider.name));
+}
+
+function providerMonitorRowFromSnapshot(data: AppData, snapshot: ProviderMonitoringSnapshot, quotaOverride?: ProviderQuotaSummary): ProviderMonitorRow {
+  const resources = data.providerResources.filter((resource) => resource.provider_id === snapshot.provider.id);
+  const observedSignal = snapshot.gateway.samples > 0 ? snapshot.gateway : snapshot.active_probe;
+  const observed = observedSignal.samples > 0;
+  return {
+    provider: snapshot.provider,
+    resources,
+    routeCount: snapshot.route_count,
+    activeRouteCount: snapshot.active_route_count,
+    statusTone: snapshot.state,
+    statusLabel: snapshot.status_label,
+    statusDetail: monitoringDetail(snapshot.status_detail),
+    basicPrimaryTone: monitoringProbeTone(snapshot.configuration.state),
+    basicPrimaryDetail: monitoringDetail(snapshot.configuration.detail),
+    basicSecondaryTone: monitoringProbeTone(snapshot.resources.state),
+    basicSecondaryDetail: `${snapshot.healthy_resource_count}/${snapshot.active_resource_count} ${tx("资源健康")}`,
+    realTone: monitoringProbeTone(observedSignal.state),
+    realDetail: observed
+      ? `${providerPercent(observedSignal.success_rate ?? 0)} · ${formatNumber(observedSignal.samples)} ${tx(observedSignal.source === "active_probe" ? "次测试" : "次请求")}`
+      : tx("等待真实测试或网关请求"),
+    latencyMS: observedSignal.latency_ms ?? 0,
+    availability24h: observedSignal.success_rate ?? 0,
+    observed24h: observed,
+    sampleSource: observedSignal.source === "active_probe" ? "codex_test" : "gateway_request",
+    quota: quotaOverride ?? snapshot.quota,
+    qualityScore: snapshot.quality_score,
+    trend: snapshot.trend,
+  };
+}
+
+function monitoringProbeTone(state: ProviderMonitoringSnapshot["configuration"]["state"]): ProviderProbeTone {
+  if (state === "healthy") return "ok";
+  if (state === "degraded") return "warn";
+  if (state === "down") return "down";
+  return "na";
+}
+
+function monitoringDetail(value?: string) {
+  if (!value) return "-";
+  const [source, detail] = value.split(":", 2);
+  const labels: Record<string, string> = {
+    configuration: tx("配置"),
+    active_probe: tx("主动测试"),
+    gateway_request: tx("真实请求"),
+    provider_online: tx("Provider 在线"),
+    resources_healthy: tx("资源健康"),
+    no_active_resources: tx("未配置账号资源"),
+    no_healthy_resources: tx("无健康资源"),
+    some_resources_unhealthy: tx("部分资源异常"),
+    awaiting_observation: tx("等待测试或真实请求"),
+    ok: "ok",
+  };
+  if (detail) return `${labels[source] ?? source} · ${labels[detail] ?? detail}`;
+  return labels[value] ?? value;
 }
 
 export function providerMonitorRows(data: AppData, providers: Provider[]): ProviderMonitorRow[] {
@@ -575,6 +624,7 @@ export function providerMonitorRow(data: AppData, provider: Provider): ProviderM
     availability24h,
     observed24h,
     sampleSource,
+    quota: { supported: false, limit_reached: false, successful_accounts: 0, failed_accounts: 0 },
     qualityScore: providerQualityScore(availability24h, latencyMS, resourceScore, observed24h, healthyProvider),
     trend: providerTrend(samples),
   };
@@ -645,7 +695,7 @@ export function providerMonitorSummary(rows: ProviderMonitorRow[]) {
       summary[row.statusTone] += 1;
       return summary;
     },
-    { healthy: 0, degraded: 0, down: 0 } as Record<ProviderMonitorTone, number>,
+    { healthy: 0, degraded: 0, down: 0, unknown: 0 } as Record<ProviderMonitorTone, number>,
   );
 }
 
@@ -667,6 +717,7 @@ export function providerMonitorTone(provider: Provider, observed: boolean, avail
 export function providerStatusLabel(tone: ProviderMonitorTone) {
   if (tone === "healthy") return "Healthy";
   if (tone === "degraded") return "Degraded";
+  if (tone === "unknown") return "Awaiting Test";
   return "Functional Down";
 }
 

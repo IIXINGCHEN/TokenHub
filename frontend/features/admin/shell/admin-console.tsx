@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { type LoadedData, loadPlanForView, mergeLoadedData } from "../core/data-loading";
 import { allNavGroupTitles, canAccessView, defaultViewForRole, rememberRecentView, standaloneViewMeta } from "../core/navigation";
 import { clearOAuthLoginResult, clearPendingOAuthBaseURL, clearProviderAccountOAuthResultFromLocation, clearSavedSession, forwardOAuthAuthorizationResponse, hasPendingProviderAccountOAuthResult, isOAuthAuthorizationResponse, readOAuthLoginResult, readPendingOAuthBaseURL, readProviderAccountOAuthResultFromLocation, readSavedSession, savePendingProviderAccountOAuthResult, saveSession } from "../core/session";
-import { type AdminResource, type AdminUser, type AlertDelivery, type AlertEvent, type APIKey, type AppData, type ApprovalRequest, type AuditEvent, authExpiredEventName, type ConfirmState, defaultBaseURL, languageStorageKey, type LoginIdentityProvider, type ModalState, type Model, type ModelRoute, notificationChannelTypes, type Provider, type ProviderCatalogEntry, type ProviderResource, type ReportExportHistoryItem, type RequestLog, type ResourceAction, type ResourceConfig, type SettingsTabKey, type SQLiteBackup, type ToolbarAction, type UsageBreakdown, type UsagePoint, type ViewKey, viewRoutes } from "../core/types";
+import { type AdminResource, type AdminUser, type AlertDelivery, type AlertEvent, type APIKey, type AppData, type ApprovalRequest, type AuditEvent, authExpiredEventName, type ConfirmState, defaultBaseURL, languageStorageKey, type LoginIdentityProvider, type ModalState, type Model, type ModelRoute, notificationChannelTypes, type Provider, type ProviderCatalogEntry, type ProviderMonitoringSnapshot, type ProviderResource, type ReportExportHistoryItem, type RequestLog, type ResourceAction, type ResourceConfig, type SettingsTabKey, type SQLiteBackup, type ToolbarAction, type UsageBreakdown, type UsagePoint, type ViewKey, viewRoutes } from "../core/types";
 import { emptyData, emptySummary, filterByModelCategory, filterRows } from "../domain/catalog";
 import { projectSelectOptions, rowTitle, stringifyForm } from "../domain/entities";
 import { uniqueUIID, viewFromPath } from "../domain/formatting";
@@ -305,6 +305,7 @@ export function AdminConsole() {
       queue(plan.timeseries, "timeseries", "/api/admin/usage/timeseries");
       queue(plan.users, "users", "/api/admin/users");
       queue(plan.providerCatalog, "provider-catalog", "/api/admin/provider-catalog");
+      queue(plan.providerMonitoring, "provider-monitoring", "/api/admin/providers/monitoring");
       for (const kind of plan.resources) {
         requests.push({ name: `resource:${kind}`, request: adminFetch(api, `/api/admin/resources/${kind}`), optional: true });
       }
@@ -376,6 +377,9 @@ export function AdminConsole() {
         } else if (name === "provider-catalog") {
           const payload = (await resp.json()) as { data: ProviderCatalogEntry[] };
           loaded.providerCatalog = payload.data ?? [];
+        } else if (name === "provider-monitoring") {
+          const payload = (await resp.json()) as { data: ProviderMonitoringSnapshot[] };
+          loaded.providerMonitoring = payload.data ?? [];
         } else if (name.startsWith("resource:")) {
           const kind = name.slice("resource:".length);
           const payload = (await resp.json()) as { data: AdminResource[] };

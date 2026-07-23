@@ -73,6 +73,46 @@ type ClusterTaskState struct {
 	CompletedAt time.Time
 }
 
+type AdapterSessionBinding struct {
+	ID              string    `json:"id" gorm:"primaryKey"`
+	AdapterType     string    `json:"adapter_type" gorm:"uniqueIndex:idx_adapter_session_binding,priority:1"`
+	AffinityKind    string    `json:"affinity_kind"`
+	ProviderID      string    `json:"provider_id" gorm:"uniqueIndex:idx_adapter_session_binding,priority:2;index"`
+	AffinityKeyHash string    `json:"-" gorm:"uniqueIndex:idx_adapter_session_binding,priority:3"`
+	ResourceID      string    `json:"resource_id" gorm:"index"`
+	Generation      int64     `json:"generation"`
+	RebindReason    string    `json:"rebind_reason,omitempty"`
+	LastUsedAt      time.Time `json:"last_used_at"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+type ProviderResourceObservation struct {
+	ResourceID        string            `json:"resource_id" gorm:"primaryKey"`
+	AdapterType       string            `json:"adapter_type" gorm:"index"`
+	RateLimitHeaders  map[string]string `json:"rate_limit_headers,omitempty" gorm:"serializer:json"`
+	QuotaSnapshot     string            `json:"-" gorm:"type:text"`
+	QuotaFetchedAt    *time.Time        `json:"quota_fetched_at,omitempty"`
+	UpstreamRequestID string            `json:"upstream_request_id,omitempty"`
+	ServedModel       string            `json:"served_model,omitempty"`
+	ModelETag         string            `json:"model_etag,omitempty"`
+	Transport         string            `json:"transport,omitempty"`
+	UpdatedAt         time.Time         `json:"updated_at"`
+}
+
+type ProviderObservation struct {
+	ID          string    `json:"id" gorm:"primaryKey"`
+	ProviderID  string    `json:"provider_id" gorm:"index"`
+	ResourceID  string    `json:"resource_id,omitempty" gorm:"index"`
+	AdapterType string    `json:"adapter_type" gorm:"index"`
+	Source      string    `json:"source" gorm:"index"`
+	Operation   string    `json:"operation" gorm:"index"`
+	Success     bool      `json:"success" gorm:"index"`
+	LatencyMS   int64     `json:"latency_ms"`
+	ErrorCode   string    `json:"error_code,omitempty"`
+	ObservedAt  time.Time `json:"observed_at" gorm:"index"`
+}
+
 type Store interface {
 	CreateProject(project Project) Project
 	ListProjects() []Project
@@ -124,6 +164,10 @@ type Store interface {
 	UsageTimeseries(days int) []map[string]any
 	GenerateBillingPeriod(period string) (map[string]any, error)
 	ListRequestLogs() []RequestLog
+	ListProviderObservations(since time.Time) []ProviderObservation
+	RecordProviderObservation(observation ProviderObservation)
+	GetProviderResourceObservation(resourceID string) (ProviderResourceObservation, bool)
+	SaveProviderResourceQuota(resourceID string, adapterType string, snapshot string, fetchedAt time.Time) error
 	GetRequestDetail(requestID string) (map[string]any, error)
 	ListAlerts() []AlertEvent
 	GetAlert(id string) (AlertEvent, error)
@@ -160,6 +204,9 @@ type Store interface {
 	ReleaseProviderResourceCapacity(resourceID string, leaseID string)
 	FinishProviderResourceAttempt(resourceID string, leaseID string, success bool, usage Usage)
 	RefreshProviderResourceCredentials(ctx context.Context, resourceID string, force bool) (ProviderResourceCredentials, error)
+	GetAdapterSessionBinding(ctx context.Context, adapterType string, providerID string, affinityKeyHash string) (AdapterSessionBinding, bool, error)
+	CommitAdapterSessionBinding(ctx context.Context, binding AdapterSessionBinding, expectedGeneration int64) (AdapterSessionBinding, bool, error)
+	RunClusterOperation(ctx context.Context, name string, fn func(context.Context) error) error
 	SaveProviderAccountOAuthSession(session providerAccountOAuthSession) error
 	GetProviderAccountOAuthSessionByState(state string) (providerAccountOAuthSession, bool, error)
 	ConsumeProviderAccountOAuthSession(id string, state string) (providerAccountOAuthSession, bool, error)
@@ -392,6 +439,9 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 			&InFlightLease{},
 			&ClusterLease{},
 			&ClusterTaskState{},
+			&AdapterSessionBinding{},
+			&ProviderResourceObservation{},
+			&ProviderObservation{},
 			&providerAccountOAuthSessionRecord{},
 			&UsageRecord{},
 			&RequestLog{},
@@ -1116,6 +1166,12 @@ func (s *GormStore) AddProvider(provider Provider) Provider {
 	if provider.CreatedAt.IsZero() {
 		provider.CreatedAt = time.Now().UTC()
 	}
+	if provider.Type == ProviderOpenAICodex {
+		provider.APIKey = ""
+		if codexProviderBaseURLNeedsNormalization(provider.BaseURL) {
+			provider.BaseURL = openAICodexBaseURL
+		}
+	}
 	provider.APIKey = s.encryptSecret(provider.APIKey)
 	_ = s.db.Clauses(clause.OnConflict{UpdateAll: true}).Create(&provider).Error
 	return provider
@@ -1142,10 +1198,16 @@ func (s *GormStore) UpdateProvider(id string, patch Provider) (Provider, error) 
 		provider.Name = patch.Name
 	}
 	if patch.Type != "" {
+		if err := validateProviderAdapterResources(s.db, id, patch.Type); err != nil {
+			return Provider{}, err
+		}
 		provider.Type = patch.Type
 	}
 	provider.BaseURL = patch.BaseURL
 	if patch.APIKey != "" {
+		if firstNonEmpty(patch.Type, provider.Type) == ProviderOpenAICodex {
+			return Provider{}, NewHTTPError(409, "provider_adapter_credential_conflict", "Codex Subscription credentials must be stored on account resources")
+		}
 		provider.APIKey = s.encryptSecret(patch.APIKey)
 	}
 	if patch.Status != "" {
@@ -1191,6 +1253,18 @@ func (s *GormStore) DeleteProvider(id string) error {
 			if err := tx.Where("resource_id IN ?", resourceIDs).Delete(&ProviderResourceBucket{}).Error; err != nil {
 				return err
 			}
+			if err := tx.Where("resource_id IN ?", resourceIDs).Delete(&ProviderResourceObservation{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("resource_id IN ?", resourceIDs).Delete(&ProviderObservation{}).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Where("provider_id = ?", id).Delete(&AdapterSessionBinding{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("provider_id = ?", id).Delete(&ProviderObservation{}).Error; err != nil {
+			return err
 		}
 		if err := tx.Where("provider_id = ?", id).Delete(&ProviderResource{}).Error; err != nil {
 			return err
@@ -1219,8 +1293,12 @@ func (s *GormStore) AddProviderResource(resource ProviderResource) (ProviderReso
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if err := s.db.First(&Provider{}, "id = ?", resource.ProviderID).Error; err != nil {
+	var provider Provider
+	if err := s.db.First(&provider, "id = ?", resource.ProviderID).Error; err != nil {
 		return ProviderResource{}, notFound(err, "provider_not_found", "Provider not found")
+	}
+	if err := ensureProviderResourceAdapterCompatibility(s.db, &provider, resource.ResourceType); err != nil {
+		return ProviderResource{}, err
 	}
 	resource.Name = strings.TrimSpace(resource.Name)
 	now := time.Now().UTC()
@@ -1258,7 +1336,17 @@ func (s *GormStore) AddProviderResource(resource ProviderResource) (ProviderReso
 func (s *GormStore) ListProviderResources() []ProviderResource {
 	var items []ProviderResource
 	_ = s.db.Order("provider_id asc, priority asc, weight desc, created_at asc").Find(&items).Error
+	var observations []ProviderResourceObservation
+	_ = s.db.Find(&observations).Error
+	observationByResource := make(map[string]ProviderResourceObservation, len(observations))
+	for _, observation := range observations {
+		observationByResource[observation.ResourceID] = observation
+	}
 	for i := range items {
+		if observation, ok := observationByResource[items[i].ID]; ok {
+			copy := observation
+			items[i].Observation = &copy
+		}
 		redactProviderResourceSecrets(&items[i])
 	}
 	return items
@@ -1317,6 +1405,13 @@ func (s *GormStore) UpdateProviderResource(id string, patch ProviderResource) (P
 	}
 	if patch.Options != nil {
 		resource.Options = patch.Options
+	}
+	var provider Provider
+	if err := s.db.First(&provider, "id = ?", resource.ProviderID).Error; err != nil {
+		return ProviderResource{}, notFound(err, "provider_not_found", "Provider not found")
+	}
+	if err := ensureProviderResourceAdapterCompatibility(s.db, &provider, resource.ResourceType); err != nil {
+		return ProviderResource{}, err
 	}
 	resource.UpdatedAt = time.Now().UTC()
 	s.prepareProviderResourceForUpdate(&resource, patch)
@@ -1392,6 +1487,15 @@ func (s *GormStore) DeleteProviderResource(id string) error {
 			return err
 		}
 		if err := tx.Where("resource_id = ?", id).Delete(&ProviderResourceBucket{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("resource_id = ?", id).Delete(&ProviderResourceObservation{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("resource_id = ?", id).Delete(&ProviderObservation{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("resource_id = ?", id).Delete(&AdapterSessionBinding{}).Error; err != nil {
 			return err
 		}
 		return tx.Delete(&resource).Error
@@ -2353,7 +2457,10 @@ func (s *GormStore) FinishCall(call CallContext, route RouteSelection, usage Usa
 				ProviderID:         route.Provider.ID,
 				ProviderResourceID: routeResourceID(route),
 				InputTokens:        usage.PromptTokens,
+				CachedInputTokens:  usage.CachedInputTokens,
+				CacheWriteTokens:   usage.CacheWriteInputTokens,
 				OutputTokens:       usage.CompletionTokens,
+				ReasoningTokens:    usage.ReasoningOutputTokens,
 				TotalTokens:        usage.TotalTokens,
 				CostUSD:            usage.CostUSD,
 				CreatedAt:          now,
@@ -2370,6 +2477,10 @@ func (s *GormStore) FinishCall(call CallContext, route RouteSelection, usage Usa
 			ProviderID:         route.Provider.ID,
 			ProviderResourceID: routeResourceID(route),
 			ProviderModel:      route.ProviderModel,
+			UpstreamRequestID:  usage.UpstreamRequestID,
+			ServedModel:        usage.ServedModel,
+			ModelETag:          usage.ModelETag,
+			Transport:          usage.Transport,
 			StatusCode:         statusCode,
 			ErrorCode:          errorCode,
 			LatencyMS:          time.Since(call.StartedAt).Milliseconds(),
@@ -2378,6 +2489,48 @@ func (s *GormStore) FinishCall(call CallContext, route RouteSelection, usage Usa
 			CreatedAt:          now,
 		}).Error; err != nil {
 			return err
+		}
+		if route.Provider.ID != "" {
+			if err := tx.Create(&ProviderObservation{
+				ID:          NewID("pob"),
+				ProviderID:  route.Provider.ID,
+				ResourceID:  routeResourceID(route),
+				AdapterType: route.Provider.Type,
+				Source:      "gateway_request",
+				Operation:   "inference",
+				Success:     providerObservationSuccess(statusCode, errorCode),
+				LatencyMS:   time.Since(call.StartedAt).Milliseconds(),
+				ErrorCode:   errorCode,
+				ObservedAt:  now,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		if resourceID := routeResourceID(route); resourceID != "" && (len(usage.ResponseHeaders) > 0 || usage.UpstreamRequestID != "" || usage.ServedModel != "") {
+			observation := ProviderResourceObservation{
+				ResourceID:        resourceID,
+				AdapterType:       route.Provider.Type,
+				RateLimitHeaders:  codexRateLimitHeaders(usage.ResponseHeaders),
+				UpstreamRequestID: usage.UpstreamRequestID,
+				ServedModel:       usage.ServedModel,
+				ModelETag:         usage.ModelETag,
+				Transport:         usage.Transport,
+				UpdatedAt:         now,
+			}
+			if err := tx.Clauses(clause.OnConflict{
+				Columns: []clause.Column{{Name: "resource_id"}},
+				DoUpdates: clause.AssignmentColumns([]string{
+					"adapter_type",
+					"rate_limit_headers",
+					"upstream_request_id",
+					"served_model",
+					"model_e_tag",
+					"transport",
+					"updated_at",
+				}),
+			}).Create(&observation).Error; err != nil {
+				return err
+			}
 		}
 		return tx.Delete(&InFlightLease{}, "id = ?", call.RequestID).Error
 	})
@@ -2473,12 +2626,15 @@ func (s *GormStore) UsageSummary() map[string]any {
 	_ = s.db.Find(&records).Error
 	_ = s.db.Find(&logs).Error
 
-	var input, output, total int64
+	var input, cachedInput, cacheWrite, output, reasoningOutput, total int64
 	var cost float64
 	errorsCount := 0
 	for _, record := range records {
 		input += record.InputTokens
+		cachedInput += record.CachedInputTokens
+		cacheWrite += record.CacheWriteTokens
 		output += record.OutputTokens
+		reasoningOutput += record.ReasoningTokens
 		total += record.TotalTokens
 		cost += record.CostUSD
 	}
@@ -2491,13 +2647,16 @@ func (s *GormStore) UsageSummary() map[string]any {
 		}
 	}
 	return map[string]any{
-		"request_count":      billableRequestLogCount(logs),
-		"usage_record_count": len(records),
-		"input_tokens":       input,
-		"output_tokens":      output,
-		"total_tokens":       total,
-		"estimated_cost_usd": cost,
-		"errors":             errorsCount,
+		"request_count":            billableRequestLogCount(logs),
+		"usage_record_count":       len(records),
+		"input_tokens":             input,
+		"cached_input_tokens":      cachedInput,
+		"cache_write_input_tokens": cacheWrite,
+		"output_tokens":            output,
+		"reasoning_output_tokens":  reasoningOutput,
+		"total_tokens":             total,
+		"estimated_cost_usd":       cost,
+		"errors":                   errorsCount,
 	}
 }
 
@@ -2719,6 +2878,54 @@ func (s *GormStore) ListRequestLogs() []RequestLog {
 	var items []RequestLog
 	_ = s.db.Order("created_at desc").Find(&items).Error
 	return items
+}
+
+func (s *GormStore) ListProviderObservations(since time.Time) []ProviderObservation {
+	var items []ProviderObservation
+	query := s.db
+	if !since.IsZero() {
+		query = query.Where("observed_at >= ?", since.UTC())
+	}
+	_ = query.Order("observed_at desc").Find(&items).Error
+	return items
+}
+
+func (s *GormStore) RecordProviderObservation(observation ProviderObservation) {
+	if observation.ID == "" {
+		observation.ID = NewID("pob")
+	}
+	if observation.ObservedAt.IsZero() {
+		observation.ObservedAt = time.Now().UTC()
+	}
+	_ = s.db.Create(&observation).Error
+}
+
+func (s *GormStore) GetProviderResourceObservation(resourceID string) (ProviderResourceObservation, bool) {
+	var observation ProviderResourceObservation
+	err := s.db.First(&observation, "resource_id = ?", strings.TrimSpace(resourceID)).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ProviderResourceObservation{}, false
+	}
+	return observation, err == nil
+}
+
+func (s *GormStore) SaveProviderResourceQuota(resourceID string, adapterType string, snapshot string, fetchedAt time.Time) error {
+	observation := ProviderResourceObservation{
+		ResourceID:     strings.TrimSpace(resourceID),
+		AdapterType:    strings.TrimSpace(adapterType),
+		QuotaSnapshot:  snapshot,
+		QuotaFetchedAt: &fetchedAt,
+		UpdatedAt:      time.Now().UTC(),
+	}
+	return s.db.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "resource_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"adapter_type",
+			"quota_snapshot",
+			"quota_fetched_at",
+			"updated_at",
+		}),
+	}).Create(&observation).Error
 }
 
 func (s *GormStore) GetRequestDetail(requestID string) (map[string]any, error) {

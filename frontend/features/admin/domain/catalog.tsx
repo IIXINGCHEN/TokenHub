@@ -26,6 +26,7 @@ export function emptyData(): AppData {
     timeseries: [],
     resources: {},
     providerCatalog: [],
+    providerMonitoring: [],
   };
 }
 

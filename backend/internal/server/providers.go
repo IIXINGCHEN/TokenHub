@@ -20,6 +20,27 @@ type ProviderAdapter interface {
 	Embeddings(ctx context.Context, provider Provider, providerModel string, req EmbeddingsRequest) (any, Usage, error)
 }
 
+type ResponsesEnvelopeAdapter interface {
+	ResponsesWithHeaders(ctx context.Context, provider Provider, providerModel string, req ResponsesRequest, incoming http.Header) (any, Usage, error)
+}
+
+type ResponsesInvoker interface {
+	Responses(ctx context.Context, provider Provider, providerModel string, req ResponsesRequest) (any, Usage, error)
+}
+
+type ResponsesStreamOpener interface {
+	OpenResponses(ctx context.Context, provider Provider, providerModel string, req ResponsesRequest, incoming http.Header) (*http.Response, error)
+}
+
+type ProviderResourceProber interface {
+	DefaultProbeRequest() ProviderProbeRequest
+	Probe(ctx context.Context, provider Provider, resource ProviderResource, request ProviderProbeRequest) (ProviderProbeResult, error)
+}
+
+type ResponsesCompactAdapter interface {
+	CompactWithHeaders(ctx context.Context, provider Provider, providerModel string, body map[string]json.RawMessage, incoming http.Header) (any, Usage, error)
+}
+
 type MockAdapter struct{}
 
 func (a MockAdapter) Chat(ctx context.Context, provider Provider, providerModel string, req ChatCompletionRequest) (any, Usage, error) {
@@ -640,10 +661,15 @@ func geminiUsage(body map[string]any) Usage {
 
 func usageFromMap(body map[string]any) Usage {
 	usageMap, _ := body["usage"].(map[string]any)
+	inputDetails, _ := usageMap["input_tokens_details"].(map[string]any)
+	outputDetails, _ := usageMap["output_tokens_details"].(map[string]any)
 	usage := Usage{
-		PromptTokens:     int64FromAny(firstNonNil(usageMap["prompt_tokens"], usageMap["input_tokens"])),
-		CompletionTokens: int64FromAny(firstNonNil(usageMap["completion_tokens"], usageMap["output_tokens"])),
-		TotalTokens:      int64FromAny(usageMap["total_tokens"]),
+		PromptTokens:          int64FromAny(firstNonNil(usageMap["prompt_tokens"], usageMap["input_tokens"])),
+		CachedInputTokens:     int64FromAny(firstNonNil(usageMap["cached_input_tokens"], inputDetails["cached_tokens"])),
+		CacheWriteInputTokens: int64FromAny(firstNonNil(usageMap["cache_write_input_tokens"], inputDetails["cache_write_tokens"])),
+		CompletionTokens:      int64FromAny(firstNonNil(usageMap["completion_tokens"], usageMap["output_tokens"])),
+		ReasoningOutputTokens: int64FromAny(firstNonNil(usageMap["reasoning_output_tokens"], outputDetails["reasoning_tokens"])),
+		TotalTokens:           int64FromAny(usageMap["total_tokens"]),
 	}
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
