@@ -797,6 +797,7 @@ export function AdminConsole() {
           api={api}
           catalog={data.providerCatalog}
           standardModels={data.models}
+          resources={data.providerResources}
           loading={loading}
           onClose={() => setProviderCreateOpen(false)}
           onSaved={async () => {

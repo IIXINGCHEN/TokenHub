@@ -51,6 +51,7 @@ func NewWithConfig(store Store, config Config) *Server {
 		adapters: map[string]ProviderAdapter{
 			ProviderMock:             MockAdapter{},
 			ProviderOpenAI:           openai,
+			ProviderOpenAICodex:      codexSubscription,
 			ProviderOpenAICompatible: openai,
 			"deepseek":               openai,
 			"qwen":                   openai,
@@ -450,6 +451,14 @@ func (s *Server) startRoutedCall(w http.ResponseWriter, r *http.Request, project
 		writeError(w, r, err)
 		return RoutedCall{}, false
 	}
+	routes, err = s.filterCodexRoutesByModel(r.Context(), model, routes)
+	if err != nil {
+		httpErr := AsHTTPError(err)
+		s.store.FinishCall(call, RouteSelection{}, Usage{}, httpErr.Status, httpErr.Code, s.clientIP(r), r.UserAgent())
+		s.recordRequestPayload(call.RequestID, requestPayload, auditErrorPayload(err, call.RequestID))
+		writeError(w, r, err)
+		return RoutedCall{}, false
+	}
 	return RoutedCall{Call: call, Routes: s.planRouteOrder(call, routes)}, true
 }
 
@@ -477,7 +486,11 @@ func (s *Server) executeRoutedResponses(r *http.Request, routed RoutedCall, req 
 		if err != nil {
 			return nil, Usage{}, err
 		}
-		return adapter.Responses(r.Context(), route.Provider, route.ProviderModel, req)
+		resp, usage, err := adapter.Responses(r.Context(), route.Provider, route.ProviderModel, req)
+		if isCodexModelUnsupportedError(err) {
+			s.removeCodexResourceModel(routeResourceID(route), route.ProviderModel)
+		}
+		return resp, usage, err
 	})
 }
 
@@ -527,6 +540,11 @@ func (s *Server) handleAdminPlaygroundChat(w http.ResponseWriter, r *http.Reques
 	}
 
 	routes, err := s.store.SelectRouteCandidates(req.Model)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	routes, err = s.filterCodexRoutesByModel(r.Context(), req.Model, routes)
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -600,7 +618,7 @@ func executeRoutedWithStore[T any](store Store, routed RoutedCall, call func(Rou
 		}
 		resp, usage, err := call(route)
 		if resourceID != "" {
-			store.FinishProviderResourceAttempt(resourceID, err == nil, usage)
+			store.FinishProviderResourceAttempt(resourceID, err == nil || isCodexModelUnsupportedError(err), usage)
 		}
 		status, code := statusAndCode(err)
 		attempts = append(attempts, RouteAttempt{
@@ -835,6 +853,9 @@ func shouldFailoverProviderError(err error) bool {
 	if err == nil {
 		return false
 	}
+	if isCodexModelUnsupportedError(err) {
+		return true
+	}
 	httpErr := AsHTTPError(err)
 	switch httpErr.Status {
 	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
@@ -842,6 +863,19 @@ func shouldFailoverProviderError(err error) bool {
 	default:
 		return httpErr.Status >= 500
 	}
+}
+
+func isCodexModelUnsupportedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	httpErr := AsHTTPError(err)
+	if httpErr.Code != "codex_upstream_error" {
+		return false
+	}
+	message := strings.ToLower(httpErr.Message)
+	return strings.Contains(message, "model is not supported") ||
+		(strings.Contains(message, "model") && strings.Contains(message, "not supported") && strings.Contains(message, "chatgpt account"))
 }
 
 func lastAttemptRoute(attempts []RouteAttempt) RouteSelection {
@@ -2633,13 +2667,55 @@ func (s *Server) handleAdminProviderCatalogItem(w http.ResponseWriter, r *http.R
 	if _, ok := s.requireAdmin(w, r, "provider", r.Method); !ok {
 		return
 	}
-	if r.Method != http.MethodGet {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/admin/provider-catalog/"), "/")
 	if id == "" || strings.Contains(id, "/") {
 		writeError(w, r, NewHTTPError(404, "not_found", "Not found"))
+		return
+	}
+	if id == codexProviderCatalogID {
+		var (
+			entry ProviderCatalogEntry
+			err   error
+		)
+		switch r.Method {
+		case http.MethodGet:
+			resourceID := strings.TrimSpace(r.URL.Query().Get("resource_id"))
+			if resourceID == "" {
+				for _, resource := range s.store.ListProviderResources() {
+					if isOpenAIAccountResource(resource.ResourceType) && resource.Status == StatusActive {
+						resourceID = resource.ID
+						break
+					}
+				}
+			}
+			if resourceID == "" {
+				writeError(w, r, NewHTTPError(http.StatusConflict, "codex_account_required", "Connect an OpenAI Codex subscription account before loading its models"))
+				return
+			}
+			entry, err = s.queryOpenAICodexModels(r.Context(), resourceID)
+		case http.MethodPost:
+			var credentials ProviderResourceCredentials
+			if decodeErr := decodeJSON(r, &credentials); decodeErr != nil {
+				writeError(w, r, NewHTTPError(http.StatusBadRequest, "invalid_request", decodeErr.Error()))
+				return
+			}
+			entry, err = s.codexSubscription.ModelsWithCredentials(r.Context(), credentials)
+			if err == nil {
+				s.syncOpenAICodexModels(entry.Models)
+			}
+		default:
+			writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+			return
+		}
+		if err != nil {
+			writeError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": entry, "source": entry.Source})
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
 		return
 	}
 	refresh := r.URL.Query().Get("refresh") == "true"
@@ -2659,7 +2735,10 @@ func (s *Server) providerFromCreateRequest(ctx context.Context, req ProviderCrea
 	var catalog ProviderCatalogEntry
 	catalogSource := ""
 	catalogID := strings.TrimSpace(req.CatalogID)
-	if catalogID != "" {
+	if catalogID == codexProviderCatalogID {
+		catalog = s.codexProviderCatalogFromStandardModels(req.SelectedModels)
+		catalogSource = catalog.Source
+	} else if catalogID != "" {
 		entry, source, ok, err := GetProviderCatalogEntry(ctx, http.DefaultClient, catalogID, false)
 		if err != nil {
 			return Provider{}, ProviderCatalogEntry{}, source, err
@@ -3033,8 +3112,18 @@ func (s *Server) handleAdminProviderResourceNested(w http.ResponseWriter, r *htt
 				writeError(w, r, NewHTTPError(400, "invalid_request", err.Error()))
 				return
 			}
+			startedAt := time.Now()
 			result, err := s.testCodexSubscription(r.Context(), parts[0], req)
 			if err != nil {
+				httpErr := AsHTTPError(err)
+				s.recordAdminAuditWithStatus(r, user, "test", "provider_resource", parts[0], "failed", httpErr.Code, "", map[string]any{
+					"healthy":          false,
+					"model":            strings.TrimSpace(req.Model),
+					"reasoning_effort": strings.ToLower(strings.TrimSpace(req.ReasoningEffort)),
+					"speed":            strings.ToLower(strings.TrimSpace(req.Speed)),
+					"latency_ms":       time.Since(startedAt).Milliseconds(),
+					"error_code":       httpErr.Code,
+				})
 				writeError(w, r, err)
 				return
 			}
@@ -6201,6 +6290,10 @@ func adminResourcePermission(path string) string {
 }
 
 func (s *Server) recordAdminAudit(r *http.Request, user AdminUser, action string, resourceType string, resourceID string, before any, after any) {
+	s.recordAdminAuditWithStatus(r, user, action, resourceType, resourceID, "success", "", before, after)
+}
+
+func (s *Server) recordAdminAuditWithStatus(r *http.Request, user AdminUser, action string, resourceType string, resourceID string, status string, message string, before any, after any) {
 	s.store.RecordAuditEvent(AuditEvent{
 		ActorUserID:    user.ID,
 		ActorName:      user.Name,
@@ -6208,7 +6301,8 @@ func (s *Server) recordAdminAudit(r *http.Request, user AdminUser, action string
 		Action:         action,
 		ResourceType:   resourceType,
 		ResourceID:     resourceID,
-		Status:         "success",
+		Status:         status,
+		Message:        message,
 		BeforeSnapshot: snapshotJSON(before),
 		AfterSnapshot:  snapshotJSON(after),
 		IP:             s.clientIP(r),

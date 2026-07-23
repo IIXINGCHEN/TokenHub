@@ -2862,6 +2862,49 @@ func TestAdminCreatesProviderResource(t *testing.T) {
 	}
 }
 
+func TestAdminRejectsDuplicateProviderResourceName(t *testing.T) {
+	app := newTestServer()
+	for index, name := range []string{"OpenAI Codex Primary Account", "  openai codex primary account  "} {
+		resp := doJSON(t, app, http.MethodPost, "/api/admin/provider-resources", map[string]any{
+			"id":            "rsrc_openai_account_" + strconv.Itoa(index+1),
+			"provider_id":   "prv_mock",
+			"name":          name,
+			"resource_type": ProviderResourceOpenAISubscription,
+			"status":        StatusActive,
+			"healthy":       true,
+		}, "")
+		if index == 0 && resp.Code != http.StatusCreated {
+			t.Fatalf("expected first provider resource created, got %d: %s", resp.Code, resp.Body)
+		}
+		if index == 1 {
+			if resp.Code != http.StatusConflict {
+				t.Fatalf("expected duplicate provider resource name conflict, got %d: %s", resp.Code, resp.Body)
+			}
+			if !strings.Contains(resp.Body, `"code":"provider_resource_name_conflict"`) {
+				t.Fatalf("expected provider resource name conflict code, got: %s", resp.Body)
+			}
+		}
+	}
+
+	secondary := doJSON(t, app, http.MethodPost, "/api/admin/provider-resources", map[string]any{
+		"id":            "rsrc_openai_account_secondary",
+		"provider_id":   "prv_mock",
+		"name":          "OpenAI Codex Secondary Account",
+		"resource_type": ProviderResourceOpenAISubscription,
+		"status":        StatusActive,
+		"healthy":       true,
+	}, "")
+	if secondary.Code != http.StatusCreated {
+		t.Fatalf("expected secondary provider resource created, got %d: %s", secondary.Code, secondary.Body)
+	}
+	rename := doJSON(t, app, http.MethodPatch, "/api/admin/provider-resources/rsrc_openai_account_secondary", map[string]any{
+		"name": " OPENAI CODEX PRIMARY ACCOUNT ",
+	}, "")
+	if rename.Code != http.StatusConflict || !strings.Contains(rename.Body, `"code":"provider_resource_name_conflict"`) {
+		t.Fatalf("expected provider resource rename conflict, got %d: %s", rename.Code, rename.Body)
+	}
+}
+
 func TestAdminCreatesOpenAISubscriptionProviderResource(t *testing.T) {
 	store := NewMemoryStore()
 	store.AddProvider(Provider{
@@ -3037,6 +3080,7 @@ func TestOpenAISubscriptionResourceSuppliesRouteCredentials(t *testing.T) {
 		ResourceType: ProviderResourceOpenAISubscription,
 		Status:       StatusActive,
 		Healthy:      true,
+		Options:      codexCapabilityOptionsForTest("gpt-4.1-mini"),
 		Credentials: &ProviderResourceCredentials{
 			AuthType:       "oauth",
 			AccessToken:    "openai-access-token",
@@ -3131,6 +3175,7 @@ func TestOpenAISubscriptionResourceRefreshesBeforeGatewayCall(t *testing.T) {
 		ResourceType: ProviderResourceOpenAISubscription,
 		Status:       StatusActive,
 		Healthy:      true,
+		Options:      codexCapabilityOptionsForTest("gpt-4.1-mini"),
 		Credentials: &ProviderResourceCredentials{
 			AuthType:     "oauth",
 			AccessToken:  "access-expired",

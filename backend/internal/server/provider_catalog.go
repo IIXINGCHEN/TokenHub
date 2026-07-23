@@ -21,6 +21,7 @@ var catalogCache = struct {
 }{}
 
 var standardModelCategories = map[string]bool{
+	"codex":        true,
 	"openai":       true,
 	"claude":       true,
 	"deepseek":     true,
@@ -483,6 +484,8 @@ func inferModelFamily(id string) string {
 func inferModelCategory(id string, displayName string) string {
 	normalized := strings.ToLower(strings.Join([]string{id, displayName}, " "))
 	switch {
+	case strings.Contains(normalized, "codex"):
+		return "codex"
 	case strings.Contains(normalized, "gpt") || strings.Contains(normalized, "openai") || strings.Contains(normalized, "o1") || strings.Contains(normalized, "o3") || strings.Contains(normalized, "o4"):
 		return "openai"
 	case strings.Contains(normalized, "claude") || strings.Contains(normalized, "anthropic"):

@@ -1,6 +1,6 @@
 import { type FieldConfig, type Model, type ModelRoute, type Provider, type ProviderResource, type ResourceConfig } from "../core/types";
 import { modelCategory, modelCategoryFormOptions, modelCategoryLabel } from "../domain/catalog";
-import { findProvider, modelCapabilitySummary, modelPriceSummary, modelRouteDefaults, modelRoutesFor, modelSelectOptions, providerAccountResourceSummary, providerRouteDefaults, providerRouteSummary, providerSelectOptions, routeScoreSummary, stringifyForm } from "../domain/entities";
+import { findProvider, modelCapabilitySummary, modelPriceSummary, modelRouteDefaults, modelRoutesFor, modelSelectOptions, providerAccountResourceSummary, providerDisplayBaseURL, providerDisplayName, providerDisplayType, providerRouteDefaults, providerRouteSummary, providerSelectOptions, routeScoreSummary, stringifyForm } from "../domain/entities";
 import { formatTime, modelToForm, routeStrategyLabel } from "../domain/formatting";
 import { providerTypeLabel, resourceTypeLabel } from "../domain/labels";
 import { tx } from "../i18n/runtime";
@@ -15,9 +15,9 @@ export function providerConfig(): ResourceConfig<Provider> {
     description: "Provider 是一个可调用的上游渠道实例，包含服务商类型、Base URL、API Key、健康状态和标准模型路由。",
     createLabel: "新增 Provider",
     columns: [
-      { key: "name", label: "名称" },
-      { key: "type", label: "类型", render: (item) => providerTypeLabel(item.type) },
-      { key: "base_url", label: "Base URL", render: (item) => item.base_url || "local mock" },
+      { key: "name", label: "名称", render: (item, ctx) => providerDisplayName(item, ctx.providerResources) },
+      { key: "type", label: "类型", render: (item, ctx) => providerTypeLabel(providerDisplayType(item, ctx.providerResources)) },
+      { key: "base_url", label: "Base URL", render: (item, ctx) => providerDisplayBaseURL(item, ctx.providerResources) },
       { key: "routes", label: "路由线路", render: (item, ctx) => providerRouteSummary(item, ctx) },
       { key: "account_resources", label: "账号资源", render: (item, ctx) => providerAccountResourceSummary(item, ctx) },
       { key: "priority", label: "优先级" },
@@ -156,7 +156,7 @@ export function providerAccountTokenSummary(values: Record<string, string>) {
 
 export function defaultProviderResourceName(providerName?: string) {
   const normalized = providerName?.trim() || "Provider";
-  return `${normalized} OpenAI Account`;
+  return `${normalized} Codex Account`;
 }
 
 export function providerResourceDraftDefaults(provider: { provider_id?: string; name?: string; base_url?: string }) {
@@ -166,7 +166,7 @@ export function providerResourceDraftDefaults(provider: { provider_id?: string; 
     resource_type: "openai_subscription",
     auth_type: "oauth",
     authorization_url: "",
-    base_url: provider.base_url || "https://api.openai.com/v1",
+    base_url: provider.base_url || "https://chatgpt.com/backend-api/codex",
     group: "default",
     priority: "1",
     weight: "100",

@@ -80,6 +80,7 @@ export type ProviderCatalogModel = {
   capabilities?: string[];
   supported_parameters?: string[];
   last_updated?: string;
+  metadata?: Record<string, string>;
 };
 
 export type ProviderCatalogEntry = {
@@ -382,6 +383,8 @@ export type AuditEvent = {
   resource_id: string;
   status: string;
   message?: string;
+  before_snapshot?: string;
+  after_snapshot?: string;
   ip?: string;
   user_agent?: string;
   created_at: string;

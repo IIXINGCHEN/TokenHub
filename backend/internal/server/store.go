@@ -64,6 +64,7 @@ type Store interface {
 	AddProviderResource(resource ProviderResource) (ProviderResource, error)
 	ListProviderResources() []ProviderResource
 	UpdateProviderResource(id string, patch ProviderResource) (ProviderResource, error)
+	UpdateProviderResourceOptions(id string, options map[string]string) (ProviderResource, error)
 	DeleteProviderResource(id string) error
 	SetProviderResourceHealth(resourceID string, healthy bool) (ProviderResource, error)
 	BulkOperateProviderResources(action string, ids []string) (ProviderResourceBulkResult, error)
@@ -841,9 +842,13 @@ func (s *GormStore) AddProviderResource(resource ProviderResource) (ProviderReso
 	if err := s.db.First(&Provider{}, "id = ?", resource.ProviderID).Error; err != nil {
 		return ProviderResource{}, notFound(err, "provider_not_found", "Provider not found")
 	}
+	resource.Name = strings.TrimSpace(resource.Name)
 	now := time.Now().UTC()
 	if resource.ID == "" {
 		resource.ID = NewID("rsrc")
+	}
+	if err := s.ensureProviderResourceNameUnique(resource.ID, resource.Name); err != nil {
+		return ProviderResource{}, err
 	}
 	if resource.Status == "" {
 		resource.Status = StatusActive
@@ -894,7 +899,11 @@ func (s *GormStore) UpdateProviderResource(id string, patch ProviderResource) (P
 		resource.ProviderID = patch.ProviderID
 	}
 	if patch.Name != "" {
-		resource.Name = patch.Name
+		nextName := strings.TrimSpace(patch.Name)
+		if err := s.ensureProviderResourceNameUnique(resource.ID, nextName); err != nil {
+			return ProviderResource{}, err
+		}
+		resource.Name = nextName
 	}
 	if patch.Group != "" {
 		resource.Group = patch.Group
@@ -937,6 +946,47 @@ func (s *GormStore) UpdateProviderResource(id string, patch ProviderResource) (P
 	if shouldEncryptAPIKey {
 		resource.APIKey = s.encryptSecret(resource.APIKey)
 	}
+	if err := s.db.Save(&resource).Error; err != nil {
+		return ProviderResource{}, err
+	}
+	redactProviderResourceSecrets(&resource)
+	return resource, nil
+}
+
+func (s *GormStore) ensureProviderResourceNameUnique(resourceID, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return NewHTTPError(http.StatusBadRequest, "invalid_provider_resource", "Provider resource name is required")
+	}
+	var count int64
+	err := s.db.Model(&ProviderResource{}).
+		Where("LOWER(TRIM(name)) = ?", strings.ToLower(name)).
+		Where("id <> ?", resourceID).
+		Count(&count).Error
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		return NewHTTPError(http.StatusConflict, "provider_resource_name_conflict", "Provider resource name already exists")
+	}
+	return nil
+}
+
+func (s *GormStore) UpdateProviderResourceOptions(id string, options map[string]string) (ProviderResource, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var resource ProviderResource
+	if err := s.db.First(&resource, "id = ?", id).Error; err != nil {
+		return ProviderResource{}, notFound(err, "provider_resource_not_found", "Provider resource not found")
+	}
+	if resource.Options == nil {
+		resource.Options = map[string]string{}
+	}
+	for key, value := range options {
+		resource.Options[key] = value
+	}
+	resource.UpdatedAt = time.Now().UTC()
 	if err := s.db.Save(&resource).Error; err != nil {
 		return ProviderResource{}, err
 	}
@@ -1096,6 +1146,11 @@ func (s *GormStore) ImportProviderResources(resources []ProviderResource) (Provi
 		now := time.Now().UTC()
 		if resource.ID == "" {
 			resource.ID = NewID("rsrc")
+		}
+		if err := s.ensureProviderResourceNameUnique(resource.ID, resource.Name); err != nil {
+			result.Failed++
+			result.Errors = append(result.Errors, "row "+row+": "+err.Error())
+			continue
 		}
 		if resource.Status == "" {
 			resource.Status = StatusActive

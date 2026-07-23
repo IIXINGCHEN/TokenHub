@@ -103,6 +103,7 @@ export function loadPlanForView(user: AdminUser, view: ViewKey): LoadPlan {
       plan.overview = true;
       plan.routes = true;
       plan.logs = can("audit");
+      plan.auditEvents = canViewAdminAudit(user);
       plan.breakdown = can("usage") || can("billing");
       plan.providerCatalog = true;
       break;

@@ -7,7 +7,7 @@ import { formatNumber } from "../domain/formatting";
 import { settingsTabLabel } from "../domain/labels";
 import { activeLanguage, type AppLanguage, countWithLabel, displayText, languageOptions, translatedCell, tx } from "../i18n/runtime";
 import { defaultFormValues } from "../resources/payloads";
-import { apiKeyStatusAction, APIKeyStatusSwitch } from "../resources/project-key-config";
+import { apiKeyStatusAction, APIKeyDownloadMenu, APIKeyStatusSwitch } from "../resources/project-key-config";
 import { identityProviderConfig, roleConfig, systemSettingConfig } from "../resources/settings-config";
 import { IdentityProviderEditModal } from "../shared/modals";
 import { FieldInput } from "../shared/ui";
@@ -236,6 +236,7 @@ export function EntityTable<T>({
               ))}
               <td>
                 <div className="row-actions" onClick={(event) => event.stopPropagation()}>
+                  {config.view === "api-keys" ? <APIKeyDownloadMenu data={data} item={item as APIKey} /> : null}
                   {(config.actions ?? [])
                     .filter((action) => action.visible?.(item) ?? true)
                     .map((action) => (

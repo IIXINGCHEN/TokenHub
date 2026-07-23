@@ -11,6 +11,7 @@ TokenHub 文档现在按企业 AI 网关里的三种角色组织。默认文档�
 | [普通用户指南](user-guide.md) | 员工和应用开发者 | 查看可用模型、创建项目 Key、调用模型 API、查看个人用量 |
 | [团队负责人指南](team-leader-guide.md) | 团队 Owner 和项目维护者 | 管理项目空间、成员、API Key、团队报表和项目成本归因 |
 | [管理员指南](administrator-guide.md) | 平台管理员和安全运维 | 配置 Provider、模型目录、路由、身份源、RBAC、审计和成本治理 |
+| [Codex 接入 TokenHub](codex-tokenhub-configuration.md) | Codex 用户和项目开发者 | 配置 TokenHub Provider，在全局默认环境与局部 Profile 之间切换 |
 
 ## 共享英文样例数据
 

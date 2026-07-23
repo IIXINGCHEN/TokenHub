@@ -59,17 +59,23 @@ type CodexSubscriptionTestResult = {
   };
 };
 
-const codexSubscriptionModels = [
-  ["gpt-5.6-sol", "5.6 Sol"],
-  ["gpt-5.6-terra", "5.6 Terra"],
-  ["gpt-5.6-luna", "5.6 Luna"],
-  ["gpt-5.5", "5.5"],
-  ["gpt-5.4", "5.4"],
-  ["gpt-5.4-mini", "5.4 Mini"],
-  ["gpt-5.3-codex-spark", "5.3 Codex Spark"],
-] as const;
+type ProviderEditTab = "quota" | "test" | "settings" | "models";
 
-const codexReasoningEfforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+const codexProviderCatalogSummary: ProviderCatalogEntry = {
+  id: "openai-codex",
+  name: "OpenAI Codex",
+  display_name: "OpenAI Codex",
+  type: "openai_codex",
+  base_url: "https://chatgpt.com/backend-api/codex",
+  categories: ["codex"],
+  category_counts: { codex: 0 },
+  models_count: 0,
+  source: "openai-codex-live",
+};
+
+const accountProviderCatalogOptions = [codexProviderCatalogSummary];
+
+const fallbackCodexReasoningEfforts = ["low", "medium", "high", "xhigh", "max"];
 
 export function ProviderUpsertModal({
   mode,
@@ -101,11 +107,19 @@ export function ProviderUpsertModal({
   setNotice: (value: string) => void;
 }) {
   const availableCategories = useMemo(() => catalogModelCategoryOptions(catalog), [catalog]);
-  const initialCategory = availableCategories.find((item) => item.key !== "all")?.key ?? "custom";
-  const initialEntry = catalog.find((entry) => providerEntrySupportsCategory(entry, initialCategory)) ?? catalog.find((entry) => entry.id === "custom") ?? catalog[0];
+  const editingCodexSubscription = mode === "edit" && resources.some((resource) =>
+    resource.provider_id === provider?.id && resource.resource_type === "openai_subscription",
+  );
+  const initialCategory = editingCodexSubscription ? "codex" : availableCategories.find((item) => item.key !== "all")?.key ?? "custom";
+  const initialEntry = editingCodexSubscription
+    ? codexProviderCatalogSummary
+    : catalog.find((entry) => providerEntrySupportsCategory(entry, initialCategory)) ?? catalog.find((entry) => entry.id === "custom") ?? catalog[0];
   const [modelCategory, setModelCategory] = useState(initialCategory);
   const [catalogID, setCatalogID] = useState(initialEntry?.id ?? "custom");
   const [detail, setDetail] = useState<ProviderCatalogEntry | null>(null);
+  const [codexCatalog, setCodexCatalog] = useState<ProviderCatalogEntry | null>(null);
+  const [codexCatalogLoading, setCodexCatalogLoading] = useState(false);
+  const [codexCatalogError, setCodexCatalogError] = useState("");
   const [catalogQuery, setCatalogQuery] = useState("");
   const [modelQuery, setModelQuery] = useState("");
   const [modelLoading, setModelLoading] = useState(false);
@@ -114,33 +128,40 @@ export function ProviderUpsertModal({
   const [selectedModels, setSelectedModels] = useState<Record<string, boolean>>({});
   const [values, setValues] = useState<Record<string, string>>(() => ({
     id: mode === "edit" ? provider?.id ?? "" : "",
-    name: mode === "edit" ? provider?.name ?? "" : initialEntry?.display_name ?? "",
-    type: mode === "edit" ? provider?.type ?? "openai_compatible" : initialEntry?.type ?? "openai_compatible",
-    base_url: mode === "edit" ? provider?.base_url ?? "" : initialEntry?.base_url ?? "",
+    name: mode === "edit" ? editingCodexSubscription ? "OpenAI Codex" : provider?.name ?? "" : initialEntry?.display_name ?? "",
+    type: mode === "edit" ? editingCodexSubscription ? "openai_codex" : provider?.type ?? "openai_compatible" : initialEntry?.type ?? "openai_compatible",
+    base_url: mode === "edit" ? editingCodexSubscription ? codexProviderCatalogSummary.base_url ?? "" : provider?.base_url ?? "" : initialEntry?.base_url ?? "",
     api_key: "",
     priority: String(provider?.priority ?? 10),
     status: provider?.status ?? "active",
     healthy: String(provider?.healthy ?? true),
     create_routes: mode === "create" ? "true" : "false",
   }));
-  const [credentialMode, setCredentialMode] = useState<ProviderCredentialMode>("provider_api_key");
+  const [credentialMode, setCredentialMode] = useState<ProviderCredentialMode>(editingCodexSubscription ? "account_integration" : "provider_api_key");
   const [accountValues, setAccountValues] = useState<Record<string, string>>(() =>
     providerResourceDraftDefaults({
       provider_id: "",
-      name: mode === "edit" ? provider?.name ?? "" : initialEntry?.display_name || initialEntry?.name || "",
-      base_url: mode === "edit" ? provider?.base_url ?? "" : initialEntry?.base_url ?? "",
+      name: mode === "edit" ? editingCodexSubscription ? "OpenAI Codex Codex Account" : provider?.name ?? "" : initialEntry?.display_name || initialEntry?.name || "",
+      base_url: mode === "edit" ? editingCodexSubscription ? codexProviderCatalogSummary.base_url ?? "" : provider?.base_url ?? "" : initialEntry?.base_url ?? "",
     }),
   );
   const [accountOAuthCallback, setAccountOAuthCallback] = useState("");
   const [accountOAuthStatus, setAccountOAuthStatus] = useState("");
   const [accountOAuthBusy, setAccountOAuthBusy] = useState(false);
-  const [accountQuotaBusyID, setAccountQuotaBusyID] = useState("");
-  const [accountQuotaError, setAccountQuotaError] = useState("");
+  const [accountOAuthCallbackModalOpen, setAccountOAuthCallbackModalOpen] = useState(false);
+  const [accountOAuthCallbackModalError, setAccountOAuthCallbackModalError] = useState("");
+  const [accountQuotaBusyIDs, setAccountQuotaBusyIDs] = useState<Record<string, boolean>>({});
+  const [accountQuotaErrors, setAccountQuotaErrors] = useState<Record<string, string>>({});
   const [accountQuotas, setAccountQuotas] = useState<Record<string, OpenAIAccountQuota>>({});
+  const [selectedAccountID, setSelectedAccountID] = useState(editingCodexSubscription ? "all" : "");
+  const [accountCatalogs, setAccountCatalogs] = useState<Record<string, ProviderCatalogEntry>>({});
+  const [accountCatalogErrors, setAccountCatalogErrors] = useState<Record<string, string>>({});
+  const [accountCatalogLoading, setAccountCatalogLoading] = useState(false);
   const [codexTestValues, setCodexTestValues] = useState({ model: "gpt-5.6-luna", reasoning_effort: "medium", speed: "standard", prompt: "" });
   const [codexTestBusyID, setCodexTestBusyID] = useState("");
-  const [codexTestError, setCodexTestError] = useState("");
+  const [codexTestErrors, setCodexTestErrors] = useState<Record<string, string>>({});
   const [codexTestResults, setCodexTestResults] = useState<Record<string, CodexSubscriptionTestResult>>({});
+  const [editTab, setEditTab] = useState<ProviderEditTab>(editingCodexSubscription ? "quota" : "settings");
   const [createStep, setCreateStep] = useState(0);
   const createSteps = useMemo(() => providerCreateWizardSteps(), []);
   const lastCreateStep = createSteps.length - 1;
@@ -151,10 +172,18 @@ export function ProviderUpsertModal({
     [provider, routes],
   );
   const subscriptionResources = useMemo(
-    () => resources.filter((resource) => resource.resource_type === "openai_subscription"),
-    [resources],
+    () => resources.filter((resource) =>
+      resource.resource_type === "openai_subscription" && (mode === "create" || resource.provider_id === provider?.id),
+    ),
+    [mode, provider?.id, resources],
   );
-
+  const usesCodexCatalog = credentialMode === "account_integration" || editingCodexSubscription;
+  const selectedAccountResources = useMemo(
+    () => selectedAccountID === "all"
+      ? subscriptionResources
+      : subscriptionResources.filter((resource) => resource.id === selectedAccountID),
+    [selectedAccountID, subscriptionResources],
+  );
   const categoryCatalog = useMemo(
     () => catalog.filter((entry) => providerEntrySupportsCategory(entry, modelCategory)),
     [catalog, modelCategory],
@@ -162,12 +191,13 @@ export function ProviderUpsertModal({
   const customCatalogEntry = useMemo(() => buildCustomProviderCatalogEntry(modelCategory, standardModels), [modelCategory, standardModels]);
 
   useEffect(() => {
+    if (credentialMode === "account_integration" || catalogID === codexProviderCatalogSummary.id) return;
     if (categoryCatalog.length === 0) return;
     if (!categoryCatalog.some((entry) => entry.id === catalogID)) {
       selectCatalog(categoryCatalog[0]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modelCategory, categoryCatalog.length]);
+  }, [modelCategory, categoryCatalog.length, credentialMode, catalogID]);
 
   useEffect(() => {
     const entry = catalogID === "custom" ? customCatalogEntry : catalog.find((item) => item.id === catalogID);
@@ -184,6 +214,12 @@ export function ProviderUpsertModal({
     let cancelled = false;
     setDetail(null);
     setSelectedModels({});
+    if (catalogID === codexProviderCatalogSummary.id) {
+      setModelLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
     if (catalogID === "custom") {
       setDetail(customCatalogEntry);
       setModelLoading(false);
@@ -228,27 +264,149 @@ export function ProviderUpsertModal({
   }, [catalogID, catalogReloadKey, customCatalogEntry, initialEntry?.display_name, mode]);
 
   useEffect(() => {
+    if (!usesCodexCatalog || mode === "edit") return;
+    const resource = subscriptionResources.find((item) => item.status === "active") ?? subscriptionResources[0];
+    const hasPendingCredentials = Boolean(accountValues.access_token?.trim() && accountValues.account_id?.trim());
+    if (!resource && !hasPendingCredentials) {
+      setCodexCatalog(null);
+      setCodexCatalogError(tx("完成 Codex 账号授权后将从真实账号加载可用模型。"));
+      return;
+    }
+    let cancelled = false;
+    setCodexCatalogLoading(true);
+    setCodexCatalogError("");
+    const path = resource
+      ? `/api/admin/provider-catalog/${codexProviderCatalogSummary.id}?resource_id=${encodeURIComponent(resource.id)}`
+      : `/api/admin/provider-catalog/${codexProviderCatalogSummary.id}`;
+    const request = hasPendingCredentials
+      ? {
+          method: "POST",
+          body: JSON.stringify({
+            auth_type: accountValues.auth_type || "oauth",
+            access_token: accountValues.access_token,
+            refresh_token: accountValues.refresh_token,
+            id_token: accountValues.id_token,
+            account_id: accountValues.account_id,
+            email: accountValues.account_email,
+            organization_id: accountValues.organization_id,
+            plan_type: accountValues.plan_type,
+            token_type: accountValues.token_type,
+            expires_at: accountValues.expires_at,
+            scopes: accountValues.scopes,
+          }),
+        }
+      : undefined;
+    adminFetch(api, path, request)
+      .then(async (resp) => {
+        if (!resp.ok) throw new Error(await readAdminError(resp, tx("加载 Codex 模型目录")));
+        return (await resp.json()) as { data: ProviderCatalogEntry };
+      })
+      .then((payload) => {
+        if (cancelled) return;
+        setCodexCatalog(payload.data);
+        setCodexCatalogError("");
+      })
+      .catch((err) => {
+        if (cancelled || isAuthExpiredError(err)) return;
+        setCodexCatalog(null);
+        setCodexCatalogError(err instanceof Error ? err.message : tx("Codex 模型目录加载失败"));
+      })
+      .finally(() => {
+        if (!cancelled) setCodexCatalogLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    api,
+    credentialMode,
+    subscriptionResources,
+    usesCodexCatalog,
+    accountValues.access_token,
+    accountValues.account_id,
+    catalogReloadKey,
+    mode,
+  ]);
+
+  useEffect(() => {
+    if (mode !== "edit" || !editingCodexSubscription || selectedAccountResources.length === 0) {
+      setAccountCatalogs({});
+      setAccountCatalogErrors({});
+      return;
+    }
+    let cancelled = false;
+    setAccountCatalogLoading(true);
+    setAccountCatalogErrors({});
+    void Promise.all(selectedAccountResources.map(async (resource) => {
+      try {
+        const resp = await adminFetch(
+          api,
+          `/api/admin/provider-catalog/${codexProviderCatalogSummary.id}?resource_id=${encodeURIComponent(resource.id)}`,
+        );
+        if (!resp.ok) throw new Error(await readAdminError(resp, tx("加载账号模型目录")));
+        const payload = (await resp.json()) as { data: ProviderCatalogEntry };
+        if (!cancelled) {
+          setAccountCatalogs((current) => ({ ...current, [resource.id]: payload.data }));
+        }
+      } catch (err) {
+        if (cancelled || isAuthExpiredError(err)) return;
+        const message = err instanceof Error ? err.message : tx("账号模型目录加载失败");
+        setAccountCatalogErrors((current) => ({ ...current, [resource.id]: message }));
+      }
+    })).finally(() => {
+      if (!cancelled) setAccountCatalogLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, editingCodexSubscription, mode, selectedAccountResources]);
+
+  useEffect(() => {
     if (mode === "create") {
       modalRef.current?.scrollTo({ top: 0 });
     }
   }, [createStep, mode]);
 
+  useEffect(() => {
+    if (mode !== "edit" || editTab !== "quota") return;
+    for (const resource of selectedAccountResources) {
+      if (!accountQuotas[resource.id]) void queryAccountQuota(resource);
+    }
+    // Query when the visible account scope changes; successful results remain cached for manual refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editTab, mode, selectedAccountResources]);
+
+  const selectedAccountCatalog = useMemo(
+    () => {
+      const catalogs = selectedAccountResources
+        .map((resource) => accountCatalogs[resource.id])
+        .filter((entry): entry is ProviderCatalogEntry => Boolean(entry));
+      return catalogs.length === selectedAccountResources.length ? intersectProviderCatalogs(catalogs) : null;
+    },
+    [accountCatalogs, selectedAccountResources],
+  );
+  const effectiveDetail = editingCodexSubscription ? selectedAccountCatalog : usesCodexCatalog ? codexCatalog : detail;
+  const effectiveCatalogLoading = editingCodexSubscription ? accountCatalogLoading : usesCodexCatalog ? codexCatalogLoading : modelLoading;
+  const effectiveCatalogError = editingCodexSubscription
+    ? Object.values(accountCatalogErrors)[0] || ""
+    : usesCodexCatalog ? codexCatalogError : modelError;
   const models = useMemo(
-    () => (detail?.models ?? []).filter((model) => {
+    () => (effectiveDetail?.models ?? []).filter((model) => {
       if (modelCategory !== "all" && modelCategoryForCatalog(model) !== modelCategory) return false;
+      if (usesCodexCatalog) return true;
       const canonical = model.canonical_name || canonicalModelNameForUI(model.id, model.display_name);
       return standardModels.some((standard) => canonicalModelNameForUI(standard.name, standard.name) === canonicalModelNameForUI(canonical, canonical));
     }),
-    [detail, modelCategory, standardModels],
+    [effectiveDetail, modelCategory, standardModels, usesCodexCatalog],
   );
   useEffect(() => {
-    if (mode !== "create" || !detail || values.create_routes !== "true") return;
+    if (mode !== "create" || !effectiveDetail || values.create_routes !== "true") return;
     const nextSelected: Record<string, boolean> = {};
     for (const model of models) {
       nextSelected[model.id] = true;
     }
     setSelectedModels(nextSelected);
-  }, [detail, mode, models, values.create_routes]);
+  }, [effectiveDetail, mode, models, values.create_routes]);
   const filteredCatalog = useMemo(() => {
     const normalized = catalogQuery.trim().toLowerCase();
     const entries = categoryCatalog;
@@ -273,12 +431,49 @@ export function ProviderUpsertModal({
     .map(([id]) => id);
   const autoRouteEnabled = values.create_routes === "true";
   const selectedRouteCount = autoRouteEnabled ? selectedModelIDs.length : 0;
-  const selectedEntry = detail ?? (catalogID === "custom" ? customCatalogEntry : catalog.find((entry) => entry.id === catalogID));
-  const showProviderCatalog = mode === "edit" || (mode === "create" && createStep === 1 && credentialMode !== "account_integration");
-  const providerBodyClassName = mode === "create" && !showProviderCatalog ? "provider-modal-body provider-wizard-single" : "provider-modal-body";
+  const selectedEntry = usesCodexCatalog
+    ? codexCatalog ?? codexProviderCatalogSummary
+    : detail ?? (catalogID === "custom" ? customCatalogEntry : catalog.find((entry) => entry.id === catalogID));
+  const showProviderCatalog = (mode === "edit" && !usesCodexCatalog) || (mode === "create" && createStep === 1 && credentialMode !== "account_integration");
+  const providerBodyClassName = !showProviderCatalog ? "provider-modal-body provider-wizard-single" : "provider-modal-body";
   const accountRuntimeFields = useMemo(() => providerCreateAccountRuntimeFields(), []);
   const accountManualTokenFields = useMemo(() => providerCreateAccountManualTokenFields(), []);
   const accountTokenSummary = useMemo(() => providerAccountTokenSummary(accountValues), [accountValues]);
+  const accountResourceNameConflict = useMemo(() => {
+    const normalized = accountValues.name?.trim().toLocaleLowerCase();
+    if (!normalized) return false;
+    return resources.some((resource) => resource.name.trim().toLocaleLowerCase() === normalized);
+  }, [accountValues.name, resources]);
+  const codexTestModels = selectedAccountCatalog?.models ?? [];
+  const selectedCodexTestModel = codexTestModels.find((model) => model.id === codexTestValues.model);
+  const codexFastTestSupported = codexTestModels.some((model) =>
+    model.id === "gpt-5.6-luna" && model.supported_parameters?.includes("service_tier"),
+  );
+  const codexReasoningEfforts = selectedCodexTestModel?.metadata?.supported_reasoning_levels
+    ?.split(",")
+    .map((value) => value.trim())
+    .filter(Boolean) ?? fallbackCodexReasoningEfforts;
+
+  useEffect(() => {
+    if (codexTestModels.length === 0) return;
+    setCodexTestValues((current) => {
+      const nextModel = codexTestModels.some((model) => model.id === current.model)
+        ? current.model
+        : codexTestModels.find((model) => model.id === "gpt-5.6-luna")?.id ?? codexTestModels[0].id;
+      const model = codexTestModels.find((item) => item.id === nextModel);
+      const efforts = model?.metadata?.supported_reasoning_levels?.split(",").filter(Boolean) ?? fallbackCodexReasoningEfforts;
+      const nextEffort = efforts.includes(current.reasoning_effort)
+        ? current.reasoning_effort
+        : model?.metadata?.default_reasoning_level || efforts[0] || "medium";
+      if (nextModel === current.model && nextEffort === current.reasoning_effort) return current;
+      return { ...current, model: nextModel, reasoning_effort: nextEffort };
+    });
+  }, [codexTestModels, codexTestValues.model]);
+
+  useEffect(() => {
+    if (codexTestValues.speed !== "fast" || codexFastTestSupported) return;
+    setCodexTestValues((current) => ({ ...current, speed: "standard" }));
+  }, [codexFastTestSupported, codexTestValues.speed]);
 
   useEffect(() => {
     if (mode !== "create" || !hasPendingProviderAccountOAuthResult()) return;
@@ -296,13 +491,11 @@ export function ProviderUpsertModal({
   }, [mode, credentialMode]);
 
   useEffect(() => {
-    if (mode !== "create" || credentialMode !== "account_integration" || catalog.length === 0 || catalogID !== "custom") return;
-    const recommended = recommendedAccountProviderEntry(catalog);
-    if (!recommended) return;
-    setModelCategory("openai");
-    selectCatalog(recommended);
+    if (mode !== "create" || credentialMode !== "account_integration" || catalogID === codexProviderCatalogSummary.id) return;
+    setModelCategory("codex");
+    selectCatalog(codexProviderCatalogSummary);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [catalog.length, credentialMode, mode, catalogID]);
+  }, [credentialMode, mode, catalogID]);
 
   function update(key: string, value: string) {
     const previousProviderName = values.name;
@@ -318,7 +511,10 @@ export function ProviderUpsertModal({
     if (key === "base_url") {
       setAccountValues((current) => {
         if (current.base_url && current.base_url !== previousBaseURL) return current;
-        return { ...current, base_url: value || "https://api.openai.com/v1" };
+        return {
+          ...current,
+          base_url: value || (credentialMode === "account_integration" ? codexProviderCatalogSummary.base_url || "" : "https://api.openai.com/v1"),
+        };
       });
     }
   }
@@ -380,6 +576,19 @@ export function ProviderUpsertModal({
     void applyProviderAccountOAuthResult(result, tx("已从粘贴的回调结果回填账号 Token。"));
   }
 
+  function confirmProviderAccountOAuthCallback() {
+    const result = parseProviderAccountOAuthResult(accountOAuthCallback, true);
+    if (!result) {
+      const message = tx("请粘贴登录后浏览器地址栏中的完整 localhost 回调地址。");
+      setAccountOAuthCallbackModalError(message);
+      setAccountOAuthStatus(message);
+      return;
+    }
+    setAccountOAuthCallbackModalError("");
+    setAccountOAuthCallbackModalOpen(false);
+    void applyProviderAccountOAuthResult(result, tx("已从粘贴的回调结果回填账号 Token。"));
+  }
+
   async function exchangeProviderAccountAuthorizationCode(result: ProviderAccountOAuthResult, message: string) {
     const pendingSession = readPendingProviderAccountOAuthSession();
     const sessionID = result.session_id || pendingSession?.session_id || "";
@@ -425,6 +634,9 @@ export function ProviderUpsertModal({
       const generated = (await resp.json()) as ProviderAccountOAuthGenerateResponse;
       savePendingProviderAccountOAuthSession({ session_id: generated.session_id, state: generated.state });
       window.open(generated.auth_url, "_blank", "noopener,noreferrer");
+      setAccountOAuthCallback("");
+      setAccountOAuthCallbackModalError("");
+      setAccountOAuthCallbackModalOpen(true);
       setAccountOAuthStatus(tx("已打开 OpenAI/Codex 授权页。授权后请复制浏览器地址栏中的完整 localhost callback URL，并粘贴到回调结果。"));
       setError("");
     } catch (err) {
@@ -448,8 +660,12 @@ export function ProviderUpsertModal({
   }
 
   async function queryAccountQuota(resource: ProviderResource) {
-    setAccountQuotaBusyID(resource.id);
-    setAccountQuotaError("");
+    setAccountQuotaBusyIDs((current) => ({ ...current, [resource.id]: true }));
+    setAccountQuotaErrors((current) => {
+      const next = { ...current };
+      delete next[resource.id];
+      return next;
+    });
     try {
       const resp = await adminFetch(api, `/api/admin/provider-resources/${resource.id}/quota`);
       if (!resp.ok) throw new Error(await readAdminError(resp, tx("查询订阅额度")));
@@ -457,29 +673,38 @@ export function ProviderUpsertModal({
       setAccountQuotas((current) => ({ ...current, [resource.id]: quota }));
     } catch (err) {
       if (isAuthExpiredError(err)) return;
-      setAccountQuotaError(err instanceof Error ? err.message : tx("查询订阅额度失败"));
+      setAccountQuotaErrors((current) => ({
+        ...current,
+        [resource.id]: err instanceof Error ? err.message : tx("查询订阅额度失败"),
+      }));
     } finally {
-      setAccountQuotaBusyID("");
+      setAccountQuotaBusyIDs((current) => ({ ...current, [resource.id]: false }));
     }
   }
 
-  async function testCodexSubscription(resource: ProviderResource) {
-    setCodexTestBusyID(resource.id);
-    setCodexTestError("");
-    try {
-      const resp = await adminFetch(api, `/api/admin/provider-resources/${resource.id}/test`, {
-        method: "POST",
-        body: JSON.stringify(codexTestValues),
-      });
-      if (!resp.ok) throw new Error(await readAdminError(resp, tx("测试 Codex Subscription")));
-      const result = (await resp.json()) as CodexSubscriptionTestResult;
-      setCodexTestResults((current) => ({ ...current, [resource.id]: result }));
-    } catch (err) {
-      if (isAuthExpiredError(err)) return;
-      setCodexTestError(err instanceof Error ? err.message : tx("Codex Subscription 测试失败"));
-    } finally {
-      setCodexTestBusyID("");
+  async function testCodexSubscription() {
+    if (selectedAccountResources.length === 0) {
+      setCodexTestErrors({ selection: tx("请选择要测试的 Codex 账号") });
+      return;
     }
+    setCodexTestBusyID(selectedAccountID);
+    setCodexTestErrors({});
+    await Promise.all(selectedAccountResources.map(async (resource) => {
+      try {
+        const resp = await adminFetch(api, `/api/admin/provider-resources/${resource.id}/test`, {
+          method: "POST",
+          body: JSON.stringify(codexTestValues),
+        });
+        if (!resp.ok) throw new Error(await readAdminError(resp, tx("测试 Codex Subscription")));
+        const result = (await resp.json()) as CodexSubscriptionTestResult;
+        setCodexTestResults((current) => ({ ...current, [resource.id]: result }));
+      } catch (err) {
+        if (isAuthExpiredError(err)) return;
+        const message = err instanceof Error ? err.message : tx("Codex Subscription 测试失败");
+        setCodexTestErrors((current) => ({ ...current, [resource.id]: message }));
+      }
+    }));
+    setCodexTestBusyID("");
   }
 
   function selectCredentialMode(nextMode: ProviderCredentialMode) {
@@ -490,14 +715,11 @@ export function ProviderUpsertModal({
         resource_type: "openai_subscription",
         auth_type: "oauth",
       }));
-      const recommended = recommendedAccountProviderEntry(catalog);
-      if (recommended) {
-        setModelCategory("openai");
-        setCatalogQuery("");
-        setModelQuery("");
-        setSelectedModels({});
-        selectCatalog(recommended);
-      }
+      setModelCategory("codex");
+      setCatalogQuery("");
+      setModelQuery("");
+      setSelectedModels({});
+      selectCatalog(codexProviderCatalogSummary);
     }
   }
 
@@ -506,7 +728,7 @@ export function ProviderUpsertModal({
     setAccountValues((current) => ({
       ...current,
       name: defaultProviderResourceName(providerName),
-      base_url: baseURL || "https://api.openai.com/v1",
+      base_url: baseURL || codexProviderCatalogSummary.base_url || "",
     }));
   }
 
@@ -578,6 +800,14 @@ export function ProviderUpsertModal({
       return false;
     }
     if (targetStep === 2 && credentialMode === "account_integration") {
+      if (!accountValues.name?.trim()) {
+        setError(tx("请填写账号资源名称。"));
+        return false;
+      }
+      if (accountResourceNameConflict) {
+        setError(tx("账号资源名称已存在，请使用唯一名称。"));
+        return false;
+      }
       try {
         assertProviderAccountResourceReady(accountValues);
       } catch (err) {
@@ -601,6 +831,7 @@ export function ProviderUpsertModal({
     setNotice("");
     try {
       if (mode === "create" && credentialMode === "account_integration") {
+        if (accountResourceNameConflict) throw new Error(tx("账号资源名称已存在，请使用唯一名称。"));
         assertProviderAccountResourceReady(accountValues);
       }
       const payload = (mode === "edit" ? providerUpdatePayload : providerPayload)({
@@ -626,7 +857,7 @@ export function ProviderUpsertModal({
           ...accountValues,
           provider_id: providerID,
           name: accountValues.name?.trim() || defaultProviderResourceName(result.provider?.name || values.name || providerID),
-          base_url: accountValues.base_url?.trim() || values.base_url || "https://api.openai.com/v1",
+          base_url: accountValues.base_url?.trim() || values.base_url || codexProviderCatalogSummary.base_url || "",
         };
         const resourceResp = await adminFetch(api, "/api/admin/provider-resources", {
           method: "POST",
@@ -741,11 +972,95 @@ export function ProviderUpsertModal({
           ) : null}
 
           <section className="provider-config-pane">
-            {mode === "edit" || createStep > 0 ? (
+            {mode === "edit" && editingCodexSubscription ? (
+              <div className="provider-account-selector">
+                <div>
+                  <strong>{tx("账号列表")}</strong>
+                  <span>{tx("额度、真实测试和模型映射均使用这里选择的账号。")}</span>
+                </div>
+                <select
+                  aria-label={tx("账号列表")}
+                  value={selectedAccountID}
+                  onChange={(event) => {
+                    setSelectedAccountID(event.target.value);
+                    setModelQuery("");
+                    setSelectedModels({});
+                  }}
+                >
+                  <option value="all">{tx("全部账号")}（{subscriptionResources.length}）</option>
+                  {subscriptionResources.map((resource) => (
+                    <option key={resource.id} value={resource.id}>
+                      {resource.name} · {providerResourceAccountLabel(resource)}
+                      {resource.status !== "active" ? ` · ${tx("已停用")}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : mode === "edit" || createStep > 0 ? (
               <div className="provider-selected-summary">
                 <strong>{modelCategoryLabel(modelCategory)}</strong>
-                <span>{selectedEntry?.display_name || selectedEntry?.name || tx("请选择渠道商")}</span>
+                {credentialMode === "account_integration" ? (
+                  <select
+                    aria-label={tx("账号池通道")}
+                    className="provider-account-channel-select"
+                    value={catalogID}
+                    onChange={(event) => {
+                      const entry = accountProviderCatalogOptions.find((item) => item.id === event.target.value);
+                      if (entry) selectCatalog(entry);
+                    }}
+                  >
+                    {accountProviderCatalogOptions.map((entry) => (
+                      <option key={entry.id} value={entry.id}>{entry.display_name || entry.name}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <span>{selectedEntry?.display_name || selectedEntry?.name || tx("请选择渠道商")}</span>
+                )}
                 <em>{providerTypeLabel(selectedEntry?.type || values.type || "openai_compatible")}</em>
+              </div>
+            ) : null}
+            {mode === "edit" ? (
+              <div className="provider-editor-tabs" role="tablist" aria-label={tx("Provider 编辑区")}>
+                {subscriptionResources.length > 0 ? (
+                  <>
+                    <button
+                      aria-selected={editTab === "quota"}
+                      className={editTab === "quota" ? "active" : ""}
+                      onClick={() => setEditTab("quota")}
+                      role="tab"
+                      type="button"
+                    >
+                      {tx("订阅额度")}
+                    </button>
+                    <button
+                      aria-selected={editTab === "test"}
+                      className={editTab === "test" ? "active" : ""}
+                      onClick={() => setEditTab("test")}
+                      role="tab"
+                      type="button"
+                    >
+                      {tx("真实请求测试")}
+                    </button>
+                  </>
+                ) : null}
+                <button
+                  aria-selected={editTab === "settings"}
+                  className={editTab === "settings" ? "active" : ""}
+                  onClick={() => setEditTab("settings")}
+                  role="tab"
+                  type="button"
+                >
+                  {tx("基础配置")}
+                </button>
+                <button
+                  aria-selected={editTab === "models"}
+                  className={editTab === "models" ? "active" : ""}
+                  onClick={() => setEditTab("models")}
+                  role="tab"
+                  type="button"
+                >
+                  {tx("模型映射")}
+                </button>
               </div>
             ) : null}
             {mode === "create" && createStep === 0 ? (
@@ -770,7 +1085,7 @@ export function ProviderUpsertModal({
                         <span><Icon size={18} /></span>
                         <strong>{tx(option.label)}</strong>
                         <em>{tx(option.description)}</em>
-                        {option.key === "account_integration" ? <small>{tx("账号资源池会自动推荐 OpenAI 兼容通道，下一步只需确认 Base URL 和账号凭据。")}</small> : null}
+                        {option.key === "account_integration" ? <small>{tx("账号资源池会选择 Codex Subscription 适配器，下一步确认 Codex Backend 地址和账号凭据。")}</small> : null}
                       </button>
                     );
                   })}
@@ -794,7 +1109,7 @@ export function ProviderUpsertModal({
                     <ReviewItem label={credentialMode === "account_integration" ? "模型协议" : "模型类型"} value={modelCategoryLabel(modelCategory)} />
                     <ReviewItem label={credentialMode === "account_integration" ? "默认通道" : "渠道商"} value={selectedEntry?.display_name || selectedEntry?.name || "-"} />
                     <ReviewItem label={credentialMode === "account_integration" ? "兼容协议" : "渠道商类型"} value={providerTypeLabel(selectedEntry?.type || values.type || "openai_compatible")} />
-                    <ReviewItem label="可映射模型" value={detail ? `${models.length}/${detail.models_count}` : tx("加载中")} />
+                    <ReviewItem label="可映射模型" value={effectiveDetail ? `${models.length}/${effectiveDetail.models_count}` : codexCatalogError || tx("加载中")} />
                   </div>
                 ) : null}
               </section>
@@ -865,14 +1180,17 @@ export function ProviderUpsertModal({
                       <span>{tx("使用 OpenAI/Codex OAuth 授权账号；TokenHub 会在后端换取并保存账号 Token。")}</span>
                     </div>
                     <div className="provider-account-auth-grid">
-                      <label className="field">
+                      <label className="field provider-account-auth-wide">
                         <span>{tx("账号资源名称")}</span>
-                        <input value={accountValues.name ?? ""} onChange={(event) => updateAccountValue("name", event.target.value)} required />
-                      </label>
-                      <label className="field">
-                        <span>{tx("账号地址/邮箱")}</span>
-                        <input value={accountValues.account_email ?? ""} onChange={(event) => updateAccountValue("account_email", event.target.value)} placeholder="name@example.com" />
-                        <small>{tx("用于区分账号资源，可填写邮箱或账号系统里的唯一地址。")}</small>
+                        <input
+                          aria-invalid={accountResourceNameConflict}
+                          value={accountValues.name ?? ""}
+                          onChange={(event) => updateAccountValue("name", event.target.value)}
+                          required
+                        />
+                        <small className={accountResourceNameConflict ? "provider-account-name-error" : undefined}>
+                          {tx(accountResourceNameConflict ? "账号资源名称已存在，请使用唯一名称。" : "账号资源名称需全局唯一，用于在资源池中区分账号。")}
+                        </small>
                       </label>
                       <label className="field provider-account-auth-wide">
                         <span>{tx("OpenAI/Codex 授权")}</span>
@@ -911,11 +1229,11 @@ export function ProviderUpsertModal({
                       </div>
                     </div>
                     {accountOAuthStatus ? <p className="provider-credential-note">{accountOAuthStatus}</p> : null}
-                    <div className="provider-account-runtime">
-                      <div className="provider-account-inline-head">
+                    <details className="provider-account-runtime">
+                      <summary>
                         <strong>{tx("资源调度")}</strong>
-                        <span>{tx("这些配置决定账号资源参与路由时的权重、并发和限流。")}</span>
-                      </div>
+                        <span>{tx("一般无需修改；展开后可配置 Base URL、优先级、权重和限流。")}</span>
+                      </summary>
                       <div className="provider-account-fields compact">
                         {accountRuntimeFields.filter((field) => field.visible?.(accountValues) ?? true).map((field) => (
                           <ProviderInlineField
@@ -927,7 +1245,7 @@ export function ProviderUpsertModal({
                           />
                         ))}
                       </div>
-                    </div>
+                    </details>
                     <details className="provider-account-advanced">
                       <summary>{tx("高级：手动粘贴 Token")}</summary>
                       <p>{tx("只有在授权回填不可用时使用；保存后 Token 不会再次显示。")}</p>
@@ -951,29 +1269,29 @@ export function ProviderUpsertModal({
                 )}
               </section>
             ) : null}
-            {mode === "edit" && subscriptionResources.length > 0 ? (
+            {mode === "edit" && editTab === "quota" && subscriptionResources.length > 0 ? (
               <section className="provider-quota-panel">
                 <div className="wizard-panel-head">
                   <h3>{tx("订阅额度")}</h3>
                   <p>{tx("实时查询 ChatGPT/Codex 套餐用量和重置时间；不会显示虚构的美元余额。")}</p>
                 </div>
                 <div className="provider-quota-list">
-                  {subscriptionResources.map((resource) => {
+                  {selectedAccountResources.map((resource) => {
                     const quota = accountQuotas[resource.id];
                     const primary = quota?.rate_limit?.primary_window;
                     const secondary = quota?.rate_limit?.secondary_window;
-                    const accountLabel = resource.credential_summary?.account_email || resource.credential_summary?.account_id || resource.name;
                     return (
                       <article className="provider-quota-card" key={resource.id}>
                         <div className="provider-quota-card-head">
                           <div>
                             <strong>{resource.name}</strong>
-                            <span>{accountLabel}</span>
+                            <span>{providerResourceAccountLabel(resource)}</span>
                           </div>
-                          <button className="secondary-button" disabled={accountQuotaBusyID === resource.id} onClick={() => void queryAccountQuota(resource)} type="button">
-                            {tx(accountQuotaBusyID === resource.id ? "查询中" : quota ? "刷新额度" : "查询额度")}
+                          <button className="secondary-button" disabled={accountQuotaBusyIDs[resource.id]} onClick={() => void queryAccountQuota(resource)} type="button">
+                            {tx(accountQuotaBusyIDs[resource.id] ? "查询中" : quota ? "刷新额度" : "查询额度")}
                           </button>
                         </div>
+                        <ProviderAccountDetails resource={resource} />
                         {quota ? (
                           <div className="provider-quota-grid">
                             <QuotaMetric label="套餐" value={quota.plan_type || resource.credential_summary?.plan_type || "-"} />
@@ -986,42 +1304,55 @@ export function ProviderUpsertModal({
                             <QuotaMetric label="查询时间" value={new Date(quota.fetched_at * 1000).toLocaleString()} />
                           </div>
                         ) : (
-                          <p className="provider-credential-note">{tx("点击查询后显示该真实账号当前的套餐额度。")}</p>
+                          <p className="provider-credential-note">
+                            {tx(accountQuotaBusyIDs[resource.id] ? "正在自动查询该真实账号的套餐与额度信息。" : "暂未获取到该账号的套餐与额度信息，可点击查询重试。")}
+                          </p>
                         )}
+                        {accountQuotaErrors[resource.id] ? <p className="provider-quota-error">{accountQuotaErrors[resource.id]}</p> : null}
                       </article>
                     );
                   })}
                 </div>
-                {accountQuotaError ? <p className="provider-quota-error">{accountQuotaError}</p> : null}
               </section>
             ) : null}
-            {mode === "edit" && subscriptionResources.length > 0 ? (
+            {mode === "edit" && editTab === "test" && subscriptionResources.length > 0 ? (
               <section className="provider-quota-panel provider-codex-test-panel">
                 <div className="wizard-panel-head">
                   <h3>{tx("Codex 真实请求测试")}</h3>
-                  <p>{tx("选择模型、推理强度和速度后，直接使用该订阅账号调用 Codex Responses；该操作会消耗真实套餐额度。")}</p>
+                  <p>{tx("使用顶部选中的账号真实调用 Codex Responses；选择全部账号时，每个账号都会分别发起一次请求并展示独立结果。")}</p>
                 </div>
+                {selectedAccountID === "all" ? (
+                  <p className="provider-account-intersection-note">
+                    {tx("当前模型列表是所有账号可用模型的交集，确保所选模型能够被每个账号真实调用。")}
+                  </p>
+                ) : null}
                 <div className="provider-codex-test-controls">
                   <label className="field">
                     <span>{tx("模型")}</span>
                     <select
-                      disabled={codexTestValues.speed === "fast"}
+                      disabled={accountCatalogLoading || codexTestValues.speed === "fast" || codexTestModels.length === 0}
                       value={codexTestValues.model}
                       onChange={(event) => setCodexTestValues((current) => ({ ...current, model: event.target.value }))}
                     >
-                      {codexSubscriptionModels.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                      {codexTestModels.map((model) => <option key={model.id} value={model.id}>{model.display_name || model.name}</option>)}
                     </select>
+                    {accountCatalogLoading ? <small>{tx("正在从所选账号加载模型目录...")}</small> : null}
                     {codexTestValues.speed === "fast" ? <small>{tx("快速模式测试已锁定 5.6 家族中成本最低的 Luna。")}</small> : null}
                   </label>
                   <label className="field">
                     <span>{tx("推理强度")}</span>
-                    <select value={codexTestValues.reasoning_effort} onChange={(event) => setCodexTestValues((current) => ({ ...current, reasoning_effort: event.target.value }))}>
+                    <select
+                      disabled={accountCatalogLoading || codexTestModels.length === 0}
+                      value={codexTestValues.reasoning_effort}
+                      onChange={(event) => setCodexTestValues((current) => ({ ...current, reasoning_effort: event.target.value }))}
+                    >
                       {codexReasoningEfforts.map((value) => <option key={value} value={value}>{value}</option>)}
                     </select>
                   </label>
                   <label className="field">
                     <span>{tx("速度")}</span>
                     <select
+                      disabled={accountCatalogLoading || codexTestModels.length === 0}
                       value={codexTestValues.speed}
                       onChange={(event) => {
                         const speed = event.target.value;
@@ -1029,8 +1360,9 @@ export function ProviderUpsertModal({
                       }}
                     >
                       <option value="standard">{tx("标准")}</option>
-                      <option value="fast">{tx("快速（仅 5.6 Luna 测试）")}</option>
+                      <option disabled={!codexFastTestSupported} value="fast">{tx("快速（仅 5.6 Luna 测试）")}</option>
                     </select>
+                    {!codexFastTestSupported && !accountCatalogLoading ? <small>{tx("所选账号的 Luna 模型不支持快速模式。")}</small> : null}
                   </label>
                   <label className="field provider-codex-test-prompt">
                     <span>{tx("真实提示词")}</span>
@@ -1042,25 +1374,41 @@ export function ProviderUpsertModal({
                     />
                   </label>
                 </div>
+                {Object.entries(accountCatalogErrors).map(([resourceID, message]) => (
+                  <p className="provider-quota-error" key={resourceID}>
+                    {subscriptionResources.find((resource) => resource.id === resourceID)?.name || resourceID}：{message}
+                  </p>
+                ))}
+                <div className="provider-codex-test-actions">
+                  <button
+                    className="primary-button"
+                    disabled={
+                      Boolean(codexTestBusyID) ||
+                      accountCatalogLoading ||
+                      codexTestModels.length === 0 ||
+                      !codexTestValues.prompt.trim()
+                    }
+                    onClick={() => void testCodexSubscription()}
+                    type="button"
+                  >
+                    <Send size={14} />
+                    {tx(codexTestBusyID ? "正在真实调用" : selectedAccountID === "all" ? "测试全部账号" : "发送真实测试")}
+                  </button>
+                </div>
                 <div className="provider-quota-list">
-                  {subscriptionResources.map((resource) => {
+                  {selectedAccountResources.map((resource) => {
                     const result = codexTestResults[resource.id];
+                    const testError = codexTestErrors[resource.id];
                     return (
-                      <article className="provider-quota-card" key={resource.id}>
+                    <article className="provider-quota-card" key={resource.id}>
                         <div className="provider-quota-card-head">
                           <div>
                             <strong>{resource.name}</strong>
-                            <span>{resource.credential_summary?.account_email || resource.credential_summary?.account_id || resource.id}</span>
+                            <span>{providerResourceAccountLabel(resource)}</span>
                           </div>
-                          <button
-                            className="primary-button"
-                            disabled={codexTestBusyID === resource.id || !codexTestValues.prompt.trim()}
-                            onClick={() => void testCodexSubscription(resource)}
-                            type="button"
-                          >
-                            <Send size={14} />
-                            {tx(codexTestBusyID === resource.id ? "正在真实调用" : "发送真实测试")}
-                          </button>
+                          <span className={testError ? "provider-test-status error" : result ? "provider-test-status success" : "provider-test-status"}>
+                            {tx(testError ? "失败" : result ? "完成" : "等待测试")}
+                          </span>
                         </div>
                         {result ? (
                           <div className="provider-codex-test-result">
@@ -1076,6 +1424,8 @@ export function ProviderUpsertModal({
                             </div>
                             <pre>{result.output_text}</pre>
                           </div>
+                        ) : testError ? (
+                          <p className="provider-quota-error">{testError}</p>
                         ) : (
                           <p className="provider-credential-note">{tx("填写提示词后发送；返回内容来自真实 Codex 上游，不使用 Mock。")}</p>
                         )}
@@ -1083,10 +1433,17 @@ export function ProviderUpsertModal({
                     );
                   })}
                 </div>
-                {codexTestError ? <p className="provider-quota-error">{codexTestError}</p> : null}
+                {codexTestErrors.selection ? <p className="provider-quota-error">{codexTestErrors.selection}</p> : null}
               </section>
             ) : null}
-            {mode === "edit" || createStep === 1 ? (
+            {(mode === "edit" && editTab === "settings") || (mode === "create" && createStep === 1) ? (
+              mode === "edit" && editingCodexSubscription && selectedAccountID === "all" ? (
+                <div className="provider-account-selection-empty">
+                  <UserRoundCheck size={28} />
+                  <strong>{tx("请选择具体账号")}</strong>
+                  <span>{tx("基础配置不能同时编辑全部账号，请先在顶部账号列表中选择一个具体账号。")}</span>
+                </div>
+              ) : (
               <div className="provider-form-grid">
               <label className="field">
                 <span>Provider ID</span>
@@ -1118,10 +1475,16 @@ export function ProviderUpsertModal({
                 <input value={values.priority ?? "10"} type="number" onChange={(event) => update("priority", event.target.value)} />
               </label>
             </div>
+              )
             ) : null}
 
-            {mode === "edit" || createStep === 3 ? (
+            {(mode === "edit" && editTab === "models") || (mode === "create" && createStep === 3) ? (
               <>
+            {mode === "edit" && editingCodexSubscription && selectedAccountID === "all" ? (
+              <p className="provider-account-intersection-note">
+                {tx("当前上游模型映射仅展示所有账号都支持的模型交集。这样创建的路由才能在账号池切换时保持可用，避免请求被分配到不支持该模型的账号。")}
+              </p>
+            ) : null}
             <div className="provider-import-options">
               <div>
                 <strong>{tx("自动路由")}</strong>
@@ -1152,7 +1515,7 @@ export function ProviderUpsertModal({
             <div className="provider-model-head">
               <div>
                 <strong>{tx("上游模型映射")}</strong>
-                <span>{detail ? `${models.length}/${detail.models_count} ${tx("个可映射模型")}` : tx("加载中")}</span>
+                <span>{effectiveDetail ? `${models.length}/${effectiveDetail.models_count} ${tx("个可映射模型")}` : effectiveCatalogError || tx("加载中")}</span>
               </div>
               <div className="provider-model-tools">
                 <input value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={tx("搜索模型、能力、参数")} />
@@ -1162,10 +1525,10 @@ export function ProviderUpsertModal({
               </div>
             </div>
             <div className="provider-model-list">
-              {modelLoading ? (
+              {effectiveCatalogLoading ? (
                 <div className="empty">{tx("正在加载模型列表...")}</div>
-              ) : modelError ? (
-                <div className="empty">{modelError}</div>
+              ) : effectiveCatalogError ? (
+                <div className="empty">{effectiveCatalogError}</div>
               ) : filteredModels.length === 0 ? (
                 <div className="empty">{models.length === 0 ? tx("该渠道商暂无可匹配当前标准模型目录的上游模型") : tx("没有匹配的模型")}</div>
               ) : filteredModels.map((model) => (
@@ -1217,6 +1580,52 @@ export function ProviderUpsertModal({
           </button>
         </div>
       </form>
+      {accountOAuthCallbackModalOpen ? (
+        <div className="modal-backdrop provider-oauth-callback-backdrop" role="presentation">
+          <div
+            aria-labelledby="provider-oauth-callback-title"
+            aria-modal="true"
+            className="confirm-modal provider-oauth-callback-modal"
+            role="dialog"
+          >
+            <div className="provider-oauth-callback-heading">
+              <div className="provider-oauth-callback-icon" aria-hidden="true">
+                <KeyRound size={18} />
+              </div>
+              <div>
+                <p className="eyebrow">{tx("OpenAI/Codex 授权")}</p>
+                <h2 id="provider-oauth-callback-title">{tx("粘贴授权回调地址")}</h2>
+              </div>
+            </div>
+            <p>{tx("完成登录和授权后，请复制浏览器地址栏中的完整 localhost 地址，并粘贴到下方。")}</p>
+            <label className="field">
+              <span>{tx("登录后的 localhost 地址")}</span>
+              <textarea
+                autoFocus
+                onChange={(event) => {
+                  setAccountOAuthCallback(event.target.value);
+                  setAccountOAuthCallbackModalError("");
+                }}
+                placeholder="http://localhost:1455/auth/callback?code=...&state=..."
+                value={accountOAuthCallback}
+              />
+              <small>{tx("localhost 页面显示无法访问是正常现象；请复制地址栏中的完整地址，不要只复制授权 code。")}</small>
+            </label>
+            {accountOAuthCallbackModalError ? (
+              <p className="provider-oauth-callback-error" role="alert">{accountOAuthCallbackModalError}</p>
+            ) : null}
+            <div className="modal-actions">
+              <button className="secondary-button" onClick={() => setAccountOAuthCallbackModalOpen(false)} type="button">
+                {tx("稍后填写")}
+              </button>
+              <button className="button" disabled={accountOAuthBusy} onClick={confirmProviderAccountOAuthCallback} type="button">
+                <Check size={15} />
+                {tx(accountOAuthBusy ? "处理中" : "确认并回填")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1228,6 +1637,102 @@ function QuotaMetric({ label, value }: { label: string; value: string }) {
       <strong>{tx(value)}</strong>
     </div>
   );
+}
+
+function ProviderAccountDetails({ resource }: { resource: ProviderResource }) {
+  const summary = resource.credential_summary ?? {};
+  const options = resource.options ?? {};
+  const rawItems: Array<[string, string | undefined]> = [
+    ["资源 ID", resource.id],
+    ["账号邮箱", summary.account_email],
+    ["账号 ID", summary.account_id],
+    ["用户 ID", summary.user_id],
+    ["组织 ID", summary.organization_id],
+    ["套餐", summary.plan_type],
+    ["认证方式", summary.auth_type],
+    ["Token 类型", summary.token_type || options.token_type],
+    ["Token 过期时间", formatProviderAccountDate(summary.token_expires_at || options.token_expires_at)],
+    ["授权范围", summary.scopes || options.scopes],
+    ["Refresh Token", summary.has_refresh_token === "true" ? "已配置" : "未配置"],
+    ["资源状态", resource.status],
+    ["健康状态", resource.healthy ? "健康" : "异常"],
+    ["资源组", resource.group],
+    ["Base URL", resource.base_url],
+    ["区域", resource.region],
+    ["环境", resource.environment],
+    ["优先级", String(resource.priority)],
+    ["权重", String(resource.weight)],
+    ["每分钟请求限制", resource.rate_limit_rpm ? String(resource.rate_limit_rpm) : "-"],
+    ["每分钟 Token 限制", resource.token_limit_tpm ? String(resource.token_limit_tpm) : "-"],
+    ["最大并发", resource.max_concurrency ? String(resource.max_concurrency) : "-"],
+    ["连续失败次数", String(resource.failure_count ?? 0)],
+    ["冷却截止时间", formatProviderAccountDate(resource.cooldown_until)],
+    ["最后使用时间", formatProviderAccountDate(resource.last_used_at)],
+    ["最后检查时间", formatProviderAccountDate(resource.last_checked_at)],
+    ["创建时间", formatProviderAccountDate(resource.created_at)],
+    ["更新时间", formatProviderAccountDate(resource.updated_at)],
+  ];
+  const items = rawItems.filter(([, value]) => value !== undefined && value !== "");
+  return (
+    <div className="provider-account-detail-grid">
+      {items.map(([label, value]) => <QuotaMetric key={label} label={label} value={value || "-"} />)}
+    </div>
+  );
+}
+
+function providerResourceAccountLabel(resource: ProviderResource) {
+  return resource.credential_summary?.account_email || resource.credential_summary?.account_id || resource.name;
+}
+
+function formatProviderAccountDate(value?: string) {
+  if (!value) return "-";
+  const timestamp = Date.parse(value);
+  return Number.isNaN(timestamp) ? value : new Date(timestamp).toLocaleString();
+}
+
+function intersectProviderCatalogs(catalogs: ProviderCatalogEntry[]): ProviderCatalogEntry | null {
+  if (catalogs.length === 0) return null;
+  const first = catalogs[0];
+  const models = (first.models ?? []).filter((model) =>
+    catalogs.slice(1).every((catalog) =>
+      (catalog.models ?? []).some((candidate) => candidate.id.toLowerCase() === model.id.toLowerCase()),
+    ),
+  ).map((model) => {
+    const matches = catalogs.map((catalog) =>
+      (catalog.models ?? []).find((candidate) => candidate.id.toLowerCase() === model.id.toLowerCase())!,
+    );
+    const supportedParameters = (model.supported_parameters ?? []).filter((parameter) =>
+      matches.slice(1).every((candidate) => candidate.supported_parameters?.includes(parameter)),
+    );
+    const reasoningLevels = intersectStringLists(matches.map((candidate) =>
+      candidate.metadata?.supported_reasoning_levels?.split(",").map((value) => value.trim()).filter(Boolean) ?? [],
+    ));
+    const speedTiers = intersectStringLists(matches.map((candidate) =>
+      candidate.metadata?.additional_speed_tiers?.split(",").map((value) => value.trim()).filter(Boolean) ?? [],
+    ));
+    const contextWindows = matches.map((candidate) => candidate.context_window).filter((value): value is number => Boolean(value));
+    return {
+      ...model,
+      context_window: contextWindows.length > 0 ? Math.min(...contextWindows) : model.context_window,
+      supported_parameters: supportedParameters,
+      metadata: {
+        ...model.metadata,
+        supported_reasoning_levels: reasoningLevels.join(","),
+        additional_speed_tiers: speedTiers.join(","),
+      },
+    };
+  });
+  return {
+    ...first,
+    models,
+    models_count: models.length,
+    category_counts: { ...(first.category_counts ?? {}), codex: models.length },
+  };
+}
+
+function intersectStringLists(lists: string[][]) {
+  if (lists.length === 0) return [];
+  return lists[0].filter((value) => lists.slice(1).every((list) => list.includes(value)));
 }
 
 function formatQuotaPercent(value: number) {
@@ -1375,14 +1880,4 @@ export function providerAccountResourceReady(values: Record<string, string>) {
     return Boolean(values.access_token?.trim() || values.refresh_token?.trim() || values.id_token?.trim());
   }
   return Boolean(values.api_key?.trim());
-}
-
-export function recommendedAccountProviderEntry(catalog: ProviderCatalogEntry[]) {
-  const openAIEntries = catalog.filter((entry) => providerEntrySupportsCategory(entry, "openai"));
-  const exactOpenAI = openAIEntries.find((entry) => {
-    const candidates = [entry.id, entry.name, entry.display_name].map((item) => item?.trim().toLowerCase()).filter(Boolean);
-    return candidates.some((item) => item === "openai" || item === "openai official");
-  });
-  if (exactOpenAI) return exactOpenAI;
-  return openAIEntries.find((entry) => ["openai", "openai_compatible"].includes(entry.type)) ?? openAIEntries[0] ?? catalog[0];
 }

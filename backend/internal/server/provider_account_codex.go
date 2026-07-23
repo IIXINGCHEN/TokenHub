@@ -13,26 +13,19 @@ import (
 )
 
 const (
-	openAICodexResponsesURL  = "https://chatgpt.com/backend-api/codex/responses"
+	openAICodexBaseURL       = "https://chatgpt.com/backend-api/codex"
+	openAICodexResponsesURL  = openAICodexBaseURL + "/responses"
+	openAICodexModelsURL     = openAICodexBaseURL + "/models"
 	openAICodexVersion       = "0.145.0"
 	openAICodexUserAgent     = "codex_cli_rs/0.145.0 (Mac OS 15.0.0; arm64) xterm-256color"
 	openAICodexInstructions  = "You are Codex, a coding agent. Follow the user's request and return a clear, accurate result."
 	openAICodexFastTestModel = "gpt-5.6-luna"
 )
 
-var openAICodexTestModels = []string{
-	"gpt-5.6-sol",
-	"gpt-5.6-terra",
-	"gpt-5.6-luna",
-	"gpt-5.5",
-	"gpt-5.4",
-	"gpt-5.4-mini",
-	"gpt-5.3-codex-spark",
-}
-
 type CodexSubscriptionAdapter struct {
 	Client             *http.Client
 	RefreshCredentials func(context.Context, string, bool) (ProviderResourceCredentials, error)
+	ModelsURL          string
 }
 
 type codexSubscriptionTestRequest struct {
@@ -218,6 +211,14 @@ func consumeCodexResponsesStream(body io.Reader, destination io.Writer) (map[str
 			}
 		}
 		if completed {
+			if destination != nil {
+				if _, writeErr := io.WriteString(destination, "\n"); writeErr != nil {
+					return response, textBuilder.String(), usage, writeErr
+				}
+				if flusher, ok := destination.(http.Flusher); ok {
+					flusher.Flush()
+				}
+			}
 			if textBuilder.Len() == 0 {
 				textBuilder.WriteString(codexResponseOutputText(response))
 			}
@@ -247,6 +248,9 @@ func (s *Server) handleStreamingResponses(w http.ResponseWriter, r *http.Request
 			return nil, Usage{}, NewHTTPError(http.StatusBadRequest, "responses_stream_unsupported", "Streaming Responses is currently available through Codex Subscription resources")
 		}
 		opened, err := codex.OpenResponses(r.Context(), prepared.Provider, prepared.ProviderModel, request, r.Header)
+		if isCodexModelUnsupportedError(err) {
+			s.removeCodexResourceModel(routeResourceID(route), route.ProviderModel)
+		}
 		return opened, Usage{}, err
 	})
 	if err != nil {
@@ -330,10 +334,15 @@ func (s *Server) testCodexSubscription(ctx context.Context, resourceID string, r
 	request.ReasoningEffort = strings.ToLower(strings.TrimSpace(request.ReasoningEffort))
 	request.Speed = strings.ToLower(strings.TrimSpace(request.Speed))
 	request.Prompt = strings.TrimSpace(request.Prompt)
-	if !stringInList(request.Model, openAICodexTestModels) {
+	catalog, err := s.queryOpenAICodexModels(ctx, resourceID)
+	if err != nil {
+		return codexSubscriptionTestResponse{}, err
+	}
+	model, ok := codexCatalogModelByID(catalog.Models, request.Model)
+	if !ok {
 		return codexSubscriptionTestResponse{}, NewHTTPError(http.StatusBadRequest, "codex_model_invalid", "Select a supported Codex model")
 	}
-	if !stringInList(request.ReasoningEffort, []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}) {
+	if !stringInList(request.ReasoningEffort, strings.Split(model.Metadata["supported_reasoning_levels"], ",")) {
 		return codexSubscriptionTestResponse{}, NewHTTPError(http.StatusBadRequest, "codex_reasoning_effort_invalid", "Select a supported reasoning effort")
 	}
 	if request.Speed == "" {

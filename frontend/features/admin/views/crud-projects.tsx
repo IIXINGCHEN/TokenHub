@@ -1,8 +1,9 @@
-import { Plus, Search, Trash2, UserRoundCheck, X } from "lucide-react";
-import { useEffect, useState } from "react";
-import { type AdminResource, type ApiContext, type AppData, type Project, type Provider, type ProviderResource, type ReportExportHistoryItem, type RequestLog, type ResourceAction, type ResourceConfig, type ToolbarAction } from "../core/types";
+import { Plus, RefreshCw, Search, Trash2, UserRoundCheck, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { type AdminResource, type ApiContext, type AppData, type AuditEvent, type Project, type Provider, type ProviderResource, type ReportExportHistoryItem, type RequestLog, type ResourceAction, type ResourceConfig, type ToolbarAction } from "../core/types";
 import { notificationChannelLabel } from "../domain/catalog";
-import { projectMembersForProject, providerRoutesFor, stringifyValue } from "../domain/entities";
+import { projectMembersForProject, providerDisplayName, providerDisplayType, providerRoutesFor, stringifyValue } from "../domain/entities";
 import { activeRouteCount, formatNumber, formatTime } from "../domain/formatting";
 import { approvalTriggerLabel, enumValueLabel, providerTypeLabel, reportDatasetLabel, roleLabel } from "../domain/labels";
 import { countWithUnit, languageLocale, tx } from "../i18n/runtime";
@@ -173,6 +174,15 @@ export type ProviderProbeTone = "ok" | "warn" | "down" | "na";
 
 export type ProviderTrendTone = "success" | "warning" | "failure" | "none";
 
+export type ProviderMonitorSampleSource = "codex_test" | "gateway_request";
+
+export type ProviderMonitorSample = {
+  created_at: string;
+  success: boolean;
+  latency_ms: number;
+  error_code?: string;
+};
+
 export type ProviderMonitorRow = {
   provider: Provider;
   resources: ProviderResource[];
@@ -190,6 +200,7 @@ export type ProviderMonitorRow = {
   latencyMS: number;
   availability24h: number;
   observed24h: boolean;
+  sampleSource: ProviderMonitorSampleSource;
   qualityScore: number;
   trend: ProviderTrendTone[];
 };
@@ -221,6 +232,29 @@ export function ProviderAvailabilityMonitor({ api, data, providers }: { api?: Ap
     providers.some((provider) => provider.id === resource.provider_id) && resource.resource_type === "openai_subscription",
   );
   const subscriptionResourceKey = subscriptionResources.map((resource) => `${resource.id}:${resource.updated_at ?? ""}`).sort().join("|");
+
+  async function refreshQuota(resource: ProviderResource) {
+    if (!api) return;
+    setQuotaStates((current) => ({
+      ...current,
+      [resource.id]: { ...current[resource.id], loading: true, error: "" },
+    }));
+    try {
+      const resp = await adminFetch(api, `/api/admin/provider-resources/${resource.id}/quota`);
+      if (!resp.ok) throw new Error(await readAdminError(resp, tx("查询 Codex 套餐")));
+      const quota = (await resp.json()) as OpenAIAccountQuota;
+      setQuotaStates((current) => ({ ...current, [resource.id]: { quota } }));
+    } catch (error) {
+      setQuotaStates((current) => ({
+        ...current,
+        [resource.id]: {
+          ...current[resource.id],
+          loading: false,
+          error: error instanceof Error ? error.message : tx("套餐查询失败"),
+        },
+      }));
+    }
+  }
 
   useEffect(() => {
     if (!api || subscriptionResources.length === 0) return;
@@ -265,7 +299,7 @@ export function ProviderAvailabilityMonitor({ api, data, providers }: { api?: Ap
         <div>
           <p className="eyebrow">Provider Availability</p>
           <h2>{tx("Provider 可用性监控")}</h2>
-          <span>{tx("按健康检测、账号资源和真实请求日志汇总上游渠道可用性。")}</span>
+          <span>{tx("Codex 订阅使用专用真实测试记录；其他通道使用真实网关请求日志。")}</span>
         </div>
         <div className="provider-monitor-summary" aria-label={tx("Provider 健康摘要")}>
           <span><strong>{summary.healthy}</strong>{tx("正常")}</span>
@@ -293,10 +327,10 @@ export function ProviderAvailabilityMonitor({ api, data, providers }: { api?: Ap
               <tr key={row.provider.id}>
                 <td>
                   <div className="provider-monitor-name">
-                    <span className={`provider-monitor-avatar ${row.statusTone}`}>{providerInitial(row.provider)}</span>
+                    <span className={`provider-monitor-avatar ${row.statusTone}`}>{providerDisplayName(row.provider, row.resources).slice(0, 1).toUpperCase()}</span>
                     <div>
-                      <strong>{row.provider.name || row.provider.id}</strong>
-                      <span>{providerTypeLabel(row.provider.type)} · {row.activeRouteCount}/{row.routeCount || 0} {tx("启用路由")} · {row.resources.length || 0} {tx("账号资源")}</span>
+                      <strong>{providerDisplayName(row.provider, row.resources)}</strong>
+                      <span>{providerTypeLabel(providerDisplayType(row.provider, row.resources))} · {row.activeRouteCount}/{row.routeCount || 0} {tx("启用路由")} · {row.resources.length || 0} {tx("账号资源")}</span>
                     </div>
                   </div>
                 </td>
@@ -313,10 +347,14 @@ export function ProviderAvailabilityMonitor({ api, data, providers }: { api?: Ap
                   <ProviderProbeLine tone={row.basicPrimaryTone} detail={row.basicPrimaryDetail} />
                   <ProviderProbeLine tone={row.basicSecondaryTone} detail={row.basicSecondaryDetail} />
                 </td>
-                <td><ProviderCodexQuota quotaStates={quotaStates} resources={row.resources} /></td>
+                <td><ProviderCodexQuota quotaStates={quotaStates} resources={row.resources} onRefresh={refreshQuota} /></td>
                 <td>
                   <ProviderProbeLine tone={row.realTone} detail={row.realDetail} />
-                  <small className="provider-monitor-subtle">{row.observed24h ? tx("真实请求样本") : tx("无请求样本")}</small>
+                  <small className="provider-monitor-subtle">
+                    {row.sampleSource === "codex_test"
+                      ? tx(row.observed24h ? "Codex 专用测试" : "无 Codex 测试样本")
+                      : tx(row.observed24h ? "网关请求样本" : "无网关请求样本")}
+                  </small>
                 </td>
                 <td><strong className="provider-monitor-metric">{latencyDisplay(row.latencyMS)}</strong></td>
                 <td><strong className="provider-monitor-metric">{providerPercent(row.availability24h)}</strong></td>
@@ -340,17 +378,46 @@ export function ProviderAvailabilityMonitor({ api, data, providers }: { api?: Ap
         <span><i className="success" />{tx("正常")}</span>
         <span><i className="warning" />{tx("降级/慢响应")}</span>
         <span><i className="failure" />{tx("故障")}</span>
-        <em>{tx("真实监控来自最近请求日志；基础监控来自 Provider 和账号资源健康状态。")}</em>
+        <em>{tx("Codex 监控来自专用真实测试；普通 Provider 监控来自网关请求日志。")}</em>
       </div>
     </section>
   );
 }
 
-export function ProviderCodexQuota({ quotaStates, resources }: { quotaStates: Record<string, ProviderQuotaState>; resources: ProviderResource[] }) {
+export function ProviderCodexQuota({
+  quotaStates,
+  resources,
+  onRefresh,
+}: {
+  quotaStates: Record<string, ProviderQuotaState>;
+  resources: ProviderResource[];
+  onRefresh: (resource: ProviderResource) => void;
+}) {
+  const [popoverPosition, setPopoverPosition] = useState<{ left: number; top: number }>();
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const showPopover = (element: HTMLElement) => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    const rect = element.getBoundingClientRect();
+    setPopoverPosition({
+      left: Math.min(rect.left, window.innerWidth - 336),
+      top: rect.bottom + 8,
+    });
+  };
+  const keepPopover = () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+  };
+  const schedulePopoverClose = () => {
+    closeTimer.current = setTimeout(() => setPopoverPosition(undefined), 120);
+  };
+
+  useEffect(() => () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+  }, []);
+
   const subscriptions = resources.filter((resource) => resource.resource_type === "openai_subscription" && resource.status === "active");
   if (subscriptions.length === 0) return <span className="provider-codex-quota na">-</span>;
   const states = subscriptions.map((resource) => ({ resource, state: quotaStates[resource.id] }));
-  if (states.some(({ state }) => state?.loading)) {
+  if (states.every(({ state }) => state?.loading || !state)) {
     return <span className="provider-codex-quota loading">{tx("查询中")}</span>;
   }
   const available = states.filter(({ state }) => state?.quota).map(({ resource, state }) => ({ resource, quota: state!.quota! }));
@@ -367,10 +434,60 @@ export function ProviderCodexQuota({ quotaStates, resources }: { quotaStates: Re
   const plan = limiting.quota.plan_type || limiting.resource.credential_summary?.plan_type || "-";
   const limited = limiting.quota.rate_limit?.limit_reached || limiting.quota.rate_limit?.allowed === false;
   return (
-    <div className={`provider-codex-quota ${limited ? "limited" : "available"}`}>
-      <strong>{formatQuotaPercent(remaining)}%</strong>
-      <span>{plan} · {quotaResetLabel(limiting.quota.rate_limit?.primary_window)}</span>
-      {available.length > 1 ? <small>{available.length} {tx("个账号，显示最低余量")}</small> : null}
+    <div className="provider-codex-quota-wrap" onMouseLeave={schedulePopoverClose}>
+      <button
+        className={`provider-codex-quota ${limited ? "limited" : "available"}`}
+        onBlur={schedulePopoverClose}
+        onFocus={(event) => showPopover(event.currentTarget)}
+        onMouseEnter={(event) => showPopover(event.currentTarget)}
+        type="button"
+      >
+        <strong>{formatQuotaPercent(remaining)}%</strong>
+        <span>{plan} · {quotaResetLabel(limiting.quota.rate_limit?.primary_window)}</span>
+        <small>{subscriptions.length} {tx("个账号，显示最低余量")}</small>
+      </button>
+      {popoverPosition && typeof document !== "undefined" ? createPortal(
+        <div
+          className="provider-codex-accounts-popover"
+          onFocus={keepPopover}
+          onMouseEnter={keepPopover}
+          onMouseLeave={schedulePopoverClose}
+          role="tooltip"
+          style={popoverPosition}
+        >
+          {states.map(({ resource, state }) => {
+            const quota = state?.quota;
+            const accountLabel = resource.credential_summary?.account_email || resource.credential_summary?.account_id || resource.name;
+            const accountPlan = quota?.plan_type || resource.credential_summary?.plan_type || "-";
+            const accountLimited = quota?.rate_limit?.limit_reached || quota?.rate_limit?.allowed === false;
+            return (
+              <div className="provider-codex-account" key={resource.id}>
+                <div>
+                  <strong title={accountLabel}>{accountLabel}</strong>
+                  {quota ? (
+                    <span className={accountLimited ? "limited" : ""}>
+                      {accountPlan} · {formatQuotaPercent(quotaRemainingPercent(quota))}% · {quotaResetLabel(quota.rate_limit?.primary_window)}
+                    </span>
+                  ) : (
+                    <span className={state?.error ? "limited" : ""} title={state?.error}>
+                      {state?.loading ? tx("查询中") : tx("查询失败")}
+                    </span>
+                  )}
+                </div>
+                <button
+                  aria-label={`${tx("刷新额度")} ${accountLabel}`}
+                  disabled={state?.loading}
+                  onClick={() => onRefresh(resource)}
+                  type="button"
+                >
+                  <RefreshCw size={13} />
+                </button>
+              </div>
+            );
+          })}
+        </div>,
+        document.body,
+      ) : null}
     </div>
   );
 }
@@ -418,10 +535,11 @@ export function providerMonitorRow(data: AppData, provider: Provider): ProviderM
   const resources = data.providerResources.filter((resource) => resource.provider_id === provider.id);
   const routes = providerRoutesFor(provider, data);
   const logs = providerLogsFor(data, provider, resources);
+  const { source: sampleSource, samples } = providerMonitorSamples(data, provider, resources);
   const now = Date.now();
-  const recent24h = logs.filter((log) => now - safeTime(log.created_at) <= 24 * 60 * 60 * 1000);
-  const success24h = recent24h.filter((log) => !requestLogFailed(log));
-  const warning24h = recent24h.filter((log) => !requestLogFailed(log) && (log.status_code >= 300 || log.latency_ms >= 5000));
+  const recent24h = samples.filter((sample) => now - safeTime(sample.created_at) <= 24 * 60 * 60 * 1000);
+  const success24h = recent24h.filter((sample) => sample.success);
+  const warning24h = recent24h.filter((sample) => sample.success && sample.latency_ms >= 5000);
   const failed24h = recent24h.length - success24h.length;
   const observed24h = recent24h.length > 0;
   const activeResources = resources.filter((resource) => resource.status === "active");
@@ -429,8 +547,8 @@ export function providerMonitorRow(data: AppData, provider: Provider): ProviderM
   const healthyProvider = provider.status === "active" && provider.healthy;
   const resourceScore = activeResources.length > 0 ? (healthyResources.length / activeResources.length) * 100 : (healthyProvider ? 100 : 0);
   const availability24h = observed24h ? (success24h.length / recent24h.length) * 100 : (healthyProvider ? 100 : 0);
-  const latencyLogs = (success24h.length ? success24h : logs.filter((log) => !requestLogFailed(log))).filter((log) => log.latency_ms > 0);
-  const latencyMS = percentileLatency(latencyLogs, 0.5);
+  const latencySamples = (success24h.length ? success24h : samples.filter((sample) => sample.success)).filter((sample) => sample.latency_ms > 0);
+  const latencyMS = percentileLatency(latencySamples, 0.5);
   const statusTone = providerMonitorTone(provider, observed24h, availability24h, warning24h.length, failed24h, activeResources.length, healthyResources.length);
   const activeRouteCount = routes.filter((route) => route.status === "active").length;
   return {
@@ -440,7 +558,9 @@ export function providerMonitorRow(data: AppData, provider: Provider): ProviderM
     activeRouteCount,
     statusTone,
     statusLabel: providerStatusLabel(statusTone),
-    statusDetail: providerStatusDetail(provider, logs, resources),
+    statusDetail: sampleSource === "codex_test"
+      ? providerCodexTestStatusDetail(samples, resources)
+      : providerStatusDetail(provider, logs, resources),
     basicPrimaryTone: healthyProvider ? "ok" : "down",
     basicPrimaryDetail: provider.status === "active" ? tx("Provider 在线") : enumValueLabel(provider.status),
     basicSecondaryTone: providerResourceProbeTone(activeResources.length, healthyResources.length),
@@ -449,14 +569,74 @@ export function providerMonitorRow(data: AppData, provider: Provider): ProviderM
       : tx("未配置账号资源"),
     realTone: providerRealProbeTone(observed24h, availability24h, warning24h.length, failed24h),
     realDetail: observed24h
-      ? `${providerPercent(availability24h)} · ${formatNumber(recent24h.length)} ${tx("次请求")}`
-      : tx("无真实请求"),
+      ? `${providerPercent(availability24h)} · ${formatNumber(recent24h.length)} ${tx(sampleSource === "codex_test" ? "次测试" : "次请求")}`
+      : tx(sampleSource === "codex_test" ? "无 Codex 测试" : "无真实请求"),
     latencyMS,
     availability24h,
     observed24h,
+    sampleSource,
     qualityScore: providerQualityScore(availability24h, latencyMS, resourceScore, observed24h, healthyProvider),
-    trend: providerTrend(data, provider, resources),
+    trend: providerTrend(samples),
   };
+}
+
+export function providerMonitorSamples(data: AppData, provider: Provider, resources: ProviderResource[]): { source: ProviderMonitorSampleSource; samples: ProviderMonitorSample[] } {
+  const codexResources = resources.filter((resource) => resource.resource_type === "openai_subscription");
+  if (codexResources.length > 0) {
+    return { source: "codex_test", samples: providerCodexTestSamples(data.auditEvents, codexResources) };
+  }
+  const samples = providerLogsFor(data, provider, resources).map((log) => ({
+    created_at: log.created_at,
+    success: !requestLogFailed(log),
+    latency_ms: log.latency_ms,
+    error_code: log.error_code,
+  }));
+  return { source: "gateway_request", samples };
+}
+
+export function providerCodexTestSamples(events: AuditEvent[], resources: ProviderResource[]): ProviderMonitorSample[] {
+  const resourceIDs = new Set(resources.map((resource) => resource.id));
+  return events
+    .filter((event) => event.action === "test" && event.resource_type === "provider_resource" && resourceIDs.has(event.resource_id))
+    .map((event) => {
+      const snapshot = auditSnapshot(event.after_snapshot);
+      return {
+        created_at: event.created_at,
+        success: event.status === "success" && snapshot.healthy !== false,
+        latency_ms: finiteNumber(snapshot.latency_ms),
+        error_code: stringValue(snapshot.error_code) || event.message,
+      };
+    })
+    .sort((left, right) => safeTime(left.created_at) - safeTime(right.created_at));
+}
+
+export function providerCodexTestStatusDetail(samples: ProviderMonitorSample[], resources: ProviderResource[]) {
+  const latest = samples[samples.length - 1];
+  if (latest?.error_code) return `${timeLabel(latest.created_at)} · ${latest.error_code}`;
+  if (latest) return timeLabel(latest.created_at);
+  const latestResourceCheck = resources
+    .map((resource) => resource.last_checked_at || resource.updated_at || "")
+    .filter(Boolean)
+    .sort((left, right) => safeTime(right) - safeTime(left))[0];
+  return latestResourceCheck ? timeLabel(latestResourceCheck) : tx("等待 Codex 测试");
+}
+
+export function auditSnapshot(value: string | undefined): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+export function finiteNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+export function stringValue(value: unknown) {
+  return typeof value === "string" ? value : "";
 }
 
 export function providerMonitorSummary(rows: ProviderMonitorRow[]) {
@@ -523,7 +703,7 @@ export function providerProbeLabel(tone: ProviderProbeTone) {
   return "na";
 }
 
-export function percentileLatency(logs: RequestLog[], percentile: number) {
+export function percentileLatency(logs: Array<{ latency_ms: number }>, percentile: number) {
   const values = logs.map((log) => log.latency_ms || 0).filter((value) => value > 0).sort((left, right) => left - right);
   if (values.length === 0) return 0;
   const index = Math.min(values.length - 1, Math.max(0, Math.floor((values.length - 1) * percentile)));
@@ -548,22 +728,21 @@ export function providerQualityScore(availability: number, latencyMS: number, re
   return Math.round(clampNumber(availabilityScore * 0.62 + latencyScore * 0.24 + resourceScore * 0.14, 0, 100));
 }
 
-export function providerTrend(data: AppData, provider: Provider, resources: ProviderResource[]) {
-  const logs = providerLogsFor(data, provider, resources);
+export function providerTrend(samples: ProviderMonitorSample[]) {
   const days = 30;
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   return Array.from({ length: days }, (_, index) => {
     const dayStart = today - (days - 1 - index) * 24 * 60 * 60 * 1000;
     const dayEnd = dayStart + 24 * 60 * 60 * 1000;
-    const dayLogs = logs.filter((log) => {
-      const time = safeTime(log.created_at);
+    const daySamples = samples.filter((sample) => {
+      const time = safeTime(sample.created_at);
       return time >= dayStart && time < dayEnd;
     });
-    if (dayLogs.length === 0) return "none" as ProviderTrendTone;
-    const failures = dayLogs.filter((log) => requestLogFailed(log)).length;
-    const slow = dayLogs.filter((log) => !requestLogFailed(log) && log.latency_ms >= 5000).length;
-    const availability = ((dayLogs.length - failures) / dayLogs.length) * 100;
+    if (daySamples.length === 0) return "none" as ProviderTrendTone;
+    const failures = daySamples.filter((sample) => !sample.success).length;
+    const slow = daySamples.filter((sample) => sample.success && sample.latency_ms >= 5000).length;
+    const availability = ((daySamples.length - failures) / daySamples.length) * 100;
     if (availability < 90) return "failure" as ProviderTrendTone;
     if (failures > 0 || slow > 0 || availability < 99) return "warning" as ProviderTrendTone;
     return "success" as ProviderTrendTone;

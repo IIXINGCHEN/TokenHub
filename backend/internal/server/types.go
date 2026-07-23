@@ -26,6 +26,7 @@ const (
 
 	ProviderMock             = "mock"
 	ProviderOpenAI           = "openai"
+	ProviderOpenAICodex      = "openai_codex"
 	ProviderOpenAICompatible = "openai_compatible"
 	ProviderAzureOpenAI      = "azure_openai"
 	ProviderAnthropic        = "anthropic"

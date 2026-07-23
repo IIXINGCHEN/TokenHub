@@ -1,5 +1,9 @@
-import { type AdminResource, type APIKey, type AppData, type FieldConfig, type Project, type ResourceAction, type ResourceConfig } from "../core/types";
+import { ChevronDown, Download } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { type AdminResource, type APIKey, type AppData, defaultBaseURL, type FieldConfig, type Project, type ResourceAction, type ResourceConfig } from "../core/types";
 import { costCenterLabel, costCenterSelectOptions, ownerUserLabel, projectMemberCanIssueLabel, projectMemberProjectSelectOptions, projectMemberRoleLabel, projectMemberRoleOptions, projectName, projectOwnerLabel, projectSelectOptions, projectTeamLabel, stringifyForm, stringifyValue, teamLabel, teamSelectOptions, truthyValue, userSelectOptions } from "../domain/entities";
+import { apiGatewayBaseURL } from "../domain/formatting";
 import { tx } from "../i18n/runtime";
 import { adminDelete, adminFetch, adminMutate, keyPatchPayload, projectQuotaSummary, updateAPIKeyStatus } from "./payloads";
 import { StatusPill } from "../shared/ui";
@@ -241,6 +245,152 @@ export function APIKeyStatusSwitch({
       <strong>{enabled ? tx("启用") : tx("停用")}</strong>
     </button>
   );
+}
+
+export function APIKeyDownloadMenu({ item, data }: { item: APIKey; data: AppData }) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState({ left: 0, top: 0 });
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const optionsRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeMenu = () => setOpen(false);
+    const close = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (!menuRef.current?.contains(target) && !optionsRef.current?.contains(target)) closeMenu();
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeMenu();
+    };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", closeMenu);
+    window.addEventListener("scroll", closeMenu, true);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", closeMenu);
+      window.removeEventListener("scroll", closeMenu, true);
+    };
+  }, [open]);
+
+  function toggleMenu() {
+    if (!open && triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      const menuHeight = 112;
+      const openBelow = window.innerHeight - rect.bottom >= menuHeight + 12;
+      setPosition({
+        left: Math.max(8, rect.right - 248),
+        top: openBelow ? rect.bottom + 6 : Math.max(8, rect.top - menuHeight - 6),
+      });
+    }
+    setOpen((current) => !current);
+  }
+
+  function downloadConfig() {
+    downloadTextTemplate(
+      codexConfigTemplate(item, data),
+      `${templateFilename(item.name)}-codex-config.toml`,
+      "text/plain;charset=utf-8",
+    );
+    setOpen(false);
+  }
+
+  function downloadEnvironment() {
+    downloadTextTemplate(
+      tokenHubEnvironmentTemplate(item),
+      `${templateFilename(item.name)}.env`,
+      "text/plain;charset=utf-8",
+    );
+    setOpen(false);
+  }
+
+  return (
+    <div className="api-key-download-menu" ref={menuRef}>
+      <button
+        aria-expanded={open}
+        aria-haspopup="menu"
+        className="text-button api-key-download-trigger"
+        onClick={toggleMenu}
+        ref={triggerRef}
+        title={tx("下载 Key 配置模板")}
+        type="button"
+      >
+        <Download size={13} />
+        <span>{tx("下载")}</span>
+        <ChevronDown size={12} />
+      </button>
+      {open ? createPortal(
+        <div className="api-key-download-options" ref={optionsRef} role="menu" style={position}>
+          <button onClick={downloadConfig} role="menuitem" type="button">
+            <strong>{tx("Codex CLI 配置")}</strong>
+            <span>config.toml · {tx("连接 TokenHub Responses")}</span>
+          </button>
+          <button onClick={downloadEnvironment} role="menuitem" type="button">
+            <strong>{tx("环境变量模板")}</strong>
+            <span>.env · {tx("替换 Key 占位符")}</span>
+          </button>
+        </div>,
+        document.body,
+      ) : null}
+    </div>
+  );
+}
+
+export function codexConfigTemplate(item: APIKey, data: AppData) {
+  const model = codexTemplateModel(item, data);
+  const baseURL = apiGatewayBaseURL(defaultBaseURL);
+  return `# TokenHub Codex CLI configuration for ${item.name}
+# Set the API key before starting Codex:
+# export TOKENHUB_API_KEY="REPLACE_WITH_YOUR_TOKENHUB_API_KEY"
+
+model = "${escapeTomlString(model)}"
+model_provider = "tokenhub"
+model_reasoning_effort = "medium"
+
+[model_providers.tokenhub]
+name = "TokenHub - ${escapeTomlString(item.name)}"
+base_url = "${escapeTomlString(baseURL)}"
+wire_api = "responses"
+env_key = "TOKENHUB_API_KEY"
+env_key_instructions = "Set TOKENHUB_API_KEY to REPLACE_WITH_YOUR_TOKENHUB_API_KEY"
+`;
+}
+
+export function tokenHubEnvironmentTemplate(item: APIKey) {
+  return `# TokenHub API Key for ${item.name}
+TOKENHUB_API_KEY=REPLACE_WITH_YOUR_TOKENHUB_API_KEY
+`;
+}
+
+function codexTemplateModel(item: APIKey, data: AppData) {
+  const activeModels = new Set(data.models.filter((model) => model.status === "active").map((model) => model.name));
+  const routedModels = data.routes
+    .filter((route) => route.status === "active" && activeModels.has(route.model_name))
+    .map((route) => route.model_name);
+  const allowedModels = (item.allowed_models ?? []).filter(Boolean);
+  const candidates = allowedModels.length > 0 ? allowedModels.filter((model) => routedModels.includes(model)) : routedModels;
+  return candidates[0] ?? allowedModels[0] ?? "REPLACE_WITH_MODEL_ID_FROM_V1_MODELS";
+}
+
+function escapeTomlString(value: string) {
+  return value.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"");
+}
+
+function templateFilename(value: string) {
+  const normalized = value.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return normalized || "tokenhub-key";
+}
+
+function downloadTextTemplate(content: string, filename: string, type: string) {
+  const url = window.URL.createObjectURL(new Blob([content], { type }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  window.URL.revokeObjectURL(url);
 }
 
 export function apiKeyStatusAction(status: "active" | "disabled"): ResourceAction<APIKey> {
