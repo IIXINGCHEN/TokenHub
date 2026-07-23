@@ -214,6 +214,7 @@ export type ModelCacheReadPriceInfo = {
   price?: number;
   source: "configured" | "estimated" | "unavailable";
   ratio?: number;
+  unavailableReason?: "embedding" | "missing_input_price";
 };
 
 export const defaultCacheReadEstimateRatio = 0.10;
@@ -221,6 +222,9 @@ export const deepSeekCacheReadEstimateRatio = 0.02;
 export const deepSeekV4ProCacheReadRatio = 1 / 120;
 
 export function modelCacheReadPriceInfo(model: Model): ModelCacheReadPriceInfo {
+  if (model.modality === "embedding") {
+    return { source: "unavailable", unavailableReason: "embedding" };
+  }
   const configured = model.cache_read_price_usd_per_1m || readModelMetadataNumber(model, [
     "cached_input_price_usd_per_1m",
     "cache_read_price_usd_per_1m",
@@ -228,7 +232,7 @@ export function modelCacheReadPriceInfo(model: Model): ModelCacheReadPriceInfo {
   ]);
   if (configured > 0) return { price: configured, source: "configured" };
   const input = model.input_price_usd_per_1m || 0;
-  if (!input || model.modality === "embedding") return { source: "unavailable" };
+  if (!input) return { source: "unavailable", unavailableReason: "missing_input_price" };
   const category = modelCategory(model);
   const deepSeekV4Pro = `${model.name} ${model.family ?? ""}`.toLowerCase().includes("v4-pro");
   const ratio = category !== "deepseek"
@@ -249,6 +253,9 @@ export function modelCacheReadPriceHint(info: ModelCacheReadPriceInfo) {
   }
   if (info.source === "estimated") {
     return `${tx("未配置缓存读价，当前按标准输入价的")} ${cacheReadEstimatePercent(info.ratio || 0)} ${tx("估算；建议按上游实际价格配置。")}`;
+  }
+  if (info.unavailableReason === "embedding") {
+    return tx("Embedding 模型按 Embedding 单价计费，不适用缓存读价。");
   }
   return tx("缺少标准输入价，无法估算缓存读价。");
 }

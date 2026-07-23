@@ -1849,6 +1849,9 @@ func (s *GormStore) AddModel(model Model) Model {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if model.Modality == "embedding" {
+		model.CacheReadPriceUSDPer1M = 0
+	}
 	if model.ID == "" {
 		model.ID = model.Name
 	}
@@ -1898,6 +1901,9 @@ func (s *GormStore) UpdateModel(name string, patch Model) (Model, error) {
 		model.CacheReadPriceUSDPer1M = patch.CacheReadPriceUSDPer1M
 		model.OutputPriceUSDPer1M = patch.OutputPriceUSDPer1M
 		model.EmbeddingPriceUSDPer1M = patch.EmbeddingPriceUSDPer1M
+		if model.Modality == "embedding" {
+			model.CacheReadPriceUSDPer1M = 0
+		}
 		if patch.InputModalities != nil {
 			model.InputModalities = patch.InputModalities
 		}
@@ -3565,6 +3571,9 @@ const (
 )
 
 func effectiveCacheReadPriceUSDPer1M(model Model) float64 {
+	if model.Modality == "embedding" {
+		return 0
+	}
 	if model.CacheReadPriceUSDPer1M > 0 {
 		return model.CacheReadPriceUSDPer1M
 	}

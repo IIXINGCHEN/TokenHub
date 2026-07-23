@@ -275,7 +275,7 @@ export function ModelCatalogPriceTable({
                 <td><strong className="model-price-number output">{modelCatalogPriceValue(row.outputPrice)}</strong></td>
                 <td>
                   <span
-                    aria-label={row.cacheReadPriceHint}
+                    aria-label={`${modelCatalogPriceValue(row.cacheReadPrice)}. ${row.cacheReadPriceHint}`}
                     className={`model-cache-price ${row.cacheReadPriceSource}`}
                     data-tooltip={row.cacheReadPriceHint}
                     tabIndex={0}

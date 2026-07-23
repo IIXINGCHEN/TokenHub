@@ -3,6 +3,7 @@ package server
 import (
 	"math"
 	"testing"
+	"time"
 )
 
 func TestPriceUsageAppliesConfiguredCacheReadPrice(t *testing.T) {
@@ -56,6 +57,16 @@ func TestEffectiveCacheReadPriceUsesCategoryEstimateWhenUnconfigured(t *testing.
 			},
 			want: 0.3,
 		},
+		{
+			name: "embedding cache price is unavailable",
+			model: Model{
+				Name:                   "embedding",
+				Modality:               "embedding",
+				InputPriceUSDPer1M:     2,
+				CacheReadPriceUSDPer1M: 0.3,
+			},
+			want: 0,
+		},
 	}
 
 	for _, tt := range tests {
@@ -64,6 +75,79 @@ func TestEffectiveCacheReadPriceUsesCategoryEstimateWhenUnconfigured(t *testing.
 				t.Fatalf("effective cache price = %.12f, want %.12f", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestEmbeddingModelDoesNotStoreCacheReadPrice(t *testing.T) {
+	store := NewMemoryStore()
+	created := store.AddModel(Model{
+		Name:                   "embedding-cache-price",
+		Modality:               "embedding",
+		CacheReadPriceUSDPer1M: 0.3,
+		EmbeddingPriceUSDPer1M: 0.5,
+	})
+	if created.CacheReadPriceUSDPer1M != 0 {
+		t.Fatalf("created embedding cache read price = %v, want 0", created.CacheReadPriceUSDPer1M)
+	}
+
+	updated, err := store.UpdateModel(created.Name, Model{
+		Modality:               "embedding",
+		CacheReadPriceUSDPer1M: 0.4,
+		EmbeddingPriceUSDPer1M: 0.6,
+	})
+	if err != nil {
+		t.Fatalf("update embedding model: %v", err)
+	}
+	if updated.CacheReadPriceUSDPer1M != 0 {
+		t.Fatalf("updated embedding cache read price = %v, want 0", updated.CacheReadPriceUSDPer1M)
+	}
+}
+
+func TestFinishCallPersistsCachedInputTokensInUsageAggregates(t *testing.T) {
+	store := NewMemoryStore()
+	call := CallContext{
+		RequestID: "req_cached_usage",
+		Project:   Project{ID: "project_cached_usage"},
+		Model: Model{
+			Name:                   "cached-chat",
+			Modality:               "chat",
+			InputPriceUSDPer1M:     2,
+			CacheReadPriceUSDPer1M: 0.5,
+			OutputPriceUSDPer1M:    8,
+		},
+		StartedAt: time.Now(),
+	}
+	route := RouteSelection{Provider: Provider{ID: "provider_cached_usage"}}
+
+	store.FinishCall(call, route, Usage{
+		PromptTokens:      1000,
+		CachedInputTokens: 400,
+		CompletionTokens:  100,
+	}, 200, "", "127.0.0.1", "store-test")
+
+	records := store.ListUsageRecords()
+	if len(records) != 1 {
+		t.Fatalf("usage records = %d, want 1", len(records))
+	}
+	if records[0].CachedInputTokens != 400 {
+		t.Fatalf("persisted cached input tokens = %d, want 400", records[0].CachedInputTokens)
+	}
+	if math.Abs(records[0].CostUSD-0.0022) > 1e-12 {
+		t.Fatalf("persisted cost = %.12f, want 0.0022", records[0].CostUSD)
+	}
+
+	summary := store.UsageSummary()
+	if got := summary["cached_input_tokens"]; got != int64(400) {
+		t.Fatalf("summary cached input tokens = %#v, want 400", got)
+	}
+
+	breakdown := store.UsageBreakdown()
+	models, ok := breakdown["models"].([]map[string]any)
+	if !ok || len(models) != 1 {
+		t.Fatalf("model breakdown = %#v, want one row", breakdown["models"])
+	}
+	if got := models[0]["cached_input_tokens"]; got != int64(400) {
+		t.Fatalf("breakdown cached input tokens = %#v, want 400", got)
 	}
 }
 
