@@ -131,6 +131,17 @@ npm install
 npm run test:deepseek
 ```
 
+## Optional AI Agent Development Workflows
+
+TokenHub provides two opt-in workflows for AI-assisted changes:
+
+| Workflow | Choose it for |
+| --- | --- |
+| [`fast-dev`](docs/development/workflows/fast-dev.md) | Small, well-scoped, low-risk changes |
+| [`feature-dev`](docs/development/workflows/feature-dev.md) | Important features, user-visible or cross-component changes, public API or data-model changes, security-sensitive work, deployment changes, or architectural decisions |
+
+Activate one by naming it in the request, such as `Use fast-dev for this change.` Without an explicit selection, the agent follows the normal repository guidance. The agent asks before switching workflows, and workflow selection does not authorize Git or pull-request actions. See [AGENTS.md](AGENTS.md#optional-development-workflows).
+
 ## Documentation
 
 - [Documentation home](docs/README.md)
