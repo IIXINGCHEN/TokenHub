@@ -91,9 +91,27 @@ cp deploy/.env.example deploy/.env
 - [English documentation](docs/README.md)
 - [日本語ドキュメント](docs/ja/README.md)
 
+## Contributors
+
+TokenHub 的演进离不开真实企业场景里的使用反馈、网关集成、文档完善、测试补充和持续维护。感谢每一位让项目变得更可靠的人。
+
+<p align="center">
+  <a href="https://github.com/astaxie/TokenHub/graphs/contributors">
+    <img src="https://contrib.rocks/image?repo=astaxie/TokenHub" alt="TokenHub contributors" />
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/astaxie/TokenHub/graphs/contributors">查看全部贡献者</a>
+  ·
+  <a href="CONTRIBUTING.zh-CN.md">参与贡献</a>
+</p>
+
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=astaxie%2FTokenHub&type=Date&legend=top-left)](https://www.star-history.com/?repos=astaxie%2FTokenHub&type=date&legend=top-left)
+[![GitHub Repo stars](https://img.shields.io/github/stars/astaxie/TokenHub?style=social)](https://github.com/astaxie/TokenHub/stargazers)
+
+在 [Star History 实时图表](https://star-history.com/#astaxie/TokenHub&Date)查看 TokenHub 的增长趋势。
 
 ## License
 
