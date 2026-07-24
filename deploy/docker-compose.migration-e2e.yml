@@ -1,0 +1,48 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: litellm
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-v1.60.2
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://litellm:litellm@postgres:5432/litellm
+      LITELLM_MASTER_KEY: sk-test-key
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-placeholder}
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./litellm-config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+
+  tokenhub:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    environment:
+      TOKENHUB_ADMIN_TOKEN: admin-token
+      TOKENHUB_DATABASE_URL: sqlite://data/tokenhub.db
+    ports:
+      - "8080:8080"
+
+  mock-upstream:
+    image: nginx:alpine
+    volumes:
+      - ./mock-upstream.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8081:80"
