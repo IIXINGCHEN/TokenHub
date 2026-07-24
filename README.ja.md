@@ -131,6 +131,17 @@ npm install
 npm run test:deepseek
 ```
 
+## オプションの AI Agent 開発ワークフロー
+
+TokenHub には、AI Agent がリポジトリを変更する際に選択できる 2 つのワークフローがあります。
+
+| ワークフロー | 適用範囲 |
+| --- | --- |
+| [`fast-dev`](docs/development/workflows/fast-dev.md) | 範囲が明確でリスクの低い局所的な変更 |
+| [`feature-dev`](docs/development/workflows/feature-dev.md) | 重要な機能、ユーザーに見える変更、コンポーネント横断の変更、公開 API やデータモデルの変更、セキュリティに関わる作業、デプロイ変更、アーキテクチャ上の判断 |
+
+依頼でワークフロー名を明示すると有効になります（例: `この変更では fast-dev を使用してください。`）。指定がなければ通常のリポジトリガイドに従います。切り替え前には確認が必要で、ワークフローの選択は Git や Pull Request の操作を許可するものではありません。詳細は [AGENTS.md](AGENTS.md#optional-development-workflows) を参照してください。
+
 ## ドキュメント
 
 - [ドキュメントホーム](docs/ja/README.md)
