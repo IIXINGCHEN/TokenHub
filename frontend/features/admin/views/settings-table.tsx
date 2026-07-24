@@ -380,7 +380,7 @@ export type PaginationState = {
   setPageSize: (pageSize: number) => void;
 };
 
-export const pageSizeOptions = [20, 50, 100];
+export const pageSizeOptions = [10, 20, 50, 100];
 
 export function usePagination(totalItems: number, resetKey: string): PaginationState {
   const [page, setPageState] = useState(1);

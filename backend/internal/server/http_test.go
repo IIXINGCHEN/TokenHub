@@ -412,6 +412,107 @@ models:
 	}
 }
 
+func TestAdminRestoreDefaultModelCatalog(t *testing.T) {
+	catalogPath := filepath.Join(t.TempDir(), "model-catalog.yaml")
+	content := []byte(`
+version: 1
+models:
+  - name: factory-chat
+    category: openai
+    family: factory
+    modality: chat
+    context_window: 128000
+    input_price_usd_per_1m: 1.5
+    output_price_usd_per_1m: 6
+  - name: factory-embedding
+    category: openai
+    family: factory
+    modality: embedding
+    embedding_price_usd_per_1m: 0.02
+`)
+	if err := os.WriteFile(catalogPath, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewMemoryStore()
+	store.AddModel(Model{Name: "factory-chat", Family: "customized", Modality: "chat", ContextWindow: 1000, Status: StatusDisabled})
+	store.AddModel(Model{Name: "custom-only", Family: "custom", Modality: "chat", Status: StatusActive})
+	app := NewWithConfig(store, Config{AdminToken: "dev_admin_token", ModelCatalogFile: catalogPath}).Handler()
+
+	deleteResp := doJSON(t, app, http.MethodDelete, "/api/admin/models/factory-chat", nil, "")
+	if deleteResp.Code != http.StatusNoContent {
+		t.Fatalf("expected delete to succeed, got %d: %s", deleteResp.Code, deleteResp.Body)
+	}
+
+	restore := doJSON(t, app, http.MethodPost, "/api/admin/models/restore-defaults", map[string]any{}, "")
+	if restore.Code != http.StatusOK {
+		t.Fatalf("expected restore to succeed, got %d: %s", restore.Code, restore.Body)
+	}
+	if !strings.Contains(restore.Body, `"restored":2`) {
+		t.Fatalf("expected restore count, got %s", restore.Body)
+	}
+
+	byName := map[string]Model{}
+	for _, model := range store.ListModels() {
+		byName[model.Name] = model
+	}
+	if byName["factory-chat"].Family != "factory" || byName["factory-chat"].ContextWindow != 128000 || byName["factory-chat"].Status != StatusActive {
+		t.Fatalf("factory-chat was not restored from catalog: %+v", byName["factory-chat"])
+	}
+	if byName["factory-embedding"].EmbeddingPriceUSDPer1M != 0.02 {
+		t.Fatalf("factory embedding was not restored: %+v", byName["factory-embedding"])
+	}
+	if _, ok := byName["custom-only"]; !ok {
+		t.Fatalf("custom model should be preserved")
+	}
+}
+
+func TestAdminModelItemSupportsEscapedSlashNames(t *testing.T) {
+	store := NewMemoryStore()
+	store.AddModel(Model{Name: "deepseek/deepseek-ocr-2", Family: "deepseek", Modality: "ocr", Status: StatusActive})
+	store.AddRoute(ModelRoute{
+		ID:            "route_deepseek_ocr",
+		ModelName:     "deepseek/deepseek-ocr-2",
+		ProviderID:    "prv_deepseek",
+		ProviderModel: "deepseek-ocr-2",
+		Status:        StatusActive,
+	})
+	app := New(store).Handler()
+
+	patch := doJSON(t, app, http.MethodPatch, "/api/admin/models/deepseek%2Fdeepseek-ocr-2", map[string]any{
+		"family":   "deepseek-updated",
+		"modality": "ocr",
+		"status":   StatusActive,
+	}, "")
+	if patch.Code != http.StatusOK {
+		t.Fatalf("expected escaped slash model patch to succeed, got %d: %s", patch.Code, patch.Body)
+	}
+	updated, ok := modelByNameForTest(store.ListModels(), "deepseek/deepseek-ocr-2")
+	if !ok || updated.Family != "deepseek-updated" {
+		t.Fatalf("expected escaped slash model to be patched, got ok=%v model=%+v", ok, updated)
+	}
+
+	deleteResp := doJSON(t, app, http.MethodDelete, "/api/admin/models/deepseek%2Fdeepseek-ocr-2", nil, "")
+	if deleteResp.Code != http.StatusNoContent {
+		t.Fatalf("expected escaped slash model delete to succeed, got %d: %s", deleteResp.Code, deleteResp.Body)
+	}
+	if _, ok := modelByNameForTest(store.ListModels(), "deepseek/deepseek-ocr-2"); ok {
+		t.Fatalf("expected escaped slash model to be deleted")
+	}
+	if len(store.ListRoutes()) != 0 {
+		t.Fatalf("expected model routes to be deleted with model, got %+v", store.ListRoutes())
+	}
+}
+
+func modelByNameForTest(models []Model, name string) (Model, bool) {
+	for _, model := range models {
+		if model.Name == name {
+			return model, true
+		}
+	}
+	return Model{}, false
+}
+
 func TestAdminCreatesAPIKeyUnderDefaultProject(t *testing.T) {
 	store := NewMemoryStore()
 	if err := BootstrapBaseData(store); err != nil {

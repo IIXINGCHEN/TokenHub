@@ -40,6 +40,10 @@ Users should only see callable models. A model is callable when it is active in 
 
 The model catalog accepts an optional cache read price in USD per 1 million tokens. When it is configured, cached input tokens use that price in estimated costs. When it is left blank, TokenHub estimates the cache read price at about 0.83% of the standard input price for DeepSeek V4 Pro, 2% for other DeepSeek models, and 10% for other non-embedding models. The model pricing table marks estimated values and explains the applied ratio on hover.
 
+## Catalog Recovery
+
+Deleting a model removes the database record and its routes, but it does not edit `data/model-catalog.yaml` or the file configured by `TOKENHUB_MODEL_CATALOG_FILE`. Backend startup syncs that configured catalog again. Administrators can also use **Restore Factory Catalog** in the Model Catalog page to re-import and overwrite standard models from the configured catalog while keeping manually added models.
+
 ## Security Checklist
 
 | Control | Requirement |

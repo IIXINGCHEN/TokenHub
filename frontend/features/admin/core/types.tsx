@@ -709,7 +709,8 @@ export type ModalState<T> = {
 
 export type ConfirmState<T> = {
   config: ResourceConfig<T>;
-  item: T;
+  item?: T;
+  items?: T[];
 };
 
 export type SettingsTabKey = "settings" | "role-configs" | "identity-providers";
