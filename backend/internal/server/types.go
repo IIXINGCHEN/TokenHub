@@ -525,21 +525,30 @@ type SQLiteBackupRecord struct {
 }
 
 type ChatMessage struct {
-	Role    string `json:"role"`
-	Content any    `json:"content"`
+	Role       string `json:"role"`
+	Content    any    `json:"content"`
+	Name       string `json:"name,omitempty"`
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	ToolCalls  any    `json:"tool_calls,omitempty"`
 }
 
 type ReasoningOptions = ResponsesReasoning
 
 type ChatCompletionRequest struct {
-	Model           string         `json:"model"`
-	Messages        []ChatMessage  `json:"messages"`
-	Stream          bool           `json:"stream,omitempty"`
-	StreamOptions   map[string]any `json:"stream_options,omitempty"`
-	MaxTokens       int            `json:"max_tokens,omitempty"`
-	Temperature     *float64       `json:"temperature,omitempty"`
-	ReasoningEffort *string        `json:"reasoning_effort,omitempty"`
-	Metadata        map[string]any `json:"metadata,omitempty"`
+	Model             string         `json:"model"`
+	Messages          []ChatMessage  `json:"messages"`
+	Stream            bool           `json:"stream,omitempty"`
+	StreamOptions     map[string]any `json:"stream_options,omitempty"`
+	MaxTokens         int            `json:"max_tokens,omitempty"`
+	Temperature       *float64       `json:"temperature,omitempty"`
+	TopP              *float64       `json:"top_p,omitempty"`
+	Stop              any            `json:"stop,omitempty"`
+	Tools             any            `json:"tools,omitempty"`
+	ToolChoice        any            `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool          `json:"parallel_tool_calls,omitempty"`
+	ResponseFormat    any            `json:"response_format,omitempty"`
+	ReasoningEffort   *string        `json:"reasoning_effort,omitempty"`
+	Metadata          map[string]any `json:"metadata,omitempty"`
 }
 
 type PlaygroundChatResponse struct {

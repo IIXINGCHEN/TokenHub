@@ -683,6 +683,7 @@ export const enTranslations: Record<string, string> = {
     "AI 工具接入": "AI Tool Integration",
     "API 类型": "API Type",
     "OpenAI 兼容工具": "OpenAI-Compatible Tools",
+    "AI 工具类型": "AI tool type",
     "示例使用环境变量保存完整 Key。当前凭证：": "The examples store the full Key in an environment variable. Current credential:",
     "代码语言": "Code Language",
     "环境变量": "Environment Variables",

@@ -47,7 +47,7 @@ TokenHub は、日常的なモデル利用、チームガバナンス、プラ�
 
 ## プラットフォーム機能
 
-- OpenAI-Compatible モデル API: `/v1/chat/completions`、`/v1/responses`、`/v1/embeddings`。
+- OpenAI-Compatible モデル API: `/v1/chat/completions`、`/v1/responses`、`/v1/embeddings`。Anthropic Messages API: `/v1/messages`、`/v1/messages/count_tokens`。
 - Provider チャネル: OpenAI-Compatible、Azure OpenAI、Anthropic、Gemini、DeepSeek、Qwen、ローカル vLLM/Ollama、カスタム上流。
 - モデルカタログとルーティングポリシー: 優先度、重み、フェイルオーバー順序、ルートヘルス診断に対応。
 - プロジェクト単位の Key 管理: チーム所有、メンバー権限、クォータ、並行数制限に対応。

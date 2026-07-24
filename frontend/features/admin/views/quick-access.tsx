@@ -13,7 +13,8 @@ import { GatewayCodeBlock } from "./gateway-docs-ui";
 
 type QuickAccessStep = "keys" | "models" | "usage";
 type UsageMode = "api" | "tools";
-type APIStyle = "chat" | "responses";
+type APIStyle = "chat" | "responses" | "messages";
+type ToolStyle = "openai" | "claude";
 type CodeLanguage = "curl" | "python" | "node";
 
 export function QuickAccessView({
@@ -493,11 +494,12 @@ function ModelDetail({ model, data }: { model: Model; data: AppData }) {
 function UsageStep({ api, keyHint, model }: { api: ApiContext; keyHint: string; model: Model }) {
   const [mode, setMode] = useState<UsageMode>("api");
   const [apiStyle, setAPIStyle] = useState<APIStyle>("chat");
+  const [toolStyle, setToolStyle] = useState<ToolStyle>("openai");
   const [language, setLanguage] = useState<CodeLanguage>("curl");
   const baseURL = apiGatewayBaseURL(api.baseURL);
   const code = mode === "api"
     ? apiExamples(baseURL, model.name, apiStyle)[language]
-    : toolExamples(baseURL, model.name)[language];
+    : toolExamples(baseURL, model.name, toolStyle)[language];
 
   return (
     <div className="quick-access-usage-step">
@@ -515,8 +517,14 @@ function UsageStep({ api, keyHint, model }: { api: ApiContext; keyHint: string; 
           <div className="quick-access-segmented" aria-label={tx("API 类型")}>
             <button className={apiStyle === "chat" ? "active" : ""} onClick={() => setAPIStyle("chat")} type="button">Chat Completions</button>
             <button className={apiStyle === "responses" ? "active" : ""} onClick={() => setAPIStyle("responses")} type="button">Responses API</button>
+            <button className={apiStyle === "messages" ? "active" : ""} onClick={() => setAPIStyle("messages")} type="button">Anthropic Messages</button>
           </div>
-        ) : <strong>{tx("OpenAI 兼容工具")}</strong>}
+        ) : (
+          <div className="quick-access-segmented" aria-label={tx("AI 工具类型")}>
+            <button className={toolStyle === "openai" ? "active" : ""} onClick={() => setToolStyle("openai")} type="button">{tx("OpenAI 兼容工具")}</button>
+            <button className={toolStyle === "claude" ? "active" : ""} onClick={() => setToolStyle("claude")} type="button">Claude Code</button>
+          </div>
+        )}
         <span>{tx("当前模型")} <code>{model.name}</code></span>
       </div>
 
@@ -548,42 +556,60 @@ function maskedKey(key?: APIKey) {
 }
 
 function apiExamples(baseURL: string, model: string, style: APIStyle): Record<CodeLanguage, string> {
-  const endpoint = style === "chat" ? "chat/completions" : "responses";
-  const body = style === "chat"
-    ? `{
+  const endpoint = style === "chat" ? "chat/completions" : style === "responses" ? "responses" : "messages";
+  const body = style === "chat" ? `{
     "model": "${model}",
     "messages": [
       {"role": "user", "content": "Hello, TokenHub"}
     ]
-  }`
-    : `{
+  }` : style === "responses" ? `{
     "model": "${model}",
     "input": "Hello, TokenHub"
+  }` : `{
+    "model": "${model}",
+    "max_tokens": 1024,
+    "messages": [
+      {"role": "user", "content": "Hello, TokenHub"}
+    ]
   }`;
-  const pythonCall = style === "chat"
-    ? `client.chat.completions.create(
+  const pythonCall = style === "chat" ? `client.chat.completions.create(
     model="${model}",
     messages=[{"role": "user", "content": "Hello, TokenHub"}],
-)`
-    : `client.responses.create(
+)` : style === "responses" ? `client.responses.create(
     model="${model}",
     input="Hello, TokenHub",
+)` : `client.messages.create(
+    model="${model}",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Hello, TokenHub"}],
 )`;
-  const nodeCall = style === "chat"
-    ? `client.chat.completions.create({
+  const nodeCall = style === "chat" ? `client.chat.completions.create({
   model: "${model}",
   messages: [{ role: "user", content: "Hello, TokenHub" }],
-})`
-    : `client.responses.create({
+})` : style === "responses" ? `client.responses.create({
   model: "${model}",
   input: "Hello, TokenHub",
+})` : `client.messages.create({
+  model: "${model}",
+  max_tokens: 1024,
+  messages: [{ role: "user", content: "Hello, TokenHub" }],
 })`;
+  const anthropicHostURL = baseURL.replace(/\/v1\/?$/, "");
   return {
     curl: `curl -X POST '${baseURL}/${endpoint}' \\
   -H "Authorization: Bearer $TOKENHUB_API_KEY" \\
-  -H 'Content-Type: application/json' \\
+${style === "messages" ? "  -H 'anthropic-version: 2023-06-01' \\\n" : ""}  -H 'Content-Type: application/json' \\
   -d '${body}'`,
-    python: `import os
+    python: style === "messages" ? `import os
+from anthropic import Anthropic
+
+client = Anthropic(
+    api_key=os.environ["TOKENHUB_API_KEY"],
+    base_url="${anthropicHostURL}",
+)
+
+response = ${pythonCall}
+print(response)` : `import os
 from openai import OpenAI
 
 client = OpenAI(
@@ -593,7 +619,15 @@ client = OpenAI(
 
 response = ${pythonCall}
 print(response)`,
-    node: `import OpenAI from "openai";
+    node: style === "messages" ? `import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic({
+  apiKey: process.env.TOKENHUB_API_KEY,
+  baseURL: "${anthropicHostURL}",
+});
+
+const response = await ${nodeCall};
+console.log(response);` : `import OpenAI from "openai";
 
 const client = new OpenAI({
   apiKey: process.env.TOKENHUB_API_KEY,
@@ -605,7 +639,25 @@ console.log(response);`,
   };
 }
 
-function toolExamples(baseURL: string, model: string): Record<CodeLanguage, string> {
+function toolExamples(baseURL: string, model: string, style: ToolStyle): Record<CodeLanguage, string> {
+  if (style === "claude") {
+    const anthropicHostURL = baseURL.replace(/\/v1\/?$/, "");
+    return {
+      curl: `export ANTHROPIC_BASE_URL="${anthropicHostURL}"
+export ANTHROPIC_AUTH_TOKEN="$TOKENHUB_API_KEY"
+export ANTHROPIC_MODEL="${model}"
+
+claude`,
+      node: `{
+  "env": {
+    "ANTHROPIC_BASE_URL": "${anthropicHostURL}",
+    "ANTHROPIC_AUTH_TOKEN": "${"${TOKENHUB_API_KEY}"}",
+    "ANTHROPIC_MODEL": "${model}"
+  }
+}`,
+      python: "",
+    };
+  }
   return {
     curl: `export OPENAI_API_KEY="$TOKENHUB_API_KEY"
 export OPENAI_BASE_URL="${baseURL}"

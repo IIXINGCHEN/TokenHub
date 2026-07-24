@@ -1,6 +1,17 @@
 import { type AppRole } from "../core/types";
 import { formatNumber } from "../domain/formatting";
-import { gatewayEmbeddingsCurl, gatewayListModelsCurl, gatewayOpenAISDKExample, gatewayPythonSDKExample, gatewayResponsesCurl, gatewayRetrieveModelCurl, gatewayStreamingCurl } from "./gateway-llm-en";
+import {
+  gatewayAnthropicCountTokensCurl,
+  gatewayAnthropicMessagesCurl,
+  gatewayClaudeCodeExample,
+  gatewayEmbeddingsCurl,
+  gatewayListModelsCurl,
+  gatewayOpenAISDKExample,
+  gatewayPythonSDKExample,
+  gatewayResponsesCurl,
+  gatewayRetrieveModelCurl,
+  gatewayStreamingCurl,
+} from "./gateway-llm-en";
 import { type GatewayDocBundle, type GatewayDocStats } from "./gateway-view";
 
 export function gatewayJapaneseLLMUsageDocs(stats: GatewayDocStats, role: AppRole): GatewayDocBundle {
@@ -208,6 +219,48 @@ export function gatewayJapaneseLLMUsageDocs(stats: GatewayDocStats, role: AppRol
             examples: [{ title: "cURL", code: gatewayResponsesCurl(stats) }],
           },
           {
+            id: "anthropic-messages",
+            group: "LLM API",
+            method: "POST",
+            path: "/v1/messages",
+            title: "Anthropic Message を作成",
+            description: "Claude Code または Anthropic 互換クライアントから、テキスト、画像、クライアントツール、ツール結果、ストリーミングを利用できます。",
+            params: {
+              title: "リクエスト Body",
+              columns: ["フィールド", "型", "必須", "説明"],
+              rows: [
+                ["model", "string", "はい", "呼び出し可能な TokenHub モデル ID。"],
+                ["max_tokens", "integer", "はい", "最大生成 tokens。"],
+                ["messages", "array", "はい", "user、assistant、構造化 content block からなる Anthropic メッセージ。"],
+                ["system", "string | array", "いいえ", "トップレベルの Anthropic system prompt。"],
+                ["tools", "array", "いいえ", "input_schema で定義するクライアントツール。"],
+                ["tool_choice", "object", "いいえ", "自動、必須、指定、無効のツール利用を制御します。"],
+                ["stream", "boolean", "いいえ", "true の場合は Anthropic の名前付き SSE event を返します。"],
+              ],
+            },
+            notesTitle: "ルーティング動作",
+            notes: [
+              "Anthropic ネイティブルートでは content block と beta header を保持します。",
+              "OpenAI 互換ルートではクライアントツール、ツール結果、画像、ストリーミング event を変換します。",
+              "OpenAI 互換ルートで未対応の Anthropic サーバーツールを受けた場合は、明示的な 400 response を返します。",
+            ],
+            examplesTitle: "例",
+            examples: [
+              { title: "Messages API", code: gatewayAnthropicMessagesCurl(stats) },
+              { title: "Claude Code", code: gatewayClaudeCodeExample(stats) },
+            ],
+          },
+          {
+            id: "anthropic-count-tokens",
+            group: "LLM API",
+            method: "POST",
+            path: "/v1/messages/count_tokens",
+            title: "Anthropic Message の Token を見積もる",
+            description: "Key 認証とモデル権限の確認後、決定的な input token 見積もりを返します。推論利用としては課金されません。",
+            examplesTitle: "例",
+            examples: [{ title: "cURL", code: gatewayAnthropicCountTokensCurl(stats) }],
+          },
+          {
             id: "embeddings-api",
             group: "LLM API",
             method: "POST",
@@ -259,12 +312,13 @@ export function gatewayJapaneseLLMUsageDocs(stats: GatewayDocStats, role: AppRol
             id: "sdk-examples",
             group: teamLeader ? "チーム導入" : "Project Key",
             badge: "SDK",
-            title: "OpenAI 互換 SDK",
-            description: "OpenAI 互換 SDK の base URL を TokenHub に向け、TokenHub Project API Key を使います。",
-            examplesTitle: "SDK 例",
+            title: "SDK と Claude Code",
+            description: "OpenAI 互換 SDK は TokenHub Base URL を使い、Claude Code は TokenHub Host URL を使います。",
+            examplesTitle: "クライアント例",
             examples: [
               { title: "Node.js", code: gatewayOpenAISDKExample(stats) },
               { title: "Python", code: gatewayPythonSDKExample(stats) },
+              { title: "Claude Code", code: gatewayClaudeCodeExample(stats) },
             ],
           },
           {

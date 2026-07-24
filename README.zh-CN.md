@@ -47,7 +47,7 @@ TokenHub 将日常模型使用、团队治理和平台运维拆成清晰的角�
 
 ## 平台能力
 
-- OpenAI-Compatible 模型 API：`/v1/chat/completions`、`/v1/responses`、`/v1/embeddings`。
+- OpenAI-Compatible 模型 API：`/v1/chat/completions`、`/v1/responses`、`/v1/embeddings`；Anthropic Messages API：`/v1/messages`、`/v1/messages/count_tokens`。
 - Provider 渠道：OpenAI-Compatible、Azure OpenAI、Anthropic、Gemini、DeepSeek、Qwen、本地 vLLM/Ollama 和自定义上游。
 - 模型目录和路由策略：支持优先级、权重、失败回退顺序和路由健康诊断。
 - 按项目归属的 Key 管理：支持团队归属、成员权限、额度和并发限制。

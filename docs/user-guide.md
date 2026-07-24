@@ -8,7 +8,7 @@ This guide is for employees and application developers who call approved large l
 
 | Item | Purpose |
 | --- | --- |
-| Base URL | OpenAI-compatible endpoint root, for example `http://localhost:8080/v1` |
+| Base URL | OpenAI-compatible root `http://localhost:8080/v1`; Claude Code host `http://localhost:8080` |
 | Project API Key | Sent as `Authorization: Bearer YOUR_TOKENHUB_API_KEY` |
 | Model ID | Returned by `GET /v1/models` and used as the `model` field |
 | Request ID | Used in Request Logs when troubleshooting failures |
@@ -20,7 +20,7 @@ Console login tokens cannot call model APIs. Use a project API key from **Key Ma
 1. Open **Key Management** and create or copy an API key. New keys are shown only once.
 2. TokenHub automatically attributes a personal key to an assigned project, or to the platform default project when none is assigned.
 3. Call `GET /v1/models` to see the model list available to that key.
-4. Use one model ID in `POST /v1/chat/completions`, `POST /v1/responses`, or `POST /v1/embeddings`.
+4. Use one model ID in `POST /v1/chat/completions`, `POST /v1/messages`, `POST /v1/responses`, or `POST /v1/embeddings`.
 5. Review **Usage Analytics** and **Request Logs** for requests, tokens, cost, and errors.
 
 ## List Models
@@ -42,8 +42,12 @@ Typical model fields:
 | `input_token_price_per_m` | JieKou-compatible integer input price per million tokens |
 | `output_token_price_per_m` | JieKou-compatible integer output price per million tokens |
 | `title` | Model title |
+| `display_name` | Anthropic-compatible display name |
 | `description` | Model description |
 | `context_size` | Maximum context window |
+| `created_at` | Anthropic-compatible RFC 3339 creation timestamp |
+| `max_input_tokens` | Anthropic-compatible maximum input context |
+| `max_tokens` | Configured maximum output tokens, or `0` when unspecified |
 
 ## Retrieve Model
 
@@ -112,6 +116,39 @@ Responses accepts the nested OpenAI-compatible form:
 TokenHub treats reasoning effort as a best-effort hint and does not change route ordering. OpenAI-compatible providers receive the value unchanged. Native Anthropic routes convert supported values to `output_config.effort`. Native Gemini routes convert supported values according to the model-specific `thinkingLevel` matrix for Gemini 3 and later models or the documented `thinkingBudget` for Gemini 2.5 models. Unsupported or blank values are omitted so the upstream model default remains in effect. If an upstream provider returns a `400` or `422` parameter error that explicitly identifies the effort field, TokenHub retries the same route once without that field before applying the existing failover behavior. Each physical retry counts toward Provider Resource RPM and appears as a route attempt.
 
 Responses reasoning effort is supported on OpenAI-compatible, Anthropic, and Gemini routes. Azure OpenAI Responses and streaming Responses are not implemented; those requests return `501 provider_capability_not_supported`.
+
+## Anthropic Messages and Claude Code
+
+TokenHub exposes `POST /v1/messages` and `POST /v1/messages/count_tokens` for Claude Code and Anthropic-compatible clients. Use a project key as a bearer token:
+
+```bash
+curl --request POST \
+  --url "http://localhost:8080/v1/messages" \
+  --header "Authorization: Bearer YOUR_TOKENHUB_API_KEY" \
+  --header "anthropic-version: 2023-06-01" \
+  --header "Content-Type: application/json" \
+  --data '{
+    "model": "CLAUDE_COMPATIBLE_MODEL_ID",
+    "max_tokens": 2048,
+    "messages": [
+      {"role": "user", "content": "Understand this repository and summarize its architecture."}
+    ]
+  }'
+```
+
+Native Anthropic routes preserve Anthropic content blocks and beta headers. OpenAI-compatible routes translate text, images, client tools, tool results, parallel tool calls, and streaming events. Anthropic server tools that cannot be represented by an OpenAI-compatible provider return `400 unsupported_tool`.
+
+Configure local Claude Code with the TokenHub host URL, without the `/v1` suffix:
+
+```bash
+export ANTHROPIC_BASE_URL="http://localhost:8080"
+export ANTHROPIC_AUTH_TOKEN="YOUR_TOKENHUB_API_KEY"
+export ANTHROPIC_MODEL="CLAUDE_COMPATIBLE_MODEL_ID"
+
+claude
+```
+
+`ANTHROPIC_AUTH_TOKEN` sends the TokenHub key in `Authorization: Bearer`. `ANTHROPIC_API_KEY` also works through `x-api-key` when no Authorization header is present. Token counting verifies key and model access but does not create a billed inference record.
 
 ## SDK Setup
 
