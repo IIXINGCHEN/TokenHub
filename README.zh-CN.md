@@ -71,7 +71,7 @@ TokenHub 将日常模型使用、团队治理和平台运维拆成清晰的角�
 - Nginx 将管理后台、API 和健康检查流量负载均衡到健康副本。
 - 后端副本将持久化配置、OAuth 会话、配额计数、审计数据、集群锁和请求并发租约统一存储在 PostgreSQL 中。
 - 租约过期和归属判断使用 PostgreSQL 时钟，避免不同宿主机的时钟偏差导致租约被提前接管；失去租约后，心跳会取消对应任务或请求。
-- 每个后端启动时都会同步挂载的模型目录，并通过集群租约串行执行幂等同步。
+- 每个后端启动时都会同步当前配置的模型目录，并通过集群租约串行执行幂等同步。
 - 数据库协调故障只释放 Provider 容量，不会把健康的模型 Provider 错误计为失败。
 
 所有后端副本必须使用相同的 `TOKENHUB_SECRET_KEY`。`TOKENHUB_DB_MAX_OPEN_CONNS` 按单副本配置，所有副本的连接池总和必须低于 PostgreSQL 的连接数上限。
@@ -104,7 +104,7 @@ cp deploy/.env.example deploy/.env
 - 用户名：`admin`
 - 密码：`TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD` 的配置值
 
-部署脚本会在构建前校验生产凭证，不输出敏感值地逐项提示不安全的变量。如果本次创建或重启的后端容器异常导致 Compose 失败，脚本只会自动显示本次启动产生的后端近期日志。
+部署脚本会校验生产凭证，拉取已发布镜像并启动容器，不在部署服务器构建镜像。镜像尚未公开时，如果默认 `latest` 标签拉取失败，脚本会自动改为从本地源码构建；显式指定的标签不会触发该行为。校验失败时会列出不安全的变量，但不会输出敏感值。如果本次创建或重启的后端容器异常导致 Compose 失败，脚本只会自动显示本次启动产生的后端近期日志。需要明确从当前代码构建时，使用 `./deploy/install.sh --build`。
 
 ## 本地开发
 
@@ -130,6 +130,17 @@ cd sdk
 npm install
 npm run test:deepseek
 ```
+
+## 可选的 AI Agent 开发工作流
+
+TokenHub 为 AI Agent 修改仓库提供两套可选工作流：
+
+| 工作流 | 适用范围 |
+| --- | --- |
+| [`fast-dev`](docs/development/workflows/fast-dev.md) | 范围明确、风险较低的局部修改 |
+| [`feature-dev`](docs/development/workflows/feature-dev.md) | 重要功能、用户可见或跨组件修改、公共 API 或数据模型修改、安全敏感修改、部署修改或架构决策 |
+
+在请求中指定工作流即可启用，例如 `本次修改使用 fast-dev。` 未指定时，Agent 按仓库常规指引执行。切换工作流前需要确认，选择工作流也不代表允许 Git 或 Pull Request 操作。Agent 规则见 [AGENTS.md](AGENTS.md#optional-development-workflows)。
 
 ## 文档
 

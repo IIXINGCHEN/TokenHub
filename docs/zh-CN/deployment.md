@@ -76,8 +76,9 @@ cp deploy/.env.example deploy/.env
 - `TOKENHUB_ADMIN_TOKEN`：Admin API 启动 Token，请使用至少 32 字节的随机值。
 - `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD`：仅用于创建初始 `admin` 用户，请设置至少 12 字节的密码。
 - `TOKENHUB_SECRET_KEY`：后端密钥，请使用至少 32 字节的随机值并保持稳定。
+- `TOKENHUB_IMAGE_TAG`：前后端共用的镜像标签，默认 `latest`。
 - `TOKENHUB_PUBLIC_BASE_URL`：展示给用户的后端访问地址。
-- `NEXT_PUBLIC_API_BASE_URL`：浏览器管理后台访问后端的地址。
+- `TOKENHUB_API_BASE_URL`：浏览器管理后台访问后端的地址，由前端服务在运行时读取。旧变量 `NEXT_PUBLIC_API_BASE_URL` 保留一个兼容周期，作为回退配置。
 - `TOKENHUB_BACKEND_PORT`：后端宿主机端口，默认 `8080`。
 - `TOKENHUB_FRONTEND_PORT`：管理后台宿主机端口，默认 `3000`。
 
@@ -87,9 +88,9 @@ cp deploy/.env.example deploy/.env
 ./deploy/install.sh
 ```
 
-脚本会在构建前校验 Compose 环境变量，不输出敏感值地逐项提示不安全的变量。如果 Compose 失败，且本次创建或重启的后端容器处于已退出、重启中、失效或不健康状态，脚本会打印本次启动产生的最多 100 行后端日志。后端之外的故障不会导出无关的后端日志。
+脚本会先校验 Compose 环境变量，再拉取已发布镜像并启动容器，不在部署服务器构建镜像。首次发布 GHCR 镜像期间，如果镜像无法拉取，脚本会自动改为从当前代码构建。校验失败时会列出不安全的变量，但不会输出敏感值。如果 Compose 失败，且本次创建或重启的后端容器处于已退出、重启中、失效或不健康状态，脚本会打印本次启动产生的最多 100 行后端日志。后端之外的故障不会导出无关的后端日志。
 
-只校验配置，不构建或启动容器：
+只校验配置，不拉取镜像或启动容器：
 
 ```bash
 ./deploy/install.sh --check-only
@@ -97,7 +98,28 @@ cp deploy/.env.example deploy/.env
 
 使用其他环境文件时，可执行 `./deploy/install.sh --env-file /path/to/deploy.env`。
 
-### 可选：服务器侧构建加速
+### 已发布镜像的版本规则
+
+GitHub Actions 为 `linux/amd64` 和 `linux/arm64` 发布 `ghcr.io/astaxie/tokenhub-backend` 与 `ghcr.io/astaxie/tokenhub-frontend`。
+
+- GitHub Release 发布后，自动构建完整的语义化版本标签；非预发布版本同时更新主次版本标签和 `latest`。
+- `workflow_dispatch` 仅允许发布 `edge` 或独立的 `manual-*` 标签，不能覆盖正式版本标签或 `latest`。
+- PR 不构建或推送容器镜像。
+- 合并到 `main` 不发布镜像。
+
+工作流先为每个镜像推送本次运行专用的暂存标签，确认两个多平台镜像都存在后，再发布最终标签。前后端必须使用相同的 `TOKENHUB_IMAGE_TAG`。生产部署建议固定完整版本标签，不依赖持续变化的 `latest`。
+
+GHCR 首次发布产生的 Package 默认为私有。开放匿名部署前，仓库所有者需要将两个 Package 调整为 Public。在此之前，使用默认 `latest` 标签的安装会在拉取失败后自动改为从本地源码构建。如果显式配置的 `TOKENHUB_IMAGE_TAG` 无法拉取，安装脚本会直接退出，不会把当前源码标记成该版本。
+
+### 可选：本地构建
+
+需要从当前代码构建镜像时执行：
+
+```bash
+./deploy/install.sh --build
+```
+
+以下加速配置仅适用于本地源码构建。
 
 项目 Dockerfile 不写死区域性的包镜像源。如果服务器访问 Docker Hub、npm 或 Go Module 源较慢，请优先在部署服务器上配置加速，而不是修改 Dockerfile。
 
@@ -130,7 +152,7 @@ Compose 会启动：
 - 后端：`http://localhost:8080`
 - 前端：`http://localhost:3000`
 - SQLite 数据：保存在 Docker named volume `tokenhub-data`
-- 模型目录：从 `data/model-catalog.yaml` 挂载
+- 模型目录：使用所选后端镜像中内置的版本
 
 查看状态：
 
@@ -163,7 +185,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down
 docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 ```
 
-只有在你明确要删除本地数据时，才使用 `down -v`。
+仅在明确需要删除本地数据时使用 `down -v`。
 
 ## 后端环境变量
 
@@ -193,8 +215,8 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `NEXT_PUBLIC_API_BASE_URL` | `http://localhost:8080` | 后端 Admin API 地址 |
-| `NEXT_PUBLIC_APP_NAME` | `TokenHub` | 页面展示名称 |
+| `TOKENHUB_API_BASE_URL` | `http://localhost:8080` | 前端服务在运行时读取的后端 Admin API 地址 |
+| `NEXT_PUBLIC_API_BASE_URL` | 空 | 已弃用的兼容回退配置，需要迁移到 `TOKENHUB_API_BASE_URL` |
 
 ## 数据和备份
 
@@ -215,17 +237,15 @@ SQLite 是项目、Key、Provider、路由、用户、请求日志、用量、�
 
 ## 模型目录
 
-部署文件会把仓库里的 `data/model-catalog.yaml` 挂载到后端容器的 `/app/catalog/model-catalog.yaml`。
+发布的后端镜像会把对应版本的 `data/model-catalog.yaml` 放在 `/app/catalog/model-catalog.yaml`。默认部署直接使用镜像内文件，确保后端程序和模型目录来自同一镜像版本。
 
-更新标准模型目录：
-
-1. 编辑 `data/model-catalog.yaml`。
-2. 重启后端容器。
-3. 打开管理后台的 `模型目录` 确认结果。
+需要使用自定义模型目录时，显式指定挂载文件：
 
 ```bash
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml restart tokenhub-backend
+./deploy/install.sh --model-catalog /absolute/path/to/model-catalog.yaml
 ```
+
+自定义文件会覆盖镜像内的模型目录，其版本需要与 `TOKENHUB_IMAGE_TAG` 分别管理。更新文件后，重启后端容器，并在管理后台的「模型目录」中确认结果。
 
 ## 反向代理
 

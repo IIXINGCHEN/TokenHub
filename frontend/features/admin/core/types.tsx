@@ -147,6 +147,7 @@ export type ProviderCatalogModel = {
   context_window?: number;
   max_output_tokens?: number;
   input_price_usd_per_1m?: number;
+  cache_read_price_usd_per_1m?: number;
   output_price_usd_per_1m?: number;
   input_modalities?: string[];
   output_modalities?: string[];
@@ -205,6 +206,7 @@ export type Model = {
   context_window?: number;
   status: string;
   input_price_usd_per_1m?: number;
+  cache_read_price_usd_per_1m?: number;
   output_price_usd_per_1m?: number;
   embedding_price_usd_per_1m?: number;
   input_modalities?: string[];
@@ -260,6 +262,7 @@ export type PlaygroundRouteSummary = {
 
 export type PlaygroundUsage = {
   prompt_tokens?: number;
+  cached_input_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
   estimated_cost_usd?: number;
@@ -474,6 +477,7 @@ export type UsageBreakdownRow = {
   id: string;
   request_count: number;
   input_tokens: number;
+  cached_input_tokens?: number;
   output_tokens: number;
   total_tokens: number;
   estimated_cost_usd: number;
@@ -492,6 +496,7 @@ export type UsagePoint = {
   date: string;
   request_count: number;
   input_tokens: number;
+  cached_input_tokens?: number;
   output_tokens: number;
   total_tokens: number;
   estimated_cost_usd: number;
@@ -707,9 +712,6 @@ export type ConfirmState<T> = {
 };
 
 export type SettingsTabKey = "settings" | "role-configs" | "identity-providers";
-
-export const defaultBaseURL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8080";
 
 export const sessionStorageKey = "tokenhub.admin.session";
 

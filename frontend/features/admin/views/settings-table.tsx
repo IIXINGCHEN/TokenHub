@@ -174,6 +174,7 @@ export function RouteStrategyHint({ data }: { data: AppData }) {
 export function EntityTable<T>({
   config,
   data,
+  apiBaseURL,
   items,
   loading = false,
   query = "",
@@ -186,6 +187,7 @@ export function EntityTable<T>({
 }: {
   config: ResourceConfig<T>;
   data: AppData;
+  apiBaseURL?: string;
   items: T[];
   loading?: boolean;
   query?: string;
@@ -236,7 +238,7 @@ export function EntityTable<T>({
               ))}
               <td>
                 <div className="row-actions" onClick={(event) => event.stopPropagation()}>
-                  {config.view === "api-keys" ? <APIKeyDownloadMenu data={data} item={item as APIKey} /> : null}
+                  {config.view === "api-keys" && apiBaseURL ? <APIKeyDownloadMenu baseURL={apiBaseURL} data={data} item={item as APIKey} /> : null}
                   {(config.actions ?? [])
                     .filter((action) => action.visible?.(item) ?? true)
                     .map((action) => (

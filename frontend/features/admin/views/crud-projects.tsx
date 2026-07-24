@@ -131,6 +131,7 @@ export function CrudView<T>({
           <EntityTable
             config={config}
             data={data}
+            apiBaseURL={api?.baseURL}
             items={items}
             loading={loading}
             query={query}

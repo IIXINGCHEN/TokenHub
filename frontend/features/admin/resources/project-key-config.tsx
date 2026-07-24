@@ -1,7 +1,7 @@
 import { ChevronDown, Download } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { type AdminResource, type APIKey, type AppData, defaultBaseURL, type FieldConfig, type Project, type ResourceAction, type ResourceConfig } from "../core/types";
+import { type AdminResource, type APIKey, type AppData, type FieldConfig, type Project, type ResourceAction, type ResourceConfig } from "../core/types";
 import { costCenterLabel, costCenterSelectOptions, ownerUserLabel, projectMemberCanIssueLabel, projectMemberProjectSelectOptions, projectMemberRoleLabel, projectMemberRoleOptions, projectName, projectOwnerLabel, projectSelectOptions, projectTeamLabel, stringifyForm, stringifyValue, teamLabel, teamSelectOptions, truthyValue, userSelectOptions } from "../domain/entities";
 import { apiGatewayBaseURL } from "../domain/formatting";
 import { tx } from "../i18n/runtime";
@@ -247,7 +247,7 @@ export function APIKeyStatusSwitch({
   );
 }
 
-export function APIKeyDownloadMenu({ item, data }: { item: APIKey; data: AppData }) {
+export function APIKeyDownloadMenu({ item, data, baseURL }: { item: APIKey; data: AppData; baseURL: string }) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState({ left: 0, top: 0 });
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -291,7 +291,7 @@ export function APIKeyDownloadMenu({ item, data }: { item: APIKey; data: AppData
 
   function downloadConfig() {
     downloadTextTemplate(
-      codexConfigTemplate(item, data),
+      codexConfigTemplate(item, data, baseURL),
       `${templateFilename(item.name)}-codex-config.toml`,
       "text/plain;charset=utf-8",
     );
@@ -339,9 +339,9 @@ export function APIKeyDownloadMenu({ item, data }: { item: APIKey; data: AppData
   );
 }
 
-export function codexConfigTemplate(item: APIKey, data: AppData) {
+export function codexConfigTemplate(item: APIKey, data: AppData, apiBaseURL: string) {
   const model = codexTemplateModel(item, data);
-  const baseURL = apiGatewayBaseURL(defaultBaseURL);
+  const baseURL = apiGatewayBaseURL(apiBaseURL);
   return `# TokenHub Codex CLI configuration for ${item.name}
 # Set the API key before starting Codex:
 # export TOKENHUB_API_KEY="REPLACE_WITH_YOUR_TOKENHUB_API_KEY"

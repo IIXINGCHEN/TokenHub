@@ -140,6 +140,7 @@ type Model struct {
 	Modality               string            `json:"modality"`
 	ContextWindow          int64             `json:"context_window"`
 	InputPriceUSDPer1M     float64           `json:"input_price_usd_per_1m"`
+	CacheReadPriceUSDPer1M float64           `json:"cache_read_price_usd_per_1m"`
 	OutputPriceUSDPer1M    float64           `json:"output_price_usd_per_1m"`
 	EmbeddingPriceUSDPer1M float64           `json:"embedding_price_usd_per_1m"`
 	InputModalities        []string          `json:"input_modalities,omitempty" gorm:"serializer:json"`
@@ -152,23 +153,24 @@ type Model struct {
 }
 
 type ProviderCatalogModel struct {
-	ID                  string            `json:"id"`
-	Name                string            `json:"name"`
-	DisplayName         string            `json:"display_name,omitempty"`
-	CanonicalName       string            `json:"canonical_name,omitempty"`
-	Category            string            `json:"category,omitempty"`
-	Family              string            `json:"family,omitempty"`
-	Type                string            `json:"type,omitempty"`
-	ContextWindow       int64             `json:"context_window,omitempty"`
-	MaxOutputTokens     int64             `json:"max_output_tokens,omitempty"`
-	InputPriceUSDPer1M  float64           `json:"input_price_usd_per_1m,omitempty"`
-	OutputPriceUSDPer1M float64           `json:"output_price_usd_per_1m,omitempty"`
-	InputModalities     []string          `json:"input_modalities,omitempty"`
-	OutputModalities    []string          `json:"output_modalities,omitempty"`
-	Capabilities        []string          `json:"capabilities,omitempty"`
-	SupportedParameters []string          `json:"supported_parameters,omitempty"`
-	LastUpdated         string            `json:"last_updated,omitempty"`
-	Metadata            map[string]string `json:"metadata,omitempty"`
+	ID                     string            `json:"id"`
+	Name                   string            `json:"name"`
+	DisplayName            string            `json:"display_name,omitempty"`
+	CanonicalName          string            `json:"canonical_name,omitempty"`
+	Category               string            `json:"category,omitempty"`
+	Family                 string            `json:"family,omitempty"`
+	Type                   string            `json:"type,omitempty"`
+	ContextWindow          int64             `json:"context_window,omitempty"`
+	MaxOutputTokens        int64             `json:"max_output_tokens,omitempty"`
+	InputPriceUSDPer1M     float64           `json:"input_price_usd_per_1m,omitempty"`
+	CacheReadPriceUSDPer1M float64           `json:"cache_read_price_usd_per_1m,omitempty"`
+	OutputPriceUSDPer1M    float64           `json:"output_price_usd_per_1m,omitempty"`
+	InputModalities        []string          `json:"input_modalities,omitempty"`
+	OutputModalities       []string          `json:"output_modalities,omitempty"`
+	Capabilities           []string          `json:"capabilities,omitempty"`
+	SupportedParameters    []string          `json:"supported_parameters,omitempty"`
+	LastUpdated            string            `json:"last_updated,omitempty"`
+	Metadata               map[string]string `json:"metadata,omitempty"`
 }
 
 type ProviderCatalogEntry struct {
@@ -527,12 +529,13 @@ type ChatMessage struct {
 }
 
 type ChatCompletionRequest struct {
-	Model       string         `json:"model"`
-	Messages    []ChatMessage  `json:"messages"`
-	Stream      bool           `json:"stream,omitempty"`
-	MaxTokens   int            `json:"max_tokens,omitempty"`
-	Temperature *float64       `json:"temperature,omitempty"`
-	Metadata    map[string]any `json:"metadata,omitempty"`
+	Model         string         `json:"model"`
+	Messages      []ChatMessage  `json:"messages"`
+	Stream        bool           `json:"stream,omitempty"`
+	StreamOptions map[string]any `json:"stream_options,omitempty"`
+	MaxTokens     int            `json:"max_tokens,omitempty"`
+	Temperature   *float64       `json:"temperature,omitempty"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
 }
 
 type PlaygroundChatResponse struct {

@@ -1,6 +1,7 @@
 services:
   tokenhub-backend:
     container_name: tokenhub-backend
+    image: ghcr.io/astaxie/tokenhub-backend:${TOKENHUB_IMAGE_TAG:-latest}
     build:
       context: ..
       dockerfile: backend/Dockerfile
@@ -30,7 +31,6 @@ services:
       - "${TOKENHUB_BACKEND_PORT:-8080}:8080"
     volumes:
       - tokenhub-data:/app/data
-      - ../data/model-catalog.yaml:/app/catalog/model-catalog.yaml:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz >/dev/null 2>&1"]
       interval: 10s
@@ -43,15 +43,12 @@ services:
 
   tokenhub-frontend:
     container_name: tokenhub-frontend
+    image: ghcr.io/astaxie/tokenhub-frontend:${TOKENHUB_IMAGE_TAG:-latest}
     build:
       context: ../frontend
-      args:
-        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8080}
-        NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-TokenHub}
     restart: unless-stopped
     environment:
-      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8080}
-      NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-TokenHub}
+      TOKENHUB_API_BASE_URL: ${TOKENHUB_API_BASE_URL:-${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8080}}
     ports:
       - "${TOKENHUB_FRONTEND_PORT:-3000}:3000"
     depends_on:

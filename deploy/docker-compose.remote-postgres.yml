@@ -1,5 +1,6 @@
 services:
   tokenhub-backend:
+    image: ghcr.io/astaxie/tokenhub-backend:${TOKENHUB_IMAGE_TAG:-latest}
     build:
       context: ..
       dockerfile: backend/Dockerfile
@@ -29,8 +30,6 @@ services:
       TOKENHUB_DB_CONN_MAX_LIFETIME_MINUTES: ${TOKENHUB_DB_CONN_MAX_LIFETIME_MINUTES:-30}
     expose:
       - "8080"
-    volumes:
-      - ../data/model-catalog.yaml:/app/catalog/model-catalog.yaml:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/readyz >/dev/null 2>&1"]
       interval: 10s
@@ -42,15 +41,12 @@ services:
       - tokenhub
 
   tokenhub-frontend:
+    image: ghcr.io/astaxie/tokenhub-frontend:${TOKENHUB_IMAGE_TAG:-latest}
     build:
       context: ../frontend
-      args:
-        NEXT_PUBLIC_API_BASE_URL: ${TOKENHUB_PUBLIC_BASE_URL:?set TOKENHUB_PUBLIC_BASE_URL}
-        NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-TokenHub}
     restart: unless-stopped
     environment:
-      NEXT_PUBLIC_API_BASE_URL: ${TOKENHUB_PUBLIC_BASE_URL:?set TOKENHUB_PUBLIC_BASE_URL}
-      NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-TokenHub}
+      TOKENHUB_API_BASE_URL: ${TOKENHUB_API_BASE_URL:-${NEXT_PUBLIC_API_BASE_URL:-${TOKENHUB_PUBLIC_BASE_URL}}}
     expose:
       - "3000"
     healthcheck:

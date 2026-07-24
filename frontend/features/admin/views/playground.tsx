@@ -265,6 +265,7 @@ export function PlaygroundPanel({
             {lastResult?.usage ? (
               <div className="playground-foot">
                 <span>Prompt {formatNumber(lastResult.usage.prompt_tokens ?? 0)}</span>
+                <span>Cached {formatNumber(lastResult.usage.cached_input_tokens ?? 0)}</span>
                 <span>Completion {formatNumber(lastResult.usage.completion_tokens ?? 0)}</span>
                 <span>Total {formatNumber(lastResult.usage.total_tokens ?? 0)}</span>
                 {lastResult.request_id ? <span>{lastResult.request_id}</span> : null}

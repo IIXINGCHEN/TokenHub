@@ -2008,6 +2008,9 @@ func (s *GormStore) AddModel(model Model) Model {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if model.Modality == "embedding" {
+		model.CacheReadPriceUSDPer1M = 0
+	}
 	if model.ID == "" {
 		model.ID = model.Name
 	}
@@ -2054,8 +2057,12 @@ func (s *GormStore) UpdateModel(name string, patch Model) (Model, error) {
 			model.ContextWindow = patch.ContextWindow
 		}
 		model.InputPriceUSDPer1M = patch.InputPriceUSDPer1M
+		model.CacheReadPriceUSDPer1M = patch.CacheReadPriceUSDPer1M
 		model.OutputPriceUSDPer1M = patch.OutputPriceUSDPer1M
 		model.EmbeddingPriceUSDPer1M = patch.EmbeddingPriceUSDPer1M
+		if model.Modality == "embedding" {
+			model.CacheReadPriceUSDPer1M = 0
+		}
 		if patch.InputModalities != nil {
 			model.InputModalities = patch.InputModalities
 		}
@@ -2725,12 +2732,13 @@ func (s *GormStore) UsageTimeseries(days int) []map[string]any {
 		day := now.AddDate(0, 0, -i).Format("2006-01-02")
 		indexByDay[day] = len(series)
 		series = append(series, map[string]any{
-			"date":               day,
-			"request_count":      int64(0),
-			"input_tokens":       int64(0),
-			"output_tokens":      int64(0),
-			"total_tokens":       int64(0),
-			"estimated_cost_usd": float64(0),
+			"date":                day,
+			"request_count":       int64(0),
+			"input_tokens":        int64(0),
+			"cached_input_tokens": int64(0),
+			"output_tokens":       int64(0),
+			"total_tokens":        int64(0),
+			"estimated_cost_usd":  float64(0),
 		})
 	}
 	var records []UsageRecord
@@ -2743,6 +2751,7 @@ func (s *GormStore) UsageTimeseries(days int) []map[string]any {
 		}
 		series[idx]["request_count"] = series[idx]["request_count"].(int64) + 1
 		series[idx]["input_tokens"] = series[idx]["input_tokens"].(int64) + record.InputTokens
+		series[idx]["cached_input_tokens"] = series[idx]["cached_input_tokens"].(int64) + record.CachedInputTokens
 		series[idx]["output_tokens"] = series[idx]["output_tokens"].(int64) + record.OutputTokens
 		series[idx]["total_tokens"] = series[idx]["total_tokens"].(int64) + record.TotalTokens
 		series[idx]["estimated_cost_usd"] = series[idx]["estimated_cost_usd"].(float64) + record.CostUSD
@@ -2762,14 +2771,15 @@ func (s *GormStore) GenerateBillingPeriod(period string) (map[string]any, error)
 	}
 
 	type bucket struct {
-		CostCenter   string
-		ProjectID    string
-		TeamID       string
-		RequestCount int64
-		InputTokens  int64
-		OutputTokens int64
-		TotalTokens  int64
-		CostUSD      float64
+		CostCenter        string
+		ProjectID         string
+		TeamID            string
+		RequestCount      int64
+		InputTokens       int64
+		CachedInputTokens int64
+		OutputTokens      int64
+		TotalTokens       int64
+		CostUSD           float64
 	}
 	buckets := map[string]*bucket{}
 	projectTotals := map[string]float64{}
@@ -2785,6 +2795,7 @@ func (s *GormStore) GenerateBillingPeriod(period string) (map[string]any, error)
 		}
 		item.RequestCount++
 		item.InputTokens += record.InputTokens
+		item.CachedInputTokens += record.CachedInputTokens
 		item.OutputTokens += record.OutputTokens
 		item.TotalTokens += record.TotalTokens
 		item.CostUSD += record.CostUSD
@@ -2818,17 +2829,18 @@ func (s *GormStore) GenerateBillingPeriod(period string) (map[string]any, error)
 				Description: "由 TokenHub 用量记录自动生成",
 				Status:      StatusActive,
 				Fields: map[string]any{
-					"period":             period,
-					"cost_center":        item.CostCenter,
-					"project_id":         item.ProjectID,
-					"team_id":            item.TeamID,
-					"allocated_cost_usd": roundMoney(item.CostUSD),
-					"request_count":      item.RequestCount,
-					"input_tokens":       item.InputTokens,
-					"output_tokens":      item.OutputTokens,
-					"total_tokens":       item.TotalTokens,
-					"allocation_rule":    "actual_usage_cost",
-					"generated_by":       "tokenhub",
+					"period":              period,
+					"cost_center":         item.CostCenter,
+					"project_id":          item.ProjectID,
+					"team_id":             item.TeamID,
+					"allocated_cost_usd":  roundMoney(item.CostUSD),
+					"request_count":       item.RequestCount,
+					"input_tokens":        item.InputTokens,
+					"cached_input_tokens": item.CachedInputTokens,
+					"output_tokens":       item.OutputTokens,
+					"total_tokens":        item.TotalTokens,
+					"allocation_rule":     "actual_usage_cost",
+					"generated_by":        "tokenhub",
 				},
 				CreatedAt: time.Now().UTC(),
 				UpdatedAt: time.Now().UTC(),
@@ -3796,15 +3808,65 @@ func priceUsage(model Model, usage Usage) Usage {
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	}
+	usage.CachedInputTokens = minInt64(maxInt64(usage.CachedInputTokens, 0), usage.PromptTokens)
 	if usage.CostUSD == 0 {
 		if model.Modality == "embedding" && model.EmbeddingPriceUSDPer1M > 0 {
 			usage.CostUSD = float64(usage.TotalTokens) * model.EmbeddingPriceUSDPer1M / 1_000_000
 		} else {
-			usage.CostUSD = float64(usage.PromptTokens)*model.InputPriceUSDPer1M/1_000_000 +
+			uncachedInputTokens := usage.PromptTokens - usage.CachedInputTokens
+			cacheReadPrice := effectiveCacheReadPriceUSDPer1M(model)
+			usage.CostUSD = float64(uncachedInputTokens)*model.InputPriceUSDPer1M/1_000_000 +
+				float64(usage.CachedInputTokens)*cacheReadPrice/1_000_000 +
 				float64(usage.CompletionTokens)*model.OutputPriceUSDPer1M/1_000_000
 		}
 	}
 	return usage
+}
+
+const (
+	defaultCacheReadEstimateRatio  = 0.10
+	deepSeekCacheReadEstimateRatio = 0.02
+	deepSeekV4ProCacheReadRatio    = 1.0 / 120
+)
+
+func effectiveCacheReadPriceUSDPer1M(model Model) float64 {
+	if model.Modality == "embedding" {
+		return 0
+	}
+	if model.CacheReadPriceUSDPer1M > 0 {
+		return model.CacheReadPriceUSDPer1M
+	}
+	for _, key := range []string{"cached_input_price_usd_per_1m", "cache_read_price_usd_per_1m", "cached_read_price_usd_per_1m"} {
+		if value, err := strconv.ParseFloat(strings.TrimSpace(model.Metadata[key]), 64); err == nil && value > 0 {
+			return value
+		}
+	}
+	if model.InputPriceUSDPer1M <= 0 {
+		return 0
+	}
+	ratio := defaultCacheReadEstimateRatio
+	category := standardModelCategory(firstNonEmpty(model.Category, inferModelCategory(model.Name, model.Family)))
+	if category == "deepseek" {
+		ratio = deepSeekCacheReadEstimateRatio
+		if strings.Contains(strings.ToLower(model.Name+" "+model.Family), "v4-pro") {
+			ratio = deepSeekV4ProCacheReadRatio
+		}
+	}
+	return model.InputPriceUSDPer1M * ratio
+}
+
+func minInt64(left int64, right int64) int64 {
+	if left < right {
+		return left
+	}
+	return right
+}
+
+func maxInt64(left int64, right int64) int64 {
+	if left > right {
+		return left
+	}
+	return right
 }
 
 func raiseQuotaAlerts(tx *gorm.DB, key APIKey, dayCounter, monthCounter *QuotaCounter) error {
@@ -4592,12 +4654,13 @@ func addUsage(counter *QuotaCounter, usage Usage) {
 
 func aggregateUsage(records []UsageRecord, keyFn func(UsageRecord) string) []map[string]any {
 	type bucket struct {
-		Key          string
-		Requests     int64
-		InputTokens  int64
-		OutputTokens int64
-		TotalTokens  int64
-		CostUSD      float64
+		Key               string
+		Requests          int64
+		InputTokens       int64
+		CachedInputTokens int64
+		OutputTokens      int64
+		TotalTokens       int64
+		CostUSD           float64
 	}
 	buckets := map[string]*bucket{}
 	for _, record := range records {
@@ -4612,6 +4675,7 @@ func aggregateUsage(records []UsageRecord, keyFn func(UsageRecord) string) []map
 		}
 		item.Requests++
 		item.InputTokens += record.InputTokens
+		item.CachedInputTokens += record.CachedInputTokens
 		item.OutputTokens += record.OutputTokens
 		item.TotalTokens += record.TotalTokens
 		item.CostUSD += record.CostUSD
@@ -4629,12 +4693,13 @@ func aggregateUsage(records []UsageRecord, keyFn func(UsageRecord) string) []map
 	result := make([]map[string]any, 0, len(items))
 	for _, item := range items {
 		result = append(result, map[string]any{
-			"id":                 item.Key,
-			"request_count":      item.Requests,
-			"input_tokens":       item.InputTokens,
-			"output_tokens":      item.OutputTokens,
-			"total_tokens":       item.TotalTokens,
-			"estimated_cost_usd": item.CostUSD,
+			"id":                  item.Key,
+			"request_count":       item.Requests,
+			"input_tokens":        item.InputTokens,
+			"cached_input_tokens": item.CachedInputTokens,
+			"output_tokens":       item.OutputTokens,
+			"total_tokens":        item.TotalTokens,
+			"estimated_cost_usd":  item.CostUSD,
 		})
 	}
 	return result

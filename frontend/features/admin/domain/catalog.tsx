@@ -34,6 +34,7 @@ export function emptySummary(): Summary {
   return {
     request_count: 0,
     input_tokens: 0,
+    cached_input_tokens: 0,
     output_tokens: 0,
     total_tokens: 0,
     estimated_cost_usd: 0,
@@ -114,6 +115,7 @@ export function buildCustomProviderCatalogEntry(category: string, standardModels
       type: model.modality,
       context_window: model.context_window,
       input_price_usd_per_1m: model.input_price_usd_per_1m,
+      cache_read_price_usd_per_1m: model.cache_read_price_usd_per_1m,
       output_price_usd_per_1m: model.output_price_usd_per_1m,
       input_modalities: model.input_modalities,
       output_modalities: model.output_modalities,

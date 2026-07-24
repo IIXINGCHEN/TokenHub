@@ -367,6 +367,10 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("cache-control", "no-cache")
 		w.Header().Set("x-request-id", routed.Call.RequestID)
 		s.writeRouteHeaders(w, routed.Call, route, 1)
+w.WriteHeader(http.StatusOK)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
 		usage, err := adapter.ChatStream(leaseCtx, route.Provider, route.ProviderModel, req, w)
 		if leaseErr := coordinationLeaseError(leaseCtx); leaseErr != nil {
 			err = leaseErr
@@ -3104,21 +3108,22 @@ func (s *Server) customProviderCatalogFromStandardModels(category string) Provid
 			continue
 		}
 		models = append(models, ProviderCatalogModel{
-			ID:                  model.Name,
-			Name:                model.Name,
-			DisplayName:         model.Name,
-			CanonicalName:       model.Name,
-			Category:            modelCategory,
-			Family:              model.Family,
-			Type:                model.Modality,
-			ContextWindow:       model.ContextWindow,
-			InputPriceUSDPer1M:  model.InputPriceUSDPer1M,
-			OutputPriceUSDPer1M: model.OutputPriceUSDPer1M,
-			InputModalities:     append([]string(nil), model.InputModalities...),
-			OutputModalities:    append([]string(nil), model.OutputModalities...),
-			Capabilities:        append([]string(nil), model.Capabilities...),
-			SupportedParameters: append([]string(nil), model.SupportedParameters...),
-			Metadata:            map[string]string{"source": "tokenhub-standard-catalog"},
+			ID:                     model.Name,
+			Name:                   model.Name,
+			DisplayName:            model.Name,
+			CanonicalName:          model.Name,
+			Category:               modelCategory,
+			Family:                 model.Family,
+			Type:                   model.Modality,
+			ContextWindow:          model.ContextWindow,
+			InputPriceUSDPer1M:     model.InputPriceUSDPer1M,
+			CacheReadPriceUSDPer1M: model.CacheReadPriceUSDPer1M,
+			OutputPriceUSDPer1M:    model.OutputPriceUSDPer1M,
+			InputModalities:        append([]string(nil), model.InputModalities...),
+			OutputModalities:       append([]string(nil), model.OutputModalities...),
+			Capabilities:           append([]string(nil), model.Capabilities...),
+			SupportedParameters:    append([]string(nil), model.SupportedParameters...),
+			Metadata:               map[string]string{"source": "tokenhub-standard-catalog"},
 		})
 	}
 	categories, categoryCounts := catalogCategorySummary(models)
@@ -4481,7 +4486,7 @@ func (s *Server) handleAdminExport(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	case "usage":
-		_ = writer.Write([]string{"dimension", "id", "request_count", "input_tokens", "output_tokens", "total_tokens", "estimated_cost_usd"})
+		_ = writer.Write([]string{"dimension", "id", "request_count", "input_tokens", "cached_input_tokens", "output_tokens", "total_tokens", "estimated_cost_usd"})
 		records := s.filterUsageRecordsForUser(user, s.store.ListUsageRecords())
 		if periodFilter != "" {
 			filtered := make([]UsageRecord, 0, len(records))
@@ -4503,6 +4508,7 @@ func (s *Server) handleAdminExport(w http.ResponseWriter, r *http.Request) {
 					stringifyCSV(row["id"]),
 					stringifyCSV(row["request_count"]),
 					stringifyCSV(row["input_tokens"]),
+					stringifyCSV(row["cached_input_tokens"]),
 					stringifyCSV(row["output_tokens"]),
 					stringifyCSV(row["total_tokens"]),
 					stringifyCSV(row["estimated_cost_usd"]),
@@ -4543,6 +4549,7 @@ func (s *Server) handleAdminExport(w http.ResponseWriter, r *http.Request) {
 			{Header: "allocated_cost_usd", Field: "allocated_cost_usd"},
 			{Header: "request_count", Field: "request_count"},
 			{Header: "input_tokens", Field: "input_tokens"},
+			{Header: "cached_input_tokens", Field: "cached_input_tokens"},
 			{Header: "output_tokens", Field: "output_tokens"},
 			{Header: "total_tokens", Field: "total_tokens"},
 			{Header: "allocation_rule", Field: "allocation_rule"},
@@ -5853,11 +5860,12 @@ func (s *Server) linkProjectQuotaPolicy(quota AdminResource, payload map[string]
 func (s *Server) usageSummaryForUser(user AdminUser) map[string]any {
 	records := s.filterUsageRecordsForUser(user, s.store.ListUsageRecords())
 	logs := s.filterRequestLogsForUser(user, s.store.ListRequestLogs())
-	var input, output, total int64
+	var input, cachedInput, output, total int64
 	var cost float64
 	errorsCount := 0
 	for _, record := range records {
 		input += record.InputTokens
+		cachedInput += record.CachedInputTokens
 		output += record.OutputTokens
 		total += record.TotalTokens
 		cost += record.CostUSD
@@ -5871,13 +5879,14 @@ func (s *Server) usageSummaryForUser(user AdminUser) map[string]any {
 		}
 	}
 	return map[string]any{
-		"request_count":      billableRequestLogCount(logs),
-		"usage_record_count": len(records),
-		"input_tokens":       input,
-		"output_tokens":      output,
-		"total_tokens":       total,
-		"estimated_cost_usd": cost,
-		"errors":             errorsCount,
+		"request_count":       billableRequestLogCount(logs),
+		"usage_record_count":  len(records),
+		"input_tokens":        input,
+		"cached_input_tokens": cachedInput,
+		"output_tokens":       output,
+		"total_tokens":        total,
+		"estimated_cost_usd":  cost,
+		"errors":              errorsCount,
 	}
 }
 
@@ -5970,12 +5979,13 @@ func (s *Server) usageTimeseriesForUser(user AdminUser, days int) []map[string]a
 		day := now.AddDate(0, 0, -i).Format("2006-01-02")
 		indexByDay[day] = len(series)
 		series = append(series, map[string]any{
-			"date":               day,
-			"request_count":      int64(0),
-			"input_tokens":       int64(0),
-			"output_tokens":      int64(0),
-			"total_tokens":       int64(0),
-			"estimated_cost_usd": float64(0),
+			"date":                day,
+			"request_count":       int64(0),
+			"input_tokens":        int64(0),
+			"cached_input_tokens": int64(0),
+			"output_tokens":       int64(0),
+			"total_tokens":        int64(0),
+			"estimated_cost_usd":  float64(0),
 		})
 	}
 	for _, record := range s.filterUsageRecordsForUser(user, s.store.ListUsageRecords()) {
@@ -5989,6 +5999,7 @@ func (s *Server) usageTimeseriesForUser(user AdminUser, days int) []map[string]a
 		}
 		series[idx]["request_count"] = series[idx]["request_count"].(int64) + 1
 		series[idx]["input_tokens"] = series[idx]["input_tokens"].(int64) + record.InputTokens
+		series[idx]["cached_input_tokens"] = series[idx]["cached_input_tokens"].(int64) + record.CachedInputTokens
 		series[idx]["output_tokens"] = series[idx]["output_tokens"].(int64) + record.OutputTokens
 		series[idx]["total_tokens"] = series[idx]["total_tokens"].(int64) + record.TotalTokens
 		series[idx]["estimated_cost_usd"] = series[idx]["estimated_cost_usd"].(float64) + record.CostUSD
@@ -6912,7 +6923,18 @@ func (s *Server) cors(next http.Handler) http.Handler {
 		}
 
 		w.Header().Set("access-control-allow-methods", "GET,POST,PATCH,DELETE,OPTIONS")
-		w.Header().Set("access-control-allow-headers", "authorization,content-type")
+		allowHeaders := "authorization,content-type"
+		if reqHeaders := r.Header.Get("access-control-request-headers"); reqHeaders != "" {
+			seen := map[string]bool{"authorization": true, "content-type": true}
+			for _, h := range strings.Split(reqHeaders, ",") {
+				h = strings.ToLower(strings.TrimSpace(h))
+				if h != "" && !seen[h] {
+					allowHeaders += "," + h
+					seen[h] = true
+				}
+			}
+		}
+		w.Header().Set("access-control-allow-headers", allowHeaders)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
