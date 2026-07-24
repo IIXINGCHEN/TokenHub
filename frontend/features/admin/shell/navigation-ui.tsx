@@ -276,10 +276,24 @@ export function pageHeaderChips(view: ViewKey, data: AppData, user: AdminUser) {
         { label: role === "team_leader" ? "团队成员" : "用户", value: formatNumber(data.users.length) },
       ];
     case "api-keys":
+      if (role === "user") {
+        return [
+          { label: "Key", value: formatNumber(data.keys.length) },
+          { label: "可用模型", value: formatNumber(playgroundModels(data).length) },
+        ];
+      }
       return [
         { label: "Key", value: formatNumber(data.keys.length) },
         { label: "项目", value: formatNumber(data.projects.length) },
       ];
+    case "gateway":
+      if (role === "user" || role === "team_leader") {
+        return [
+          { label: "API Key", value: formatNumber(data.keys.length) },
+          { label: "可用模型", value: formatNumber(playgroundModels(data).length) },
+        ];
+      }
+      return [{ label: "记录", value: formatNumber(pageRecordCount(view, data)) }];
     case "usage":
     case "billing":
       return [
