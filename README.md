@@ -55,7 +55,7 @@ TokenHub separates everyday model usage, team governance, and platform administr
 - Identity source configuration for OAuth/OIDC enterprise sign-in, plus RBAC and audit trails.
 - Clean console with compact role-aware navigation, global search, light/dark mode, and split-view API documentation.
 - SQLite-first private deployment with Docker Compose support.
-- PostgreSQL support for production deployments with connection pooling. See the [deployment guide](docs/deployment.md).
+- PostgreSQL supports multi-instance deployments: share state through remote PostgreSQL, scale frontend and backend replicas horizontally, and configure connection pools. See the [deployment guide](docs/deployment.md).
 - Console language switching for English, Chinese, and Japanese.
 - TokenHub can also connect OpenAI Codex subscription resources and route selected local Codex CLI or desktop sessions through an isolated, recoverable Codex profile. See the [Codex integration guides](docs/codex-tokenhub-profile-quick-start.md).
 
