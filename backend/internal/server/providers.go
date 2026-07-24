@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -153,13 +154,13 @@ func (a OpenAICompatibleAdapter) Chat(ctx context.Context, provider Provider, pr
 func (a OpenAICompatibleAdapter) ChatStream(ctx context.Context, provider Provider, providerModel string, req ChatCompletionRequest, w io.Writer) (Usage, error) {
 	req.Model = providerModel
 	req.Stream = true
+	req = includeOpenAIStreamUsage(req)
 	resp, err := a.doRaw(ctx, provider, http.MethodPost, "/chat/completions", req)
 	if err != nil {
 		return Usage{}, err
 	}
 	defer resp.Body.Close()
-	_, err = io.Copy(w, resp.Body)
-	return Usage{}, err
+	return copyOpenAIStreamAndUsage(w, resp.Body)
 }
 
 func (a OpenAICompatibleAdapter) Responses(ctx context.Context, provider Provider, providerModel string, req ResponsesRequest) (any, Usage, error) {
@@ -256,13 +257,13 @@ func (a AzureOpenAIAdapter) Chat(ctx context.Context, provider Provider, provide
 func (a AzureOpenAIAdapter) ChatStream(ctx context.Context, provider Provider, providerModel string, req ChatCompletionRequest, w io.Writer) (Usage, error) {
 	req.Model = providerModel
 	req.Stream = true
+	req = includeOpenAIStreamUsage(req)
 	resp, err := a.doRaw(ctx, provider, providerModel, "/chat/completions", req)
 	if err != nil {
 		return Usage{}, err
 	}
 	defer resp.Body.Close()
-	_, err = io.Copy(w, resp.Body)
-	return Usage{}, err
+	return copyOpenAIStreamAndUsage(w, resp.Body)
 }
 
 func (a AzureOpenAIAdapter) Responses(ctx context.Context, provider Provider, providerModel string, req ResponsesRequest) (any, Usage, error) {
@@ -596,9 +597,13 @@ func anthropicText(body map[string]any) string {
 
 func anthropicUsage(body map[string]any) Usage {
 	usageMap, _ := body["usage"].(map[string]any)
+	uncachedInputTokens := int64FromAny(usageMap["input_tokens"])
+	cacheCreationInputTokens := int64FromAny(usageMap["cache_creation_input_tokens"])
+	cachedInputTokens := int64FromAny(usageMap["cache_read_input_tokens"])
 	usage := Usage{
-		PromptTokens:     int64FromAny(usageMap["input_tokens"]),
-		CompletionTokens: int64FromAny(usageMap["output_tokens"]),
+		PromptTokens:      uncachedInputTokens + cacheCreationInputTokens + cachedInputTokens,
+		CachedInputTokens: cachedInputTokens,
+		CompletionTokens:  int64FromAny(usageMap["output_tokens"]),
 	}
 	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	return usage
@@ -628,9 +633,10 @@ func geminiText(body map[string]any) string {
 func geminiUsage(body map[string]any) Usage {
 	usageMap, _ := body["usageMetadata"].(map[string]any)
 	usage := Usage{
-		PromptTokens:     int64FromAny(usageMap["promptTokenCount"]),
-		CompletionTokens: int64FromAny(usageMap["candidatesTokenCount"]),
-		TotalTokens:      int64FromAny(usageMap["totalTokenCount"]),
+		PromptTokens:      int64FromAny(usageMap["promptTokenCount"]),
+		CachedInputTokens: int64FromAny(firstNonNil(usageMap["cachedContentTokenCount"], usageMap["totalCachedTokens"])),
+		CompletionTokens:  int64FromAny(usageMap["candidatesTokenCount"]),
+		TotalTokens:       int64FromAny(usageMap["totalTokenCount"]),
 	}
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
@@ -640,8 +646,16 @@ func geminiUsage(body map[string]any) Usage {
 
 func usageFromMap(body map[string]any) Usage {
 	usageMap, _ := body["usage"].(map[string]any)
+	details, _ := firstNonNil(usageMap["prompt_tokens_details"], usageMap["input_tokens_details"]).(map[string]any)
 	usage := Usage{
-		PromptTokens:     int64FromAny(firstNonNil(usageMap["prompt_tokens"], usageMap["input_tokens"])),
+		PromptTokens: int64FromAny(firstNonNil(usageMap["prompt_tokens"], usageMap["input_tokens"])),
+		CachedInputTokens: int64FromAny(firstNonNil(
+			details["cached_tokens"],
+			usageMap["prompt_cache_hit_tokens"],
+			usageMap["cached_input_tokens"],
+			usageMap["cached_tokens"],
+			usageMap["total_cached_tokens"],
+		)),
 		CompletionTokens: int64FromAny(firstNonNil(usageMap["completion_tokens"], usageMap["output_tokens"])),
 		TotalTokens:      int64FromAny(usageMap["total_tokens"]),
 	}
@@ -649,6 +663,58 @@ func usageFromMap(body map[string]any) Usage {
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	}
 	return usage
+}
+
+func includeOpenAIStreamUsage(req ChatCompletionRequest) ChatCompletionRequest {
+	options := make(map[string]any, len(req.StreamOptions)+1)
+	for key, value := range req.StreamOptions {
+		options[key] = value
+	}
+	options["include_usage"] = true
+	req.StreamOptions = options
+	return req
+}
+
+func copyOpenAIStreamAndUsage(w io.Writer, body io.Reader) (Usage, error) {
+	reader := bufio.NewReader(body)
+	var usage Usage
+	for {
+		line, readErr := reader.ReadString('\n')
+		if line != "" {
+			if _, err := io.WriteString(w, line); err != nil {
+				return usage, err
+			}
+			if parsed, ok := usageFromServerSentEvent(line); ok {
+				usage = parsed
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				return usage, nil
+			}
+			return usage, readErr
+		}
+	}
+}
+
+func usageFromServerSentEvent(line string) (Usage, bool) {
+	payload := strings.TrimSpace(line)
+	if !strings.HasPrefix(payload, "data:") {
+		return Usage{}, false
+	}
+	payload = strings.TrimSpace(strings.TrimPrefix(payload, "data:"))
+	if payload == "" || payload == "[DONE]" {
+		return Usage{}, false
+	}
+	var event map[string]any
+	if err := json.Unmarshal([]byte(payload), &event); err != nil {
+		return Usage{}, false
+	}
+	usageMap, ok := event["usage"].(map[string]any)
+	if !ok || len(usageMap) == 0 {
+		return Usage{}, false
+	}
+	return usageFromMap(event), true
 }
 
 func chatResponse(model string, text string, usage Usage) map[string]any {

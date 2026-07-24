@@ -137,6 +137,7 @@ type Model struct {
 	Modality               string            `json:"modality"`
 	ContextWindow          int64             `json:"context_window"`
 	InputPriceUSDPer1M     float64           `json:"input_price_usd_per_1m"`
+	CacheReadPriceUSDPer1M float64           `json:"cache_read_price_usd_per_1m"`
 	OutputPriceUSDPer1M    float64           `json:"output_price_usd_per_1m"`
 	EmbeddingPriceUSDPer1M float64           `json:"embedding_price_usd_per_1m"`
 	InputModalities        []string          `json:"input_modalities,omitempty" gorm:"serializer:json"`
@@ -149,23 +150,24 @@ type Model struct {
 }
 
 type ProviderCatalogModel struct {
-	ID                  string            `json:"id"`
-	Name                string            `json:"name"`
-	DisplayName         string            `json:"display_name,omitempty"`
-	CanonicalName       string            `json:"canonical_name,omitempty"`
-	Category            string            `json:"category,omitempty"`
-	Family              string            `json:"family,omitempty"`
-	Type                string            `json:"type,omitempty"`
-	ContextWindow       int64             `json:"context_window,omitempty"`
-	MaxOutputTokens     int64             `json:"max_output_tokens,omitempty"`
-	InputPriceUSDPer1M  float64           `json:"input_price_usd_per_1m,omitempty"`
-	OutputPriceUSDPer1M float64           `json:"output_price_usd_per_1m,omitempty"`
-	InputModalities     []string          `json:"input_modalities,omitempty"`
-	OutputModalities    []string          `json:"output_modalities,omitempty"`
-	Capabilities        []string          `json:"capabilities,omitempty"`
-	SupportedParameters []string          `json:"supported_parameters,omitempty"`
-	LastUpdated         string            `json:"last_updated,omitempty"`
-	Metadata            map[string]string `json:"metadata,omitempty"`
+	ID                     string            `json:"id"`
+	Name                   string            `json:"name"`
+	DisplayName            string            `json:"display_name,omitempty"`
+	CanonicalName          string            `json:"canonical_name,omitempty"`
+	Category               string            `json:"category,omitempty"`
+	Family                 string            `json:"family,omitempty"`
+	Type                   string            `json:"type,omitempty"`
+	ContextWindow          int64             `json:"context_window,omitempty"`
+	MaxOutputTokens        int64             `json:"max_output_tokens,omitempty"`
+	InputPriceUSDPer1M     float64           `json:"input_price_usd_per_1m,omitempty"`
+	CacheReadPriceUSDPer1M float64           `json:"cache_read_price_usd_per_1m,omitempty"`
+	OutputPriceUSDPer1M    float64           `json:"output_price_usd_per_1m,omitempty"`
+	InputModalities        []string          `json:"input_modalities,omitempty"`
+	OutputModalities       []string          `json:"output_modalities,omitempty"`
+	Capabilities           []string          `json:"capabilities,omitempty"`
+	SupportedParameters    []string          `json:"supported_parameters,omitempty"`
+	LastUpdated            string            `json:"last_updated,omitempty"`
+	Metadata               map[string]string `json:"metadata,omitempty"`
 }
 
 type ProviderCatalogEntry struct {
@@ -301,10 +303,11 @@ type ModelRoute struct {
 }
 
 type Usage struct {
-	PromptTokens     int64   `json:"prompt_tokens"`
-	CompletionTokens int64   `json:"completion_tokens"`
-	TotalTokens      int64   `json:"total_tokens"`
-	CostUSD          float64 `json:"estimated_cost_usd,omitempty"`
+	PromptTokens      int64   `json:"prompt_tokens"`
+	CachedInputTokens int64   `json:"cached_input_tokens,omitempty"`
+	CompletionTokens  int64   `json:"completion_tokens"`
+	TotalTokens       int64   `json:"total_tokens"`
+	CostUSD           float64 `json:"estimated_cost_usd,omitempty"`
 }
 
 type UsageRecord struct {
@@ -316,6 +319,7 @@ type UsageRecord struct {
 	ProviderID         string    `json:"provider_id" gorm:"index"`
 	ProviderResourceID string    `json:"provider_resource_id,omitempty" gorm:"index"`
 	InputTokens        int64     `json:"input_tokens"`
+	CachedInputTokens  int64     `json:"cached_input_tokens"`
 	OutputTokens       int64     `json:"output_tokens"`
 	TotalTokens        int64     `json:"total_tokens"`
 	CostUSD            float64   `json:"estimated_cost_usd"`
@@ -507,12 +511,13 @@ type ChatMessage struct {
 }
 
 type ChatCompletionRequest struct {
-	Model       string         `json:"model"`
-	Messages    []ChatMessage  `json:"messages"`
-	Stream      bool           `json:"stream,omitempty"`
-	MaxTokens   int            `json:"max_tokens,omitempty"`
-	Temperature *float64       `json:"temperature,omitempty"`
-	Metadata    map[string]any `json:"metadata,omitempty"`
+	Model         string         `json:"model"`
+	Messages      []ChatMessage  `json:"messages"`
+	Stream        bool           `json:"stream,omitempty"`
+	StreamOptions map[string]any `json:"stream_options,omitempty"`
+	MaxTokens     int            `json:"max_tokens,omitempty"`
+	Temperature   *float64       `json:"temperature,omitempty"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
 }
 
 type PlaygroundChatResponse struct {

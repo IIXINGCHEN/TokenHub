@@ -302,6 +302,7 @@ export function fallbackDays(): UsagePoint[] {
     date: `2026-06-${String(index + 1).padStart(2, "0")}`,
     request_count: 0,
     input_tokens: 0,
+    cached_input_tokens: 0,
     output_tokens: 0,
     total_tokens: 0,
     estimated_cost_usd: 0,
@@ -349,6 +350,9 @@ export function formatModelPrice(model: ProviderCatalogModel) {
 export function modelToForm(item: Model) {
   return {
     ...stringifyForm(item),
+    cache_read_price_usd_per_1m: item.cache_read_price_usd_per_1m
+      ? String(item.cache_read_price_usd_per_1m)
+      : "",
     capabilities: (item.capabilities ?? []).join(", "),
     supported_parameters: (item.supported_parameters ?? []).join(", "),
     input_modalities: (item.input_modalities ?? []).join(", "),
