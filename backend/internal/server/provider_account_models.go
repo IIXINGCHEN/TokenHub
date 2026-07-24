@@ -37,7 +37,7 @@ type codexRemoteModel struct {
 	AdditionalSpeedTiers     []string                    `json:"additional_speed_tiers"`
 	ServiceTiers             []codexRemoteServiceTier    `json:"service_tiers"`
 	DefaultServiceTier       string                      `json:"default_service_tier"`
-	MinimalClientVersion     []int                       `json:"minimal_client_version"`
+	MinimalClientVersion     json.RawMessage             `json:"minimal_client_version"`
 	ShellType                string                      `json:"shell_type"`
 	SupportVerbosity         bool                        `json:"support_verbosity"`
 	DefaultVerbosity         string                      `json:"default_verbosity"`
@@ -233,7 +233,7 @@ func (a CodexSubscriptionAdapter) modelsWithCredentials(ctx context.Context, cre
 				"additional_speed_tiers":     strings.Join(remote.AdditionalSpeedTiers, ","),
 				"service_tiers":              strings.Join(serviceTierIDs, ","),
 				"default_service_tier":       remote.DefaultServiceTier,
-				"minimal_client_version":     integerListString(remote.MinimalClientVersion),
+				"minimal_client_version":     codexMinimalClientVersionString(remote.MinimalClientVersion),
 				"shell_type":                 remote.ShellType,
 				"support_verbosity":          strconv.FormatBool(remote.SupportVerbosity),
 				"default_verbosity":          remote.DefaultVerbosity,
@@ -364,6 +364,18 @@ func integerListString(values []int) string {
 		parts = append(parts, strconv.Itoa(value))
 	}
 	return strings.Join(parts, ".")
+}
+
+func codexMinimalClientVersionString(value json.RawMessage) string {
+	var version string
+	if json.Unmarshal(value, &version) == nil {
+		return strings.TrimSpace(version)
+	}
+	var parts []int
+	if json.Unmarshal(value, &parts) == nil {
+		return integerListString(parts)
+	}
+	return ""
 }
 
 func firstNonEmptyModelETag(models []ProviderCatalogModel) string {

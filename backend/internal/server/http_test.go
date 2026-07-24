@@ -2863,6 +2863,90 @@ func TestAdminCreatesProviderResource(t *testing.T) {
 	}
 }
 
+func TestAdminDeletesProviderAccountRuntimeData(t *testing.T) {
+	store := NewMemoryStore()
+	if err := SeedDemoData(store); err != nil {
+		t.Fatal(err)
+	}
+	provider := store.AddProvider(Provider{
+		Name:    "Delete Account Provider",
+		Type:    ProviderOpenAICodex,
+		Status:  StatusActive,
+		Healthy: true,
+	})
+	resource, err := store.AddProviderResource(ProviderResource{
+		ProviderID:   provider.ID,
+		Name:         "Delete Account Resource",
+		ResourceType: ProviderResourceOpenAISubscription,
+		Status:       StatusActive,
+		Healthy:      true,
+		Credentials: &ProviderResourceCredentials{
+			AccessToken:  "delete-account-access-token",
+			RefreshToken: "delete-account-refresh-token",
+			AccountID:    "delete-account-id",
+			Email:        "delete.account@example.com",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := store.AddRoute(ModelRoute{
+		ModelName:          "delete-account-model",
+		ProviderID:         provider.ID,
+		ProviderResourceID: resource.ID,
+		ProviderModel:      "delete-account-model",
+		Status:             StatusActive,
+	})
+	now := time.Now().UTC()
+	for _, record := range []any{
+		&InFlightLease{ID: "lease_delete_account", ScopeType: "provider_resource", ScopeID: resource.ID, ExpiresAt: now.Add(time.Minute)},
+		&ProviderResourceBucket{ResourceID: resource.ID, Bucket: "minute", Requests: 1, Tokens: 2, UpdatedAt: now},
+		&ProviderResourceObservation{ResourceID: resource.ID, AdapterType: ProviderOpenAICodex, QuotaSnapshot: `{"plan_type":"pro"}`, QuotaFetchedAt: &now, UpdatedAt: now},
+		&ProviderObservation{ID: "obs_delete_account", ProviderID: provider.ID, ResourceID: resource.ID, AdapterType: ProviderOpenAICodex, Source: "real_request", Operation: "responses", Success: true, ObservedAt: now},
+		&AdapterSessionBinding{ID: "binding_delete_account", AdapterType: ProviderOpenAICodex, AffinityKind: AffinityKindCodexSession, ProviderID: provider.ID, AffinityKeyHash: "delete-account-affinity", ResourceID: resource.ID, LastUsedAt: now},
+	} {
+		if err := store.db.Create(record).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	app := New(store).Handler()
+	resp := doJSON(t, app, http.MethodDelete, "/api/admin/provider-resources/"+resource.ID, nil, "")
+	if resp.Code != http.StatusNoContent {
+		t.Fatalf("expected account delete 204, got %d: %s", resp.Code, resp.Body)
+	}
+
+	checks := []struct {
+		name  string
+		model any
+		where string
+		args  []any
+	}{
+		{name: "provider resource", model: &ProviderResource{}, where: "id = ?", args: []any{resource.ID}},
+		{name: "in-flight lease", model: &InFlightLease{}, where: "scope_type = ? AND scope_id = ?", args: []any{"provider_resource", resource.ID}},
+		{name: "rate-limit bucket", model: &ProviderResourceBucket{}, where: "resource_id = ?", args: []any{resource.ID}},
+		{name: "resource observation", model: &ProviderResourceObservation{}, where: "resource_id = ?", args: []any{resource.ID}},
+		{name: "provider observation", model: &ProviderObservation{}, where: "resource_id = ?", args: []any{resource.ID}},
+		{name: "session binding", model: &AdapterSessionBinding{}, where: "resource_id = ?", args: []any{resource.ID}},
+	}
+	for _, check := range checks {
+		var count int64
+		if err := store.db.Model(check.model).Where(check.where, check.args...).Count(&count).Error; err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("expected %s data to be deleted, found %d row(s)", check.name, count)
+		}
+	}
+	var detachedRoute ModelRoute
+	if err := store.db.First(&detachedRoute, "id = ?", route.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if detachedRoute.ProviderResourceID != "" {
+		t.Fatalf("expected route to be detached from deleted account, got %q", detachedRoute.ProviderResourceID)
+	}
+}
+
 func TestAdminRejectsDuplicateProviderResourceName(t *testing.T) {
 	app := newTestServer()
 	for index, name := range []string{"OpenAI Codex Primary Account", "  openai codex primary account  "} {

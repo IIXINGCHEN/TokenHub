@@ -18,6 +18,7 @@ import (
 const (
 	AffinityKindCodexSession = "codex_session"
 	noBindingGeneration      = int64(-1)
+	codexSessionAffinityTTL  = time.Hour
 )
 
 type RequestAffinity struct {
@@ -106,9 +107,18 @@ func codexRawStringField(request ResponsesRequest, key string) string {
 }
 
 func (s *GormStore) GetAdapterSessionBinding(ctx context.Context, adapterType string, providerID string, affinityKeyHash string) (AdapterSessionBinding, bool, error) {
+	adapterType = strings.TrimSpace(adapterType)
+	providerID = strings.TrimSpace(providerID)
+	affinityKeyHash = strings.TrimSpace(affinityKeyHash)
+	cutoff := time.Now().UTC().Add(-codexSessionAffinityTTL)
+	if err := s.db.WithContext(ctx).
+		Where("adapter_type = ? AND provider_id = ? AND affinity_key_hash = ? AND last_used_at <= ?", adapterType, providerID, affinityKeyHash, cutoff).
+		Delete(&AdapterSessionBinding{}).Error; err != nil {
+		return AdapterSessionBinding{}, false, err
+	}
 	var binding AdapterSessionBinding
 	err := s.db.WithContext(ctx).
-		Where("adapter_type = ? AND provider_id = ? AND affinity_key_hash = ?", strings.TrimSpace(adapterType), strings.TrimSpace(providerID), strings.TrimSpace(affinityKeyHash)).
+		Where("adapter_type = ? AND provider_id = ? AND affinity_key_hash = ?", adapterType, providerID, affinityKeyHash).
 		First(&binding).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return AdapterSessionBinding{}, false, nil
@@ -121,7 +131,7 @@ func (s *GormStore) GetAdapterSessionBinding(ctx context.Context, adapterType st
 
 // CommitAdapterSessionBinding creates, touches, or compare-and-swap rebinds a
 // durable adapter session. A generation of -1 means the caller observed no
-// binding. Bindings intentionally have no automatic expiry.
+// binding. Successful use refreshes the one-hour sliding expiration window.
 func (s *GormStore) CommitAdapterSessionBinding(ctx context.Context, binding AdapterSessionBinding, expectedGeneration int64) (AdapterSessionBinding, bool, error) {
 	binding.AdapterType = strings.TrimSpace(binding.AdapterType)
 	binding.AffinityKind = strings.TrimSpace(binding.AffinityKind)

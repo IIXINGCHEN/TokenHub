@@ -531,7 +531,7 @@
 .provider-quota-card {
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 10px;
+  padding: 12px;
   background: var(--surface);
 }
 
@@ -542,20 +542,171 @@
   gap: 12px;
 }
 
-.provider-quota-card-head > div {
+.provider-quota-account {
   min-width: 0;
   display: grid;
   gap: 3px;
 }
 
-.provider-quota-card-head strong {
+.provider-quota-account strong {
+  overflow-wrap: anywhere;
   color: var(--text);
-  font-size: 12px;
+  font-size: 13px;
 }
 
-.provider-quota-card-head span {
+.provider-quota-account > span {
   color: var(--muted-strong);
+  font-size: 10px;
+}
+
+.provider-quota-card-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.provider-quota-card-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.provider-account-disable-button {
+  color: var(--warn);
+}
+
+.provider-account-delete-button {
+  width: auto;
+  height: 34px;
+  min-height: 34px;
+  padding: 0 10px;
+}
+
+.provider-account-confirmation-modal {
+  width: min(460px, calc(100vw - 32px));
+}
+
+.provider-account-confirmation-target {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 3px;
+  background: var(--surface-soft);
+}
+
+.provider-account-confirmation-target span {
+  color: var(--muted);
   font-size: 11px;
+}
+
+.provider-account-confirmation-target strong {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.provider-account-delete-confirmation-field code {
+  width: max-content;
+  border-radius: 6px;
+  padding: 5px 8px;
+  background: var(--surface-soft);
+  color: var(--neg);
+  font-size: 12px;
+  font-weight: 760;
+  letter-spacing: 0.04em;
+}
+
+.provider-quota-status {
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 10px;
+  font-weight: 740;
+}
+
+.provider-quota-status.available {
+  color: var(--pos);
+  background: color-mix(in srgb, var(--pos) 12%, transparent);
+}
+
+.provider-quota-status.limited {
+  color: var(--neg);
+  background: color-mix(in srgb, var(--neg) 10%, transparent);
+}
+
+.provider-quota-summary {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: minmax(160px, 0.8fr) minmax(0, 2.2fr);
+  gap: 8px;
+}
+
+.provider-quota-usage {
+  border-radius: 7px;
+  padding: 10px;
+  display: grid;
+  align-content: center;
+  gap: 6px;
+  background: var(--surface-soft);
+}
+
+.provider-quota-usage > span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.provider-quota-usage > strong {
+  color: var(--text);
+  font-size: 24px;
+  line-height: 1;
+}
+
+.provider-quota-progress {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--border);
+}
+
+.provider-quota-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.provider-quota-highlights {
+  display: grid;
+  grid-template-columns: 0.7fr 0.7fr 1.6fr;
+  gap: 8px;
+}
+
+.provider-quota-fetched-at {
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 9px;
+  text-align: right;
+}
+
+.provider-quota-details {
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.provider-quota-details summary {
+  width: max-content;
+  cursor: pointer;
+  color: var(--muted-strong);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.provider-quota-details[open] summary {
+  color: var(--text);
 }
 
 .provider-quota-grid {
@@ -567,8 +718,6 @@
 
 .provider-account-detail-grid {
   margin-top: 10px;
-  border-top: 1px solid var(--border);
-  padding-top: 10px;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;

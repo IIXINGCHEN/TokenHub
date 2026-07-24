@@ -829,6 +829,9 @@ export function AdminConsole() {
             setProviderEditItem(null);
             await load();
           }}
+          onAccountsChanged={async () => {
+            await load();
+          }}
           setLoading={setLoading}
           setError={setError}
           setNotice={setNotice}

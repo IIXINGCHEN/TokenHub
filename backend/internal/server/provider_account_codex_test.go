@@ -47,7 +47,7 @@ func TestCodexSubscriptionModelsUsesLiveVisibleCatalog(t *testing.T) {
 			t.Fatalf("missing Codex auth headers: %#v", req.Header)
 		}
 		body := `{"models":[
-			{"slug":"gpt-live-codex","display_name":"GPT Live Codex","description":"Live model","default_reasoning_level":"medium","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"},{"effort":"high"}],"visibility":"list","supported_in_api":true,"priority":2,"additional_speed_tiers":["fast"],"context_window":272000,"input_modalities":["text","image"]},
+			{"slug":"gpt-live-codex","display_name":"GPT Live Codex","description":"Live model","default_reasoning_level":"medium","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"},{"effort":"high"}],"visibility":"list","supported_in_api":true,"priority":2,"additional_speed_tiers":["fast"],"minimal_client_version":"0.124.0","context_window":272000,"input_modalities":["text","image"]},
 			{"slug":"codex-hidden","display_name":"Hidden","supported_reasoning_levels":[{"effort":"medium"}],"visibility":"hide","priority":1}
 		]}`
 		return &http.Response{
@@ -76,7 +76,9 @@ func TestCodexSubscriptionModelsUsesLiveVisibleCatalog(t *testing.T) {
 	if model.ID != "gpt-live-codex" || model.Category != "codex" || model.ContextWindow != 272000 {
 		t.Fatalf("unexpected live model: %+v", model)
 	}
-	if model.Metadata["supported_reasoning_levels"] != "low,medium,high" || model.Metadata["additional_speed_tiers"] != "fast" {
+	if model.Metadata["supported_reasoning_levels"] != "low,medium,high" ||
+		model.Metadata["additional_speed_tiers"] != "fast" ||
+		model.Metadata["minimal_client_version"] != "0.124.0" {
 		t.Fatalf("missing live model metadata: %+v", model.Metadata)
 	}
 }
@@ -874,6 +876,67 @@ func TestProviderMonitoringRecoversFromHistoricalFailure(t *testing.T) {
 	}
 }
 
+func TestCodexSubscriptionProbeAllowsFastModeForAnyModel(t *testing.T) {
+	adapter := CodexSubscriptionAdapter{
+		Client: &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			var payload map[string]any
+			if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			reasoning, _ := payload["reasoning"].(map[string]any)
+			if payload["model"] != "gpt-5.4" || payload["service_tier"] != "priority" || reasoning["effort"] != "high" {
+				t.Fatalf("unexpected fast probe payload: %#v", payload)
+			}
+			stream := strings.Join([]string{
+				"event: response.output_text.delta",
+				`data: {"type":"response.output_text.delta","delta":"Fast probe works."}`,
+				"",
+				"event: response.completed",
+				`data: {"type":"response.completed","response":{"id":"resp_fast_probe","status":"completed","service_tier":"priority","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}`,
+				"",
+			}, "\n")
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       io.NopCloser(strings.NewReader(stream)),
+				Request:    req,
+			}, nil
+		})},
+		RefreshCredentials: func(context.Context, string, bool) (ProviderResourceCredentials, error) {
+			return ProviderResourceCredentials{AccessToken: "access_fast_probe", AccountID: "account_fast_probe"}, nil
+		},
+	}
+	provider := Provider{
+		ID:      "prv_fast_probe",
+		Name:    "Fast Probe",
+		Type:    ProviderOpenAICodex,
+		Status:  StatusActive,
+		Healthy: true,
+		Options: map[string]string{"resource_id": "rsrc_fast_probe"},
+	}
+	resource := ProviderResource{
+		ID:           "rsrc_fast_probe",
+		ProviderID:   provider.ID,
+		Name:         "Fast Probe Account",
+		ResourceType: ProviderResourceOpenAISubscription,
+		Status:       StatusActive,
+		Healthy:      true,
+	}
+
+	result, err := adapter.Probe(context.Background(), provider, resource, ProviderProbeRequest{
+		Model:           "gpt-5.4",
+		ReasoningEffort: "high",
+		Speed:           "fast",
+		Prompt:          "Confirm fast mode.",
+	})
+	if err != nil {
+		t.Fatalf("fast probe with non-Luna model failed: %v", err)
+	}
+	if result.Model != "gpt-5.4" || result.Speed != "fast" || result.UpstreamServiceTier != "priority" || result.OutputText != "Fast probe works." {
+		t.Fatalf("unexpected fast probe result: %+v", result)
+	}
+}
+
 func TestProviderTestUsesCodexDefaultProbeProfile(t *testing.T) {
 	store := NewMemoryStore()
 	provider := store.AddProvider(Provider{
@@ -901,7 +964,7 @@ func TestProviderTestUsesCodexDefaultProbeProfile(t *testing.T) {
 			t.Fatal(err)
 		}
 		reasoning, _ := payload["reasoning"].(map[string]any)
-		if payload["model"] != openAICodexFastTestModel || payload["service_tier"] != nil || reasoning["effort"] != "medium" {
+		if payload["model"] != openAICodexDefaultProbeModel || payload["service_tier"] != nil || reasoning["effort"] != "medium" {
 			t.Fatalf("unexpected default probe profile: %#v", payload)
 		}
 		stream := strings.Join([]string{

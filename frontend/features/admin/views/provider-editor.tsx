@@ -1,4 +1,4 @@
-import { AlertCircle, Boxes, Check, Copy, KeyRound, Plus, Search, Send, Server, Settings, UserRoundCheck } from "lucide-react";
+import { AlertCircle, Ban, Boxes, Check, Copy, KeyRound, Plus, Search, Send, Server, Settings, Trash2, UserRoundCheck } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { clearPendingProviderAccountOAuthSession, consumePendingProviderAccountOAuthResult, hasPendingProviderAccountOAuthResult, parseProviderAccountOAuthResult, providerAccountOAuthCallbackURL, type ProviderAccountOAuthGenerateResponse, type ProviderAccountOAuthResult, readPendingProviderAccountOAuthSession, savePendingProviderAccountOAuthSession } from "../core/session";
 import { type ApiContext, type FieldConfig, type Model, type ModelRoute, type Provider, type ProviderCatalogEntry, type ProviderCredentialMode, type ProviderResource } from "../core/types";
@@ -61,6 +61,13 @@ type CodexSubscriptionTestResult = {
 
 type ProviderEditTab = "quota" | "test" | "settings" | "models";
 
+type ProviderAccountConfirmation = {
+  action: "enable" | "disable" | "delete";
+  resource: ProviderResource;
+};
+
+const deleteAccountConfirmationPhrase = "DELETE THIS ACCOUNT";
+
 const codexProviderCatalogSummary: ProviderCatalogEntry = {
   id: "openai-codex",
   name: "OpenAI Codex",
@@ -88,6 +95,7 @@ export function ProviderUpsertModal({
   loading,
   onClose,
   onSaved,
+  onAccountsChanged,
   setLoading,
   setError,
   setNotice,
@@ -102,18 +110,29 @@ export function ProviderUpsertModal({
   loading: boolean;
   onClose: () => void;
   onSaved: () => Promise<void>;
+  onAccountsChanged?: () => Promise<void>;
   setLoading: (value: boolean) => void;
   setError: (value: string) => void;
   setNotice: (value: string) => void;
 }) {
-  const availableCategories = useMemo(() => catalogModelCategoryOptions(catalog), [catalog]);
   const editingCodexSubscription = mode === "edit" && resources.some((resource) =>
     resource.provider_id === provider?.id && resource.resource_type === "openai_subscription",
+  );
+  const directCredentialCatalog = useMemo(
+    () => catalog.filter((entry) => entry.id !== codexProviderCatalogSummary.id && entry.type !== "openai_codex"),
+    [catalog],
+  );
+  const selectableProviderCatalog = mode === "create" ? directCredentialCatalog : catalog;
+  const availableCategories = useMemo(
+    () => catalogModelCategoryOptions(selectableProviderCatalog).filter((item) => mode !== "create" || item.key !== "codex"),
+    [mode, selectableProviderCatalog],
   );
   const initialCategory = editingCodexSubscription ? "codex" : availableCategories.find((item) => item.key !== "all")?.key ?? "custom";
   const initialEntry = editingCodexSubscription
     ? codexProviderCatalogSummary
-    : catalog.find((entry) => providerEntrySupportsCategory(entry, initialCategory)) ?? catalog.find((entry) => entry.id === "custom") ?? catalog[0];
+    : selectableProviderCatalog.find((entry) => providerEntrySupportsCategory(entry, initialCategory))
+      ?? selectableProviderCatalog.find((entry) => entry.id === "custom")
+      ?? selectableProviderCatalog[0];
   const [modelCategory, setModelCategory] = useState(initialCategory);
   const [catalogID, setCatalogID] = useState(initialEntry?.id ?? "custom");
   const [detail, setDetail] = useState<ProviderCatalogEntry | null>(null);
@@ -153,6 +172,10 @@ export function ProviderUpsertModal({
   const [accountQuotaBusyIDs, setAccountQuotaBusyIDs] = useState<Record<string, boolean>>({});
   const [accountQuotaErrors, setAccountQuotaErrors] = useState<Record<string, string>>({});
   const [accountQuotas, setAccountQuotas] = useState<Record<string, OpenAIAccountQuota>>({});
+  const [accountConfirmation, setAccountConfirmation] = useState<ProviderAccountConfirmation | null>(null);
+  const [accountConfirmationBusy, setAccountConfirmationBusy] = useState(false);
+  const [accountConfirmationError, setAccountConfirmationError] = useState("");
+  const [deleteAccountConfirmation, setDeleteAccountConfirmation] = useState("");
   const [selectedAccountID, setSelectedAccountID] = useState(editingCodexSubscription ? "all" : "");
   const [accountCatalogs, setAccountCatalogs] = useState<Record<string, ProviderCatalogEntry>>({});
   const [accountCatalogErrors, setAccountCatalogErrors] = useState<Record<string, string>>({});
@@ -185,8 +208,8 @@ export function ProviderUpsertModal({
     [selectedAccountID, subscriptionResources],
   );
   const categoryCatalog = useMemo(
-    () => catalog.filter((entry) => providerEntrySupportsCategory(entry, modelCategory)),
-    [catalog, modelCategory],
+    () => selectableProviderCatalog.filter((entry) => providerEntrySupportsCategory(entry, modelCategory)),
+    [modelCategory, selectableProviderCatalog],
   );
   const customCatalogEntry = useMemo(() => buildCustomProviderCatalogEntry(modelCategory, standardModels), [modelCategory, standardModels]);
 
@@ -446,9 +469,6 @@ export function ProviderUpsertModal({
   }, [accountValues.name, resources]);
   const codexTestModels = selectedAccountCatalog?.models ?? [];
   const selectedCodexTestModel = codexTestModels.find((model) => model.id === codexTestValues.model);
-  const codexFastTestSupported = codexTestModels.some((model) =>
-    model.id === "gpt-5.6-luna" && model.supported_parameters?.includes("service_tier"),
-  );
   const codexReasoningEfforts = selectedCodexTestModel?.metadata?.supported_reasoning_levels
     ?.split(",")
     .map((value) => value.trim())
@@ -469,11 +489,6 @@ export function ProviderUpsertModal({
       return { ...current, model: nextModel, reasoning_effort: nextEffort };
     });
   }, [codexTestModels, codexTestValues.model]);
-
-  useEffect(() => {
-    if (codexTestValues.speed !== "fast" || codexFastTestSupported) return;
-    setCodexTestValues((current) => ({ ...current, speed: "standard" }));
-  }, [codexFastTestSupported, codexTestValues.speed]);
 
   useEffect(() => {
     if (mode !== "create" || !hasPendingProviderAccountOAuthResult()) return;
@@ -720,6 +735,10 @@ export function ProviderUpsertModal({
       setModelQuery("");
       setSelectedModels({});
       selectCatalog(codexProviderCatalogSummary);
+      return;
+    }
+    if (modelCategory === "codex" || catalogID === codexProviderCatalogSummary.id) {
+      selectCategory(availableCategories[0]?.key ?? "custom");
     }
   }
 
@@ -732,13 +751,82 @@ export function ProviderUpsertModal({
     }));
   }
 
+  function requestAccountConfirmation(action: ProviderAccountConfirmation["action"], resource: ProviderResource) {
+    setAccountConfirmation({ action, resource });
+    setAccountConfirmationError("");
+    setDeleteAccountConfirmation("");
+  }
+
+  function closeAccountConfirmation() {
+    if (accountConfirmationBusy) return;
+    setAccountConfirmation(null);
+    setAccountConfirmationError("");
+    setDeleteAccountConfirmation("");
+  }
+
+  async function updateAccountStatus(resource: ProviderResource, action: "enable" | "disable") {
+    setLoading(true);
+    setAccountConfirmationBusy(true);
+    setAccountConfirmationError("");
+    setError("");
+    setNotice("");
+    try {
+      const resp = await adminFetch(api, "/api/admin/provider-resources/bulk", {
+        method: "POST",
+        body: JSON.stringify({ action, ids: [resource.id] }),
+      });
+      if (!resp.ok) throw new Error(await readAdminError(resp, tx(action === "disable" ? "禁用账号" : "启用账号")));
+      const result = (await resp.json()) as { success?: number; errors?: string[] };
+      if (result.success !== 1) {
+        throw new Error(result.errors?.[0] || tx(action === "disable" ? "禁用账号失败" : "启用账号失败"));
+      }
+      setNotice(`${providerResourceAccountLabel(resource)} ${tx(action === "disable" ? "已禁用" : "已启用")}`);
+      setAccountConfirmation(null);
+      await (onAccountsChanged ?? onSaved)();
+    } catch (err) {
+      if (isAuthExpiredError(err)) return;
+      setAccountConfirmationError(err instanceof Error ? err.message : tx("操作失败"));
+    } finally {
+      setAccountConfirmationBusy(false);
+      setLoading(false);
+    }
+  }
+
+  async function deleteAccount(resource: ProviderResource) {
+    if (deleteAccountConfirmation !== deleteAccountConfirmationPhrase) return;
+    setLoading(true);
+    setAccountConfirmationBusy(true);
+    setAccountConfirmationError("");
+    setError("");
+    setNotice("");
+    try {
+      const resp = await adminFetch(api, `/api/admin/provider-resources/${encodeURIComponent(resource.id)}`, {
+        method: "DELETE",
+      });
+      if (!resp.ok && resp.status !== 204) throw new Error(await readAdminError(resp, tx("删除账号")));
+      setNotice(`${providerResourceAccountLabel(resource)} ${tx("已彻底删除")}`);
+      setAccountConfirmation(null);
+      await (onAccountsChanged ?? onSaved)();
+    } catch (err) {
+      if (isAuthExpiredError(err)) return;
+      setAccountConfirmationError(err instanceof Error ? err.message : tx("删除账号失败"));
+    } finally {
+      setAccountConfirmationBusy(false);
+      setLoading(false);
+    }
+  }
+
   function selectCategory(category: string) {
     setModelCategory(category);
     setCatalogQuery("");
     setModelQuery("");
     setSelectedModels({});
-    const nextEntry = catalog.find((entry) => providerEntrySupportsCategory(entry, category));
-    if (nextEntry) selectCatalog(nextEntry);
+    const nextEntry = selectableProviderCatalog.find((entry) => providerEntrySupportsCategory(entry, category));
+    if (nextEntry) {
+      selectCatalog(nextEntry);
+    } else {
+      selectCustomCatalog();
+    }
   }
 
   function selectCatalog(entry: ProviderCatalogEntry) {
@@ -1117,8 +1205,14 @@ export function ProviderUpsertModal({
             {mode === "create" && createStep === 2 ? (
               <section className="provider-wizard-panel">
                 <div className="wizard-panel-head">
-                  <h3>{tx("配置账号与凭据")}</h3>
-                  <p>{tx(credentialMode === "account_integration" ? "先完成账号授权回填；TokenHub 会把回填的 Token 保存为账号资源。" : "选择是直接保存 API Key、接入账号资源池，还是稍后补齐凭据。")}</p>
+                  <h3>{tx(credentialMode === "account_integration" ? "账号授权" : credentialMode === "provider_api_key" ? "直接 API Key" : "稍后配置")}</h3>
+                  <p>{tx(
+                    credentialMode === "account_integration"
+                      ? "先完成账号授权回填；TokenHub 会把回填的 Token 保存为账号资源。"
+                      : credentialMode === "provider_api_key"
+                        ? "把上游 Key 保存到 Provider，适合单账号或兼容 API。"
+                        : "保存后不会写入上游凭据，可稍后通过编辑 Provider 或账号集成补齐。",
+                  )}</p>
                 </div>
               </section>
             ) : null}
@@ -1138,34 +1232,6 @@ export function ProviderUpsertModal({
             ) : null}
             {mode === "create" && createStep === 2 ? (
               <section className="provider-credential-panel">
-                <div className="provider-credential-head">
-                  <div>
-                    <strong>{tx("认证与账号来源")}</strong>
-                    <span>{tx("选择 Provider 使用哪一种上游凭据。账号集成会把账号作为资源池管理，适合 OpenAI subscription 或多个账号轮询。")}</span>
-                  </div>
-                </div>
-                <div className="provider-credential-options" role="radiogroup" aria-label={tx("认证与账号来源")}>
-                  {providerCredentialOptions().map((option) => {
-                    const Icon = option.icon;
-                    const active = credentialMode === option.key;
-                    return (
-                      <button
-                        aria-checked={active}
-                        className={active ? "provider-credential-option active" : "provider-credential-option"}
-                        key={option.key}
-                        onClick={() => selectCredentialMode(option.key)}
-                        role="radio"
-                        type="button"
-                      >
-                        <Icon size={16} />
-                        <span>
-                          <strong>{tx(option.label)}</strong>
-                          <em>{tx(option.description)}</em>
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
                 {credentialMode === "provider_api_key" ? (
                   <div className="provider-direct-key-fields">
                     <label className="field">
@@ -1280,29 +1346,89 @@ export function ProviderUpsertModal({
                     const quota = accountQuotas[resource.id];
                     const primary = quota?.rate_limit?.primary_window;
                     const secondary = quota?.rate_limit?.secondary_window;
+                    const accountEmail = providerResourceAccountLabel(resource);
+                    const quotaStatus = quota?.rate_limit?.limit_reached ? "已达上限" : quota?.rate_limit?.allowed ? "可用" : "不可用";
+                    const usagePercent = quotaUsagePercent(primary);
                     return (
                       <article className="provider-quota-card" key={resource.id}>
                         <div className="provider-quota-card-head">
-                          <div>
-                            <strong>{resource.name}</strong>
-                            <span>{providerResourceAccountLabel(resource)}</span>
+                          <div className="provider-quota-account">
+                            <span>{resource.name}</span>
+                            <strong>{accountEmail}</strong>
                           </div>
-                          <button className="secondary-button" disabled={accountQuotaBusyIDs[resource.id]} onClick={() => void queryAccountQuota(resource)} type="button">
-                            {tx(accountQuotaBusyIDs[resource.id] ? "查询中" : quota ? "刷新额度" : "查询额度")}
-                          </button>
+                          <div className="provider-quota-card-actions">
+                            {quota ? <span className={`provider-quota-status ${quotaStatus === "可用" ? "available" : "limited"}`}>{tx(quotaStatus)}</span> : null}
+                            <button className="secondary-button" disabled={accountQuotaBusyIDs[resource.id]} onClick={() => void queryAccountQuota(resource)} type="button">
+                              {tx(accountQuotaBusyIDs[resource.id] ? "查询中" : quota ? "刷新额度" : "查询额度")}
+                            </button>
+                            {resource.status === "active" ? (
+                              <button
+                                className="secondary-button provider-account-disable-button"
+                                disabled={loading}
+                                onClick={() => requestAccountConfirmation("disable", resource)}
+                                type="button"
+                              >
+                                <Ban size={14} />
+                                {tx("禁用")}
+                              </button>
+                            ) : (
+                              <button
+                                className="secondary-button"
+                                disabled={loading}
+                                onClick={() => requestAccountConfirmation("enable", resource)}
+                                type="button"
+                              >
+                                {tx("启用")}
+                              </button>
+                            )}
+                            <button
+                              className="danger-button provider-account-delete-button"
+                              disabled={loading}
+                              onClick={() => requestAccountConfirmation("delete", resource)}
+                              type="button"
+                            >
+                              <Trash2 size={14} />
+                              {tx("删除")}
+                            </button>
+                          </div>
                         </div>
-                        <ProviderAccountDetails resource={resource} />
                         {quota ? (
-                          <div className="provider-quota-grid">
-                            <QuotaMetric label="套餐" value={quota.plan_type || resource.credential_summary?.plan_type || "-"} />
-                            <QuotaMetric label="状态" value={quota.rate_limit?.limit_reached ? "已达上限" : quota.rate_limit?.allowed ? "可用" : "不可用"} />
-                            <QuotaMetric label="主窗口使用率" value={primary ? `${formatQuotaPercent(primary.used_percent)}%` : "-"} />
-                            <QuotaMetric label="主窗口重置" value={quotaWindowResetLabel(primary)} />
-                            {secondary ? <QuotaMetric label="次窗口使用率" value={`${formatQuotaPercent(secondary.used_percent)}%`} /> : null}
-                            {secondary ? <QuotaMetric label="次窗口重置" value={quotaWindowResetLabel(secondary)} /> : null}
-                            {quota.rate_limit_reset_credits ? <QuotaMetric label="重置额度" value={String(quota.rate_limit_reset_credits.available_count)} /> : null}
-                            <QuotaMetric label="查询时间" value={new Date(quota.fetched_at * 1000).toLocaleString()} />
-                          </div>
+                          <>
+                            <div className="provider-quota-summary">
+                              <div className="provider-quota-usage">
+                                <span>{tx("主窗口使用率")}</span>
+                                <strong>{primary ? `${formatQuotaPercent(primary.used_percent)}%` : "-"}</strong>
+                                <div
+                                  aria-label={tx("主窗口使用率")}
+                                  aria-valuemax={100}
+                                  aria-valuemin={0}
+                                  aria-valuenow={usagePercent}
+                                  className="provider-quota-progress"
+                                  role="progressbar"
+                                >
+                                  <span style={{ width: `${usagePercent}%` }} />
+                                </div>
+                              </div>
+                              <div className="provider-quota-highlights">
+                                <QuotaMetric label="套餐" value={quota.plan_type || resource.credential_summary?.plan_type || "-"} />
+                                <QuotaMetric label="重置额度" value={quota.rate_limit_reset_credits ? String(quota.rate_limit_reset_credits.available_count) : "-"} />
+                                <QuotaMetric label="主窗口重置时间" value={quotaWindowResetLabel(primary)} />
+                              </div>
+                            </div>
+                            <div className="provider-quota-fetched-at">
+                              {tx("查询时间")} · {new Date(quota.fetched_at * 1000).toLocaleString()}
+                            </div>
+                            <details className="provider-quota-details">
+                              <summary>{tx("账号与更多用量详情")}</summary>
+                              {secondary ? (
+                                <div className="provider-quota-grid">
+                                  <QuotaMetric label="次窗口使用率" value={`${formatQuotaPercent(secondary.used_percent)}%`} />
+                                  <QuotaMetric label="次窗口重置" value={quotaWindowResetLabel(secondary)} />
+                                </div>
+                              ) : null}
+                              <ProviderAccountDetails resource={resource} />
+                            </details>
+                          </>
                         ) : (
                           <p className="provider-credential-note">
                             {tx(accountQuotaBusyIDs[resource.id] ? "正在自动查询该真实账号的套餐与额度信息。" : "暂未获取到该账号的套餐与额度信息，可点击查询重试。")}
@@ -1330,14 +1456,13 @@ export function ProviderUpsertModal({
                   <label className="field">
                     <span>{tx("模型")}</span>
                     <select
-                      disabled={accountCatalogLoading || codexTestValues.speed === "fast" || codexTestModels.length === 0}
+                      disabled={accountCatalogLoading || codexTestModels.length === 0}
                       value={codexTestValues.model}
                       onChange={(event) => setCodexTestValues((current) => ({ ...current, model: event.target.value }))}
                     >
                       {codexTestModels.map((model) => <option key={model.id} value={model.id}>{model.display_name || model.name}</option>)}
                     </select>
                     {accountCatalogLoading ? <small>{tx("正在从所选账号加载模型目录...")}</small> : null}
-                    {codexTestValues.speed === "fast" ? <small>{tx("快速模式测试已锁定 5.6 家族中成本最低的 Luna。")}</small> : null}
                   </label>
                   <label className="field">
                     <span>{tx("推理强度")}</span>
@@ -1354,15 +1479,11 @@ export function ProviderUpsertModal({
                     <select
                       disabled={accountCatalogLoading || codexTestModels.length === 0}
                       value={codexTestValues.speed}
-                      onChange={(event) => {
-                        const speed = event.target.value;
-                        setCodexTestValues((current) => ({ ...current, speed, model: speed === "fast" ? "gpt-5.6-luna" : current.model }));
-                      }}
+                      onChange={(event) => setCodexTestValues((current) => ({ ...current, speed: event.target.value }))}
                     >
                       <option value="standard">{tx("标准")}</option>
-                      <option disabled={!codexFastTestSupported} value="fast">{tx("快速（仅 5.6 Luna 测试）")}</option>
+                      <option value="fast">{tx("快速")}</option>
                     </select>
-                    {!codexFastTestSupported && !accountCatalogLoading ? <small>{tx("所选账号的 Luna 模型不支持快速模式。")}</small> : null}
                   </label>
                   <label className="field provider-codex-test-prompt">
                     <span>{tx("真实提示词")}</span>
@@ -1580,6 +1701,84 @@ export function ProviderUpsertModal({
           </button>
         </div>
       </form>
+      {accountConfirmation ? (
+        <div className="modal-backdrop provider-account-confirmation-backdrop" role="presentation">
+          <div
+            aria-labelledby="provider-account-confirmation-title"
+            aria-modal="true"
+            className="confirm-modal provider-account-confirmation-modal"
+            role="dialog"
+          >
+            <div>
+              <p className="eyebrow">{tx("账号安全操作")}</p>
+              <h2 id="provider-account-confirmation-title">
+                {tx(accountConfirmation.action === "delete"
+                  ? "确认彻底删除账号"
+                  : accountConfirmation.action === "enable"
+                    ? "确认启用账号"
+                    : "确认禁用账号")}
+              </h2>
+            </div>
+            <div className="provider-account-confirmation-target">
+              <span>{accountConfirmation.resource.name}</span>
+              <strong>{providerResourceAccountLabel(accountConfirmation.resource)}</strong>
+            </div>
+            <p>
+              {tx(accountConfirmation.action === "delete"
+                ? "删除后，账号凭据、额度缓存、健康观测、会话绑定和运行状态都会被永久清除，且无法恢复。"
+                : accountConfirmation.action === "enable"
+                  ? "启用后，该账号会重新加入路由调度，并恢复额度查询、真实测试和模型映射能力。"
+                  : "禁用后，该账号会立即退出路由调度；账号数据仍会保留，可稍后重新启用。")}
+            </p>
+            {accountConfirmation.action === "delete" ? (
+              <label className="field provider-account-delete-confirmation-field">
+                <span>{tx("请输入以下英文短语以确认删除")}</span>
+                <code>{deleteAccountConfirmationPhrase}</code>
+                <input
+                  autoComplete="off"
+                  autoFocus
+                  onChange={(event) => {
+                    setDeleteAccountConfirmation(event.target.value);
+                    setAccountConfirmationError("");
+                  }}
+                  placeholder={deleteAccountConfirmationPhrase}
+                  spellCheck={false}
+                  value={deleteAccountConfirmation}
+                />
+              </label>
+            ) : null}
+            {accountConfirmationError ? <p className="provider-quota-error" role="alert">{accountConfirmationError}</p> : null}
+            <div className="modal-actions">
+              <button className="secondary-button" disabled={accountConfirmationBusy} onClick={closeAccountConfirmation} type="button">
+                {tx("取消")}
+              </button>
+              <button
+                className={accountConfirmation.action === "delete" ? "danger-confirm" : "button"}
+                disabled={
+                  accountConfirmationBusy ||
+                  (accountConfirmation.action === "delete" && deleteAccountConfirmation !== deleteAccountConfirmationPhrase)
+                }
+                onClick={() => {
+                  if (accountConfirmation.action === "delete") {
+                    void deleteAccount(accountConfirmation.resource);
+                  } else {
+                    void updateAccountStatus(accountConfirmation.resource, accountConfirmation.action);
+                  }
+                }}
+                type="button"
+              >
+                {tx(accountConfirmationBusy
+                  ? "处理中"
+                  : accountConfirmation.action === "delete"
+                    ? "永久删除账号"
+                    : accountConfirmation.action === "enable"
+                      ? "确认启用"
+                      : "确认禁用")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {accountOAuthCallbackModalOpen ? (
         <div className="modal-backdrop provider-oauth-callback-backdrop" role="presentation">
           <div
@@ -1739,6 +1938,11 @@ function formatQuotaPercent(value: number) {
   return Number.isFinite(value) ? String(Math.round(value * 10) / 10) : "0";
 }
 
+function quotaUsagePercent(window?: OpenAIQuotaWindow) {
+  if (!window || !Number.isFinite(window.used_percent)) return 0;
+  return Math.min(100, Math.max(0, window.used_percent));
+}
+
 function quotaWindowResetLabel(window?: OpenAIQuotaWindow) {
   if (!window) return "-";
   if (window.reset_at > 0) return new Date(window.reset_at * 1000).toLocaleString();
@@ -1868,6 +2072,11 @@ export function providerCreateWizardSteps(): Array<{ title: string; icon: typeof
 
 export function providerCreateWizardStepTitle(title: string, credentialMode: ProviderCredentialMode) {
   if (credentialMode === "account_integration" && title === "渠道信息") return "默认通道";
+  if (title === "账号与凭据") {
+    if (credentialMode === "account_integration") return "账号授权";
+    if (credentialMode === "provider_api_key") return "直接 API Key";
+    return "稍后配置";
+  }
   return title;
 }
 

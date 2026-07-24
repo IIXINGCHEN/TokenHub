@@ -21,7 +21,7 @@ const (
 	openAICodexModelsURL         = openAICodexBaseURL + "/models"
 	openAICodexVersion           = "0.145.0"
 	openAICodexUserAgent         = "codex_cli_rs/0.145.0 (Mac OS 15.0.0; arm64) xterm-256color"
-	openAICodexFastTestModel     = "gpt-5.6-luna"
+	openAICodexDefaultProbeModel = "gpt-5.6-luna"
 	openAICodexMaxRequestRetries = 4
 	openAICodexStreamIdleTimeout = 5 * time.Minute
 )
@@ -457,7 +457,7 @@ func codexResponseOutputText(response map[string]any) string {
 
 func (a CodexSubscriptionAdapter) DefaultProbeRequest() ProviderProbeRequest {
 	return ProviderProbeRequest{
-		Model:           openAICodexFastTestModel,
+		Model:           openAICodexDefaultProbeModel,
 		ReasoningEffort: "medium",
 		Speed:           "standard",
 		Prompt:          "Reply with exactly one short sentence confirming that the Codex connection works.",
@@ -490,9 +490,6 @@ func (a CodexSubscriptionAdapter) Probe(ctx context.Context, provider Provider, 
 	}
 	if request.Speed != "standard" && request.Speed != "fast" {
 		return ProviderProbeResult{}, NewHTTPError(http.StatusBadRequest, "codex_speed_invalid", "Speed must be standard or fast")
-	}
-	if request.Speed == "fast" && request.Model != openAICodexFastTestModel {
-		return ProviderProbeResult{}, NewHTTPError(http.StatusBadRequest, "codex_fast_test_model_blocked", "Fast-mode tests are restricted to the lower-cost gpt-5.6-luna model")
 	}
 	if provider.Options == nil {
 		provider.Options = map[string]string{}
