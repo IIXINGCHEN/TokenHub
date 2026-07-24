@@ -17,8 +17,8 @@ Language: [English](../user-guide.md) | [简体中文](../zh-CN/user-guide.md) |
 
 ## 呼び出し順序
 
-1. **Key Management** を開き、利用量とコストを持つ Project を選びます。
-2. Project API Key を作成またはコピーします。新しい Key は一度だけ表示されます。
+1. **Key Management** を開き、API Key を作成またはコピーします。新しい Key は一度だけ表示されます。
+2. TokenHub は個人 Key を割り当て済み Project に自動帰属し、未割り当ての場合はプラットフォームのデフォルト Project に帰属します。
 3. `GET /v1/models` で、その Key から利用できるモデル一覧を確認します。
 4. モデル ID を選び、`POST /v1/chat/completions`、`POST /v1/responses`、`POST /v1/embeddings` を呼び出します。
 5. **Usage Analytics** と **Request Logs** でリクエスト、Token、コスト、エラーを確認します。

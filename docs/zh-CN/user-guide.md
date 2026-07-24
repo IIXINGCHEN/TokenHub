@@ -17,8 +17,8 @@ Language: [English](../user-guide.md) | 简体中文 | [日本語](../ja/user-gu
 
 ## 调用顺序
 
-1. 打开 **Key 管理**，选择承担用量和成本的项目。
-2. 创建或复制项目 API Key。新 Key 只展示一次。
+1. 打开 **Key 管理**，创建或复制 API Key。新 Key 只展示一次。
+2. TokenHub 会自动把个人 Key 归入已分配项目；尚未分配项目时归入平台默认项目。
 3. 调用 `GET /v1/models` 查看这个 Key 可用的模型列表。
 4. 选择一个模型 ID，调用 `POST /v1/chat/completions`、`POST /v1/responses` 或 `POST /v1/embeddings`。
 5. 在 **用量统计** 和 **请求日志** 中查看请求、Token、成本和错误。
