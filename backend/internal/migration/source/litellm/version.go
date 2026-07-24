@@ -1,10 +1,19 @@
 package litellm
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 )
+
+// ErrVersionUnknown is returned when the LiteLLM version marker cannot be
+// detected in the config.
+var ErrVersionUnknown = errors.New("litellm: version marker not found in config")
+
+// ErrVersionUnsupported is returned when the LiteLLM version is outside the
+// supported range.
+var ErrVersionUnsupported = errors.New("litellm: version outside supported range")
 
 type semver struct {
 	Major int
@@ -15,12 +24,12 @@ type semver struct {
 func ValidateSupportedVersion(version string) error {
 	v, err := parseVersion(normalizeVersion(version))
 	if err != nil {
-		return fmt.Errorf("litellm: parse version %q: %w", version, err)
+		return fmt.Errorf("%w: parse version %q: %w", ErrVersionUnknown, version, err)
 	}
 	min, _ := parseVersion("1.52.0")
 	max, _ := parseVersion("1.70.0")
 	if compareSemver(v, min) < 0 || compareSemver(v, max) >= 0 {
-		return fmt.Errorf("litellm: unsupported version %q, supported range is %s", version, SupportedVersionRange)
+		return fmt.Errorf("%w: version %q, supported range is %s", ErrVersionUnsupported, version, SupportedVersionRange)
 	}
 	return nil
 }

@@ -448,7 +448,7 @@ func parseTimestamp(raw string, b *bundle.CanonicalMigrationBundle, path string)
 }
 
 func warn(b *bundle.CanonicalMigrationBundle, code string, message string, path string) {
-	b.Warnings = append(b.Warnings, bundle.Warning{Code: code, Message: message, Path: path})
+	b.Warnings = append(b.Warnings, bundle.Warning{Severity: bundle.SeverityWarn, Code: code, Message: message, Path: path})
 }
 
 func cloneMetadata(in map[string]string) map[string]string {

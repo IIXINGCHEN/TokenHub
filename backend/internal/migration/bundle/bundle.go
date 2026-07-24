@@ -43,11 +43,19 @@ type Source struct {
 	Metadata       map[string]string `json:"metadata,omitempty"`
 }
 
+// Warning severity levels.
+const (
+	SeverityInfo    = "info"
+	SeverityWarn    = "warn"
+	SeverityBlocker = "blocker"
+)
+
 // Warning is a non-fatal issue encountered while producing the bundle.
 type Warning struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Path    string `json:"path,omitempty"`
+	Severity string `json:"severity"`
+	Code     string `json:"code"`
+	Message  string `json:"message"`
+	Path     string `json:"path,omitempty"`
 }
 
 // ExternalRef records the identifier used by the source system so

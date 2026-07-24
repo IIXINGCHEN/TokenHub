@@ -15,6 +15,9 @@ func TestGetRegisteredExtractor(t *testing.T) {
 	if extractor.Name() != "litellm" {
 		t.Fatalf("unexpected extractor name %q", extractor.Name())
 	}
+	if len(extractor.SupportedVersions()) == 0 {
+		t.Fatal("expected non-empty supported versions")
+	}
 }
 
 func TestGetUnknownExtractor(t *testing.T) {

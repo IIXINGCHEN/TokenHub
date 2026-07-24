@@ -18,6 +18,15 @@ const (
 	ActionDelete Action = "delete"
 )
 
+// MigrationReport is a structured summary of an apply or plan operation.
+type MigrationReport struct {
+	Created int               `json:"created"`
+	Updated int               `json:"updated"`
+	Skipped int               `json:"skipped"`
+	Errors  []string          `json:"errors,omitempty"`
+	NewKeys map[string]string `json:"new_keys,omitempty"`
+}
+
 type Change struct {
 	Resource string `json:"resource"`
 	ID       string `json:"id"`
@@ -31,6 +40,7 @@ type Checkpoint struct {
 type ApplyResult struct {
 	Changes     []Change          `json:"changes"`
 	Checkpoint  Checkpoint        `json:"checkpoint"`
+	Report      MigrationReport   `json:"report"`
 	NewKeys     map[string]string `json:"new_keys,omitempty"`
 	Unsupported []string          `json:"unsupported,omitempty"`
 }
@@ -169,6 +179,7 @@ func (s *StoreSink) Apply(b *bundle.CanonicalMigrationBundle) (*ApplyResult, err
 		result.Checkpoint.Changes = append(result.Checkpoint.Changes, change)
 	}
 	result.NewKeys = s.NewKeys()
+	result.Report = s.buildReport(result.Changes)
 
 	return result, nil
 }
@@ -351,6 +362,126 @@ func (s *StoreSink) NewKeys() map[string]string {
 		copyMap[key] = value
 	}
 	return copyMap
+}
+
+// buildReport creates a MigrationReport from a list of changes.
+func (s *StoreSink) buildReport(changes []Change) MigrationReport {
+	var report MigrationReport
+	for _, c := range changes {
+		switch c.Action {
+		case ActionCreate:
+			report.Created++
+		case ActionUpdate:
+			report.Updated++
+		case ActionSkip:
+			report.Skipped++
+		}
+	}
+	report.NewKeys = s.NewKeys()
+	return report
+}
+
+// Plan performs a dry-run apply and returns a MigrationReport without
+// writing any resources to the store.
+func (s *StoreSink) Plan(b *bundle.CanonicalMigrationBundle) (*MigrationReport, error) {
+	if err := bundle.Validate(b); err != nil {
+		return nil, err
+	}
+	// Build a temporary ref index so we can resolve project refs for API keys.
+	// This mirrors the ref index built during Apply.
+	planIndex := refIndex{
+		providers: map[string]string{},
+		resources: map[string]string{},
+		projects:  map[string]string{},
+		users:     map[string]string{},
+		apiKeys:   map[string]string{},
+		models:    map[string]string{},
+		routes:    map[string]string{},
+		teams:     map[string]string{},
+	}
+	for _, item := range b.Teams {
+		planIndex.teams[item.ExternalRef.ID] = item.ID
+	}
+	// Resolve project refs for Plan
+	projects := s.store.ListProjects()
+	for _, item := range b.Projects {
+		teamID := planIndex.teams[item.TeamRef]
+		_, found := findProjectByBusinessKey(projects, item.Spec.Name, teamID)
+		if found {
+			planIndex.projects[item.ExternalRef.ID] = "existing"
+		}
+	}
+
+	var report MigrationReport
+	for range b.Teams {
+		report.Skipped++
+	}
+	providers := s.store.ListProviders()
+	for _, item := range b.Providers {
+		_, found := findProviderByBusinessKey(providers, item.Spec.Name, item.Spec.Type)
+		if found {
+			report.Updated++
+		} else {
+			report.Created++
+		}
+	}
+	resources := s.store.ListProviderResources()
+	for _, item := range b.ProviderResources {
+		providerID := planIndex.providers[item.ProviderRef]
+		_, found := findProviderResourceByBusinessKey(resources, providerID, item.Spec.Name)
+		if found {
+			report.Updated++
+		} else {
+			report.Created++
+		}
+	}
+	models := s.store.ListModels()
+	for _, item := range b.Models {
+		_, found := findModelByName(models, item.Spec.Name)
+		if found {
+			report.Updated++
+		} else {
+			report.Created++
+		}
+	}
+	users := s.store.ListAdminUsers()
+	for _, item := range b.Users {
+		_, found := findAdminUserByIdentity(users, item.Spec)
+		if found {
+			report.Updated++
+		} else {
+			report.Created++
+		}
+	}
+	for _, item := range b.Projects {
+		teamID := planIndex.teams[item.TeamRef]
+		_, found := findProjectByBusinessKey(projects, item.Spec.Name, teamID)
+		if found {
+			report.Updated++
+		} else {
+			report.Created++
+		}
+	}
+	keys := s.store.ListAPIKeys()
+	for _, item := range b.APIKeys {
+		projectID := planIndex.projects[item.ProjectRef]
+		_, found := findAPIKeyByBusinessKey(keys, projectID, item.Spec.Name)
+		if found {
+			report.Updated++
+		} else {
+			report.Created++
+		}
+	}
+	routes := s.store.ListRoutes()
+	for _, item := range b.Routes {
+		_, found := findRouteByBusinessKey(routes, item.Spec.ModelName, item.Spec.ProviderResourceID, item.Spec.ProviderModel)
+		if found {
+			report.Updated++
+		} else {
+			report.Created++
+		}
+	}
+	return &report, nil
 }
 
 func (s *StoreSink) applyProvider(item bundle.ProviderRef) (Change, error) {

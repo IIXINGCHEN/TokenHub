@@ -54,8 +54,9 @@
     "warning": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["code", "message"],
+      "required": ["severity", "code", "message"],
       "properties": {
+        "severity": {"type": "string", "enum": ["info", "warn", "blocker"]},
         "code": {"type": "string", "minLength": 1},
         "message": {"type": "string", "minLength": 1},
         "path": {"type": "string"}

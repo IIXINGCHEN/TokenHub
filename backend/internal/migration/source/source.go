@@ -7,6 +7,14 @@ import (
 	"tokenhub/backend/internal/migration/bundle"
 )
 
+// Info describes a source adapter and its readiness.
+type Info struct {
+	Adapter string `json:"adapter"`
+	Version string `json:"version"`
+	Ready   bool   `json:"ready"`
+	Note    string `json:"note,omitempty"`
+}
+
 // ExtractOptions configures a source extraction run.
 type ExtractOptions struct {
 	InputPath string
@@ -18,7 +26,8 @@ type ExtractOptions struct {
 // gateway configuration or export.
 type Extractor interface {
 	Name() string
-	SupportedVersions() string
+	SupportedVersions() []string
+	Probe(ctx context.Context, opts ExtractOptions) (Info, error)
 	Extract(ctx context.Context, opts ExtractOptions) (*bundle.CanonicalMigrationBundle, error)
 }
 
