@@ -330,7 +330,10 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("cache-control", "no-cache")
 		w.Header().Set("x-request-id", routed.Call.RequestID)
 		s.writeRouteHeaders(w, routed.Call, route, 1)
-		w.WriteHeader(http.StatusOK)
+w.WriteHeader(http.StatusOK)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
 		usage, err := adapter.ChatStream(leaseCtx, route.Provider, route.ProviderModel, req, w)
 		if leaseErr := coordinationLeaseError(leaseCtx); leaseErr != nil {
 			err = leaseErr
