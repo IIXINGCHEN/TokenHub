@@ -50,3 +50,4 @@ yarn-error.log*
 .claude/
 .spec-workflow/
 CLAUDE.md
+backend/tokenhub-migrate

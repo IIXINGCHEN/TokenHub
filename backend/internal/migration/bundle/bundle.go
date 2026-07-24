@@ -165,3 +165,11 @@ func Unmarshal(data []byte) (*CanonicalMigrationBundle, error) {
 	}
 	return &out, nil
 }
+
+// UnmarshalCheckpoint parses a checkpoint JSON payload into dst.
+func UnmarshalCheckpoint(data []byte, dst any) error {
+	if err := json.Unmarshal(data, dst); err != nil {
+		return fmt.Errorf("bundle: unmarshal checkpoint: %w", err)
+	}
+	return nil
+}
