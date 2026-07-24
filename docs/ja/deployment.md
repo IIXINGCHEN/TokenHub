@@ -76,8 +76,9 @@ cp deploy/.env.example deploy/.env
 - `TOKENHUB_ADMIN_TOKEN`: Admin API の初期 Token。32 バイト以上のランダム値を使用してください。
 - `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD`: 初期 `admin` ユーザーの作成時にのみ使用するパスワード。12 バイト以上にしてください。
 - `TOKENHUB_SECRET_KEY`: バックエンド秘密鍵。32 バイト以上のランダム値を使用し、安定して保持してください。
+- `TOKENHUB_IMAGE_TAG`: バックエンドとフロントエンドで共通のイメージタグ。デフォルトは `latest`。
 - `TOKENHUB_PUBLIC_BASE_URL`: ユーザーに表示するバックエンド URL。
-- `NEXT_PUBLIC_API_BASE_URL`: ブラウザの管理コンソールが使用するバックエンド URL。
+- `TOKENHUB_API_BASE_URL`: ブラウザの管理コンソールが使用するバックエンド URL。フロントエンドサーバーが実行時に読み取ります。非推奨の `NEXT_PUBLIC_API_BASE_URL` は、1 回の互換期間に限りフォールバックとして残します。
 - `TOKENHUB_BACKEND_PORT`: バックエンドのホスト側ポート。デフォルトは `8080`。
 - `TOKENHUB_FRONTEND_PORT`: 管理コンソールのホスト側ポート。デフォルトは `3000`。
 
@@ -87,9 +88,9 @@ cp deploy/.env.example deploy/.env
 ./deploy/install.sh
 ```
 
-スクリプトはビルド前に Compose の環境変数を検証し、秘密値を表示せずに安全でない変数を個別に報告します。Compose が失敗し、その試行で作成または再起動したバックエンドコンテナが exited、restarting、dead、unhealthy のいずれかである場合、その試行のバックエンドログを最大 100 行表示します。バックエンド以外の障害では、無関係なバックエンドログを出力しません。
+スクリプトは Compose の環境変数を検証し、公開済みイメージを取得して、ローカルではビルドせずにコンテナを起動します。GHCR イメージの初回公開中に取得できない場合は、現在のチェックアウトからのビルドへ自動的に切り替えます。秘密値を表示せずに安全でない変数を個別に報告します。Compose が失敗し、その試行で作成または再起動したバックエンドコンテナが exited、restarting、dead、unhealthy のいずれかである場合、その試行のバックエンドログを最大 100 行表示します。バックエンド以外の障害では、無関係なバックエンドログを出力しません。
 
-コンテナをビルドまたは起動せず、設定だけを検証するには次を実行します。
+イメージを取得したりコンテナを起動したりせず、設定だけを検証するには次を実行します。
 
 ```bash
 ./deploy/install.sh --check-only
@@ -97,7 +98,28 @@ cp deploy/.env.example deploy/.env
 
 別の環境ファイルを使用する場合は、`./deploy/install.sh --env-file /path/to/deploy.env` を実行します。
 
-### 任意: サーバー側のビルド高速化
+### 公開イメージのバージョンルール
+
+GitHub Actions は `linux/amd64` と `linux/arm64` 向けに `ghcr.io/astaxie/tokenhub-backend` と `ghcr.io/astaxie/tokenhub-frontend` を公開します。
+
+- GitHub Release を公開すると、完全なセマンティックバージョンのタグを自動生成します。プレリリースでない場合は、メジャー・マイナータグと `latest` も更新します。
+- `workflow_dispatch` では `edge` または分離された `manual-*` タグのみを公開でき、正式なリリースタグや `latest` は上書きできません。
+- PR ではコンテナイメージをビルドまたは push しません。
+- `main` へのマージではイメージを公開しません。
+
+ワークフローは、まず実行ごとのステージングタグで各イメージを push し、両方のマルチプラットフォームイメージが存在することを確認してから最終タグを公開します。バックエンドとフロントエンドには同じ `TOKENHUB_IMAGE_TAG` を使用してください。本番環境では `latest` ではなく、完全なリリースタグを固定することを推奨します。
+
+GHCR で初めて公開した Package はデフォルトで非公開です。匿名デプロイを有効にする前に、リポジトリ所有者が両方の Package を Public に変更する必要があります。それまでは、デフォルトの `latest` タグを使用するデプロイに限り、取得に失敗するとローカルのソースビルドへ自動的に切り替えます。明示した `TOKENHUB_IMAGE_TAG` を取得できない場合、現在のソースをそのバージョンとして扱わず、インストールスクリプトは終了します。
+
+### 任意: ローカルビルド
+
+現在のチェックアウトからイメージをビルドする場合は、次を実行します。
+
+```bash
+./deploy/install.sh --build
+```
+
+以下の高速化設定は、ローカルのソースビルドにのみ適用されます。
 
 このプロジェクトの Dockerfile には、地域依存のパッケージミラーをハードコードしません。サーバーから Docker Hub、npm、Go Module ソースへのアクセスが遅い場合は、Dockerfile を編集せず、デプロイ先サーバー側で高速化を設定してください。
 
@@ -130,7 +152,7 @@ Compose は次を起動します。
 - バックエンド: `http://localhost:8080`
 - フロントエンド: `http://localhost:3000`
 - SQLite データ: Docker named volume `tokenhub-data`
-- モデルカタログ: `data/model-catalog.yaml` からマウント
+- モデルカタログ: 選択したバックエンドイメージに含まれるバージョン
 
 状態を確認します。
 
@@ -193,8 +215,8 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 
 | 変数 | デフォルト | 説明 |
 | --- | --- | --- |
-| `NEXT_PUBLIC_API_BASE_URL` | `http://localhost:8080` | バックエンド Admin API URL |
-| `NEXT_PUBLIC_APP_NAME` | `TokenHub` | 表示名 |
+| `TOKENHUB_API_BASE_URL` | `http://localhost:8080` | フロントエンドサーバーが実行時に読み取るバックエンド Admin API URL |
+| `NEXT_PUBLIC_API_BASE_URL` | 空 | 非推奨の互換フォールバック。`TOKENHUB_API_BASE_URL` へ移行してください |
 
 ## データとバックアップ
 
@@ -215,17 +237,15 @@ SQLite は、プロジェクト、Key、Provider、ルート、ユーザー、�
 
 ## モデルカタログ
 
-デプロイファイルは、リポジトリ内の `data/model-catalog.yaml` をバックエンドコンテナの `/app/catalog/model-catalog.yaml` にマウントします。
+公開済みバックエンドイメージには、対応するバージョンの `data/model-catalog.yaml` が `/app/catalog/model-catalog.yaml` に含まれます。デフォルトのデプロイではこのファイルを使用し、バックエンドプログラムとモデルカタログを同じイメージバージョンにそろえます。
 
-標準モデルカタログを更新する手順:
-
-1. `data/model-catalog.yaml` を編集します。
-2. バックエンドコンテナを再起動します。
-3. 管理コンソールの `Model Catalog` で結果を確認します。
+カスタムモデルカタログを使用する場合は、マウントするファイルを明示します。
 
 ```bash
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml restart tokenhub-backend
+./deploy/install.sh --model-catalog /absolute/path/to/model-catalog.yaml
 ```
+
+カスタムファイルはイメージ内のモデルカタログを上書きするため、そのバージョンは `TOKENHUB_IMAGE_TAG` とは別に管理します。ファイルを更新した後、バックエンドコンテナを再起動し、管理コンソールの `Model Catalog` で内容を確認します。
 
 ## リバースプロキシ
 
