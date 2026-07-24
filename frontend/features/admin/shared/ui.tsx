@@ -11,12 +11,16 @@ import { PaginationControls, usePagination } from "../views/settings-table";
 export function ConfirmDialog({
   title,
   message,
+  confirmLabel = "删除",
+  confirmClassName = "danger-confirm",
   loading,
   onCancel,
   onConfirm,
 }: {
   title: string;
   message: string;
+  confirmLabel?: string;
+  confirmClassName?: string;
   loading: boolean;
   onCancel: () => void;
   onConfirm: () => void;
@@ -28,7 +32,7 @@ export function ConfirmDialog({
         <p>{tx(message)}</p>
         <div className="modal-actions">
           <button className="secondary-button" onClick={onCancel} type="button">{tx("取消")}</button>
-          <button className="danger-confirm" onClick={onConfirm} disabled={loading} type="button">{tx("删除")}</button>
+          <button className={confirmClassName} onClick={onConfirm} disabled={loading} type="button">{tx(confirmLabel)}</button>
         </div>
       </div>
     </div>

@@ -163,6 +163,12 @@ export function deleteConfirmMessage(name: string) {
   return `删除「${name}」后，当前内存数据会立即移除。`;
 }
 
+export function bulkDeleteConfirmMessage(count: number) {
+  if (activeLanguage === "en") return `After deleting ${formatNumber(count)} selected records, the current in-memory data will be removed immediately.`;
+  if (activeLanguage === "ja") return `選択した ${formatNumber(count)} 件を削除すると、現在のメモリ上のデータはすぐに削除されます。`;
+  return `删除选中的 ${formatNumber(count)} 条记录后，当前内存数据会立即移除。`;
+}
+
 export function routeAttemptCountText(count: number) {
   if (count > 1) {
     if (activeLanguage === "en") return `${formatNumber(count)} attempts, with fallback`;

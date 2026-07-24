@@ -638,6 +638,10 @@ export async function adminDelete(ctx: ApiContext, path: string) {
   if (!resp.ok && resp.status !== 204) throw new Error(await readAdminError(resp, operationLabel("DELETE", path)));
 }
 
+export async function restoreDefaultModelCatalog(ctx: ApiContext) {
+  await adminMutate(ctx, "/api/admin/models/restore-defaults", "POST", {});
+}
+
 export async function readLoadError(resp: Response, name: string) {
   if (resp.status === 403) return permissionDeniedMessage(loadRequestLabel(name));
   return readAdminError(resp, loadRequestLabel(name));

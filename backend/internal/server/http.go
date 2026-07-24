@@ -127,6 +127,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/admin/provider-resources", s.handleAdminProviderResources)
 	s.mux.HandleFunc("/api/admin/provider-resources/", s.handleAdminProviderResourceNested)
 	s.mux.HandleFunc("/api/admin/models", s.handleAdminModels)
+	s.mux.HandleFunc("/api/admin/models/restore-defaults", s.handleAdminModelsRestoreDefaults)
 	s.mux.HandleFunc("/api/admin/models/", s.handleAdminModelItem)
 	s.mux.HandleFunc("/api/admin/routing-rules", s.handleAdminRoutes)
 	s.mux.HandleFunc("/api/admin/routing-rules/", s.handleAdminRouteItem)
@@ -3710,13 +3711,44 @@ func (s *Server) handleAdminModels(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) handleAdminModelsRestoreDefaults(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdmin(w, r, "model", r.Method)
+	if !ok {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+		return
+	}
+	catalogFile := strings.TrimSpace(s.config.ModelCatalogFile)
+	if catalogFile == "" {
+		catalogFile = defaultModelCatalogFile()
+	}
+	models, err := defaultModelCatalog(catalogFile)
+	if err != nil {
+		writeError(w, r, NewHTTPError(500, "model_catalog_restore_failed", err.Error()))
+		return
+	}
+	for _, model := range models {
+		s.store.AddModel(model)
+	}
+	s.recordAdminAudit(r, user, "restore_defaults", "model", "model_catalog", "", map[string]any{
+		"catalog_file": catalogFile,
+		"models":       len(models),
+	})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"restored": len(models),
+		"data":     s.accessibleModelsForAdminUser(user),
+	})
+}
+
 func (s *Server) handleAdminModelItem(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAdmin(w, r, "model", r.Method)
 	if !ok {
 		return
 	}
-	modelName := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/admin/models/"), "/")
-	if modelName == "" || strings.Contains(modelName, "/") {
+	modelName, ok := adminModelNameFromPath(r)
+	if !ok {
 		writeError(w, r, NewHTTPError(404, "not_found", "Not found"))
 		return
 	}
@@ -3744,6 +3776,24 @@ func (s *Server) handleAdminModelItem(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
 	}
+}
+
+func adminModelNameFromPath(r *http.Request) (string, bool) {
+	const prefix = "/api/admin/models/"
+	escaped := strings.TrimPrefix(r.URL.EscapedPath(), prefix)
+	escaped = strings.Trim(escaped, "/")
+	if escaped == "" || strings.Contains(escaped, "/") {
+		return "", false
+	}
+	modelName, err := url.PathUnescape(escaped)
+	if err != nil {
+		return "", false
+	}
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" {
+		return "", false
+	}
+	return modelName, true
 }
 
 func (s *Server) handleAdminRoutes(w http.ResponseWriter, r *http.Request) {

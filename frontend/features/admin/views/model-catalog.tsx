@@ -1,5 +1,5 @@
-import { AlertCircle, Boxes, ChevronDown, CircleHelp, Gauge, GripVertical, Plus, Search, Trash2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { AlertCircle, Boxes, ChevronDown, CircleHelp, Gauge, GripVertical, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { type AppData, type Model, type ModelRoute, type Provider, type ResourceAction, type ResourceConfig, type ViewKey } from "../core/types";
 import { filterModelCatalog, hasThirdPartyRoute, modelCapabilityLabel, modelCatalogCapabilityTabs, modelCatalogCategories, modelCatalogFilterLabel, modelCategory, modelCategoryInitial, modelCategoryLabel, modelCategoryTabs, notificationChannelTabs, priceMetric } from "../domain/catalog";
 import { filterRouteModels, findProvider, modelRoutesFor, reorderRoutes, routeModelCategories } from "../domain/entities";
@@ -9,7 +9,7 @@ import { tx } from "../i18n/runtime";
 import { DataSection, ModelRouteProviders, StatusPill } from "../shared/ui";
 import { clampNumber } from "./crud-projects";
 import { modelBrandIconSource, modelCatalogMoney, modelCatalogPriceBaseline, modelCatalogPriceRow, modelCatalogPriceValue, modelDisplayTitle, modelEstimatedMonthlyCost } from "./database-model-pricing";
-import { RouteStrategyHint } from "./settings-table";
+import { PaginationControls, RouteStrategyHint, usePagination } from "./settings-table";
 
 export function ModelCategoryTabs({
   data,
@@ -77,6 +77,8 @@ export function ModelCatalogView({
   onCreate,
   onEdit,
   onDelete,
+  onBulkDelete,
+  onRestoreDefaults,
   onAction,
 }: {
   config: ResourceConfig<Model>;
@@ -85,6 +87,8 @@ export function ModelCatalogView({
   onCreate: () => void;
   onEdit: (item: Model) => void;
   onDelete: (item: Model) => void;
+  onBulkDelete: (items: Model[]) => void;
+  onRestoreDefaults: () => void;
   onAction: (action: ResourceAction<Model>, item: Model) => void;
 }) {
   const [category, setCategory] = useState("all");
@@ -156,6 +160,12 @@ export function ModelCatalogView({
                   {tx(config.createLabel ?? "新增模型")}
                 </button>
               ) : null}
+              {!readOnly ? (
+                <button className="secondary-button" onClick={onRestoreDefaults} type="button">
+                  <RefreshCw size={16} />
+                  {tx("恢复出厂目录")}
+                </button>
+              ) : null}
             </div>
           </div>
 
@@ -182,6 +192,7 @@ export function ModelCatalogView({
               onAction={onAction}
               onEdit={readOnly ? undefined : onEdit}
               onDelete={readOnly ? undefined : onDelete}
+              onBulkDelete={readOnly ? undefined : onBulkDelete}
             />
           )}
         </section>
@@ -209,6 +220,7 @@ export function ModelCatalogPriceTable({
   onAction,
   onEdit,
   onDelete,
+  onBulkDelete,
 }: {
   models: Model[];
   data: AppData;
@@ -217,48 +229,139 @@ export function ModelCatalogPriceTable({
   onAction: (action: ResourceAction<Model>, item: Model) => void;
   onEdit?: (item: Model) => void;
   onDelete?: (item: Model) => void;
+  onBulkDelete?: (items: Model[]) => void;
 }) {
   const [sort, setSort] = useState<ModelCatalogPriceSort>({ key: "default", direction: "asc" });
+  const [selectedModelNames, setSelectedModelNames] = useState<Set<string>>(() => new Set());
   const defaultSorted = modelCatalogPriceSortedModels(models);
   const baseline = modelCatalogPriceBaseline(defaultSorted);
   const rows = modelCatalogSortRows(defaultSorted.map((model) => modelCatalogPriceRow(model, data, readOnly, baseline)), sort);
+  const paginationResetKey = `model-catalog:${sort.key}:${sort.direction}:${models.map((model) => model.name).join("|")}`;
+  const pagination = usePagination(rows.length, paginationResetKey);
+  const pagedRows = rows.slice(pagination.startIndex, pagination.endIndex);
   const maxIndex = Math.max(1, ...rows.map((row) => row.priceIndex || 0));
+  const pageModelNames = pagedRows.map((row) => row.model.name);
+  const pageSelectableCount = pageModelNames.length;
+  const allPageSelected = pageSelectableCount > 0 && pageModelNames.every((name) => selectedModelNames.has(name));
+  const somePageSelected = pageModelNames.some((name) => selectedModelNames.has(name));
+  const selectedModels = rows.map((row) => row.model).filter((model) => selectedModelNames.has(model.name));
+
+  useEffect(() => {
+    const visibleNames = new Set(models.map((model) => model.name));
+    setSelectedModelNames((current) => {
+      const next = new Set<string>();
+      current.forEach((name) => {
+        if (visibleNames.has(name)) next.add(name);
+      });
+      return next.size === current.size ? current : next;
+    });
+  }, [models]);
+
+  function toggleModelSelection(name: string, checked: boolean) {
+    setSelectedModelNames((current) => {
+      const next = new Set(current);
+      if (checked) {
+        next.add(name);
+      } else {
+        next.delete(name);
+      }
+      return next;
+    });
+  }
+
+  function togglePageSelection(checked: boolean) {
+    setSelectedModelNames((current) => {
+      const next = new Set(current);
+      for (const name of pageModelNames) {
+        if (checked) {
+          next.add(name);
+        } else {
+          next.delete(name);
+        }
+      }
+      return next;
+    });
+  }
+
   return (
-    <div className="model-price-table-wrap">
-      <table className={readOnly ? "model-price-table" : "model-price-table admin"}>
-        <thead>
-          <tr>
-            <th aria-sort={modelCatalogSortAria(sort, "name")}>
-              <ModelCatalogSortHeader label="模型" sortKey="name" sort={sort} onSort={setSort} />
-            </th>
-            <th>{tx("类型")}</th>
-            <th aria-sort={modelCatalogSortAria(sort, "input")}>
-              <ModelCatalogSortHeader label="输入价" sortKey="input" sort={sort} onSort={setSort} />
-            </th>
-            <th aria-sort={modelCatalogSortAria(sort, "output")}>
-              <ModelCatalogSortHeader label="输出价" sortKey="output" sort={sort} onSort={setSort} />
-            </th>
-            <th aria-sort={modelCatalogSortAria(sort, "cache")}>
-              <ModelCatalogSortHeader label="缓存读" sortKey="cache" sort={sort} onSort={setSort} />
-            </th>
-            <th aria-sort={modelCatalogSortAria(sort, "context")}>
-              <ModelCatalogSortHeader label="上下文" sortKey="context" sort={sort} onSort={setSort} />
-            </th>
-            <th aria-sort={modelCatalogSortAria(sort, "monthly")}>
-              <ModelCatalogSortHeader label="估算月成本" sortKey="monthly" sort={sort} onSort={setSort} />
-            </th>
-            <th aria-sort={modelCatalogSortAria(sort, "index")}>
-              <ModelCatalogSortHeader label="价格指数" sortKey="index" sort={sort} onSort={setSort} />
-            </th>
-            <th>{tx("来源")}</th>
-            {!readOnly ? <th>{tx("操作")}</th> : null}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => {
-            const visibleActions = actions.filter((action) => !action.visible || action.visible(row.model));
-            return (
-              <tr className={row.availability.tone === "blocked" && !readOnly ? "unrouted" : undefined} key={row.model.name}>
+    <>
+      {!readOnly ? (
+        <div className="model-bulk-toolbar">
+          <span>{selectedModels.length > 0 ? `${selectedModels.length} ${tx("个已选")}` : tx("未选择模型")}</span>
+          <div>
+            <button className="secondary-button" disabled={selectedModels.length === 0} onClick={() => setSelectedModelNames(new Set())} type="button">
+              {tx("清除选择")}
+            </button>
+            <button className="danger-button model-bulk-delete" disabled={selectedModels.length === 0 || !onBulkDelete} onClick={() => onBulkDelete?.(selectedModels)} type="button">
+              <Trash2 size={15} />
+              {tx("批量删除")}
+            </button>
+          </div>
+        </div>
+      ) : null}
+      <div className="model-price-table-wrap">
+        <table className={readOnly ? "model-price-table" : "model-price-table admin selectable"}>
+          <thead>
+            <tr>
+              {!readOnly ? (
+                <th className="model-price-select">
+                  <input
+                    aria-label={tx("全选")}
+                    checked={allPageSelected}
+                    ref={(input) => {
+                      if (input) input.indeterminate = somePageSelected && !allPageSelected;
+                    }}
+                    onChange={(event) => togglePageSelection(event.currentTarget.checked)}
+                    type="checkbox"
+                  />
+                </th>
+              ) : null}
+              <th aria-sort={modelCatalogSortAria(sort, "name")}>
+                <ModelCatalogSortHeader label="模型" sortKey="name" sort={sort} onSort={setSort} />
+              </th>
+              <th>{tx("类型")}</th>
+              <th aria-sort={modelCatalogSortAria(sort, "input")}>
+                <ModelCatalogSortHeader label="输入价" sortKey="input" sort={sort} onSort={setSort} />
+              </th>
+              <th aria-sort={modelCatalogSortAria(sort, "output")}>
+                <ModelCatalogSortHeader label="输出价" sortKey="output" sort={sort} onSort={setSort} />
+              </th>
+              <th aria-sort={modelCatalogSortAria(sort, "cache")}>
+                <ModelCatalogSortHeader label="缓存读" sortKey="cache" sort={sort} onSort={setSort} />
+              </th>
+              <th aria-sort={modelCatalogSortAria(sort, "context")}>
+                <ModelCatalogSortHeader label="上下文" sortKey="context" sort={sort} onSort={setSort} />
+              </th>
+              <th aria-sort={modelCatalogSortAria(sort, "monthly")}>
+                <ModelCatalogSortHeader label="估算月成本" sortKey="monthly" sort={sort} onSort={setSort} />
+              </th>
+              <th aria-sort={modelCatalogSortAria(sort, "index")}>
+                <ModelCatalogSortHeader label="价格指数" sortKey="index" sort={sort} onSort={setSort} />
+              </th>
+              <th>{tx("来源")}</th>
+              {!readOnly ? <th>{tx("操作")}</th> : null}
+            </tr>
+          </thead>
+          <tbody>
+            {pagedRows.map((row) => {
+              const visibleActions = actions.filter((action) => !action.visible || action.visible(row.model));
+              const selected = selectedModelNames.has(row.model.name);
+              const rowClassName = [
+                row.availability.tone === "blocked" && !readOnly ? "unrouted" : "",
+                selected ? "selected-model-row" : "",
+              ].filter(Boolean).join(" ") || undefined;
+              return (
+                <tr className={rowClassName} key={row.model.name}>
+                  {!readOnly ? (
+                    <td className="model-price-select">
+                      <input
+                        aria-label={row.model.name}
+                        checked={selected}
+                        onChange={(event) => toggleModelSelection(row.model.name, event.currentTarget.checked)}
+                        type="checkbox"
+                      />
+                    </td>
+                  ) : null}
                 <td>
                   <div className="model-price-name">
                     <ModelBrandIcon category={row.category} label={row.categoryLabel} />
@@ -327,9 +430,11 @@ export function ModelCatalogPriceTable({
               </tr>
             );
           })}
-        </tbody>
-      </table>
-    </div>
+          </tbody>
+        </table>
+      </div>
+      <PaginationControls pagination={pagination} totalItems={rows.length} />
+    </>
   );
 }
 

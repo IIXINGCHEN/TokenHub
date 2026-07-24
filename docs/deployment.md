@@ -260,6 +260,8 @@ To mount a custom catalog explicitly:
 ./deploy/install.sh --model-catalog /absolute/path/to/model-catalog.yaml
 ```
 
+After editing the configured catalog file, restart the backend or use **Restore Factory Catalog** in the admin Model Catalog page to re-import the current file without removing manually added models.
+
 The custom mount intentionally overrides the image catalog and is therefore managed separately from `TOKENHUB_IMAGE_TAG`. After updating that file, restart the backend container and confirm the entries in `Model Catalog`.
 
 ## Reverse Proxy

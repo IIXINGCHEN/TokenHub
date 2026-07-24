@@ -531,6 +531,38 @@
   background: var(--surface-soft);
 }
 
+.model-bulk-toolbar {
+  min-height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 8px 6px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  box-shadow: var(--shadow-sm);
+}
+
+.model-bulk-toolbar > span {
+  color: var(--text);
+  font-weight: 720;
+}
+
+.model-bulk-toolbar > div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.model-bulk-delete {
+  min-width: 92px;
+  justify-content: center;
+  gap: 6px;
+}
+
 .model-price-table-wrap {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -549,6 +581,10 @@
 
 .model-price-table.admin {
   min-width: 960px;
+}
+
+.model-price-table.admin.selectable {
+  min-width: 1040px;
 }
 
 .model-price-table th {
@@ -620,6 +656,25 @@
   background: color-mix(in srgb, var(--warn) 6%, var(--surface));
 }
 
+.model-price-table tbody tr.selected-model-row {
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+}
+
+.model-price-table th.model-price-select,
+.model-price-table td.model-price-select {
+  width: 44px;
+  padding-right: 8px;
+  padding-left: 8px;
+  text-align: center;
+}
+
+.model-price-select input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 .model-price-table th:nth-child(1),
 .model-price-table td:nth-child(1) {
   width: 22%;
@@ -661,6 +716,55 @@
 
 .model-price-table.admin th:nth-child(10),
 .model-price-table.admin td:nth-child(10) {
+  width: 11%;
+}
+
+.model-price-table.admin.selectable th:nth-child(1),
+.model-price-table.admin.selectable td:nth-child(1) {
+  width: 44px;
+}
+
+.model-price-table.admin.selectable th:nth-child(2),
+.model-price-table.admin.selectable td:nth-child(2) {
+  width: 20%;
+}
+
+.model-price-table.admin.selectable th:nth-child(3),
+.model-price-table.admin.selectable td:nth-child(3) {
+  width: 7%;
+}
+
+.model-price-table.admin.selectable th:nth-child(4),
+.model-price-table.admin.selectable td:nth-child(4),
+.model-price-table.admin.selectable th:nth-child(5),
+.model-price-table.admin.selectable td:nth-child(5),
+.model-price-table.admin.selectable th:nth-child(6),
+.model-price-table.admin.selectable td:nth-child(6) {
+  width: 8%;
+}
+
+.model-price-table.admin.selectable th:nth-child(7),
+.model-price-table.admin.selectable td:nth-child(7) {
+  width: 8%;
+}
+
+.model-price-table.admin.selectable th:nth-child(8),
+.model-price-table.admin.selectable td:nth-child(8) {
+  width: 10%;
+}
+
+.model-price-table.admin.selectable th:nth-child(9),
+.model-price-table.admin.selectable td:nth-child(9) {
+  width: 11%;
+}
+
+.model-price-table.admin.selectable th:nth-child(10),
+.model-price-table.admin.selectable td:nth-child(10) {
+  width: 8%;
+}
+
+.model-price-table.admin.selectable th:nth-child(11),
+.model-price-table.admin.selectable td:nth-child(11) {
   width: 11%;
 }
 

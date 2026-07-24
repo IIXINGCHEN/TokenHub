@@ -10,10 +10,10 @@ import { emptyData, emptySummary, filterByModelCategory, filterRows } from "../d
 import { rowTitle, stringifyForm } from "../domain/entities";
 import { uniqueUIID, viewFromPath } from "../domain/formatting";
 import { reportDatasetLabel } from "../domain/labels";
-import { type AppLanguage, deleteConfirmMessage, importUsersDoneMessage, importUsersSkippedMessage, isIssuedAPIKey, readSavedLanguage, setActiveLanguage, tx } from "../i18n/runtime";
+import { type AppLanguage, bulkDeleteConfirmMessage, deleteConfirmMessage, importUsersDoneMessage, importUsersSkippedMessage, isIssuedAPIKey, readSavedLanguage, setActiveLanguage, tx } from "../i18n/runtime";
 import { createKeyWithCapture } from "../resources/generic-config";
 import { downloadReport } from "../resources/governance-config";
-import { adminFetch, adminMutate, importUsersFromCSVContent, isAuthExpiredError, loadRequestLabel, notificationChannelDefaults, permissionPartialLoadMessage, readAdminError, readLoadError, routePayload } from "../resources/payloads";
+import { adminFetch, adminMutate, importUsersFromCSVContent, isAuthExpiredError, loadRequestLabel, notificationChannelDefaults, permissionPartialLoadMessage, readAdminError, readLoadError, restoreDefaultModelCatalog, routePayload } from "../resources/payloads";
 import { projectMemberConfig, projectMemberInitialValues } from "../resources/project-key-config";
 import { resourceConfigFor } from "../resources/settings-config";
 import { APIKeyWizardModal, UserImportModal } from "../shared/modals";
@@ -64,6 +64,7 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
   const [apiKeyWizardInitialValues, setApiKeyWizardInitialValues] = useState<Record<string, string>>({});
   const [userImportOpen, setUserImportOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<ConfirmState<any> | null>(null);
+  const [confirmRestoreModels, setConfirmRestoreModels] = useState(false);
   const [issuedKey, setIssuedKey] = useState("");
   const [reportHistory, setReportHistory] = useState<ReportExportHistoryItem[]>([]);
   const resetToken = typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("reset_token") ?? "";
@@ -254,6 +255,7 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
       setApiKeyWizardInitialValues({});
       setUserImportOpen(false);
       setConfirmDelete(null);
+      setConfirmRestoreModels(false);
       setIssuedKey("");
       setNotice("");
       setError("");
@@ -454,6 +456,7 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
     setUserImportOpen(false);
     setApiKeyWizardOpen(false);
     setApiKeyWizardInitialValues({});
+    setConfirmRestoreModels(false);
     selectView("overview", { replace: true });
   }
 
@@ -489,6 +492,48 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
     } catch (err) {
       if (isAuthExpiredError(err)) return;
       setError(err instanceof Error ? err.message : tx("删除失败"));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function deleteItems<T>(config: ResourceConfig<T>, items: T[]) {
+    if (!config.remove || items.length === 0) return;
+    setLoading(true);
+    setError("");
+    let deletedCount = 0;
+    try {
+      for (const item of items) {
+        await config.remove(api, item);
+        deletedCount += 1;
+      }
+      setIssuedKey("");
+      setConfirmDelete(null);
+      await load();
+    } catch (err) {
+      if (isAuthExpiredError(err)) return;
+      if (deletedCount > 0) {
+        setConfirmDelete(null);
+        await load();
+      }
+      setError(err instanceof Error ? err.message : tx("删除失败"));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function restoreModelsFromDefaultCatalog() {
+    setLoading(true);
+    setError("");
+    setNotice("");
+    try {
+      await restoreDefaultModelCatalog(api);
+      setConfirmRestoreModels(false);
+      setNotice(tx("模型目录已恢复"));
+      await load();
+    } catch (err) {
+      if (isAuthExpiredError(err)) return;
+      setError(err instanceof Error ? err.message : tx("操作失败"));
     } finally {
       setLoading(false);
     }
@@ -743,6 +788,8 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
               onCreate={() => setModal({ config: activeConfig })}
               onEdit={(item) => setModal({ config: activeConfig, item })}
               onDelete={(item) => setConfirmDelete({ config: activeConfig, item })}
+              onBulkDelete={(items) => setConfirmDelete({ config: activeConfig, items })}
+              onRestoreDefaults={() => setConfirmRestoreModels(true)}
               onAction={(action, item) => void runResourceAction(action, item, data)}
             />
           ) : activeView === "reports" && activeConfig ? (
@@ -897,10 +944,28 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
       {confirmDelete ? (
         <ConfirmDialog
           title={tx("确认删除")}
-          message={deleteConfirmMessage(rowTitle(confirmDelete.item))}
+          message={confirmDelete.items?.length ? bulkDeleteConfirmMessage(confirmDelete.items.length) : deleteConfirmMessage(rowTitle(confirmDelete.item))}
           loading={loading}
           onCancel={() => setConfirmDelete(null)}
-          onConfirm={() => void deleteItem(confirmDelete.config, confirmDelete.item)}
+          onConfirm={() => {
+            if (confirmDelete.items?.length) {
+              void deleteItems(confirmDelete.config, confirmDelete.items);
+              return;
+            }
+            if (confirmDelete.item) void deleteItem(confirmDelete.config, confirmDelete.item);
+          }}
+        />
+      ) : null}
+
+      {confirmRestoreModels ? (
+        <ConfirmDialog
+          title={tx("恢复出厂目录")}
+          message={tx("将从配置文件重新导入标准模型，并覆盖同名模型的目录字段；手动新增的其他模型会保留。")}
+          confirmLabel="恢复"
+          confirmClassName="button"
+          loading={loading}
+          onCancel={() => setConfirmRestoreModels(false)}
+          onConfirm={() => void restoreModelsFromDefaultCatalog()}
         />
       ) : null}
 
