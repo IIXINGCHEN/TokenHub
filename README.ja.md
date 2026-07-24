@@ -55,35 +55,9 @@ TokenHub は、日常的なモデル利用、チームガバナンス、プラ�
 - OAuth/OIDC によるエンタープライズサインイン、RBAC、監査証跡に対応する ID ソース設定。
 - クリーンなコンソール: ロール別ナビゲーション、グローバル検索、ライト/ダーク切り替え、左ナビ + 右詳細の API ドキュメント。
 - SQLite-first のプライベートデプロイと Docker Compose サポート。
-- コネクションプーリング対応の PostgreSQL による本番環境デプロイメントサポート。
+- PostgreSQL はマルチインスタンス構成に対応します。リモート PostgreSQL で状態を共有し、フロントエンドとバックエンドのレプリカを水平スケールできるほか、コネクションプールも設定できます。[デプロイガイド](docs/ja/deployment.md)を参照してください。
 - 管理コンソールは英語、中国語、日本語の切り替えに対応。
-
-## マルチインスタンス構成
-
-デフォルトのインストールでは、SQLite を使用するフロントエンド 1 台とバックエンド 1 台を起動します。水平スケールする場合は `deploy/docker-compose.remote-postgres.yml` を使用します。Nginx が複数のフロントエンドおよびバックエンドレプリカの統一エントリーポイントとなり、共有状態はリモート PostgreSQL に保存されます。複数のバックエンドレプリカで同じ SQLite ファイルを共有してはいけません。
-
-<p align="center">
-  <img src="docs/assets/architecture/tokenhub-multi-instance.png" alt="TokenHub マルチインスタンス構成" width="1200" />
-</p>
-
-マルチインスタンスモードでは：
-
-- Nginx が管理コンソール、API、ヘルスチェックのトラフィックを正常なレプリカへ分散します。
-- バックエンドレプリカは、永続設定、OAuth セッション、クォータカウンター、監査データ、クラスターロック、実行中リクエストの並行数リースを PostgreSQL で共有します。
-- リースの期限と所有権は PostgreSQL のクロックで判定し、ホスト間の時刻ずれによる早期引き継ぎを防ぎます。所有権を失った処理はハートビートによってキャンセルされます。
-- 設定されたモデルカタログはバックエンドの起動ごとに同期され、冪等な同期処理はクラスターロックによって直列化されます。
-- データベースの調整障害では Provider の容量だけを解放し、正常なモデル Provider を誤って失敗扱いにしません。
-
-すべてのバックエンドレプリカで同じ `TOKENHUB_SECRET_KEY` を使用してください。`TOKENHUB_DB_MAX_OPEN_CONNS` はレプリカ単位で設定し、接続プールの合計が PostgreSQL の上限を下回るようにします。
-
-```bash
-docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.remote-postgres.yml up -d \
-  --scale tokenhub-backend=3 \
-  --scale tokenhub-frontend=2
-```
-
-設定要件、ヘルスプローブ、実際の PostgreSQL E2E テストについては、[デプロイガイド](docs/ja/deployment.md#リモート-postgresql-を使用するマルチインスタンス構成)を参照してください。
+- TokenHub は OpenAI Codex のサブスクリプションアカウントリソースにも接続できます。分離および復旧が可能な Codex Profile を使用し、指定したローカル Codex CLI またはデスクトップセッションを TokenHub 経由で実行できます。[Codex 接続ガイド](docs/ja/codex-tokenhub-profile-quick-start.md)を参照してください。
 
 ## クイックスタート
 
@@ -106,48 +80,13 @@ cp deploy/.env.example deploy/.env
 
 デプロイスクリプトは本番用認証情報を検証し、公開済みイメージを取得して、ローカルではビルドせずにコンテナを起動します。イメージがまだ公開されておらず、デフォルトの `latest` タグの取得に失敗した場合は、ローカルのソースビルドへ自動的に切り替えます。明示したタグでは切り替えません。秘密値を表示せずに安全でない変数を個別に報告します。その試行で作成または再起動したバックエンドコンテナの異常により Compose が失敗した場合に限り、その試行で生成された直近のバックエンドログを自動表示します。現在のチェックアウトから明示的にビルドする場合は `./deploy/install.sh --build` を使用します。
 
-## ローカル開発
-
-バックエンド:
-
-```bash
-cd backend
-go run ./cmd/tokenhub
-```
-
-フロントエンド:
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-SDK サンプルでモデル API の疎通を確認できます。
-
-```bash
-cd sdk
-npm install
-npm run test:deepseek
-```
-
-## オプションの AI Agent 開発ワークフロー
-
-TokenHub には、AI Agent がリポジトリを変更する際に選択できる 2 つのワークフローがあります。
-
-| ワークフロー | 適用範囲 |
-| --- | --- |
-| [`fast-dev`](docs/development/workflows/fast-dev.md) | 範囲が明確でリスクの低い局所的な変更 |
-| [`feature-dev`](docs/development/workflows/feature-dev.md) | 重要な機能、ユーザーに見える変更、コンポーネント横断の変更、公開 API やデータモデルの変更、セキュリティに関わる作業、デプロイ変更、アーキテクチャ上の判断 |
-
-依頼でワークフロー名を明示すると有効になります（例: `この変更では fast-dev を使用してください。`）。指定がなければ通常のリポジトリガイドに従います。切り替え前には確認が必要で、ワークフローの選択は Git や Pull Request の操作を許可するものではありません。詳細は [AGENTS.md](AGENTS.md#optional-development-workflows) を参照してください。
-
 ## ドキュメント
 
 - [ドキュメントホーム](docs/ja/README.md)
 - [ユーザーガイド](docs/ja/user-guide.md)
 - [チームリーダーガイド](docs/ja/team-leader-guide.md)
 - [管理者ガイド](docs/ja/administrator-guide.md)
+- [コントリビューションガイド](CONTRIBUTING.ja.md)
 - [English documentation](docs/README.md)
 - [简体中文文档](docs/zh-CN/README.md)
 

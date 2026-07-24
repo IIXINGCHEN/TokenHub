@@ -1,10 +1,12 @@
 import { appRole } from "../core/navigation";
-import { type AdminResource, type AdminUser, type AppData, DEFAULT_PROJECT_ID, type Model, type ModelRoute, type Project, type Provider, type RequestLog, type RouteAttemptLog, type UsageBreakdownRow } from "../core/types";
+import { type AdminResource, type AdminUser, type AppData, DEFAULT_PROJECT_ID, type Model, type ModelRoute, type Project, type Provider, type ProviderResource, type RequestLog, type RouteAttemptLog, type UsageBreakdownRow } from "../core/types";
 import { modelCategory, modelCategoryLabel } from "./catalog";
 import { formatMoney, modelCategoryRank } from "./formatting";
 import { compactList, enumValueLabel, fieldKeyLabel, fieldValueLabel, providerTypeLabel, roleLabel, splitList } from "./labels";
 import { tx } from "../i18n/runtime";
 import { preferredModelCategories } from "../shared/ui";
+
+export const codexSubscriptionBaseURL = "https://chatgpt.com/backend-api/codex";
 
 export function rowID(item: unknown) {
   return String(readPath(item, "id") || readPath(item, "name") || JSON.stringify(item));
@@ -136,8 +138,20 @@ export function providerSelectOptions(data: AppData) {
     .sort((left, right) => (left.priority - right.priority) || left.name.localeCompare(right.name))
     .map((provider) => ({
       value: provider.id,
-      label: `${provider.name || provider.id} / ${providerTypeLabel(provider.type)}${provider.status !== "active" ? ` / ${enumValueLabel(provider.status)}` : ""}`,
+      label: `${providerDisplayName(provider, data.providerResources)} / ${providerTypeLabel(providerDisplayType(provider, data.providerResources))}${provider.status !== "active" ? ` / ${enumValueLabel(provider.status)}` : ""}`,
     }));
+}
+
+export function providerDisplayName(provider: Provider, _resources: ProviderResource[]) {
+  return provider.name || provider.id;
+}
+
+export function providerDisplayType(provider: Provider, _resources: ProviderResource[]) {
+  return provider.type;
+}
+
+export function providerDisplayBaseURL(provider: Provider, _resources: ProviderResource[]) {
+  return provider.base_url || "local mock";
 }
 
 export function roleSelectOptions(data: AppData) {
@@ -340,7 +354,8 @@ export function costCenterLabel(data: AppData, costCenter: string) {
 
 export function projectName(data: AppData, projectID: string) {
   const project = findProject(data, projectID);
-  return project ? project.name : projectID || "-";
+  if (project) return project.name;
+  return projectID === DEFAULT_PROJECT_ID ? tx("默认项目空间") : projectID || "-";
 }
 
 export function projectOwnerLabel(data: AppData, projectID: string) {

@@ -48,7 +48,19 @@ PostgreSQL 的详细配置见 [PostgreSQL 设置指南](../postgresql-setup.md)�
 
 ### 使用远端 PostgreSQL 的多实例部署
 
-数据库由 Compose 项目之外的平台托管时，使用 `deploy/docker-compose.remote-postgres.yml`。该配置在可扩容的前后端服务前提供 Nginx 网关，并且不会启动本地数据库。
+默认安装使用 SQLite 启动一个前端实例和一个后端实例。需要横向扩容且数据库由 Compose 项目之外的平台托管时，使用 `deploy/docker-compose.remote-postgres.yml`。该配置在可扩容的前后端服务前提供 Nginx 网关，并且不会启动本地数据库。
+
+<p align="center">
+  <img src="../assets/architecture/tokenhub-multi-instance.png" alt="TokenHub 多实例架构" width="1200" />
+</p>
+
+多实例模式下：
+
+- Nginx 将管理后台、API 和健康检查流量负载均衡到健康副本。
+- 后端副本将持久化配置、OAuth 会话、配额计数、审计数据、集群锁和请求并发租约统一存储在 PostgreSQL 中。
+- 租约过期和归属判断使用 PostgreSQL 时钟，避免不同宿主机的时钟偏差导致租约被提前接管；失去租约后，心跳会取消对应任务或请求。
+- 每个后端启动时都会同步当前配置的模型目录，并通过集群租约串行执行幂等同步。
+- 数据库协调故障只释放 Provider 容量，不会把健康的模型 Provider 错误计为失败。
 
 配置远端 `TOKENHUB_DATABASE_URL`、公网网关地址、生产密钥和可信代理 CIDR 后运行：
 

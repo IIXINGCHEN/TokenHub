@@ -26,6 +26,7 @@ export function emptyData(): AppData {
     timeseries: [],
     resources: {},
     providerCatalog: [],
+    providerMonitoring: [],
   };
 }
 
@@ -450,6 +451,7 @@ export function hasThirdPartyRoute(model: Model, data: AppData) {
 
 export function modelCategoryInitial(category: string, label: string) {
   const normalized = category.toLowerCase();
+  if (normalized === "codex") return "C";
   if (normalized === "claude") return "A";
   if (normalized === "gemini") return "G";
   if (normalized === "openai") return "O";
@@ -476,6 +478,11 @@ export function modelCategory(model: Model | ProviderCatalogModel | undefined) {
 }
 
 export function providerCategories(provider: Provider, data: AppData) {
+  if (data.providerResources.some((resource) =>
+    resource.provider_id === provider.id && resource.resource_type === "openai_subscription",
+  )) {
+    return ["codex"];
+  }
   const routeModels = providerRoutesFor(provider, data)
     .map((route) => data.models.find((model) => model.name === route.model_name))
     .filter(Boolean) as Model[];
@@ -488,6 +495,7 @@ export function providerCategories(provider: Provider, data: AppData) {
 
 export function providerTypeToModelCategory(type: string) {
   const normalized = type.toLowerCase();
+  if (normalized.includes("codex")) return "codex";
   if (normalized.includes("anthropic")) return "claude";
   if (normalized.includes("gemini")) return "gemini";
   if (normalized.includes("deepseek")) return "deepseek";
@@ -514,6 +522,7 @@ export function modelCategoryLabel(category: string) {
 
 export function inferModelCategoryText(value: string) {
   const normalized = value.toLowerCase();
+  if (normalized.includes("codex")) return "codex";
   if (normalized.includes("gpt") || normalized.includes("openai") || /\bo[134]\b/.test(normalized)) return "openai";
   if (normalized.includes("claude") || normalized.includes("anthropic")) return "claude";
   if (normalized.includes("deepseek")) return "deepseek";

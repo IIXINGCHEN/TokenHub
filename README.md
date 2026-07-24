@@ -55,35 +55,9 @@ TokenHub separates everyday model usage, team governance, and platform administr
 - Identity source configuration for OAuth/OIDC enterprise sign-in, plus RBAC and audit trails.
 - Clean console with compact role-aware navigation, global search, light/dark mode, and split-view API documentation.
 - SQLite-first private deployment with Docker Compose support.
-- PostgreSQL support for production deployments with connection pooling. See the [PostgreSQL setup guide](docs/postgresql-setup.md).
+- PostgreSQL supports multi-instance deployments: share state through remote PostgreSQL, scale frontend and backend replicas horizontally, and configure connection pools. See the [deployment guide](docs/deployment.md).
 - Console language switching for English, Chinese, and Japanese.
-
-## Multi-Instance Architecture
-
-The default installation starts one frontend and one backend with SQLite. For horizontal scaling, use `deploy/docker-compose.remote-postgres.yml`: it places Nginx in front of scalable frontend and backend replicas and stores shared state in a remote PostgreSQL database. A SQLite file must never be shared by multiple backend replicas.
-
-<p align="center">
-  <img src="docs/assets/architecture/tokenhub-multi-instance.png" alt="TokenHub multi-instance architecture" width="1200" />
-</p>
-
-In multi-instance mode:
-
-- Nginx load-balances console, API, and health-check traffic across healthy replicas.
-- Backend replicas keep durable configuration, OAuth sessions, quota buckets, audit data, cluster locks, and in-flight concurrency leases in PostgreSQL.
-- Lease expiry and ownership decisions use the PostgreSQL clock, avoiding early takeover caused by clock skew between hosts. Heartbeats cancel work when lease ownership is lost.
-- The configured model catalog is synchronized on every backend startup; a cluster lease serializes the idempotent synchronization across replicas.
-- Coordination failures release provider capacity without incorrectly marking a healthy model provider as failed.
-
-All backend replicas must use the same `TOKENHUB_SECRET_KEY`. Size `TOKENHUB_DB_MAX_OPEN_CONNS` per replica so the combined connection pool stays below the PostgreSQL limit.
-
-```bash
-docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.remote-postgres.yml up -d \
-  --scale tokenhub-backend=3 \
-  --scale tokenhub-frontend=2
-```
-
-See the [deployment guide](docs/deployment.md#multi-instance-deployment-with-remote-postgresql) for configuration requirements, probes, and the real PostgreSQL E2E test.
+- TokenHub can also connect OpenAI Codex subscription resources and route selected local Codex CLI or desktop sessions through an isolated, recoverable Codex profile. See the [Codex integration guides](docs/codex-tokenhub-profile-quick-start.md).
 
 ## Quick Start
 
@@ -106,48 +80,13 @@ Initial admin login:
 
 The deployment script validates production credentials, pulls published images, and starts the containers without building locally. Until the images are publicly available, a failed pull of the default `latest` tag automatically falls back to a local source build; an explicitly selected tag never does. The script reports each unsafe variable without printing secret values. If Compose fails because a backend container created or restarted by that attempt is unhealthy, it automatically shows only that attempt's recent backend logs. Use `./deploy/install.sh --build` to request a local build explicitly.
 
-## Local Development
-
-Backend:
-
-```bash
-cd backend
-go run ./cmd/tokenhub
-```
-
-Frontend:
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Smoke-test the model API with the included SDK example:
-
-```bash
-cd sdk
-npm install
-npm run test:deepseek
-```
-
-## Optional AI Agent Development Workflows
-
-TokenHub provides two opt-in workflows for AI-assisted changes:
-
-| Workflow | Choose it for |
-| --- | --- |
-| [`fast-dev`](docs/development/workflows/fast-dev.md) | Small, well-scoped, low-risk changes |
-| [`feature-dev`](docs/development/workflows/feature-dev.md) | Important features, user-visible or cross-component changes, public API or data-model changes, security-sensitive work, deployment changes, or architectural decisions |
-
-Activate one by naming it in the request, such as `Use fast-dev for this change.` Without an explicit selection, the agent follows the normal repository guidance. The agent asks before switching workflows, and workflow selection does not authorize Git or pull-request actions. See [AGENTS.md](AGENTS.md#optional-development-workflows).
-
 ## Documentation
 
 - [Documentation home](docs/README.md)
 - [User Guide](docs/user-guide.md)
 - [Team Leader Guide](docs/team-leader-guide.md)
 - [Administrator Guide](docs/administrator-guide.md)
+- [Contributing Guide](CONTRIBUTING.md)
 - [简体中文文档](docs/zh-CN/README.md)
 - [日本語ドキュメント](docs/ja/README.md)
 

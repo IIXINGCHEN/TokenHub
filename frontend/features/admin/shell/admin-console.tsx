@@ -5,9 +5,9 @@ import { useEffect, useMemo, useState } from "react";
 import { type LoadedData, loadPlanForView, mergeLoadedData } from "../core/data-loading";
 import { allNavGroupTitles, canAccessView, defaultViewForRole, rememberRecentView, standaloneViewMeta } from "../core/navigation";
 import { clearOAuthLoginResult, clearPendingOAuthBaseURL, clearProviderAccountOAuthResultFromLocation, clearSavedSession, forwardOAuthAuthorizationResponse, hasPendingProviderAccountOAuthResult, isOAuthAuthorizationResponse, readOAuthLoginResult, readPendingOAuthBaseURL, readProviderAccountOAuthResultFromLocation, readSavedSession, savePendingProviderAccountOAuthResult, saveSession } from "../core/session";
-import { type AdminResource, type AdminUser, type AlertDelivery, type AlertEvent, type APIKey, type AppData, type ApprovalRequest, type AuditEvent, authExpiredEventName, type ConfirmState, languageStorageKey, type LoginIdentityProvider, type ModalState, type Model, type ModelRoute, notificationChannelTypes, type Provider, type ProviderCatalogEntry, type ProviderResource, type ReportExportHistoryItem, type RequestLog, type ResourceAction, type ResourceConfig, type SettingsTabKey, type SQLiteBackup, type ToolbarAction, type UsageBreakdown, type UsagePoint, type ViewKey, viewRoutes } from "../core/types";
+import { type AdminResource, type AdminUser, type AlertDelivery, type AlertEvent, type APIKey, type AppData, type ApprovalRequest, type AuditEvent, authExpiredEventName, type ConfirmState, languageStorageKey, type LoginIdentityProvider, type ModalState, type Model, type ModelRoute, notificationChannelTypes, type Provider, type ProviderCatalogEntry, type ProviderMonitoringSnapshot, type ProviderResource, type ReportExportHistoryItem, type RequestLog, type ResourceAction, type ResourceConfig, type SettingsTabKey, type SQLiteBackup, type ToolbarAction, type UsageBreakdown, type UsagePoint, type ViewKey, viewRoutes } from "../core/types";
 import { emptyData, emptySummary, filterByModelCategory, filterRows } from "../domain/catalog";
-import { projectSelectOptions, rowTitle, stringifyForm } from "../domain/entities";
+import { rowTitle, stringifyForm } from "../domain/entities";
 import { uniqueUIID, viewFromPath } from "../domain/formatting";
 import { reportDatasetLabel } from "../domain/labels";
 import { type AppLanguage, deleteConfirmMessage, importUsersDoneMessage, importUsersSkippedMessage, isIssuedAPIKey, readSavedLanguage, setActiveLanguage, tx } from "../i18n/runtime";
@@ -28,6 +28,7 @@ import { ModelCatalogView, RouteStrategyView } from "../views/model-catalog";
 import { OverviewView } from "../views/overview";
 import { PlaygroundPage } from "../views/playground";
 import { ProviderUpsertModal } from "../views/provider-editor";
+import { QuickAPIKeyModal } from "../views/quick-access";
 import { EditModal, SettingsView, usePagination } from "../views/settings-table";
 import { BillingView, UsageView } from "../views/usage-billing";
 
@@ -58,6 +59,7 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
   const [modal, setModal] = useState<ModalState<any> | null>(null);
   const [providerCreateOpen, setProviderCreateOpen] = useState(false);
   const [providerEditItem, setProviderEditItem] = useState<Provider | null>(null);
+  const [quickAPIKeyOpen, setQuickAPIKeyOpen] = useState(false);
   const [apiKeyWizardOpen, setApiKeyWizardOpen] = useState(false);
   const [apiKeyWizardInitialValues, setApiKeyWizardInitialValues] = useState<Record<string, string>>({});
   const [userImportOpen, setUserImportOpen] = useState(false);
@@ -305,6 +307,7 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
       queue(plan.timeseries, "timeseries", "/api/admin/usage/timeseries");
       queue(plan.users, "users", "/api/admin/users");
       queue(plan.providerCatalog, "provider-catalog", "/api/admin/provider-catalog");
+      queue(plan.providerMonitoring, "provider-monitoring", "/api/admin/providers/monitoring");
       for (const kind of plan.resources) {
         requests.push({ name: `resource:${kind}`, request: adminFetch(api, `/api/admin/resources/${kind}`), optional: true });
       }
@@ -376,6 +379,9 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
         } else if (name === "provider-catalog") {
           const payload = (await resp.json()) as { data: ProviderCatalogEntry[] };
           loaded.providerCatalog = payload.data ?? [];
+        } else if (name === "provider-monitoring") {
+          const payload = (await resp.json()) as { data: ProviderMonitoringSnapshot[] };
+          loaded.providerMonitoring = payload.data ?? [];
         } else if (name.startsWith("resource:")) {
           const kind = name.slice("resource:".length);
           const payload = (await resp.json()) as { data: AdminResource[] };
@@ -539,6 +545,20 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
     setModal({ config: activeConfig });
   }
 
+  function openCreateAPIKey() {
+    if (loading) {
+      setNotice("");
+      setError(tx("数据加载中，请稍后再操作。"));
+      return;
+    }
+    setIssuedKey("");
+    setQuickAPIKeyOpen(true);
+  }
+
+  function quickCreateAPIKey(values: Record<string, string>, onCreated: () => void) {
+    void createKeyWithCapture(api, values, setIssuedKey, setNotice, load, setLoading, setError, onCreated);
+  }
+
   function openCreateForCurrentView() {
     if (!activeConfig) return;
     if (activeView === "routes") {
@@ -554,25 +574,12 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
       setProviderCreateOpen(true);
       return;
     }
-    if (activeConfig.view === "api-keys" && data.projects.length === 0) {
-      setNotice("");
-      setError(tx("请先创建项目，再在项目下发放 API Key。"));
-      selectView("projects");
-      return;
-    }
-    if (activeConfig.view === "api-keys" && projectSelectOptions(data, currentUser).length === 0) {
-      setNotice("");
-      setError(tx("当前账号没有可发放 Key 的项目权限，请联系项目负责人或管理员把你加入项目。"));
-      return;
-    }
     if (activeConfig.view === "notification-channels") {
       setModal({ config: activeConfig, initialValues: notificationChannelDefaults(modelCategoryFilter) });
       return;
     }
     if (activeConfig.view === "api-keys") {
-      setIssuedKey("");
-      setApiKeyWizardInitialValues({});
-      setApiKeyWizardOpen(true);
+      openCreateAPIKey();
       return;
     }
     setModal({ config: activeConfig });
@@ -687,7 +694,16 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
           ) : activeView === "playground" ? (
             <PlaygroundPage api={api} data={data} canViewRoutes={canAccessView(currentUser, "routes")} />
           ) : activeView === "gateway" ? (
-            <GatewayView api={api} data={data} user={currentUser} language={language} onLanguageChange={changeLanguage} />
+            <GatewayView
+              api={api}
+              data={data}
+              user={currentUser}
+              language={language}
+              onLanguageChange={changeLanguage}
+              loading={loading}
+              onQuickCreateKey={quickCreateAPIKey}
+              onManageKeys={() => selectView("api-keys")}
+            />
           ) : activeView === "usage" ? (
             <UsageView data={data} user={currentUser} />
           ) : activeView === "billing" ? (
@@ -745,6 +761,8 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
             <CrudView
               config={activeConfig}
               data={data}
+              api={api}
+              user={currentUser}
               items={pagedItems}
               monitorItems={filteredItems}
               totalItems={filteredItems.length}
@@ -797,6 +815,7 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
           api={api}
           catalog={data.providerCatalog}
           standardModels={data.models}
+          resources={data.providerResources}
           loading={loading}
           onClose={() => setProviderCreateOpen(false)}
           onSaved={async () => {
@@ -817,15 +836,31 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
           catalog={data.providerCatalog}
           standardModels={data.models}
           routes={data.routes}
+          resources={data.providerResources.filter((resource) => resource.provider_id === providerEditItem.id)}
           loading={loading}
           onClose={() => setProviderEditItem(null)}
           onSaved={async () => {
             setProviderEditItem(null);
             await load();
           }}
+          onAccountsChanged={async () => {
+            await load();
+          }}
           setLoading={setLoading}
           setError={setError}
           setNotice={setNotice}
+        />
+      ) : null}
+
+      {quickAPIKeyOpen ? (
+        <QuickAPIKeyModal
+          data={data}
+          user={currentUser}
+          loading={loading}
+          onClose={() => {
+            if (!loading) setQuickAPIKeyOpen(false);
+          }}
+          onCreate={(values) => quickCreateAPIKey(values, () => setQuickAPIKeyOpen(false))}
         />
       ) : null}
 

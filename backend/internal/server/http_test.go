@@ -140,6 +140,23 @@ func TestGatewayModelsExposeJieKouCompatibleFields(t *testing.T) {
 	}
 }
 
+func TestGatewayModelsExposeCodexCompatibleEnvelope(t *testing.T) {
+	resp := doJSON(t, newTestServer(), http.MethodGet, "/v1/models", nil, "thk_demo_local")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body)
+	}
+	var payload struct {
+		Data   []modelListItem `json:"data"`
+		Models []any           `json:"models"`
+	}
+	if err := json.Unmarshal([]byte(resp.Body), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Data) == 0 || payload.Models == nil || len(payload.Models) != 0 {
+		t.Fatalf("expected standard model data and an empty Codex-compatible models list, got %+v", payload)
+	}
+}
+
 func TestGatewayRetrieveModelExposeJieKouCompatibleFields(t *testing.T) {
 	app := newTestServer()
 
@@ -429,6 +446,66 @@ func TestAdminCreatesAPIKeyUnderDefaultProject(t *testing.T) {
 	}
 	if keys[0].ProjectID != defaultProjectID {
 		t.Fatalf("expected key project %s, got %s", defaultProjectID, keys[0].ProjectID)
+	}
+}
+
+func TestUserCreatesPersonalAPIKeyWithoutProjectMembership(t *testing.T) {
+	store := NewMemoryStore()
+	if err := BootstrapBaseData(store); err != nil {
+		t.Fatal(err)
+	}
+	user, err := store.CreateAdminUser(AdminUser{
+		Username: "personal-key-user",
+		Name:     "Personal Key User",
+		Email:    "personal-key-user@tokenhub.local",
+		Role:     "user",
+		Status:   StatusActive,
+	}, "user123456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := New(store).Handler()
+
+	login := doJSON(t, app, http.MethodPost, "/api/admin/auth/login", map[string]any{
+		"identity": user.Username,
+		"password": "user123456",
+	}, "")
+	var session struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal([]byte(login.Body), &session); err != nil {
+		t.Fatal(err)
+	}
+
+	created := doJSON(t, app, http.MethodPost, "/api/admin/api-keys", map[string]any{
+		"name": "Personal Key",
+	}, session.Token)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("ordinary user should create a personal key without project membership, got %d: %s", created.Code, created.Body)
+	}
+	if !strings.Contains(created.Body, `"project_id":"`+defaultProjectID+`"`) || !strings.Contains(created.Body, `"api_key"`) {
+		t.Fatalf("personal key should fall back to the default project: %s", created.Body)
+	}
+	keys := store.ListProjectKeys(defaultProjectID)
+	if len(keys) != 1 || keys[0].Metadata["created_by"] != user.ID {
+		t.Fatalf("personal key should remain attributable to its creator: %+v", keys)
+	}
+
+	assignedProject := store.CreateProject(Project{Name: "Assigned Project", Status: StatusActive})
+	store.CreateResource("project-members", AdminResource{
+		Name:   "Personal Key User Membership",
+		Status: StatusActive,
+		Fields: map[string]any{
+			"project_id": assignedProject.ID,
+			"user_id":    user.ID,
+			"role":       "developer",
+		},
+	})
+	assigned := doJSON(t, app, http.MethodPost, "/api/admin/api-keys", map[string]any{
+		"name": "Assigned Project Key",
+	}, session.Token)
+	if assigned.Code != http.StatusCreated || !strings.Contains(assigned.Body, `"project_id":"`+assignedProject.ID+`"`) {
+		t.Fatalf("personal key should prefer an assigned project, got %d: %s", assigned.Code, assigned.Body)
 	}
 }
 
@@ -2923,6 +3000,133 @@ func TestAdminCreatesProviderResource(t *testing.T) {
 	}
 }
 
+func TestAdminDeletesProviderAccountRuntimeData(t *testing.T) {
+	store := NewMemoryStore()
+	if err := SeedDemoData(store); err != nil {
+		t.Fatal(err)
+	}
+	provider := store.AddProvider(Provider{
+		Name:    "Delete Account Provider",
+		Type:    ProviderOpenAICodex,
+		Status:  StatusActive,
+		Healthy: true,
+	})
+	resource, err := store.AddProviderResource(ProviderResource{
+		ProviderID:   provider.ID,
+		Name:         "Delete Account Resource",
+		ResourceType: ProviderResourceOpenAISubscription,
+		Status:       StatusActive,
+		Healthy:      true,
+		Credentials: &ProviderResourceCredentials{
+			AccessToken:  "delete-account-access-token",
+			RefreshToken: "delete-account-refresh-token",
+			AccountID:    "delete-account-id",
+			Email:        "delete.account@example.com",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := store.AddRoute(ModelRoute{
+		ModelName:          "delete-account-model",
+		ProviderID:         provider.ID,
+		ProviderResourceID: resource.ID,
+		ProviderModel:      "delete-account-model",
+		Status:             StatusActive,
+	})
+	now := time.Now().UTC()
+	for _, record := range []any{
+		&InFlightLease{ID: "lease_delete_account", ScopeType: "provider_resource", ScopeID: resource.ID, ExpiresAt: now.Add(time.Minute)},
+		&ProviderResourceBucket{ResourceID: resource.ID, Bucket: "minute", Requests: 1, Tokens: 2, UpdatedAt: now},
+		&ProviderResourceObservation{ResourceID: resource.ID, AdapterType: ProviderOpenAICodex, QuotaSnapshot: `{"plan_type":"pro"}`, QuotaFetchedAt: &now, UpdatedAt: now},
+		&ProviderObservation{ID: "obs_delete_account", ProviderID: provider.ID, ResourceID: resource.ID, AdapterType: ProviderOpenAICodex, Source: "real_request", Operation: "responses", Success: true, ObservedAt: now},
+		&AdapterSessionBinding{ID: "binding_delete_account", AdapterType: ProviderOpenAICodex, AffinityKind: AffinityKindCodexSession, ProviderID: provider.ID, AffinityKeyHash: "delete-account-affinity", ResourceID: resource.ID, LastUsedAt: now},
+	} {
+		if err := store.db.Create(record).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	app := New(store).Handler()
+	resp := doJSON(t, app, http.MethodDelete, "/api/admin/provider-resources/"+resource.ID, nil, "")
+	if resp.Code != http.StatusNoContent {
+		t.Fatalf("expected account delete 204, got %d: %s", resp.Code, resp.Body)
+	}
+
+	checks := []struct {
+		name  string
+		model any
+		where string
+		args  []any
+	}{
+		{name: "provider resource", model: &ProviderResource{}, where: "id = ?", args: []any{resource.ID}},
+		{name: "in-flight lease", model: &InFlightLease{}, where: "scope_type = ? AND scope_id = ?", args: []any{"provider_resource", resource.ID}},
+		{name: "rate-limit bucket", model: &ProviderResourceBucket{}, where: "resource_id = ?", args: []any{resource.ID}},
+		{name: "resource observation", model: &ProviderResourceObservation{}, where: "resource_id = ?", args: []any{resource.ID}},
+		{name: "provider observation", model: &ProviderObservation{}, where: "resource_id = ?", args: []any{resource.ID}},
+		{name: "session binding", model: &AdapterSessionBinding{}, where: "resource_id = ?", args: []any{resource.ID}},
+	}
+	for _, check := range checks {
+		var count int64
+		if err := store.db.Model(check.model).Where(check.where, check.args...).Count(&count).Error; err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("expected %s data to be deleted, found %d row(s)", check.name, count)
+		}
+	}
+	var detachedRoute ModelRoute
+	if err := store.db.First(&detachedRoute, "id = ?", route.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if detachedRoute.ProviderResourceID != "" {
+		t.Fatalf("expected route to be detached from deleted account, got %q", detachedRoute.ProviderResourceID)
+	}
+}
+
+func TestAdminRejectsDuplicateProviderResourceName(t *testing.T) {
+	app := newTestServer()
+	for index, name := range []string{"OpenAI Codex Primary Account", "  openai codex primary account  "} {
+		resp := doJSON(t, app, http.MethodPost, "/api/admin/provider-resources", map[string]any{
+			"id":            "rsrc_openai_account_" + strconv.Itoa(index+1),
+			"provider_id":   "prv_mock",
+			"name":          name,
+			"resource_type": ProviderResourceOpenAISubscription,
+			"status":        StatusActive,
+			"healthy":       true,
+		}, "")
+		if index == 0 && resp.Code != http.StatusCreated {
+			t.Fatalf("expected first provider resource created, got %d: %s", resp.Code, resp.Body)
+		}
+		if index == 1 {
+			if resp.Code != http.StatusConflict {
+				t.Fatalf("expected duplicate provider resource name conflict, got %d: %s", resp.Code, resp.Body)
+			}
+			if !strings.Contains(resp.Body, `"code":"provider_resource_name_conflict"`) {
+				t.Fatalf("expected provider resource name conflict code, got: %s", resp.Body)
+			}
+		}
+	}
+
+	secondary := doJSON(t, app, http.MethodPost, "/api/admin/provider-resources", map[string]any{
+		"id":            "rsrc_openai_account_secondary",
+		"provider_id":   "prv_mock",
+		"name":          "OpenAI Codex Secondary Account",
+		"resource_type": ProviderResourceOpenAISubscription,
+		"status":        StatusActive,
+		"healthy":       true,
+	}, "")
+	if secondary.Code != http.StatusCreated {
+		t.Fatalf("expected secondary provider resource created, got %d: %s", secondary.Code, secondary.Body)
+	}
+	rename := doJSON(t, app, http.MethodPatch, "/api/admin/provider-resources/rsrc_openai_account_secondary", map[string]any{
+		"name": " OPENAI CODEX PRIMARY ACCOUNT ",
+	}, "")
+	if rename.Code != http.StatusConflict || !strings.Contains(rename.Body, `"code":"provider_resource_name_conflict"`) {
+		t.Fatalf("expected provider resource rename conflict, got %d: %s", rename.Code, rename.Body)
+	}
+}
+
 func TestAdminCreatesOpenAISubscriptionProviderResource(t *testing.T) {
 	store := NewMemoryStore()
 	store.AddProvider(Provider{
@@ -3098,6 +3302,7 @@ func TestOpenAISubscriptionResourceSuppliesRouteCredentials(t *testing.T) {
 		ResourceType: ProviderResourceOpenAISubscription,
 		Status:       StatusActive,
 		Healthy:      true,
+		Options:      codexCapabilityOptionsForTest("gpt-4.1-mini"),
 		Credentials: &ProviderResourceCredentials{
 			AuthType:       "oauth",
 			AccessToken:    "openai-access-token",
@@ -3192,6 +3397,7 @@ func TestOpenAISubscriptionResourceRefreshesBeforeGatewayCall(t *testing.T) {
 		ResourceType: ProviderResourceOpenAISubscription,
 		Status:       StatusActive,
 		Healthy:      true,
+		Options:      codexCapabilityOptionsForTest("gpt-4.1-mini"),
 		Credentials: &ProviderResourceCredentials{
 			AuthType:     "oauth",
 			AccessToken:  "access-expired",
@@ -3259,6 +3465,7 @@ func TestOpenAIProviderAccountOAuthGenerateAuthURLAndCallback(t *testing.T) {
 	}
 	if authURL.Host != "auth.openai.com" ||
 		authURL.Query().Get("client_id") != openAIAccountOAuthClientID ||
+		authURL.Query().Get("redirect_uri") != openAIAccountOAuthRedirectURI ||
 		authURL.Query().Get("code_challenge_method") != "S256" ||
 		authURL.Query().Get("codex_cli_simplified_flow") != "true" ||
 		authURL.Query().Get("state") != payload.State {
@@ -3372,7 +3579,7 @@ func TestOpenAIProviderAccountOAuthExchangeCode(t *testing.T) {
 		if r.FormValue("grant_type") != "authorization_code" ||
 			r.FormValue("client_id") != openAIAccountOAuthClientID ||
 			r.FormValue("code") != "oauth-code" ||
-			!strings.Contains(r.FormValue("redirect_uri"), "/api/admin/provider-account-oauth/openai/oauth/callback") ||
+			r.FormValue("redirect_uri") != openAIAccountOAuthRedirectURI ||
 			r.FormValue("code_verifier") == "" {
 			t.Fatalf("unexpected token form: %s", r.Form.Encode())
 		}

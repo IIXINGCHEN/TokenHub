@@ -55,35 +55,9 @@ TokenHub 将日常模型使用、团队治理和平台运维拆成清晰的角�
 - 身份源配置：支持 OAuth/OIDC 企业登录，并配合 RBAC 和审计追踪。
 - 简洁控制台：分角色导航、全局搜索、黑白主题，以及左侧 API 导航 + 右侧详情的接口文档。
 - SQLite-first 私有化部署，内置 Docker Compose 一键部署。
-- PostgreSQL 支持生产环境部署，提供连接池配置。
+- PostgreSQL 支持多实例部署：通过远端 PostgreSQL 共享状态，实现前后端实例横向扩展，并提供连接池配置。参见[部署指南](docs/zh-CN/deployment.md)。
 - 管理后台支持英文、中文、日文切换。
-
-## 多实例架构
-
-默认安装使用 SQLite 启动一个前端实例和一个后端实例。需要横向扩容时，使用 `deploy/docker-compose.remote-postgres.yml`：由 Nginx 为可扩展的前后端副本提供统一入口，并将共享状态存储在远端 PostgreSQL 中。不得让多个后端副本共享同一个 SQLite 文件。
-
-<p align="center">
-  <img src="docs/assets/architecture/tokenhub-multi-instance.png" alt="TokenHub 多实例架构" width="1200" />
-</p>
-
-多实例模式下：
-
-- Nginx 将管理后台、API 和健康检查流量负载均衡到健康副本。
-- 后端副本将持久化配置、OAuth 会话、配额计数、审计数据、集群锁和请求并发租约统一存储在 PostgreSQL 中。
-- 租约过期和归属判断使用 PostgreSQL 时钟，避免不同宿主机的时钟偏差导致租约被提前接管；失去租约后，心跳会取消对应任务或请求。
-- 每个后端启动时都会同步当前配置的模型目录，并通过集群租约串行执行幂等同步。
-- 数据库协调故障只释放 Provider 容量，不会把健康的模型 Provider 错误计为失败。
-
-所有后端副本必须使用相同的 `TOKENHUB_SECRET_KEY`。`TOKENHUB_DB_MAX_OPEN_CONNS` 按单副本配置，所有副本的连接池总和必须低于 PostgreSQL 的连接数上限。
-
-```bash
-docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.remote-postgres.yml up -d \
-  --scale tokenhub-backend=3 \
-  --scale tokenhub-frontend=2
-```
-
-配置要求、健康探针和真实 PostgreSQL E2E 测试见[部署指南](docs/zh-CN/deployment.md#使用远端-postgresql-的多实例部署)。
+- TokenHub 还支持接入 OpenAI Codex 订阅账号资源，并通过可隔离、可恢复的 Codex Profile，让指定的本地 Codex CLI 或桌面端会话经过 TokenHub。参见 [Codex 接入指南](docs/zh-CN/codex-tokenhub-profile-quick-start.md)。
 
 ## 快速开始
 
@@ -106,48 +80,13 @@ cp deploy/.env.example deploy/.env
 
 部署脚本会校验生产凭证，拉取已发布镜像并启动容器，不在部署服务器构建镜像。镜像尚未公开时，如果默认 `latest` 标签拉取失败，脚本会自动改为从本地源码构建；显式指定的标签不会触发该行为。校验失败时会列出不安全的变量，但不会输出敏感值。如果本次创建或重启的后端容器异常导致 Compose 失败，脚本只会自动显示本次启动产生的后端近期日志。需要明确从当前代码构建时，使用 `./deploy/install.sh --build`。
 
-## 本地开发
-
-后端：
-
-```bash
-cd backend
-go run ./cmd/tokenhub
-```
-
-前端：
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-使用 SDK 示例测试模型 API 链路：
-
-```bash
-cd sdk
-npm install
-npm run test:deepseek
-```
-
-## 可选的 AI Agent 开发工作流
-
-TokenHub 为 AI Agent 修改仓库提供两套可选工作流：
-
-| 工作流 | 适用范围 |
-| --- | --- |
-| [`fast-dev`](docs/development/workflows/fast-dev.md) | 范围明确、风险较低的局部修改 |
-| [`feature-dev`](docs/development/workflows/feature-dev.md) | 重要功能、用户可见或跨组件修改、公共 API 或数据模型修改、安全敏感修改、部署修改或架构决策 |
-
-在请求中指定工作流即可启用，例如 `本次修改使用 fast-dev。` 未指定时，Agent 按仓库常规指引执行。切换工作流前需要确认，选择工作流也不代表允许 Git 或 Pull Request 操作。Agent 规则见 [AGENTS.md](AGENTS.md#optional-development-workflows)。
-
 ## 文档
 
 - [文档首页](docs/zh-CN/README.md)
 - [普通用户指南](docs/zh-CN/user-guide.md)
 - [团队负责人指南](docs/zh-CN/team-leader-guide.md)
 - [管理员指南](docs/zh-CN/administrator-guide.md)
+- [贡献指南](CONTRIBUTING.zh-CN.md)
 - [English documentation](docs/README.md)
 - [日本語ドキュメント](docs/ja/README.md)
 
