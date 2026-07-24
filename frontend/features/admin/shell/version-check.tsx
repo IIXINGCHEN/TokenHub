@@ -4,7 +4,7 @@ import packageJSON from "../../../package.json";
 import { tx } from "../i18n/runtime";
 
 const currentVersion = packageJSON.version;
-const defaultUpdateCheckURL = "https://api.github.com/repos/astaxie/TokenHub/releases/latest";
+const defaultUpdateCheckURL = "https://api.github.com/repos/astaxie/TokenHub/tags";
 const defaultReleaseURL = "https://github.com/astaxie/TokenHub/releases";
 
 type VersionCheckStatus = "checking" | "available" | "current" | "error";
@@ -170,8 +170,11 @@ async function loadLatestRelease(updateURL: string, fallbackReleaseURL: string, 
   if (!resp.ok) throw new Error(`${tx("版本检测失败")}: HTTP ${resp.status}`);
   const payload = await resp.json() as Record<string, unknown> | Array<Record<string, unknown>>;
   const release = Array.isArray(payload) ? payload[0] : payload;
+  if (!release) throw new Error(tx("版本检测失败"));
+  const latestVersion = normalizeVersion(textValue(release.tag_name) || textValue(release.latest_version) || textValue(release.latestVersion) || textValue(release.version) || textValue(release.name));
+  if (!latestVersion) throw new Error(tx("版本检测失败"));
   return {
-    latestVersion: normalizeVersion(textValue(release.tag_name) || textValue(release.latest_version) || textValue(release.latestVersion) || textValue(release.version) || textValue(release.name)),
+    latestVersion,
     releaseURL: textValue(release.html_url) || textValue(release.release_url) || textValue(release.download_url) || fallbackReleaseURL,
     changelogURL: textValue(release.changelog_url) || textValue(release.html_url) || fallbackReleaseURL,
     notes: textValue(release.body) || textValue(release.notes),

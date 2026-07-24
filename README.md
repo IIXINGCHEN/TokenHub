@@ -91,9 +91,27 @@ The deployment script validates production credentials, pulls published images, 
 - [简体中文文档](docs/zh-CN/README.md)
 - [日本語ドキュメント](docs/ja/README.md)
 
+## Contributors
+
+TokenHub grows through product feedback, gateway integrations, documentation, tests, and the steady care of people who run it in real enterprise environments.
+
+<p align="center">
+  <a href="https://github.com/astaxie/TokenHub/graphs/contributors">
+    <img src="https://contrib.rocks/image?repo=astaxie/TokenHub" alt="TokenHub contributors" />
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/astaxie/TokenHub/graphs/contributors">View all contributors</a>
+  ·
+  <a href="CONTRIBUTING.md">Start contributing</a>
+</p>
+
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=astaxie%2FTokenHub&type=Date&legend=top-left)](https://www.star-history.com/?repos=astaxie%2FTokenHub&type=date&legend=top-left)
+[![GitHub Repo stars](https://img.shields.io/github/stars/astaxie/TokenHub?style=social)](https://github.com/astaxie/TokenHub/stargazers)
+
+Track TokenHub's growth on the [live Star History chart](https://star-history.com/#astaxie/TokenHub&Date).
 
 ## License
 
