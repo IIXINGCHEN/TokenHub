@@ -102,36 +102,18 @@ export function providerEntryCategoryCount(entry: ProviderCatalogEntry, category
 }
 
 export function buildCustomProviderCatalogEntry(category: string, standardModels: Model[]): ProviderCatalogEntry {
+  void standardModels;
   const normalizedCategory = standardModelCategory(category);
-  const models = standardModels
-    .filter((model) => normalizedCategory === "all" || modelCategory(model) === normalizedCategory)
-    .map((model) => ({
-      id: model.name,
-      name: model.name,
-      display_name: model.name,
-      canonical_name: model.name,
-      category: modelCategory(model),
-      family: model.family,
-      type: model.modality,
-      context_window: model.context_window,
-      input_price_usd_per_1m: model.input_price_usd_per_1m,
-      cache_read_price_usd_per_1m: model.cache_read_price_usd_per_1m,
-      output_price_usd_per_1m: model.output_price_usd_per_1m,
-      input_modalities: model.input_modalities,
-      output_modalities: model.output_modalities,
-      capabilities: model.capabilities,
-      supported_parameters: model.supported_parameters,
-    }));
   return {
     id: "custom",
     name: "自定义渠道商",
     display_name: "自定义渠道商",
     type: "openai_compatible",
     categories: [normalizedCategory],
-    category_counts: { [normalizedCategory]: models.length },
-    models_count: models.length,
-    source: "tokenhub-standard-catalog",
-    models,
+    category_counts: { [normalizedCategory]: 0 },
+    models_count: 0,
+    source: "custom-upstream-pending",
+    models: [],
   };
 }
 

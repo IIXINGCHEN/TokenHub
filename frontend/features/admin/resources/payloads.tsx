@@ -1,5 +1,5 @@
 import { clearSavedSession } from "../core/session";
-import { type AdminResource, type AdminUser, type ApiContext, type APIKey, type AppData, type ApprovalRequest, authExpiredEventName, type FieldConfig, type Project, type ProviderResource, type ResourceConfig, type UserImportResult } from "../core/types";
+import { type AdminResource, type AdminUser, type ApiContext, type APIKey, type AppData, type ApprovalRequest, authExpiredEventName, type FieldConfig, type Project, type ProviderCatalogModel, type ProviderResource, type ResourceConfig, type UserImportResult } from "../core/types";
 import { inferModelCategoryText, normalizeNotificationChannelType, notificationChannelDescription, notificationChannelLabel, notificationChannelURLPlaceholder } from "../domain/catalog";
 import { firstActiveModel, firstActiveProject, firstActiveProvider, firstActiveTeam, firstActiveUser, firstCostCenterCode, firstIssueableProject, projectMemberProjectSelectOptions, stringifyValue } from "../domain/entities";
 import { compactNumber } from "../domain/formatting";
@@ -22,7 +22,18 @@ export function providerPayload(values: Record<string, string>) {
     model_category: values.model_category,
     create_routes: values.create_routes === "true",
     selected_models: splitList(values.selected_models),
+    custom_models: parseProviderCatalogModels(values.custom_models),
   };
+}
+
+function parseProviderCatalogModels(value?: string): ProviderCatalogModel[] {
+  if (!value?.trim()) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed as ProviderCatalogModel[] : [];
+  } catch {
+    return [];
+  }
 }
 
 export function providerUpdatePayload(values: Record<string, string>) {

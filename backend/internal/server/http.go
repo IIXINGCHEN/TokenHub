@@ -3162,6 +3162,36 @@ func (s *Server) handleAdminProviderCatalogItem(w http.ResponseWriter, r *http.R
 		writeJSON(w, http.StatusOK, map[string]any{"data": entry, "source": entry.Source})
 		return
 	}
+	if id == "custom" && r.Method == http.MethodPost {
+		var req ProviderCreateRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, r, NewHTTPError(http.StatusBadRequest, "invalid_request", err.Error()))
+			return
+		}
+		if providerID := firstNonEmpty(strings.TrimSpace(req.ProviderID), strings.TrimSpace(req.ID)); providerID != "" {
+			if provider, ok := s.store.GetProvider(providerID); ok {
+				if req.Name == "" {
+					req.Name = provider.Name
+				}
+				if req.Type == "" {
+					req.Type = provider.Type
+				}
+				if req.BaseURL == "" {
+					req.BaseURL = provider.BaseURL
+				}
+				if req.APIKey == "" {
+					req.APIKey = provider.APIKey
+				}
+			}
+		}
+		entry, err := CustomProviderCatalogFromUpstream(r.Context(), http.DefaultClient, req)
+		if err != nil {
+			writeError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": entry, "source": entry.Source})
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
 		return
@@ -3198,7 +3228,12 @@ func (s *Server) providerFromCreateRequest(ctx context.Context, req ProviderCrea
 		catalogSource = source
 	}
 	if catalog.ID == "custom" {
-		catalog = s.customProviderCatalogFromStandardModels(req.ModelCategory)
+		if len(req.CustomModels) > 0 {
+			catalog = customProviderCatalogFromModels(req.CustomModels, req.ModelCategory)
+		} else {
+			catalog = s.customProviderCatalogFromStandardModels(req.ModelCategory)
+		}
+		catalogSource = catalog.Source
 	}
 	id := strings.TrimSpace(req.ID)
 	if id == "" && catalog.ID != "" && catalog.ID != "custom" {
@@ -3316,6 +3351,47 @@ func (s *Server) customProviderCatalogFromStandardModels(category string) Provid
 	entry.CategoryCounts = categoryCounts
 	entry.Models = models
 	entry.ModelsCount = len(models)
+	return entry
+}
+
+func customProviderCatalogFromModels(input []ProviderCatalogModel, category string) ProviderCatalogEntry {
+	normalizedCategory := strings.TrimSpace(category)
+	if normalizedCategory != "" {
+		normalizedCategory = standardModelCategory(normalizedCategory)
+	}
+	models := make([]ProviderCatalogModel, 0, len(input))
+	seen := map[string]bool{}
+	for _, model := range input {
+		model.ID = strings.TrimSpace(model.ID)
+		if model.ID == "" || seen[model.ID] {
+			continue
+		}
+		seen[model.ID] = true
+		model.Name = firstNonEmpty(strings.TrimSpace(model.Name), model.ID)
+		model.DisplayName = firstNonEmpty(strings.TrimSpace(model.DisplayName), model.Name)
+		model.CanonicalName = firstNonEmpty(strings.TrimSpace(model.CanonicalName), canonicalModelName(model.ID, model.DisplayName))
+		model.Category = standardModelCategory(firstNonEmpty(model.Category, inferModelCategory(model.ID, model.DisplayName)))
+		if normalizedCategory != "" && normalizedCategory != "all" && model.Category != normalizedCategory {
+			continue
+		}
+		model.Family = firstNonEmpty(model.Family, inferModelFamily(model.ID))
+		model.Type = firstNonEmpty(model.Type, normalizeModelModality(model.ID))
+		if model.Metadata == nil {
+			model.Metadata = map[string]string{}
+		}
+		if model.Metadata["source"] == "" {
+			model.Metadata["source"] = "custom-upstream"
+		}
+		models = append(models, model)
+	}
+	sort.SliceStable(models, func(i, j int) bool {
+		return strings.ToLower(models[i].ID) < strings.ToLower(models[j].ID)
+	})
+	entry := customProviderCatalogEntry()
+	entry.Source = "custom-upstream"
+	entry.Models = models
+	entry.ModelsCount = len(models)
+	entry.Categories, entry.CategoryCounts = catalogCategorySummary(models)
 	return entry
 }
 
