@@ -1,4 +1,4 @@
-import { Check, Eye, EyeOff, Fingerprint, KeyRound, LockKeyhole, Moon, Server, ShieldCheck, Sun, UserRoundCheck, Users } from "lucide-react";
+import { Box, Check, Eye, EyeOff, Fingerprint, KeyRound, LockKeyhole, Moon, Pause, Play, ShieldCheck, Sun, UserRound, UserRoundCheck, Users } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { savePendingOAuthBaseURL } from "../core/session";
 import { type LoginIdentityProvider, viewRoutes } from "../core/types";
@@ -405,6 +405,7 @@ export function LoginView({
   const [identity, setIdentity] = useState("");
   const [password, setPassword] = useState("");
   const [passwordVisible, setPasswordVisible] = useState(false);
+  const [heroPaused, setHeroPaused] = useState(false);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -423,110 +424,66 @@ export function LoginView({
         {theme === "light" ? <Moon size={17} /> : <Sun size={17} />}
       </button>
       <section className="login-stage">
-        <aside className="login-hero-panel" aria-label="TokenHub">
-          <div className="login-hero-orbit" aria-hidden="true" />
-          <div className="login-flow-scene">
-            <svg className="login-flow-svg" viewBox="0 0 460 320" aria-hidden="true">
-              <path id="login-key-flow-one" className="login-flow-link" d="M 92 84 C 150 84 165 138 208 151" />
-              <path id="login-key-flow-two" className="login-flow-link" d="M 92 160 C 142 160 166 160 208 160" />
-              <path id="login-key-flow-three" className="login-flow-link" d="M 92 236 C 150 236 165 182 208 169" />
-              <path id="login-provider-flow-one" className="login-flow-link login-provider-flow" d="M 260 150 C 298 116 318 82 362 82" />
-              <path id="login-provider-flow-two" className="login-flow-link login-provider-flow" d="M 260 160 C 302 160 320 160 362 160" />
-              <path id="login-provider-flow-three" className="login-flow-link login-provider-flow" d="M 260 170 C 298 204 318 238 362 238" />
-              {[
-                ["#login-key-flow-one", "0s"],
-                ["#login-key-flow-one", "-1.25s"],
-                ["#login-key-flow-two", "-0.35s"],
-                ["#login-key-flow-two", "-1.7s"],
-                ["#login-key-flow-three", "-0.7s"],
-                ["#login-key-flow-three", "-2.05s"],
-                ["#login-provider-flow-one", "-0.1s"],
-                ["#login-provider-flow-one", "-1.45s"],
-                ["#login-provider-flow-two", "-0.65s"],
-                ["#login-provider-flow-two", "-2s"],
-                ["#login-provider-flow-three", "-1.1s"],
-                ["#login-provider-flow-three", "-2.45s"],
-              ].map(([path, begin], index) => (
-                <circle className="login-flow-token" key={`${path}-${begin}-${index}`} r={4}>
-                  <animateMotion dur="3.1s" begin={begin} repeatCount="indefinite">
-                    <mpath href={path} />
-                  </animateMotion>
-                </circle>
-              ))}
+        <aside className={`login-hero-panel${heroPaused ? " is-paused" : ""}`} aria-label="TokenHub">
+          <div className="login-brand-lockup">
+            <span className="login-brand-mark" aria-hidden="true">
+              <img src="/brand/tokenhub-logo.png" alt="" />
+            </span>
+            <span className="login-brand-copy">
+              <strong>Token<span>Hub</span></strong>
+              <small>{tx("企业 AI 网关")}</small>
+            </span>
+          </div>
+
+          <div className="login-route-scene" aria-hidden="true">
+            <svg className="login-route-svg" viewBox="0 0 460 240">
+              <path className="login-route-line inbound" d="M 96 130 H 168" pathLength="1" />
+              <path className="login-route-line outbound top" d="M 296 130 H 334 V 72 H 372" pathLength="1" />
+              <path className="login-route-line outbound middle" d="M 296 130 H 372" pathLength="1" />
+              <path className="login-route-line outbound bottom" d="M 296 130 H 334 V 188 H 372" pathLength="1" />
             </svg>
 
-            <div className="login-key-stack" aria-hidden="true">
-              <span className="login-key-chip key-one">
-                <span className="login-key-icon">
-                  <KeyRound size={13} strokeWidth={2.6} />
-                </span>
-                Key 01
-              </span>
-              <span className="login-key-chip key-two">
-                <span className="login-key-icon">
-                  <KeyRound size={13} strokeWidth={2.6} />
-                </span>
-                Key 02
-              </span>
-              <span className="login-key-chip key-three">
-                <span className="login-key-icon">
-                  <KeyRound size={13} strokeWidth={2.6} />
-                </span>
-                Key 03
-              </span>
+            <div className="login-route-user">
+              <span className="login-route-icon"><UserRound size={19} strokeWidth={1.8} /></span>
+              <strong>{tx("用户")}</strong>
+              <small>{tx("发起 API 请求")}</small>
             </div>
 
-            <div className="login-hub-node">
-              <span className="login-logo-tile">
-                <img src="/brand/tokenhub-logo.png" alt="" />
-              </span>
-              <span className="login-hub-copy">
-                <strong>TokenHub</strong>
-                <small>Gateway</small>
-              </span>
+            <span className="login-route-label request-label">{tx("携带 API Key")}</span>
+            <span className="login-route-packet inbound-packet"><KeyRound size={10} strokeWidth={2.5} /></span>
+
+            <div className="login-route-auth">
+              <span className="login-route-icon auth"><KeyRound size={21} strokeWidth={2} /></span>
+              <strong>API Key</strong>
+              <small>{tx("验证身份与权限")}</small>
+              <span className="login-route-auth-status"><Check size={12} strokeWidth={2.7} />{tx("鉴权通过")}</span>
             </div>
 
-            <div className="login-provider-stack" aria-hidden="true">
-              <span className="login-provider-node provider-one">
-                <span className="login-provider-icon">
-                  <Server size={14} strokeWidth={2.35} />
-                </span>
-                <strong>Provider A</strong>
-                <span className="login-provider-bars">
-                  <span />
-                  <span />
-                  <span />
-                </span>
-              </span>
-              <span className="login-provider-node provider-two">
-                <span className="login-provider-icon">
-                  <Server size={14} strokeWidth={2.35} />
-                </span>
-                <strong>Provider B</strong>
-                <span className="login-provider-bars">
-                  <span />
-                  <span />
-                  <span />
-                </span>
-              </span>
-              <span className="login-provider-node provider-three">
-                <span className="login-provider-icon">
-                  <Server size={14} strokeWidth={2.35} />
-                </span>
-                <strong>Provider C</strong>
-                <span className="login-provider-bars">
-                  <span />
-                  <span />
-                  <span />
-                </span>
-              </span>
+            <span className="login-route-label access-label">{tx("允许访问")}</span>
+            <span className="login-route-packet route-one" />
+            <span className="login-route-packet route-two" />
+            <span className="login-route-packet route-three" />
+
+            <div className="login-route-models">
+              {["A", "B", "C"].map((model, index) => (
+                <div className={`login-route-model model-${index + 1}`} key={model}>
+                  <span><Box size={15} strokeWidth={1.8} /></span>
+                  <strong>{tx(`模型 ${model}`)}</strong>
+                </div>
+              ))}
             </div>
           </div>
-          <div className="login-signal-strip" aria-hidden="true">
-            <span />
-            <span />
-            <span />
-          </div>
+
+          <button
+            aria-label={tx(heroPaused ? "播放动画" : "暂停动画")}
+            aria-pressed={heroPaused}
+            className="login-motion-toggle"
+            onClick={() => setHeroPaused((current) => !current)}
+            title={tx(heroPaused ? "播放动画" : "暂停动画")}
+            type="button"
+          >
+            {heroPaused ? <Play size={14} /> : <Pause size={14} />}
+          </button>
         </aside>
 
         <form className="login-card" onSubmit={submit}>
