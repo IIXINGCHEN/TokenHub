@@ -80,48 +80,13 @@ Initial admin login:
 
 The deployment script validates production credentials, pulls published images, and starts the containers without building locally. Until the images are publicly available, a failed pull of the default `latest` tag automatically falls back to a local source build; an explicitly selected tag never does. The script reports each unsafe variable without printing secret values. If Compose fails because a backend container created or restarted by that attempt is unhealthy, it automatically shows only that attempt's recent backend logs. Use `./deploy/install.sh --build` to request a local build explicitly.
 
-## Local Development
-
-Backend:
-
-```bash
-cd backend
-go run ./cmd/tokenhub
-```
-
-Frontend:
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Smoke-test the model API with the included SDK example:
-
-```bash
-cd sdk
-npm install
-npm run test:deepseek
-```
-
-## Optional AI Agent Development Workflows
-
-TokenHub provides two opt-in workflows for AI-assisted changes:
-
-| Workflow | Choose it for |
-| --- | --- |
-| [`fast-dev`](docs/development/workflows/fast-dev.md) | Small, well-scoped, low-risk changes |
-| [`feature-dev`](docs/development/workflows/feature-dev.md) | Important features, user-visible or cross-component changes, public API or data-model changes, security-sensitive work, deployment changes, or architectural decisions |
-
-Activate one by naming it in the request, such as `Use fast-dev for this change.` Without an explicit selection, the agent follows the normal repository guidance. The agent asks before switching workflows, and workflow selection does not authorize Git or pull-request actions. See [AGENTS.md](AGENTS.md#optional-development-workflows).
-
 ## Documentation
 
 - [Documentation home](docs/README.md)
 - [User Guide](docs/user-guide.md)
 - [Team Leader Guide](docs/team-leader-guide.md)
 - [Administrator Guide](docs/administrator-guide.md)
+- [Contributing Guide](CONTRIBUTING.md)
 - [简体中文文档](docs/zh-CN/README.md)
 - [日本語ドキュメント](docs/ja/README.md)
 
