@@ -6,6 +6,8 @@ Language: [English](../codex-tokenhub-profile-quick-start.md) | 简体中文 | [
 >
 > 本文不比较其他接入方式。如需了解 Profile、进程级临时配置、CLI 全局配置和桌面端配置，请参阅 [Codex 接入 TokenHub：四种配置方式与恢复指南](codex-tokenhub-configuration.md)。
 
+用户开始配置前，管理员需要先在 TokenHub 中接入 OpenAI Codex Provider、订阅账号资源和模型路由，再为实际项目创建 API Key。
+
 ## 1. Profile 方案说明
 
 ### 1.1 设计目标

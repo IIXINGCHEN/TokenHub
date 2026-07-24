@@ -48,7 +48,19 @@ For detailed PostgreSQL configuration, see the [PostgreSQL Setup Guide](postgres
 
 ### Multi-instance deployment with remote PostgreSQL
 
-Use `deploy/docker-compose.remote-postgres.yml` when PostgreSQL is managed outside this Compose project. It adds an Nginx gateway in front of scalable backend and frontend services and does not start a local database.
+The default installation starts one frontend and one backend with SQLite. For horizontal scaling with PostgreSQL managed outside this Compose project, use `deploy/docker-compose.remote-postgres.yml`. It adds an Nginx gateway in front of scalable backend and frontend services and does not start a local database.
+
+<p align="center">
+  <img src="assets/architecture/tokenhub-multi-instance.png" alt="TokenHub multi-instance architecture" width="1200" />
+</p>
+
+In multi-instance mode:
+
+- Nginx load-balances console, API, and health-check traffic across healthy replicas.
+- Backend replicas keep durable configuration, OAuth sessions, quota buckets, audit data, cluster locks, and in-flight concurrency leases in PostgreSQL.
+- Lease expiry and ownership decisions use the PostgreSQL clock, avoiding early takeover caused by clock skew between hosts. Heartbeats cancel work when lease ownership is lost.
+- The configured model catalog is synchronized on every backend startup; a cluster lease serializes the idempotent synchronization across replicas.
+- Coordination failures release provider capacity without incorrectly marking a healthy model provider as failed.
 
 Set the remote `TOKENHUB_DATABASE_URL`, public gateway URL, production secrets, and trusted proxy CIDR, then run:
 

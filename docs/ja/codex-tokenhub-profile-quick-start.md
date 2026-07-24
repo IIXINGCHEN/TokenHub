@@ -6,6 +6,8 @@ Language: [English](../codex-tokenhub-profile-quick-start.md) | [简体中文](.
 >
 > Profile、プロセス限定設定、CLI グローバル設定、デスクトップ設定を比較する場合は、[4 つの設定方法と復旧ガイド](codex-tokenhub-configuration.md)を参照してください。
 
+ユーザーが設定を始める前に、管理者は TokenHub で OpenAI Codex Provider、サブスクリプションアカウントリソース、モデルルートを設定し、対象プロジェクトの API Key を作成する必要があります。
+
 ## 1. Profile の動作
 
 `tokenhub` Profile は `--profile tokenhub` を指定したセッションだけで読み込まれます。

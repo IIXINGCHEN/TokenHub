@@ -6,6 +6,8 @@ Language: English | [简体中文](zh-CN/codex-tokenhub-profile-quick-start.md) 
 >
 > To compare profile, process-local, global CLI, and desktop configuration, see [Connect Codex to TokenHub: Four Configuration Methods and Recovery](codex-tokenhub-configuration.md).
 
+Before users follow this guide, an administrator must configure an OpenAI Codex provider, subscription account resources, and model routes in TokenHub, and then create an API key for the project.
+
 ## 1. How the profile works
 
 The `tokenhub` profile is loaded only when Codex starts with `--profile tokenhub`.
