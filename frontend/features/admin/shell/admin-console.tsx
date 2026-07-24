@@ -750,6 +750,7 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
               totalItems={filteredItems.length}
               loading={loading}
               query={query}
+              currentUser={currentUser}
               pagination={crudPagination}
               categoryFilter={modelCategoryFilter}
               onCategoryFilter={setModelCategoryFilter}

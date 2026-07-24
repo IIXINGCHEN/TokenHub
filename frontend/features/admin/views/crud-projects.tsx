@@ -1,6 +1,6 @@
 import { Plus, Search, Trash2, UserRoundCheck, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { type AdminResource, type AppData, type Project, type Provider, type ProviderResource, type ReportExportHistoryItem, type RequestLog, type ResourceAction, type ResourceConfig, type ToolbarAction } from "../core/types";
+import { type AdminResource, type AdminUser, type AppData, type Project, type Provider, type ProviderResource, type ReportExportHistoryItem, type RequestLog, type ResourceAction, type ResourceConfig, type ToolbarAction } from "../core/types";
 import { notificationChannelLabel } from "../domain/catalog";
 import { projectMembersForProject, providerRoutesFor, stringifyValue } from "../domain/entities";
 import { activeRouteCount, formatNumber, formatTime } from "../domain/formatting";
@@ -33,6 +33,7 @@ export function CrudView<T>({
   onProjectMemberEdit,
   onProjectMemberDelete,
   onToolbarAction,
+  currentUser = null,
 }: {
   config: ResourceConfig<T>;
   data: AppData;
@@ -53,6 +54,7 @@ export function CrudView<T>({
   onProjectMemberEdit?: (member: AdminResource) => void;
   onProjectMemberDelete?: (member: AdminResource) => void;
   onToolbarAction: (action: ToolbarAction) => void;
+  currentUser?: AdminUser | null;
 }) {
   const [selectedTeamID, setSelectedTeamID] = useState("");
   const [selectedProjectID, setSelectedProjectID] = useState("");
@@ -131,6 +133,7 @@ export function CrudView<T>({
             items={items}
             loading={loading}
             query={query}
+            currentUser={currentUser}
             onCreate={config.create ? onCreate : undefined}
             onEdit={onEdit}
             onDelete={onDelete}

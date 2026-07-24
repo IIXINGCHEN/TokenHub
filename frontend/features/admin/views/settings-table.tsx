@@ -183,6 +183,7 @@ export function EntityTable<T>({
   onAction,
   onRowClick,
   selectedRowID,
+  currentUser = null,
 }: {
   config: ResourceConfig<T>;
   data: AppData;
@@ -195,6 +196,7 @@ export function EntityTable<T>({
   onAction: (action: ResourceAction<T>, item: T) => void;
   onRowClick?: (item: T) => void;
   selectedRowID?: string;
+  currentUser?: AdminUser | null;
 }) {
   if (loading && items.length === 0) {
     return <TableSkeleton columns={Math.max(3, config.columns.length + 1)} rows={5} />;
@@ -254,7 +256,7 @@ export function EntityTable<T>({
                       {tx("编辑")}
                     </button>
                   ) : null}
-                  {config.remove ? (
+                  {config.remove && (config.canRemove?.(item, currentUser) ?? true) ? (
                     <button className="danger-button" onClick={() => onDelete(item)} type="button" title={tx("删除")}>
                       <Trash2 size={15} />
                     </button>

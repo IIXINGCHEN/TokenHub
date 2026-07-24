@@ -483,6 +483,66 @@ func TestUserCanReadRoutedAdminModels(t *testing.T) {
 	}
 }
 
+func TestAdminCannotDeleteOwnAccount(t *testing.T) {
+	store := NewMemoryStore()
+	actor, err := store.CreateAdminUser(AdminUser{
+		Username: "platform.admin",
+		Email:    "platform.admin@tokenhub.local",
+		Role:     "admin",
+		Status:   StatusActive,
+	}, "admin123456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	victim, err := store.CreateAdminUser(AdminUser{
+		Username: "ordinary.user",
+		Email:    "ordinary.user@tokenhub.local",
+		Role:     "user",
+		Status:   StatusActive,
+	}, "user123456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := New(store).Handler()
+
+	login := doJSON(t, app, http.MethodPost, "/api/admin/auth/login", map[string]any{
+		"identity": "platform.admin@tokenhub.local",
+		"password": "admin123456",
+	}, "")
+	if login.Code != http.StatusOK {
+		t.Fatalf("expected login 200, got %d: %s", login.Code, login.Body)
+	}
+	var payload struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal([]byte(login.Body), &payload); err != nil {
+		t.Fatal(err)
+	}
+
+	self := doJSON(t, app, http.MethodDelete, "/api/admin/users/"+actor.ID, nil, payload.Token)
+	if self.Code != http.StatusBadRequest {
+		t.Fatalf("expected self deletion to be rejected with 400, got %d: %s", self.Code, self.Body)
+	}
+	if !strings.Contains(self.Body, "cannot_delete_self") {
+		t.Fatalf("expected cannot_delete_self error, got %s", self.Body)
+	}
+	stillExists := false
+	for _, user := range store.ListAdminUsers() {
+		if user.ID == actor.ID {
+			stillExists = true
+			break
+		}
+	}
+	if !stillExists {
+		t.Fatalf("expected actor account to survive self deletion attempt")
+	}
+
+	other := doJSON(t, app, http.MethodDelete, "/api/admin/users/"+victim.ID, nil, payload.Token)
+	if other.Code != http.StatusNoContent {
+		t.Fatalf("expected deleting another user to succeed, got %d: %s", other.Code, other.Body)
+	}
+}
+
 func TestBootstrapBaseDataSeedsGovernanceResources(t *testing.T) {
 	store := NewMemoryStore()
 	if err := BootstrapBaseData(store); err != nil {

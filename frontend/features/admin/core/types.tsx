@@ -563,6 +563,7 @@ export type ResourceConfig<T> = {
   create?: (ctx: ApiContext, values: Record<string, string>, data?: AppData) => Promise<void>;
   update?: (ctx: ApiContext, item: T, values: Record<string, string>) => Promise<void>;
   remove?: (ctx: ApiContext, item: T) => Promise<void>;
+  canRemove?: (item: T, currentUser: AdminUser | null) => boolean;
   actions?: ResourceAction<T>[];
   toolbarActions?: ToolbarAction[];
   toForm?: (item: T) => Record<string, string>;
