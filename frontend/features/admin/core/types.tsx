@@ -4,7 +4,9 @@ export type Summary = {
   request_count: number;
   input_tokens: number;
   cached_input_tokens?: number;
+  cache_write_input_tokens?: number;
   output_tokens: number;
+  reasoning_output_tokens?: number;
   total_tokens: number;
   estimated_cost_usd: number;
   errors: number;
@@ -64,6 +66,76 @@ export type Provider = {
   options?: Record<string, string>;
 };
 
+export type AdapterDescriptor = {
+  type: string;
+  capabilities: string[];
+};
+
+export type ProviderMonitoringSignal = {
+  state: "healthy" | "degraded" | "down" | "unknown";
+  source: "configuration" | "active_probe" | "gateway_request" | string;
+  detail?: string;
+  samples: number;
+  success_rate?: number;
+  latency_ms?: number;
+  error_code?: string;
+  observed_at?: string;
+};
+
+export type OpenAIQuotaWindow = {
+  used_percent: number;
+  reset_after_seconds: number;
+  reset_at: number;
+};
+
+export type OpenAIAccountQuota = {
+  plan_type?: string;
+  fetched_at?: number;
+  rate_limit?: {
+    allowed: boolean;
+    limit_reached: boolean;
+    primary_window?: OpenAIQuotaWindow;
+    secondary_window?: OpenAIQuotaWindow;
+  };
+};
+
+export type ProviderQuotaSummary = {
+  supported: boolean;
+  remaining_percent?: number;
+  limit_reached: boolean;
+  plan_type?: string;
+  earliest_reset_at?: number;
+  fetched_at?: number;
+  successful_accounts: number;
+  failed_accounts: number;
+  accounts?: Array<{
+    resource_id: string;
+    resource_name: string;
+    quota?: OpenAIAccountQuota;
+    error_code?: string;
+  }>;
+};
+
+export type ProviderMonitoringSnapshot = {
+  provider: Provider;
+  adapter: AdapterDescriptor;
+  route_count: number;
+  active_route_count: number;
+  resource_count: number;
+  active_resource_count: number;
+  healthy_resource_count: number;
+  state: "healthy" | "degraded" | "down" | "unknown";
+  status_label: string;
+  status_detail: string;
+  configuration: ProviderMonitoringSignal;
+  resources: ProviderMonitoringSignal;
+  active_probe: ProviderMonitoringSignal;
+  gateway: ProviderMonitoringSignal;
+  quota: ProviderQuotaSummary;
+  quality_score: number;
+  trend: Array<"success" | "warning" | "failure" | "none">;
+};
+
 export type ProviderCatalogModel = {
   id: string;
   name: string;
@@ -82,6 +154,7 @@ export type ProviderCatalogModel = {
   capabilities?: string[];
   supported_parameters?: string[];
   last_updated?: string;
+  metadata?: Record<string, string>;
 };
 
 export type ProviderCatalogEntry = {
@@ -175,6 +248,10 @@ export type PlaygroundRouteSummary = {
   resource_id?: string;
   resource_name?: string;
   provider_model?: string;
+  upstream_request_id?: string;
+  served_model?: string;
+  model_etag?: string;
+  transport?: string;
   priority?: number;
   resource_priority?: number;
   weight?: number;
@@ -340,7 +417,9 @@ export type UsageRecord = {
   provider_resource_id?: string;
   input_tokens: number;
   cached_input_tokens?: number;
+  cache_write_input_tokens?: number;
   output_tokens: number;
+  reasoning_output_tokens?: number;
   total_tokens: number;
   estimated_cost_usd: number;
   created_at: string;
@@ -387,6 +466,8 @@ export type AuditEvent = {
   resource_id: string;
   status: string;
   message?: string;
+  before_snapshot?: string;
+  after_snapshot?: string;
   ip?: string;
   user_agent?: string;
   created_at: string;
@@ -611,6 +692,7 @@ export type AppData = {
   timeseries: UsagePoint[];
   resources: Record<string, AdminResource[]>;
   providerCatalog: ProviderCatalogEntry[];
+  providerMonitoring: ProviderMonitoringSnapshot[];
 };
 
 export type ApiContext = {

@@ -55,35 +55,9 @@ TokenHub は、日常的なモデル利用、チームガバナンス、プラ�
 - OAuth/OIDC によるエンタープライズサインイン、RBAC、監査証跡に対応する ID ソース設定。
 - クリーンなコンソール: ロール別ナビゲーション、グローバル検索、ライト/ダーク切り替え、左ナビ + 右詳細の API ドキュメント。
 - SQLite-first のプライベートデプロイと Docker Compose サポート。
-- コネクションプーリング対応の PostgreSQL による本番環境デプロイメントサポート。
+- PostgreSQL はマルチインスタンス構成に対応します。リモート PostgreSQL で状態を共有し、フロントエンドとバックエンドのレプリカを水平スケールできるほか、コネクションプールも設定できます。[デプロイガイド](docs/ja/deployment.md)を参照してください。
 - 管理コンソールは英語、中国語、日本語の切り替えに対応。
-
-## マルチインスタンス構成
-
-デフォルトのインストールでは、SQLite を使用するフロントエンド 1 台とバックエンド 1 台を起動します。水平スケールする場合は `deploy/docker-compose.remote-postgres.yml` を使用します。Nginx が複数のフロントエンドおよびバックエンドレプリカの統一エントリーポイントとなり、共有状態はリモート PostgreSQL に保存されます。複数のバックエンドレプリカで同じ SQLite ファイルを共有してはいけません。
-
-<p align="center">
-  <img src="docs/assets/architecture/tokenhub-multi-instance.png" alt="TokenHub マルチインスタンス構成" width="1200" />
-</p>
-
-マルチインスタンスモードでは：
-
-- Nginx が管理コンソール、API、ヘルスチェックのトラフィックを正常なレプリカへ分散します。
-- バックエンドレプリカは、永続設定、OAuth セッション、クォータカウンター、監査データ、クラスターロック、実行中リクエストの並行数リースを PostgreSQL で共有します。
-- リースの期限と所有権は PostgreSQL のクロックで判定し、ホスト間の時刻ずれによる早期引き継ぎを防ぎます。所有権を失った処理はハートビートによってキャンセルされます。
-- 設定されたモデルカタログはバックエンドの起動ごとに同期され、冪等な同期処理はクラスターロックによって直列化されます。
-- データベースの調整障害では Provider の容量だけを解放し、正常なモデル Provider を誤って失敗扱いにしません。
-
-すべてのバックエンドレプリカで同じ `TOKENHUB_SECRET_KEY` を使用してください。`TOKENHUB_DB_MAX_OPEN_CONNS` はレプリカ単位で設定し、接続プールの合計が PostgreSQL の上限を下回るようにします。
-
-```bash
-docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.remote-postgres.yml up -d \
-  --scale tokenhub-backend=3 \
-  --scale tokenhub-frontend=2
-```
-
-設定要件、ヘルスプローブ、実際の PostgreSQL E2E テストについては、[デプロイガイド](docs/ja/deployment.md#リモート-postgresql-を使用するマルチインスタンス構成)を参照してください。
+- TokenHub は OpenAI Codex のサブスクリプションアカウントリソースにも接続できます。分離および復旧が可能な Codex Profile を使用し、指定したローカル Codex CLI またはデスクトップセッションを TokenHub 経由で実行できます。[Codex 接続ガイド](docs/ja/codex-tokenhub-profile-quick-start.md)を参照してください。
 
 ## クイックスタート
 

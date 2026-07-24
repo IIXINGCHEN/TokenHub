@@ -290,6 +290,7 @@ export function providerTypeLabel(type: string | undefined) {
   const labels: Record<string, string> = {
     mock: "模拟渠道",
     openai: "OpenAI 官方",
+    openai_codex: "Codex Subscription",
     openai_compatible: "OpenAI 兼容",
     azure_openai: "Azure OpenAI",
     anthropic: "Claude / Anthropic",

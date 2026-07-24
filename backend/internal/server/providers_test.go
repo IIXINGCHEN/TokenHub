@@ -1,6 +1,7 @@
 package server
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -50,7 +51,7 @@ func TestUsageFromMapExtractsCachedInputTokens(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := usageFromMap(tt.body)
-			if got != tt.want {
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("usageFromMap() = %+v, want %+v", got, tt.want)
 			}
 		})
@@ -64,7 +65,7 @@ func TestProviderSpecificUsageIncludesCachedInputTokens(t *testing.T) {
 		"cache_read_input_tokens":     float64(300),
 		"output_tokens":               float64(50),
 	}})
-	if anthropic != (Usage{PromptTokens: 600, CachedInputTokens: 300, CompletionTokens: 50, TotalTokens: 650}) {
+	if !reflect.DeepEqual(anthropic, Usage{PromptTokens: 600, CachedInputTokens: 300, CompletionTokens: 50, TotalTokens: 650}) {
 		t.Fatalf("unexpected Anthropic usage: %+v", anthropic)
 	}
 
@@ -74,7 +75,7 @@ func TestProviderSpecificUsageIncludesCachedInputTokens(t *testing.T) {
 		"candidatesTokenCount":    float64(25),
 		"totalTokenCount":         float64(525),
 	}})
-	if gemini != (Usage{PromptTokens: 500, CachedInputTokens: 350, CompletionTokens: 25, TotalTokens: 525}) {
+	if !reflect.DeepEqual(gemini, Usage{PromptTokens: 500, CachedInputTokens: 350, CompletionTokens: 25, TotalTokens: 525}) {
 		t.Fatalf("unexpected Gemini usage: %+v", gemini)
 	}
 }
@@ -113,7 +114,7 @@ func TestCopyOpenAIStreamAndUsagePreservesStreamAndReturnsUsage(t *testing.T) {
 		t.Fatalf("stream changed during copy:\n%s", output.String())
 	}
 	want := Usage{PromptTokens: 100, CachedInputTokens: 64, CompletionTokens: 20, TotalTokens: 120}
-	if usage != want {
+	if !reflect.DeepEqual(usage, want) {
 		t.Fatalf("stream usage = %+v, want %+v", usage, want)
 	}
 }

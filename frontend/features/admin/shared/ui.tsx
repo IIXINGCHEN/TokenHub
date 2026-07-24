@@ -429,10 +429,11 @@ export function ModelRouteProviders({ model, data }: { model: Model; data: AppDa
   );
 }
 
-export const providerTypeOptions = ["mock", "openai", "openai_compatible", "azure_openai", "anthropic", "gemini", "deepseek", "qwen", "local"];
+export const providerTypeOptions = ["mock", "openai", "openai_codex", "openai_compatible", "azure_openai", "anthropic", "gemini", "deepseek", "qwen", "local"];
 
 export const modelCategoryLabels: Record<string, string> = {
   all: "全部",
+  codex: "OpenAI Codex",
   openai: "OpenAI",
   claude: "Claude",
   deepseek: "DeepSeek",
@@ -455,6 +456,7 @@ export const modelCategoryLabels: Record<string, string> = {
 };
 
 export const preferredModelCategories = [
+  "codex",
   "openai",
   "claude",
   "deepseek",
