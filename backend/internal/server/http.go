@@ -2825,6 +2825,10 @@ func (s *Server) handleAdminUserItem(w http.ResponseWriter, r *http.Request) {
 		s.recordAdminAudit(r, actor, "update", "admin_user", userID, "", updatedUser)
 		writeJSON(w, http.StatusOK, updatedUser)
 	case http.MethodDelete:
+		if actor.ID == userID {
+			writeError(w, r, NewHTTPError(400, "cannot_delete_self", "You cannot delete your own account"))
+			return
+		}
 		if normalizeAdminRole(actor.Role) == "team_leader" {
 			target, ok := s.findAdminUser(userID)
 			if !ok || target.TeamID != actor.TeamID || normalizeAdminRole(target.Role) != "user" {

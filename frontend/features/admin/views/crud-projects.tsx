@@ -38,6 +38,7 @@ export function CrudView<T>({
   onProjectMemberEdit,
   onProjectMemberDelete,
   onToolbarAction,
+  currentUser = null,
 }: {
   config: ResourceConfig<T>;
   data: AppData;
@@ -60,6 +61,7 @@ export function CrudView<T>({
   onProjectMemberEdit?: (member: AdminResource) => void;
   onProjectMemberDelete?: (member: AdminResource) => void;
   onToolbarAction: (action: ToolbarAction) => void;
+  currentUser?: AdminUser | null;
 }) {
   const [selectedTeamID, setSelectedTeamID] = useState("");
   const [selectedProjectID, setSelectedProjectID] = useState("");
@@ -155,6 +157,7 @@ export function CrudView<T>({
             items={items}
             loading={loading}
             query={query}
+            currentUser={currentUser}
             onCreate={config.create ? onCreate : undefined}
             onEdit={onEdit}
             onDelete={onDelete}
