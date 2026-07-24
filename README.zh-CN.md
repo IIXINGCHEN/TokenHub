@@ -106,48 +106,13 @@ cp deploy/.env.example deploy/.env
 
 部署脚本会校验生产凭证，拉取已发布镜像并启动容器，不在部署服务器构建镜像。镜像尚未公开时，如果默认 `latest` 标签拉取失败，脚本会自动改为从本地源码构建；显式指定的标签不会触发该行为。校验失败时会列出不安全的变量，但不会输出敏感值。如果本次创建或重启的后端容器异常导致 Compose 失败，脚本只会自动显示本次启动产生的后端近期日志。需要明确从当前代码构建时，使用 `./deploy/install.sh --build`。
 
-## 本地开发
-
-后端：
-
-```bash
-cd backend
-go run ./cmd/tokenhub
-```
-
-前端：
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-使用 SDK 示例测试模型 API 链路：
-
-```bash
-cd sdk
-npm install
-npm run test:deepseek
-```
-
-## 可选的 AI Agent 开发工作流
-
-TokenHub 为 AI Agent 修改仓库提供两套可选工作流：
-
-| 工作流 | 适用范围 |
-| --- | --- |
-| [`fast-dev`](docs/development/workflows/fast-dev.md) | 范围明确、风险较低的局部修改 |
-| [`feature-dev`](docs/development/workflows/feature-dev.md) | 重要功能、用户可见或跨组件修改、公共 API 或数据模型修改、安全敏感修改、部署修改或架构决策 |
-
-在请求中指定工作流即可启用，例如 `本次修改使用 fast-dev。` 未指定时，Agent 按仓库常规指引执行。切换工作流前需要确认，选择工作流也不代表允许 Git 或 Pull Request 操作。Agent 规则见 [AGENTS.md](AGENTS.md#optional-development-workflows)。
-
 ## 文档
 
 - [文档首页](docs/zh-CN/README.md)
 - [普通用户指南](docs/zh-CN/user-guide.md)
 - [团队负责人指南](docs/zh-CN/team-leader-guide.md)
 - [管理员指南](docs/zh-CN/administrator-guide.md)
+- [贡献指南](CONTRIBUTING.zh-CN.md)
 - [English documentation](docs/README.md)
 - [日本語ドキュメント](docs/ja/README.md)
 
