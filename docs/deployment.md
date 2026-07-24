@@ -138,6 +138,20 @@ Each image is first pushed under a run-specific staging tag. The workflow verifi
 
 The first GHCR publication creates private packages. The repository owner must make both packages public before anonymous deployments can pull them. Until then, a deployment using the default `latest` tag remains usable by automatically falling back to a local source build. If an explicit `TOKENHUB_IMAGE_TAG` cannot be pulled, the installer exits instead of labeling current source as that version.
 
+### Version status and rollback
+
+Platform administrators can select the version badge below the TokenHub logo to inspect the running version, check the latest stable GitHub Release, and list up to three older stable releases. Release builds receive their exact version from the publication workflow; local source builds use the package version and are labeled as source builds.
+
+The check makes a time-limited outbound HTTPS request to the public GitHub Releases API and caches successful results for 20 minutes. It checks `astaxie/TokenHub` by default. Maintainers can set `TOKENHUB_RELEASE_REPOSITORY` to another trusted public `owner/repository` when validating releases from a fork. A GitHub outage or a repository without releases does not affect gateway traffic. The panel reports the unavailable state and keeps the current version visible.
+
+For example, check a fork while running from source:
+
+```bash
+TOKENHUB_RELEASE_REPOSITORY=your-account/TokenHub ./start.sh
+```
+
+TokenHub deploys separate backend and frontend containers, so the application does not mount the Docker socket or mutate its host. The panel instead generates Compose commands that apply the same exact `TOKENHUB_IMAGE_TAG` to both images. Pin that tag in `deploy/.env` before running the commands so a later Compose operation does not move the deployment back to `latest`. Before rollback, create a database backup and confirm that the target release supports the current schema.
+
 ### Optional local build
 
 Build from the current checkout instead of pulling published images:
@@ -221,6 +235,7 @@ Only use `down -v` when you intentionally want to delete local data.
 | `TOKENHUB_ENV` | `prod` | Runtime environment label |
 | `TOKENHUB_HTTP_ADDR` | `:8080` | Backend listen address |
 | `TOKENHUB_PUBLIC_BASE_URL` | `http://localhost:8080` | Public backend URL shown to users |
+| `TOKENHUB_RELEASE_REPOSITORY` | `astaxie/TokenHub` | Trusted public GitHub repository used for version checks, in `owner/repository` form |
 | `TOKENHUB_TRUSTED_PROXY_CIDRS` | empty | Comma-separated proxy IPs or CIDRs allowed to supply `X-Forwarded-For` |
 | `TOKENHUB_CORS_ALLOWED_ORIGINS` | public URL | Comma-separated browser origins allowed to call the backend |
 | `TOKENHUB_ADMIN_TOKEN` | `change-me-tokenhub-admin-token` | Bootstrap admin token for Admin API access |

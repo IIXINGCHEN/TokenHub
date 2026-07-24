@@ -1,12 +1,12 @@
 import { AlertCircle, Check, ChevronDown, ChevronRight, LogOut, Moon, PanelLeftClose, PanelLeftOpen, Search, Sun, X } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { appRole, filterNavItemByAccess, isNavItemActive, isNavParentItem, navGroupsForUser, normalizeSearchText, readRecentViews, roleScopeDescription, standaloneViewMeta, topQuickActionsForUser, topSearchItemsForUser, topSearchResults } from "../core/navigation";
-import { type AdminUser, type AppData, type NavItem, type ViewKey } from "../core/types";
+import { type AdminUser, type ApiContext, type AppData, type NavItem, type ViewKey } from "../core/types";
 import { formatMoney, formatNumber, playgroundModels } from "../domain/formatting";
 import { roleLabel, userInitial } from "../domain/labels";
 import { displayText, tx } from "../i18n/runtime";
 import { resourceConfigFor } from "../resources/settings-config";
-import { VersionCheck } from "./version-check";
+import { VersionStatus } from "./version-status";
 
 export function Sidebar({
   activeView,
@@ -17,8 +17,7 @@ export function Sidebar({
   onToggleCollapse,
   openGroups,
   onToggleGroup,
-  baseURL,
-  adminToken,
+  api,
 }: {
   activeView: ViewKey;
   onSelect: (view: ViewKey) => void;
@@ -28,8 +27,7 @@ export function Sidebar({
   onToggleCollapse: () => void;
   openGroups: Record<string, boolean>;
   onToggleGroup: (title: string) => void;
-  baseURL: string;
-  adminToken: string;
+  api: ApiContext;
 }) {
   const visibleGroups = navGroupsForUser(user)
     .map((group) => ({ ...group, items: group.items.map((item) => filterNavItemByAccess(item, user)).filter((item): item is NavItem => Boolean(item)) }))
@@ -39,7 +37,7 @@ export function Sidebar({
       <div className="brand">
         <img src="/brand/tokenhub-logo.png" alt="TokenHub" className="brand-logo" />
         <span className="brand-name">TokenHub</span>
-        <VersionCheck baseURL={baseURL} adminToken={adminToken} />
+        <VersionStatus api={api} user={user} />
         <button
           className="sidebar-toggle"
           aria-label={collapsed ? tx("展开菜单") : tx("折叠菜单")}
@@ -330,6 +328,7 @@ export function pageRecordCount(view: ViewKey, data: AppData) {
 
 export function TopNav({
   activeView,
+  api,
   data,
   user,
   theme,
@@ -337,6 +336,7 @@ export function TopNav({
   onThemeToggle,
 }: {
   activeView: ViewKey;
+  api: ApiContext;
   data: AppData;
   user: AdminUser;
   theme: "light" | "dark";
@@ -346,6 +346,7 @@ export function TopNav({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
+  const [showMobileVersion, setShowMobileVersion] = useState(false);
   const [recentViews, setRecentViews] = useState<ViewKey[]>(() => readRecentViews());
   const searchItems = topSearchItemsForUser(user, data);
   const normalizedQuery = normalizeSearchText(query);
@@ -368,6 +369,14 @@ export function TopNav({
   useEffect(() => {
     setRecentViews(readRecentViews());
   }, [activeView]);
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 980px)");
+    const update = () => setShowMobileVersion(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
 
   function openResult(view: ViewKey) {
     setQuery("");
@@ -443,6 +452,11 @@ export function TopNav({
       </div>
       <div className="topbar-spacer" />
       <div className="topbar-actions">
+        {showMobileVersion ? (
+          <div className="top-version-status">
+            <VersionStatus api={api} user={user} />
+          </div>
+        ) : null}
         <div className="top-quick-actions" aria-label={tx("常用操作")}>
           {quickActions.map((item) => {
             const Icon = item.icon;

@@ -699,6 +699,7 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
     <main className={sidebarCollapsed ? "app-shell sidebar-collapsed" : "app-shell"} data-theme={theme}>
       <Sidebar
         activeView={activeView}
+        api={api}
         onSelect={selectView}
         user={currentUser}
         onLogout={() => void logout()}
@@ -708,13 +709,12 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
         onToggleGroup={(title) =>
           setOpenNavGroups((current) => ({ ...current, [title]: current[title] === false }))
         }
-        baseURL={baseURL}
-        adminToken={adminToken}
       />
 
       <section className="workspace">
         <TopNav
           activeView={activeView}
+          api={api}
           data={data}
           user={currentUser}
           theme={theme}

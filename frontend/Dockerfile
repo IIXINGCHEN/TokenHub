@@ -13,6 +13,8 @@ RUN npm run build
 
 FROM node:22-alpine AS runner
 
+ARG TOKENHUB_VERSION=0.3.0
+LABEL org.opencontainers.image.version="${TOKENHUB_VERSION}"
 WORKDIR /app
 ENV NODE_ENV=production
 ENV TOKENHUB_API_BASE_URL=http://localhost:8080

@@ -13,11 +13,18 @@ import (
 	"tokenhub/backend/internal/server"
 )
 
+var (
+	buildVersion = server.DefaultAppVersion
+	buildType    = "source"
+)
+
 func main() {
 	loadDotEnv()
 
 	addr := getenv("TOKENHUB_HTTP_ADDR", ":8080")
 	config := server.ConfigFromEnv()
+	config.AppVersion = buildVersion
+	config.BuildType = buildType
 	if err := config.ValidateForStartup(); err != nil {
 		log.Fatal(err)
 	}

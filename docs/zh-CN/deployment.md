@@ -138,6 +138,20 @@ GitHub Actions 为 `linux/amd64` 和 `linux/arm64` 发布 `ghcr.io/astaxie/token
 
 GHCR 首次发布产生的 Package 默认为私有。开放匿名部署前，仓库所有者需要将两个 Package 调整为 Public。在此之前，使用默认 `latest` 标签的安装会在拉取失败后自动改为从本地源码构建。如果显式配置的 `TOKENHUB_IMAGE_TAG` 无法拉取，安装脚本会直接退出，不会把当前源码标记成该版本。
 
+### 版本状态与回退
+
+平台管理员可以点击 TokenHub 标志下方的版本胶囊，查看当前运行版本、检查最新的 GitHub 正式 Release，并列出最多 3 个更早的稳定版本。正式镜像构建会从发布工作流获得精确版本号；本地源码构建使用项目包版本，并明确标记为源码构建。
+
+版本检查会通过限时的出站 HTTPS 请求访问公开的 GitHub Releases API，并将成功结果缓存 20 分钟。默认检查 `astaxie/TokenHub`；维护者可以将 `TOKENHUB_RELEASE_REPOSITORY` 设置为其他可信的公开 `owner/repository`，用于 fork 发布验证。GitHub 故障或仓库尚无 Release 不会影响网关流量；面板会展示不可用状态，同时保留当前版本信息。
+
+例如，在源码部署中检查 fork 的 Release：
+
+```bash
+TOKENHUB_RELEASE_REPOSITORY=your-account/TokenHub ./start.sh
+```
+
+TokenHub 分别部署后端和前端容器，因此应用不会挂载 Docker Socket，也不会直接修改宿主机。版本面板会生成 Compose 命令，让两个镜像使用同一个精确的 `TOKENHUB_IMAGE_TAG`。执行命令前，请先在 `deploy/.env` 中固定该标签，避免后续 Compose 操作重新切换到 `latest`。回退前必须完成数据库备份，并确认目标版本支持当前数据库结构。
+
 ### 可选：本地构建
 
 需要从当前代码构建镜像时执行：
@@ -221,6 +235,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_ENV` | `prod` | 运行环境标识 |
 | `TOKENHUB_HTTP_ADDR` | `:8080` | 后端监听地址 |
 | `TOKENHUB_PUBLIC_BASE_URL` | `http://localhost:8080` | 展示给用户的后端地址 |
+| `TOKENHUB_RELEASE_REPOSITORY` | `astaxie/TokenHub` | 版本检查使用的可信公开 GitHub 仓库，格式为 `owner/repository` |
 | `TOKENHUB_TRUSTED_PROXY_CIDRS` | 空 | 允许提供 `X-Forwarded-For` 的代理 IP 或 CIDR，逗号分隔 |
 | `TOKENHUB_CORS_ALLOWED_ORIGINS` | 公网地址 | 允许调用后端的浏览器 Origin，逗号分隔 |
 | `TOKENHUB_ADMIN_TOKEN` | `change-me-tokenhub-admin-token` | Admin API 启动访问 Token |

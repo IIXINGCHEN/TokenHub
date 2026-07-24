@@ -1,0 +1,479 @@
+import {
+  AlertCircle,
+  ArrowUpCircle,
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  Copy,
+  ExternalLink,
+  History,
+  LoaderCircle,
+  RefreshCw,
+  Terminal,
+  X,
+} from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import packageMetadata from "../../../package.json";
+import { type AdminUser, type ApiContext } from "../core/types";
+import { languageLocale, tx } from "../i18n/runtime";
+import { adminFetch, readAdminError } from "../resources/payloads";
+import { GitHubBrandIcon } from "./auth";
+
+type VersionReleaseInfo = {
+  version: string;
+  name: string;
+  published_at: string;
+  html_url: string;
+};
+
+type SystemVersionInfo = {
+  current_version: string;
+  latest_version: string;
+  has_update: boolean;
+  build_type: "source" | "release";
+  releases_url: string;
+  release_info?: VersionReleaseInfo;
+  cached: boolean;
+  warning?: string;
+};
+
+type RollbackVersionInfo = {
+  version: string;
+  published_at: string;
+  html_url: string;
+};
+
+const fallbackVersionInfo: SystemVersionInfo = {
+  current_version: packageMetadata.version,
+  latest_version: packageMetadata.version,
+  has_update: false,
+  build_type: "source",
+  releases_url: "https://github.com/astaxie/TokenHub/releases",
+  cached: false,
+};
+
+export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser }) {
+  const canInspectVersions = ["admin", "system_admin"].includes(user.role.trim().toLowerCase());
+  const [info, setInfo] = useState<SystemVersionInfo>(fallbackVersionInfo);
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(canInspectVersions);
+  const [loadError, setLoadError] = useState("");
+  const [rollbackOpen, setRollbackOpen] = useState(false);
+  const [rollbackLoading, setRollbackLoading] = useState(false);
+  const [rollbackLoaded, setRollbackLoaded] = useState(false);
+  const [rollbackError, setRollbackError] = useState("");
+  const [rollbackVersions, setRollbackVersions] = useState<RollbackVersionInfo[]>([]);
+  const [selectedVersion, setSelectedVersion] = useState("");
+  const [copiedCommand, setCopiedCommand] = useState("");
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const modalRef = useRef<HTMLElement>(null);
+
+  const loadVersion = useCallback(async (force: boolean, signal?: AbortSignal) => {
+    if (!canInspectVersions) return;
+    setLoading(true);
+    setLoadError("");
+    try {
+      const suffix = force ? "?force=true" : "";
+      const response = await adminFetch(api, `/api/admin/system/version${suffix}`, { signal });
+      if (!response.ok) {
+        throw new Error(await readAdminError(response, tx("检查更新失败")));
+      }
+      const payload = await response.json() as SystemVersionInfo;
+      setInfo(payload);
+      if (force) {
+        setRollbackOpen(false);
+        setRollbackLoaded(false);
+        setRollbackVersions([]);
+        setRollbackError("");
+        setSelectedVersion("");
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setLoadError(error instanceof Error ? error.message : tx("检查更新失败"));
+    } finally {
+      if (!signal?.aborted) setLoading(false);
+    }
+  }, [api, canInspectVersions]);
+
+  const loadRollbackVersions = useCallback(async () => {
+    if (!canInspectVersions || rollbackLoading) return;
+    setRollbackLoading(true);
+    setRollbackError("");
+    try {
+      const response = await adminFetch(api, "/api/admin/system/rollback-versions");
+      if (!response.ok) {
+        throw new Error(await readAdminError(response, tx("加载版本失败")));
+      }
+      const payload = await response.json() as { versions?: RollbackVersionInfo[] };
+      setRollbackVersions(payload.versions ?? []);
+      setRollbackLoaded(true);
+    } catch (error) {
+      setRollbackError(error instanceof Error ? error.message : tx("加载版本失败"));
+    } finally {
+      setRollbackLoading(false);
+    }
+  }, [api, canInspectVersions, rollbackLoading]);
+
+  useEffect(() => {
+    if (!canInspectVersions) return;
+    const controller = new AbortController();
+    void loadVersion(false, controller.signal);
+    return () => controller.abort();
+  }, [canInspectVersions, loadVersion]);
+
+  useEffect(() => {
+    if (!open) return;
+    closeRef.current?.focus();
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpen(false);
+        triggerRef.current?.focus();
+        return;
+      }
+      if (event.key !== "Tab" || !modalRef.current) return;
+      const focusable = Array.from(
+        modalRef.current.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [open]);
+
+  function closeModal() {
+    setOpen(false);
+    triggerRef.current?.focus();
+  }
+
+  function toggleRollback() {
+    const nextOpen = !rollbackOpen;
+    setRollbackOpen(nextOpen);
+    if (nextOpen && !rollbackLoaded && !rollbackLoading) {
+      void loadRollbackVersions();
+    }
+  }
+
+  async function copyCommand(version: string, kind: "update" | "rollback") {
+    const command = composeVersionCommand(version);
+    try {
+      if (!navigator.clipboard) throw new Error("Clipboard API unavailable");
+      await navigator.clipboard.writeText(command);
+      setCopiedCommand(`${kind}:${version}`);
+      window.setTimeout(() => setCopiedCommand(""), 2000);
+    } catch {
+      setCopiedCommand("");
+    }
+  }
+
+  if (!canInspectVersions) {
+    return <span className="version">v{info.current_version}</span>;
+  }
+
+  const versionLabel = info.current_version || packageMetadata.version;
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        aria-haspopup="dialog"
+        className={info.has_update ? "version version-trigger update-available" : "version version-trigger"}
+        onClick={() => setOpen(true)}
+        title={info.has_update ? tx("发现新版本") : tx("当前版本")}
+        type="button"
+      >
+        <span>v{versionLabel}</span>
+        {info.has_update ? <span className="version-update-dot" aria-label={tx("发现新版本")} /> : null}
+      </button>
+
+      {open && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              className="modal-backdrop version-modal-backdrop"
+              onMouseDown={(event) => {
+                if (event.currentTarget === event.target) closeModal();
+              }}
+              role="presentation"
+            >
+              <article
+                ref={modalRef}
+                aria-labelledby="version-modal-title"
+                aria-modal="true"
+                className="version-modal"
+                role="dialog"
+              >
+                <header className="version-modal-header">
+                  <h2 id="version-modal-title">{tx("当前版本")}</h2>
+                  <div className="version-modal-actions">
+                    <button
+                      aria-label={tx("检查更新")}
+                      className="icon-button"
+                      disabled={loading}
+                      onClick={() => void loadVersion(true)}
+                      title={tx("检查更新")}
+                      type="button"
+                    >
+                      <RefreshCw className={loading ? "spin" : undefined} size={18} />
+                    </button>
+                    <button
+                      ref={closeRef}
+                      aria-label={tx("关闭")}
+                      className="icon-button"
+                      onClick={closeModal}
+                      title={tx("关闭")}
+                      type="button"
+                    >
+                      <X size={18} />
+                    </button>
+                  </div>
+                </header>
+
+                <div className="version-modal-body">
+                  <VersionSummary info={info} loading={loading} />
+
+                  {loadError || info.warning ? (
+                    <div className="version-message warning" role="status">
+                      <AlertCircle aria-hidden="true" size={17} />
+                      <span>{versionWarningText(info.warning, loadError)}</span>
+                      <button disabled={loading} onClick={() => void loadVersion(true)} type="button">
+                        {tx("重试")}
+                      </button>
+                    </div>
+                  ) : null}
+
+                  {info.has_update && info.release_info ? (
+                    <section className="version-release-card">
+                      <div className="version-release-icon" aria-hidden="true">
+                        <ArrowUpCircle size={20} />
+                      </div>
+                      <div className="version-release-copy">
+                        <span>{tx("最新版本")}</span>
+                        <strong>v{info.latest_version}</strong>
+                        {info.release_info.published_at ? <small>{formatReleaseDate(info.release_info.published_at)}</small> : null}
+                      </div>
+                      <a href={info.release_info.html_url} rel="noopener noreferrer" target="_blank">
+                        {tx("查看发布")}
+                        <ExternalLink size={14} />
+                      </a>
+                    </section>
+                  ) : (
+                    <a
+                      className="version-release-link"
+                      href={info.release_info?.html_url || info.releases_url}
+                      rel="noopener noreferrer"
+                      target="_blank"
+                    >
+                      <GitHubBrandIcon size={17} />
+                      {info.release_info ? tx("查看发布") : tx("查看全部发布")}
+                      <ExternalLink size={13} />
+                    </a>
+                  )}
+
+                  {info.has_update && info.build_type === "release" ? (
+                    <VersionCommand
+                      command={composeVersionCommand(info.latest_version)}
+                      copied={copiedCommand === `update:${info.latest_version}`}
+                      label={tx("更新命令")}
+                      onCopy={() => void copyCommand(info.latest_version, "update")}
+                    />
+                  ) : null}
+
+                  {info.has_update && info.build_type === "source" ? (
+                    <div className="version-message neutral">
+                      <Terminal aria-hidden="true" size={17} />
+                      <span>{tx("源码部署请根据发布说明手动切换版本。")}</span>
+                    </div>
+                  ) : null}
+
+                  <section className={rollbackOpen ? "version-rollback open" : "version-rollback"}>
+                    <button
+                      aria-expanded={rollbackOpen}
+                      className="version-rollback-trigger"
+                      onClick={toggleRollback}
+                      type="button"
+                    >
+                      <span>
+                        <History size={17} />
+                        {tx("版本回退")}
+                      </span>
+                      <ChevronDown size={17} />
+                    </button>
+
+                    {rollbackOpen ? (
+                      <div className="version-rollback-content">
+                        <p>{tx("选择要回退到的版本（近 3 个版本）")}</p>
+                        {rollbackLoading ? (
+                          <div className="version-list-state" role="status">
+                            <LoaderCircle className="spin" size={20} />
+                            <span>{tx("正在加载")}</span>
+                          </div>
+                        ) : rollbackError ? (
+                          <div className="version-message warning" role="alert">
+                            <AlertCircle aria-hidden="true" size={17} />
+                            <span>{tx("加载版本失败")}</span>
+                            <button onClick={() => void loadRollbackVersions()} type="button">{tx("重试")}</button>
+                          </div>
+                        ) : rollbackLoaded && rollbackVersions.length === 0 ? (
+                          <div className="version-list-state">{tx("暂无可回退的版本")}</div>
+                        ) : (
+                          <fieldset className="version-options">
+                            <legend className="sr-only">{tx("版本回退")}</legend>
+                            {rollbackVersions.map((version) => (
+                              <div
+                                className={selectedVersion === version.version ? "version-option selected" : "version-option"}
+                                key={version.version}
+                              >
+                                <label>
+                                  <input
+                                    checked={selectedVersion === version.version}
+                                    name="rollback-version"
+                                    onChange={() => setSelectedVersion(version.version)}
+                                    type="radio"
+                                    value={version.version}
+                                  />
+                                  <strong>v{version.version}</strong>
+                                  <span>{formatReleaseDate(version.published_at)}</span>
+                                </label>
+                                <a
+                                  aria-label={`${tx("查看发布")} v${version.version}`}
+                                  href={version.html_url}
+                                  rel="noopener noreferrer"
+                                  target="_blank"
+                                >
+                                  <ExternalLink size={14} />
+                                </a>
+                              </div>
+                            ))}
+                          </fieldset>
+                        )}
+
+                        {selectedVersion && info.build_type === "release" ? (
+                          <>
+                            <VersionCommand
+                              command={composeVersionCommand(selectedVersion)}
+                              copied={copiedCommand === `rollback:${selectedVersion}`}
+                              label={tx("回退命令")}
+                              onCopy={() => void copyCommand(selectedVersion, "rollback")}
+                            />
+                            <div className="version-rollback-warning">
+                              <AlertCircle aria-hidden="true" size={15} />
+                              <span>{tx("回退前请确认数据库与目标版本兼容，并先完成备份。")}</span>
+                            </div>
+                          </>
+                        ) : null}
+
+                        {selectedVersion && info.build_type === "source" ? (
+                          <div className="version-message neutral">
+                            <Terminal aria-hidden="true" size={17} />
+                            <span>{tx("源码部署请根据发布说明手动切换版本。")}</span>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </section>
+                </div>
+              </article>
+            </div>,
+            document.querySelector(".app-shell") ?? document.body,
+          )
+        : null}
+    </>
+  );
+}
+
+function VersionSummary({ info, loading }: { info: SystemVersionInfo; loading: boolean }) {
+  const hasRelease = Boolean(info.release_info);
+  return (
+    <div className="version-summary">
+      <div className="version-summary-line">
+        <strong>v{info.current_version}</strong>
+        {loading ? (
+          <LoaderCircle aria-label={tx("正在检查版本")} className="spin" size={23} />
+        ) : info.has_update ? (
+          <ArrowUpCircle aria-label={tx("发现新版本")} className="update" size={25} />
+        ) : hasRelease ? (
+          <CheckCircle2 aria-label={tx("已是最新版本")} className="current" size={25} />
+        ) : (
+          <span aria-hidden="true" className="neutral"><GitHubBrandIcon size={24} /></span>
+        )}
+      </div>
+      <p>
+        {loading
+          ? tx("正在检查版本")
+          : info.has_update
+            ? `${tx("发现新版本")} v${info.latest_version}`
+            : hasRelease
+              ? tx("已是最新版本")
+              : tx("GitHub 暂无正式 Release。")}
+      </p>
+      <span className="version-build-type">
+        {info.build_type === "release" ? tx("容器构建") : tx("源码构建")}
+      </span>
+    </div>
+  );
+}
+
+function VersionCommand({
+  command,
+  copied,
+  label,
+  onCopy,
+}: {
+  command: string;
+  copied: boolean;
+  label: string;
+  onCopy: () => void;
+}) {
+  return (
+    <section className="version-command">
+      <div className="version-command-head">
+        <div>
+          <strong>{label}</strong>
+          <span>{tx("将 deploy/.env 中的 TOKENHUB_IMAGE_TAG 固定为目标版本，再执行以下命令。")}</span>
+        </div>
+        <button onClick={onCopy} type="button">
+          {copied ? <Check size={14} /> : <Copy size={14} />}
+          {copied ? tx("已复制") : tx("复制命令")}
+        </button>
+      </div>
+      <pre><code>{command}</code></pre>
+    </section>
+  );
+}
+
+function composeVersionCommand(version: string) {
+  const compose = "docker compose --env-file deploy/.env -f deploy/docker-compose.yml";
+  return [
+    `TOKENHUB_IMAGE_TAG=${version} ${compose} pull`,
+    `TOKENHUB_IMAGE_TAG=${version} ${compose} up -d`,
+  ].join("\n");
+}
+
+function formatReleaseDate(value: string) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat(languageLocale(), {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+function versionWarningText(warning: string | undefined, loadError: string) {
+  if (warning?.includes("semantic release version")) {
+    return tx("当前构建不是语义化发布版本，无法自动比较更新。");
+  }
+  return loadError || tx("暂时无法检查 GitHub Release，请稍后重试。");
+}

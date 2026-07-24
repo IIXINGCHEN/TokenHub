@@ -49,6 +49,7 @@ type Server struct {
 	imageWorkerGroup  sync.WaitGroup
 	imageAccountMu    sync.Mutex
 	imageAccountSlots map[string]chan struct{}
+	versions          *versionService
 }
 
 func New(store Store) *Server {
@@ -115,6 +116,7 @@ func NewWithConfig(store Store, config Config) *Server {
 		imageCancel:       imageCancel,
 		imageQueue:        make(chan imageJobWork, config.ImageQueueCapacity),
 		imageAccountSlots: make(map[string]chan struct{}),
+		versions:          newVersionService(config),
 	}
 	if jobs, err := store.FailUnfinishedImageJobs("image_worker_restarted", "Image generation stopped because the server restarted"); err != nil {
 		log.Printf("[tokenhub] failed to mark unfinished image jobs after startup: %v", err)
@@ -212,6 +214,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/admin/approvals", s.handleAdminApprovals)
 	s.mux.HandleFunc("/api/admin/approvals/", s.handleAdminApprovalItem)
 	s.mux.HandleFunc("/api/admin/system/db-status", s.handleAdminSystemDBStatus)
+	s.mux.HandleFunc("/api/admin/system/version", s.handleAdminSystemVersion)
+	s.mux.HandleFunc("/api/admin/system/rollback-versions", s.handleAdminRollbackVersions)
 }
 
 func (s *Server) handleAdminProviderAdapters(w http.ResponseWriter, r *http.Request) {

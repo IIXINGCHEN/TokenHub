@@ -8,6 +8,9 @@ import (
 
 type Config struct {
 	Environment              string
+	AppVersion               string
+	BuildType                string
+	ReleaseRepository        string
 	AdminToken               string
 	BootstrapAdminPassword   string
 	PublicBaseURL            string
@@ -64,6 +67,9 @@ type Config struct {
 func ConfigFromEnv() Config {
 	return Config{
 		Environment:                getenv("TOKENHUB_ENV", "dev"),
+		AppVersion:                 DefaultAppVersion,
+		BuildType:                  defaultBuildType,
+		ReleaseRepository:          getenv("TOKENHUB_RELEASE_REPOSITORY", defaultReleaseRepository),
 		AdminToken:                 getenv("TOKENHUB_ADMIN_TOKEN", "dev_admin_token"),
 		BootstrapAdminPassword:     getenv("TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD", "admin123456"),
 		PublicBaseURL:              getenv("TOKENHUB_PUBLIC_BASE_URL", ""),
@@ -100,6 +106,9 @@ func ConfigFromEnv() Config {
 }
 
 func (c Config) ValidateForStartup() error {
+	if repository := strings.TrimSpace(c.ReleaseRepository); repository != "" && !validReleaseRepository(repository) {
+		return fmt.Errorf("invalid TOKENHUB_RELEASE_REPOSITORY: expected owner/repository")
+	}
 	environment := strings.ToLower(strings.TrimSpace(c.Environment))
 	if environment == "" {
 		return fmt.Errorf("unsafe TOKENHUB_ENV configuration: set an explicit environment")
