@@ -288,6 +288,7 @@ func (s *Server) queryOpenAICodexModels(ctx context.Context, resourceID string) 
 	catalog, status, err := s.codexSubscription.ModelsWithETag(ctx, resourceID, etag)
 	if err == nil && status == http.StatusNotModified {
 		if cached, ok := codexResourceCachedCatalog(&resource); ok {
+			s.syncOpenAICodexCatalog(resource.ProviderID, cached)
 			return cached, nil
 		}
 		catalog, err = s.codexSubscription.Models(ctx, resourceID)
@@ -296,9 +297,29 @@ func (s *Server) queryOpenAICodexModels(ctx context.Context, resourceID string) 
 		if persistErr := s.persistCodexResourceModels(resourceID, catalog.Models, time.Now().UTC()); persistErr != nil {
 			return ProviderCatalogEntry{}, persistErr
 		}
-		s.syncOpenAICodexModels(catalog.Models)
+		s.syncOpenAICodexCatalog(resource.ProviderID, catalog)
 	}
 	return catalog, err
+}
+
+func (s *Server) syncOpenAICodexCatalog(providerID string, catalog ProviderCatalogEntry) {
+	s.syncOpenAICodexModels(catalog.Models)
+	existing := map[string]bool{}
+	for _, route := range s.store.ListRoutes() {
+		if route.ProviderID != providerID {
+			continue
+		}
+		existing[normalizeModelLookupName(firstNonEmpty(route.ProviderModel, route.ModelName))] = true
+	}
+	selectedModels := make([]string, 0, len(catalog.Models))
+	for _, model := range catalog.Models {
+		if !existing[normalizeModelLookupName(model.ID)] {
+			selectedModels = append(selectedModels, model.ID)
+		}
+	}
+	if len(selectedModels) > 0 {
+		s.createProviderCatalogRoutes(providerID, catalog, ProviderCreateRequest{SelectedModels: selectedModels})
+	}
 }
 
 func (s *Server) persistCodexResourceModels(resourceID string, models []ProviderCatalogModel, fetchedAt time.Time) error {

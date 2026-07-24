@@ -140,6 +140,23 @@ func TestGatewayModelsExposeJieKouCompatibleFields(t *testing.T) {
 	}
 }
 
+func TestGatewayModelsExposeCodexCompatibleEnvelope(t *testing.T) {
+	resp := doJSON(t, newTestServer(), http.MethodGet, "/v1/models", nil, "thk_demo_local")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body)
+	}
+	var payload struct {
+		Data   []modelListItem `json:"data"`
+		Models []any           `json:"models"`
+	}
+	if err := json.Unmarshal([]byte(resp.Body), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Data) == 0 || payload.Models == nil || len(payload.Models) != 0 {
+		t.Fatalf("expected standard model data and an empty Codex-compatible models list, got %+v", payload)
+	}
+}
+
 func TestGatewayRetrieveModelExposeJieKouCompatibleFields(t *testing.T) {
 	app := newTestServer()
 

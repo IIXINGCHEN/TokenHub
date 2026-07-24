@@ -197,7 +197,11 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	for _, model := range models {
 		data = append(data, buildModelListItem(model))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"object": "list",
+		"data":   data,
+		"models": []any{},
+	})
 }
 
 func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
@@ -367,7 +371,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("cache-control", "no-cache")
 		w.Header().Set("x-request-id", routed.Call.RequestID)
 		s.writeRouteHeaders(w, routed.Call, route, 1)
-w.WriteHeader(http.StatusOK)
+		w.WriteHeader(http.StatusOK)
 		if flusher, ok := w.(http.Flusher); ok {
 			flusher.Flush()
 		}

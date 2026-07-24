@@ -141,6 +141,11 @@ func TestCodexModelCatalogUsesETagAndPersistedSnapshot(t *testing.T) {
 		len(second.Models) != 1 || second.Models[0].Metadata["minimal_client_version"] != "0.145.0" {
 		t.Fatalf("unexpected ETag model snapshots: requests=%d first=%+v second=%+v", requests, first, second)
 	}
+	routes := store.ListRoutes()
+	if len(routes) != 1 || routes[0].ModelName != "gpt-etag" || routes[0].ProviderID != provider.ID ||
+		routes[0].ProviderModel != "gpt-etag" || routes[0].Status != StatusActive {
+		t.Fatalf("expected one active Codex route after model discovery, got %+v", routes)
+	}
 }
 
 func TestCodexRouteFilteringUsesPerAccountModels(t *testing.T) {
