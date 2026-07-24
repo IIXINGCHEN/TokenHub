@@ -294,6 +294,10 @@ export function pageHeaderChips(view: ViewKey, data: AppData, user: AdminUser) {
         ];
       }
       return [{ label: "记录", value: formatNumber(pageRecordCount(view, data)) }];
+    case "settings": {
+      const currentSettings = data.resources.settings?.find((item) => item.id === "cfg_gateway") ?? data.resources.settings?.[0];
+      return [{ label: "当前生效", value: currentSettings?.id ?? "-" }];
+    }
     case "usage":
     case "billing":
       return [
