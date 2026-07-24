@@ -1,0 +1,149 @@
+package litellm
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"tokenhub/backend/internal/migration/source"
+)
+
+func TestExtractBasicConfig(t *testing.T) {
+	adapter := Adapter{}
+	bundle, err := adapter.Extract(context.Background(), source.ExtractOptions{
+		InputPath: filepath.Join("testdata", "config-basic.yaml"),
+		OriginURL: "https://litellm.example/config.yaml",
+		Metadata:  map[string]string{"env": "test"},
+	})
+	if err != nil {
+		t.Fatalf("Extract returned error: %v", err)
+	}
+	if bundle.Source.Adapter != AdapterName {
+		t.Fatalf("unexpected adapter %q", bundle.Source.Adapter)
+	}
+	if len(bundle.Providers) != 2 {
+		t.Fatalf("expected 2 providers, got %d", len(bundle.Providers))
+	}
+	if len(bundle.ProviderResources) != 2 {
+		t.Fatalf("expected 2 provider resources, got %d", len(bundle.ProviderResources))
+	}
+	if len(bundle.Models) != 2 {
+		t.Fatalf("expected 2 models, got %d", len(bundle.Models))
+	}
+	if len(bundle.Routes) != 2 {
+		t.Fatalf("expected 2 routes, got %d", len(bundle.Routes))
+	}
+	if len(bundle.Teams) != 1 || len(bundle.Users) != 1 || len(bundle.Projects) != 1 || len(bundle.APIKeys) != 1 {
+		t.Fatalf("unexpected identity resource counts: teams=%d users=%d projects=%d keys=%d", len(bundle.Teams), len(bundle.Users), len(bundle.Projects), len(bundle.APIKeys))
+	}
+	if bundle.APIKeys[0].KeySecret == nil || bundle.APIKeys[0].KeySecret.Ref == "" {
+		t.Fatal("expected api key secret ref")
+	}
+	if bundle.ProviderResources[0].APIKeySecret == nil || bundle.ProviderResources[0].APIKeySecret.Ref != "OPENAI_API_KEY" {
+		t.Fatalf("expected env-backed provider resource secret ref to preserve env name, got %+v", bundle.ProviderResources[0].APIKeySecret)
+	}
+	if bundle.APIKeys[0].ProjectRef != "project:team:team-red" {
+		t.Fatalf("unexpected project ref: %q", bundle.APIKeys[0].ProjectRef)
+	}
+	if bundle.APIKeys[0].Spec.Metadata["litellm_user_ref"] != "user:user-alice" {
+		t.Fatalf("expected user linkage metadata, got %+v", bundle.APIKeys[0].Spec.Metadata)
+	}
+	if bundle.Users[0].TeamRef != "team:team-red" {
+		t.Fatalf("unexpected user team ref: %q", bundle.Users[0].TeamRef)
+	}
+	if bundle.Routes[0].ModelRef == "" || bundle.Routes[0].ProviderRef == "" || bundle.Routes[0].ProviderResourceRef == "" {
+		t.Fatalf("expected route refs to be populated: %+v", bundle.Routes[0])
+	}
+	for _, resource := range bundle.ProviderResources {
+		if resource.APIKeySecret == nil {
+			t.Fatal("expected provider resource secret ref")
+		}
+	}
+	if len(bundle.Warnings) < 2 {
+		t.Fatalf("expected warnings for partial support, got %d", len(bundle.Warnings))
+	}
+}
+
+func TestExtractMaterializesReferencedTeamAndProject(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := []byte(`litellm_settings:
+  version: 1.58.2
+model_list:
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_base: https://api.openai.com/v1
+      api_key: os.environ/OPENAI_API_KEY
+key_management_settings:
+  users:
+    - user_id: user-alice
+      user_email: alice@example.com
+      team_id: team-red
+  virtual_keys:
+    - key_alias: red-team-key
+      token: sk-red-team
+      team_id: team-red
+      user_id: user-alice
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	bundle, err := Adapter{}.Extract(context.Background(), source.ExtractOptions{InputPath: path})
+	if err != nil {
+		t.Fatalf("Extract returned error: %v", err)
+	}
+	if len(bundle.Teams) != 1 || bundle.Teams[0].ExternalRef.ID != "team:team-red" {
+		t.Fatalf("expected team to be materialized, got %+v", bundle.Teams)
+	}
+	if len(bundle.Projects) != 1 || bundle.Projects[0].ExternalRef.ID != "project:team:team-red" {
+		t.Fatalf("expected team project to be materialized, got %+v", bundle.Projects)
+	}
+	if bundle.Users[0].TeamRef != "team:team-red" {
+		t.Fatalf("expected user team ref to resolve, got %q", bundle.Users[0].TeamRef)
+	}
+	if bundle.APIKeys[0].ProjectRef != "project:team:team-red" {
+		t.Fatalf("expected api key project ref to resolve, got %q", bundle.APIKeys[0].ProjectRef)
+	}
+}
+
+func TestExtractCreatesDistinctProvidersForDistinctEndpoints(t *testing.T) {
+	adapter := Adapter{}
+	bundle, err := adapter.Extract(context.Background(), source.ExtractOptions{
+		InputPath: filepath.Join("testdata", "config-basic.yaml"),
+	})
+	if err != nil {
+		t.Fatalf("Extract returned error: %v", err)
+	}
+	if len(bundle.Providers) != 2 {
+		t.Fatalf("expected 2 providers for distinct endpoint/base combinations, got %d", len(bundle.Providers))
+	}
+}
+
+func TestParseConfigRejectsMissingVersion(t *testing.T) {
+	_, err := ParseConfig([]byte("model_list: []\n"))
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestExtractRequiresInputPath(t *testing.T) {
+	_, err := Adapter{}.Extract(context.Background(), source.ExtractOptions{})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestExtractUnsupportedVersion(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := []byte("litellm_settings:\n  version: 1.70.0\nmodel_list:\n  - model_name: test\n    litellm_params:\n      model: openai/test\n")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	_, err := Adapter{}.Extract(context.Background(), source.ExtractOptions{InputPath: path})
+	if err == nil {
+		t.Fatal("expected unsupported version error")
+	}
+}
