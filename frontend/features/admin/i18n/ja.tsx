@@ -702,6 +702,7 @@ export const jaTranslations: Record<string, string> = {
     "AI 工具接入": "AI ツール接続",
     "API 类型": "API タイプ",
     "OpenAI 兼容工具": "OpenAI 互換ツール",
+    "AI 工具类型": "AI ツール種別",
     "示例使用环境变量保存完整 Key。当前凭证：": "サンプルでは完全な Key を環境変数に保存します。現在の認証情報:",
     "代码语言": "コード言語",
     "环境变量": "環境変数",

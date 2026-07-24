@@ -95,6 +95,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/v1/models", s.handleModels)
 	s.mux.HandleFunc("/v1/models/", s.handleModel)
 	s.mux.HandleFunc("/v1/chat/completions", s.handleChatCompletions)
+	s.mux.HandleFunc("/v1/messages", s.handleAnthropicMessages)
+	s.mux.HandleFunc("/v1/messages/count_tokens", s.handleAnthropicCountTokens)
 	s.mux.HandleFunc("/v1/responses", s.handleResponses)
 	s.mux.HandleFunc("/v1/responses/compact", s.handleResponsesCompact)
 	s.mux.HandleFunc("/v1/embeddings", s.handleEmbeddings)
@@ -198,11 +200,17 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	for _, model := range models {
 		data = append(data, buildModelListItem(model))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"object": "list",
-		"data":   data,
-		"models": []any{},
-	})
+	payload := map[string]any{
+		"object":   "list",
+		"data":     data,
+		"models":   []any{},
+		"has_more": false,
+	}
+	if len(data) > 0 {
+		payload["first_id"] = data[0].ID
+		payload["last_id"] = data[len(data)-1].ID
+	}
+	writeJSON(w, http.StatusOK, payload)
 }
 
 func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
@@ -246,12 +254,17 @@ type modelListItem struct {
 	ID                   string `json:"id"`
 	Created              int64  `json:"created"`
 	Object               string `json:"object"`
+	Type                 string `json:"type"`
 	OwnedBy              string `json:"owned_by,omitempty"`
 	InputTokenPricePerM  int64  `json:"input_token_price_per_m"`
 	OutputTokenPricePerM int64  `json:"output_token_price_per_m"`
 	Title                string `json:"title"`
+	DisplayName          string `json:"display_name"`
 	Description          string `json:"description"`
 	ContextSize          int64  `json:"context_size"`
+	CreatedAt            string `json:"created_at"`
+	MaxInputTokens       int64  `json:"max_input_tokens"`
+	MaxTokens            int64  `json:"max_tokens"`
 }
 
 func buildModelListItem(model Model) modelListItem {
@@ -263,12 +276,17 @@ func buildModelListItem(model Model) modelListItem {
 		ID:                   model.Name,
 		Created:              modelCreatedUnix(model),
 		Object:               "model",
+		Type:                 "model",
 		OwnedBy:              "tokenhub",
 		InputTokenPricePerM:  modelTokenPricePerM(inputPrice),
 		OutputTokenPricePerM: modelTokenPricePerM(model.OutputPriceUSDPer1M),
 		Title:                modelTitle(model),
+		DisplayName:          modelTitle(model),
 		Description:          modelDescription(model),
 		ContextSize:          model.ContextWindow,
+		CreatedAt:            modelCreatedAt(model),
+		MaxInputTokens:       model.ContextWindow,
+		MaxTokens:            modelMaxOutputTokens(model),
 	}
 }
 
@@ -277,6 +295,25 @@ func modelCreatedUnix(model Model) int64 {
 		return 0
 	}
 	return model.CreatedAt.Unix()
+}
+
+func modelCreatedAt(model Model) string {
+	if model.CreatedAt.IsZero() {
+		return time.Unix(0, 0).UTC().Format(time.RFC3339)
+	}
+	return model.CreatedAt.UTC().Format(time.RFC3339)
+}
+
+func modelMaxOutputTokens(model Model) int64 {
+	for _, key := range []string{"max_output_tokens", "max_tokens"} {
+		if value := strings.TrimSpace(model.Metadata[key]); value != "" {
+			parsed, err := strconv.ParseInt(value, 10, 64)
+			if err == nil && parsed >= 0 {
+				return parsed
+			}
+		}
+	}
+	return 0
 }
 
 func modelTokenPricePerM(priceUSDPer1M float64) int64 {
@@ -970,6 +1007,15 @@ func (w *streamWriteTracker) Wrote() bool {
 	return w != nil && w.wrote
 }
 
+func (w *streamWriteTracker) Flush() {
+	if w == nil {
+		return
+	}
+	if flusher, ok := w.writer.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
 func (s *Server) finishFailedRoutedCall(r *http.Request, routed RoutedCall, attempts []RouteAttempt, err error) {
 	httpErr := AsHTTPError(err)
 	route := lastAttemptRoute(attempts)
@@ -1340,14 +1386,17 @@ func (s *Server) writeRouteHeaders(w http.ResponseWriter, call CallContext, rout
 
 func (s *Server) authenticate(r *http.Request) (Project, APIKey, error) {
 	auth := r.Header.Get("authorization")
-	if auth == "" {
-		return Project{}, APIKey{}, ErrInvalidAPIKey
+	if auth != "" {
+		const prefix = "Bearer "
+		if !strings.HasPrefix(auth, prefix) {
+			return Project{}, APIKey{}, ErrInvalidAPIKey
+		}
+		return s.store.ValidateAPIKey(strings.TrimSpace(strings.TrimPrefix(auth, prefix)), s.clientIP(r))
 	}
-	const prefix = "Bearer "
-	if !strings.HasPrefix(auth, prefix) {
-		return Project{}, APIKey{}, ErrInvalidAPIKey
+	if apiKey := strings.TrimSpace(r.Header.Get("x-api-key")); apiKey != "" {
+		return s.store.ValidateAPIKey(apiKey, s.clientIP(r))
 	}
-	return s.store.ValidateAPIKey(strings.TrimSpace(strings.TrimPrefix(auth, prefix)), s.clientIP(r))
+	return Project{}, APIKey{}, ErrInvalidAPIKey
 }
 
 func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {

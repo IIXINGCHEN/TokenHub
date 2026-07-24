@@ -47,7 +47,7 @@ TokenHub separates everyday model usage, team governance, and platform administr
 
 ## Platform Capabilities
 
-- OpenAI-compatible model APIs: `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`.
+- OpenAI-compatible model APIs: `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`; Anthropic Messages APIs: `/v1/messages`, `/v1/messages/count_tokens`.
 - Provider channels for OpenAI-compatible, Azure OpenAI, Anthropic, Gemini, DeepSeek, Qwen, local vLLM/Ollama, and custom upstreams.
 - Model catalog and routing policies with priority, weight, failover order, and route health diagnostics.
 - Project-scoped key management with team ownership, member permissions, quotas, and concurrency controls.
