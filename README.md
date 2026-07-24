@@ -83,6 +83,7 @@ The deployment script validates production credentials, pulls published images, 
 ## Documentation
 
 - [Documentation home](docs/README.md)
+- [Architecture](docs/architecture.md)
 - [User Guide](docs/user-guide.md)
 - [Team Leader Guide](docs/team-leader-guide.md)
 - [Administrator Guide](docs/administrator-guide.md)

@@ -83,6 +83,7 @@ cp deploy/.env.example deploy/.env
 ## ドキュメント
 
 - [ドキュメントホーム](docs/ja/README.md)
+- [全体アーキテクチャ](docs/ja/architecture.md)
 - [ユーザーガイド](docs/ja/user-guide.md)
 - [チームリーダーガイド](docs/ja/team-leader-guide.md)
 - [管理者ガイド](docs/ja/administrator-guide.md)

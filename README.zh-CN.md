@@ -83,6 +83,7 @@ cp deploy/.env.example deploy/.env
 ## 文档
 
 - [文档首页](docs/zh-CN/README.md)
+- [整体架构](docs/zh-CN/architecture.md)
 - [普通用户指南](docs/zh-CN/user-guide.md)
 - [团队负责人指南](docs/zh-CN/team-leader-guide.md)
 - [管理员指南](docs/zh-CN/administrator-guide.md)
