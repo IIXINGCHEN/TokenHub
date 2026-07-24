@@ -106,6 +106,8 @@ export const enTranslations: Record<string, string> = {
     "账号 / 邮箱": "Account / Email",
     "密码": "Password",
     "登录中": "Signing in",
+    "暂停动画": "Pause animation",
+    "播放动画": "Play animation",
     "TokenHub 控制台": "TokenHub Console",
     "展开菜单": "Expand menu",
     "折叠菜单": "Collapse menu",
