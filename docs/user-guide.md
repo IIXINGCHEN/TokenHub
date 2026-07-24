@@ -17,8 +17,8 @@ Console login tokens cannot call model APIs. Use a project API key from **Key Ma
 
 ## Call Sequence
 
-1. Open **Key Management** and choose the project that should own usage and cost.
-2. Create or copy a project API key. New keys are shown only once.
+1. Open **Key Management** and create or copy an API key. New keys are shown only once.
+2. TokenHub automatically attributes a personal key to an assigned project, or to the platform default project when none is assigned.
 3. Call `GET /v1/models` to see the model list available to that key.
 4. Use one model ID in `POST /v1/chat/completions`, `POST /v1/responses`, or `POST /v1/embeddings`.
 5. Review **Usage Analytics** and **Request Logs** for requests, tokens, cost, and errors.

@@ -2284,58 +2284,7 @@ func (s *Server) handleAdminProjectNested(w http.ResponseWriter, r *http.Request
 			writeError(w, r, NewHTTPError(403, "project_forbidden", "Project is not available for this user"))
 			return
 		}
-		var req struct {
-			Name          string      `json:"name"`
-			Group         string      `json:"group"`
-			AllowedModels []string    `json:"allowed_models"`
-			IPAllowlist   []string    `json:"ip_allowlist"`
-			Limits        QuotaLimits `json:"limits"`
-			ExpiresAt     *time.Time  `json:"expires_at"`
-		}
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, r, NewHTTPError(400, "invalid_request", err.Error()))
-			return
-		}
-		payload := map[string]any{
-			"project_id":       projectID,
-			"name":             req.Name,
-			"group":            req.Group,
-			"allowed_models":   req.AllowedModels,
-			"ip_allowlist":     req.IPAllowlist,
-			"limits":           req.Limits,
-			"expires_at":       req.ExpiresAt,
-			"requested_action": "api_key_create",
-		}
-		if approval, required := s.approvalRequired(user, "api_key_create", "api_key", "", payload); required {
-			s.recordAdminAudit(r, user, "request_approval", "api_key", approval.ID, "", approval)
-			writeJSON(w, http.StatusAccepted, map[string]any{"approval_required": true, "approval": approval})
-			return
-		}
-		key, secret, err := s.store.CreateAPIKey(projectID, APIKey{
-			Name:        req.Name,
-			Group:       req.Group,
-			Allowed:     req.AllowedModels,
-			IPAllowlist: req.IPAllowlist,
-			Limits:      req.Limits,
-			ExpiresAt:   req.ExpiresAt,
-			Status:      StatusActive,
-			Metadata: map[string]string{
-				"created_by":      user.ID,
-				"created_by_role": normalizeAdminRole(user.Role),
-			},
-		}, "")
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		s.recordAdminAudit(r, user, "create", "api_key", key.ID, "", map[string]any{"project_id": key.ProjectID, "name": key.Name})
-		writeJSON(w, http.StatusCreated, map[string]any{
-			"id":                      key.ID,
-			"api_key":                 secret,
-			"name":                    key.Name,
-			"project_id":              key.ProjectID,
-			"plain_text_visible_once": true,
-		})
+		s.handleAdminAPIKeyCreate(w, r, user, projectID)
 	default:
 		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
 	}
@@ -2786,11 +2735,93 @@ func (s *Server) handleAdminAPIKeys(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, map[string]any{"data": s.filterAPIKeysForUser(user, s.store.ListAPIKeys())})
+	case http.MethodPost:
+		project, err := s.personalAPIKeyProject(user)
+		if err != nil {
+			writeError(w, r, err)
+			return
+		}
+		s.handleAdminAPIKeyCreate(w, r, user, project.ID)
+	default:
 		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+	}
+}
+
+func (s *Server) personalAPIKeyProject(user AdminUser) (Project, error) {
+	if normalizeAdminRole(user.Role) != "user" {
+		return Project{}, NewHTTPError(400, "project_required", "Project ID is required")
+	}
+	for _, project := range s.store.ListProjects() {
+		if project.ID == defaultProjectID || (project.Status != "" && project.Status != StatusActive) {
+			continue
+		}
+		if s.canUseProjectForAPIKey(user, project.ID) {
+			return project, nil
+		}
+	}
+	project, ok := s.store.GetProject(defaultProjectID)
+	if !ok || (project.Status != "" && project.Status != StatusActive) {
+		return Project{}, NewHTTPError(409, "default_project_unavailable", "Default project is unavailable")
+	}
+	return project, nil
+}
+
+func (s *Server) handleAdminAPIKeyCreate(w http.ResponseWriter, r *http.Request, user AdminUser, projectID string) {
+	var req struct {
+		Name          string      `json:"name"`
+		Group         string      `json:"group"`
+		AllowedModels []string    `json:"allowed_models"`
+		IPAllowlist   []string    `json:"ip_allowlist"`
+		Limits        QuotaLimits `json:"limits"`
+		ExpiresAt     *time.Time  `json:"expires_at"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, r, NewHTTPError(400, "invalid_request", err.Error()))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": s.filterAPIKeysForUser(user, s.store.ListAPIKeys())})
+	payload := map[string]any{
+		"project_id":       projectID,
+		"name":             req.Name,
+		"group":            req.Group,
+		"allowed_models":   req.AllowedModels,
+		"ip_allowlist":     req.IPAllowlist,
+		"limits":           req.Limits,
+		"expires_at":       req.ExpiresAt,
+		"requested_action": "api_key_create",
+	}
+	if approval, required := s.approvalRequired(user, "api_key_create", "api_key", "", payload); required {
+		s.recordAdminAudit(r, user, "request_approval", "api_key", approval.ID, "", approval)
+		writeJSON(w, http.StatusAccepted, map[string]any{"approval_required": true, "approval": approval})
+		return
+	}
+	key, secret, err := s.store.CreateAPIKey(projectID, APIKey{
+		Name:        req.Name,
+		Group:       req.Group,
+		Allowed:     req.AllowedModels,
+		IPAllowlist: req.IPAllowlist,
+		Limits:      req.Limits,
+		ExpiresAt:   req.ExpiresAt,
+		Status:      StatusActive,
+		Metadata: map[string]string{
+			"created_by":      user.ID,
+			"created_by_role": normalizeAdminRole(user.Role),
+		},
+	}, "")
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	s.recordAdminAudit(r, user, "create", "api_key", key.ID, "", map[string]any{"project_id": key.ProjectID, "name": key.Name})
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"id":                      key.ID,
+		"api_key":                 secret,
+		"name":                    key.Name,
+		"project_id":              key.ProjectID,
+		"plain_text_visible_once": true,
+	})
 }
 
 func (s *Server) handleAdminAPIKeyItem(w http.ResponseWriter, r *http.Request) {

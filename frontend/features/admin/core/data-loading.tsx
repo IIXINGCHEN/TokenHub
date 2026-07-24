@@ -78,6 +78,9 @@ export function loadPlanForView(user: AdminUser, view: ViewKey): LoadPlan {
       plan.keys = can("api-keys");
       plan.routes = can("routes");
       plan.logs = can("audit");
+      if (appRole(user.role) === "user" || appRole(user.role) === "team_leader") {
+        addResourceDependency(plan, "project-members");
+      }
       break;
     case "usage":
       plan.overview = true;

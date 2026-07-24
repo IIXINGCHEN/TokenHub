@@ -14,6 +14,8 @@
 @import "./styles/legacy/responsive.css";
 @import "./styles/redesign/login.css";
 @import "./styles/redesign/shell.css";
+@import "./styles/redesign/api-key-empty.css";
+@import "./styles/redesign/quick-access.css";
 @import "./styles/redesign/features.css";
 @import "./styles/redesign/gateway-docs.css";
 @import "./styles/redesign/responsive.css";

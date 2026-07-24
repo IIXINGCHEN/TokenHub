@@ -449,6 +449,66 @@ func TestAdminCreatesAPIKeyUnderDefaultProject(t *testing.T) {
 	}
 }
 
+func TestUserCreatesPersonalAPIKeyWithoutProjectMembership(t *testing.T) {
+	store := NewMemoryStore()
+	if err := BootstrapBaseData(store); err != nil {
+		t.Fatal(err)
+	}
+	user, err := store.CreateAdminUser(AdminUser{
+		Username: "personal-key-user",
+		Name:     "Personal Key User",
+		Email:    "personal-key-user@tokenhub.local",
+		Role:     "user",
+		Status:   StatusActive,
+	}, "user123456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := New(store).Handler()
+
+	login := doJSON(t, app, http.MethodPost, "/api/admin/auth/login", map[string]any{
+		"identity": user.Username,
+		"password": "user123456",
+	}, "")
+	var session struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal([]byte(login.Body), &session); err != nil {
+		t.Fatal(err)
+	}
+
+	created := doJSON(t, app, http.MethodPost, "/api/admin/api-keys", map[string]any{
+		"name": "Personal Key",
+	}, session.Token)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("ordinary user should create a personal key without project membership, got %d: %s", created.Code, created.Body)
+	}
+	if !strings.Contains(created.Body, `"project_id":"`+defaultProjectID+`"`) || !strings.Contains(created.Body, `"api_key"`) {
+		t.Fatalf("personal key should fall back to the default project: %s", created.Body)
+	}
+	keys := store.ListProjectKeys(defaultProjectID)
+	if len(keys) != 1 || keys[0].Metadata["created_by"] != user.ID {
+		t.Fatalf("personal key should remain attributable to its creator: %+v", keys)
+	}
+
+	assignedProject := store.CreateProject(Project{Name: "Assigned Project", Status: StatusActive})
+	store.CreateResource("project-members", AdminResource{
+		Name:   "Personal Key User Membership",
+		Status: StatusActive,
+		Fields: map[string]any{
+			"project_id": assignedProject.ID,
+			"user_id":    user.ID,
+			"role":       "developer",
+		},
+	})
+	assigned := doJSON(t, app, http.MethodPost, "/api/admin/api-keys", map[string]any{
+		"name": "Assigned Project Key",
+	}, session.Token)
+	if assigned.Code != http.StatusCreated || !strings.Contains(assigned.Body, `"project_id":"`+assignedProject.ID+`"`) {
+		t.Fatalf("personal key should prefer an assigned project, got %d: %s", assigned.Code, assigned.Body)
+	}
+}
+
 func TestUserCanReadRoutedAdminModels(t *testing.T) {
 	store := NewMemoryStore()
 	if _, err := store.CreateAdminUser(AdminUser{

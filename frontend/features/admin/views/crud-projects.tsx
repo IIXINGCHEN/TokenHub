@@ -1,7 +1,8 @@
 import { Plus, RefreshCw, Search, Trash2, UserRoundCheck, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { type AdminResource, type ApiContext, type AppData, type AuditEvent, type OpenAIAccountQuota, type OpenAIQuotaWindow, type Project, type Provider, type ProviderMonitoringSnapshot, type ProviderQuotaSummary, type ProviderResource, type ReportExportHistoryItem, type RequestLog, type ResourceAction, type ResourceConfig, type ToolbarAction } from "../core/types";
+import { appRole } from "../core/navigation";
+import { type AdminResource, type AdminUser, type ApiContext, type AppData, type AuditEvent, type OpenAIAccountQuota, type OpenAIQuotaWindow, type Project, type Provider, type ProviderMonitoringSnapshot, type ProviderQuotaSummary, type ProviderResource, type ReportExportHistoryItem, type RequestLog, type ResourceAction, type ResourceConfig, type ToolbarAction } from "../core/types";
 import { notificationChannelLabel } from "../domain/catalog";
 import { projectMembersForProject, providerDisplayName, providerDisplayType, providerRoutesFor, stringifyValue } from "../domain/entities";
 import { activeRouteCount, formatNumber, formatTime } from "../domain/formatting";
@@ -10,6 +11,7 @@ import { countWithUnit, languageLocale, tx } from "../i18n/runtime";
 import { reportExportDefinitions } from "../resources/governance-config";
 import { adminFetch, pendingProjectQuotaApproval, projectQuotaIssue, projectQuotaPolicy, projectQuotaValues, readAdminError, requestProjectQuotaIncrease, saveProjectQuota } from "../resources/payloads";
 import { DataSection, SimpleTable, StatusPill } from "../shared/ui";
+import { APIKeyEmptyState } from "./api-key-empty-state";
 import { ModelCategoryTabs, NotificationChannelTabs } from "./model-catalog";
 import { latencyDisplay, requestLogFailed } from "./overview";
 import { APIKeyFlowHint, EntityTable, PaginationControls, type PaginationState, resultCountLabel, RouteStrategyHint } from "./settings-table";
@@ -18,6 +20,7 @@ export function CrudView<T>({
   config,
   data,
   api,
+  user,
   items,
   monitorItems = items,
   totalItems,
@@ -39,6 +42,7 @@ export function CrudView<T>({
   config: ResourceConfig<T>;
   data: AppData;
   api?: ApiContext;
+  user?: AdminUser;
   items: T[];
   monitorItems?: T[];
   totalItems: number;
@@ -61,6 +65,10 @@ export function CrudView<T>({
   const [selectedProjectID, setSelectedProjectID] = useState("");
   const isTeamView = config.view === "teams";
   const isProjectView = config.view === "projects";
+  const isPersonalKeyView = config.view === "api-keys" && Boolean(user && appRole(user.role) === "user");
+  const tableConfig = isPersonalKeyView
+    ? { ...config, columns: config.columns.filter((column) => !["project_id", "project_owner", "project_team"].includes(String(column.key))) }
+    : config;
   const selectedTeam = isTeamView
     ? (items as AdminResource[]).find((item) => item.id === selectedTeamID)
     : undefined;
@@ -86,9 +94,17 @@ export function CrudView<T>({
 
   const detailPanelOpen = (isTeamView && selectedTeam) || (isProjectView && selectedProject);
 
+  if (config.view === "api-keys" && data.keys.length === 0 && !loading && !query.trim()) {
+    return (
+      <DataSection title={config.eyebrow}>
+        <APIKeyEmptyState onCreate={onCreate} />
+      </DataSection>
+    );
+  }
+
   return (
     <DataSection title={config.eyebrow}>
-      {config.view === "api-keys" ? <APIKeyFlowHint data={data} /> : null}
+      {config.view === "api-keys" && !isPersonalKeyView ? <APIKeyFlowHint data={data} /> : null}
       {config.view === "routes" ? <RouteStrategyHint data={data} /> : null}
       {config.view === "providers" || config.view === "models" ? (
         <ModelCategoryTabs
@@ -116,7 +132,11 @@ export function CrudView<T>({
           {config.create ? (
             <button className="button" onClick={onCreate} type="button">
               <Plus size={17} />
-              {config.view === "notification-channels" ? `${tx("配置")} ${notificationChannelLabel(categoryFilter)}` : tx(config.createLabel ?? "新增")}
+              {isPersonalKeyView
+                ? tx("创建 Key")
+                : config.view === "notification-channels"
+                  ? `${tx("配置")} ${notificationChannelLabel(categoryFilter)}`
+                  : tx(config.createLabel ?? "新增")}
             </button>
           ) : null}
           {(config.toolbarActions ?? []).map((action) => (
@@ -129,7 +149,7 @@ export function CrudView<T>({
       <div className={detailPanelOpen ? "resource-detail-layout with-panel" : "resource-detail-layout"}>
         <div className="resource-table-pane">
           <EntityTable
-            config={config}
+            config={tableConfig}
             data={data}
             apiBaseURL={api?.baseURL}
             items={items}

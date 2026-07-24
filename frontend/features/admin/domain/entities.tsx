@@ -354,7 +354,8 @@ export function costCenterLabel(data: AppData, costCenter: string) {
 
 export function projectName(data: AppData, projectID: string) {
   const project = findProject(data, projectID);
-  return project ? project.name : projectID || "-";
+  if (project) return project.name;
+  return projectID === DEFAULT_PROJECT_ID ? tx("默认项目空间") : projectID || "-";
 }
 
 export function projectOwnerLabel(data: AppData, projectID: string) {
