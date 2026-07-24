@@ -355,7 +355,8 @@ func consumeCodexResponsesStream(body io.Reader, destination io.Writer) (map[str
 func (s *Server) handleStreamingResponses(w http.ResponseWriter, r *http.Request, routed RoutedCall, request ResponsesRequest) {
 	streamStarted := false
 	attemptNumber := 0
-	response, route, usage, attempts, err := executeRoutedWithStore(r.Context(), s.store, routed, func(ctx context.Context, route RouteSelection) (map[string]any, Usage, error) {
+	allowEffortFallback := normalizedReasoningEffort(responsesReasoningEffort(request)) != nil
+	response, route, usage, attempts, err := executeRoutedWithStore(r.Context(), s.store, routed, allowEffortFallback, func(ctx context.Context, route RouteSelection, omitReasoningEffort bool) (map[string]any, Usage, error) {
 		attemptNumber++
 		prepared, err := s.prepareRouteForUpstream(ctx, route)
 		if err != nil {
@@ -369,7 +370,11 @@ func (s *Server) handleStreamingResponses(w http.ResponseWriter, r *http.Request
 		if !ok {
 			return nil, Usage{}, NewHTTPError(http.StatusBadRequest, "adapter_capability_unsupported", "Provider adapter does not support streaming Responses")
 		}
-		opened, err := streamAdapter.OpenResponses(ctx, prepared.Provider, prepared.ProviderModel, request, r.Header)
+		upstreamRequest := request
+		if omitReasoningEffort {
+			upstreamRequest = withoutResponsesReasoningEffort(upstreamRequest)
+		}
+		opened, err := streamAdapter.OpenResponses(ctx, prepared.Provider, prepared.ProviderModel, upstreamRequest, r.Header)
 		if isCodexModelUnsupportedError(err) {
 			s.removeCodexResourceModel(routeResourceID(route), route.ProviderModel)
 		}
@@ -495,13 +500,14 @@ func (a CodexSubscriptionAdapter) Probe(ctx context.Context, provider Provider, 
 		provider.Options = map[string]string{}
 	}
 	provider.Options["resource_id"] = resource.ID
+	reasoningEffort := request.ReasoningEffort
 	responsesRequest := ResponsesRequest{
 		Model: request.Model,
 		Input: []map[string]any{{
 			"role":    "user",
 			"content": []map[string]any{{"type": "input_text", "text": request.Prompt}},
 		}},
-		Reasoning: &ResponsesReasoning{Effort: request.ReasoningEffort},
+		Reasoning: &ResponsesReasoning{Effort: &reasoningEffort},
 	}
 	if request.Speed == "fast" {
 		responsesRequest.ServiceTier = "priority"

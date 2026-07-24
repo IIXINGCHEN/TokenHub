@@ -57,9 +57,10 @@ var (
 )
 
 type HTTPError struct {
-	Status  int
-	Code    string
-	Message string
+	Status         int
+	Code           string
+	Message        string
+	UpstreamStatus int `json:"-"`
 }
 
 func (e *HTTPError) Error() string {
@@ -528,14 +529,17 @@ type ChatMessage struct {
 	Content any    `json:"content"`
 }
 
+type ReasoningOptions = ResponsesReasoning
+
 type ChatCompletionRequest struct {
-	Model         string         `json:"model"`
-	Messages      []ChatMessage  `json:"messages"`
-	Stream        bool           `json:"stream,omitempty"`
-	StreamOptions map[string]any `json:"stream_options,omitempty"`
-	MaxTokens     int            `json:"max_tokens,omitempty"`
-	Temperature   *float64       `json:"temperature,omitempty"`
-	Metadata      map[string]any `json:"metadata,omitempty"`
+	Model           string         `json:"model"`
+	Messages        []ChatMessage  `json:"messages"`
+	Stream          bool           `json:"stream,omitempty"`
+	StreamOptions   map[string]any `json:"stream_options,omitempty"`
+	MaxTokens       int            `json:"max_tokens,omitempty"`
+	Temperature     *float64       `json:"temperature,omitempty"`
+	ReasoningEffort *string        `json:"reasoning_effort,omitempty"`
+	Metadata        map[string]any `json:"metadata,omitempty"`
 }
 
 type PlaygroundChatResponse struct {
@@ -582,9 +586,9 @@ type ResponsesRequest struct {
 }
 
 type ResponsesReasoning struct {
-	Effort  string `json:"effort,omitempty"`
-	Mode    string `json:"mode,omitempty"`
-	Context string `json:"context,omitempty"`
+	Effort  *string `json:"effort,omitempty"`
+	Mode    string  `json:"mode,omitempty"`
+	Context string  `json:"context,omitempty"`
 }
 
 // UnmarshalJSON keeps fields TokenHub does not interpret so the Responses API
@@ -622,6 +626,8 @@ func (r ResponsesRequest) MarshalJSON() ([]byte, error) {
 	setRawJSONField(raw, "store", r.Store, r.Store != nil)
 	if r.Reasoning != nil {
 		setResponsesReasoningField(raw, *r.Reasoning)
+	} else {
+		delete(raw, "reasoning")
 	}
 	setRawJSONField(raw, "service_tier", r.ServiceTier, r.ServiceTier != "")
 	return json.Marshal(raw)
@@ -632,8 +638,10 @@ func setResponsesReasoningField(raw map[string]json.RawMessage, reasoning Respon
 	if existing, ok := raw["reasoning"]; ok {
 		_ = json.Unmarshal(existing, &merged)
 	}
-	if reasoning.Effort != "" {
-		merged["effort"] = reasoning.Effort
+	if reasoning.Effort != nil {
+		merged["effort"] = *reasoning.Effort
+	} else {
+		delete(merged, "effort")
 	}
 	if reasoning.Mode != "" {
 		merged["mode"] = reasoning.Mode
@@ -641,8 +649,11 @@ func setResponsesReasoningField(raw map[string]json.RawMessage, reasoning Respon
 	if reasoning.Context != "" {
 		merged["context"] = reasoning.Context
 	}
-	encoded, err := json.Marshal(merged)
-	if err == nil {
+	if len(merged) == 0 {
+		delete(raw, "reasoning")
+		return
+	}
+	if encoded, err := json.Marshal(merged); err == nil {
 		raw["reasoning"] = encoded
 	}
 }
