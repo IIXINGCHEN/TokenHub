@@ -330,28 +330,63 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("cache-control", "no-cache")
 		w.Header().Set("x-request-id", routed.Call.RequestID)
 		s.writeRouteHeaders(w, routed.Call, route, 1)
-w.WriteHeader(http.StatusOK)
-		if flusher, ok := w.(http.Flusher); ok {
-			flusher.Flush()
+		streamReq := req
+		allowEffortFallback := normalizedReasoningEffort(req.ReasoningEffort) != nil
+		attempts := make([]RouteAttempt, 0, 2)
+		streamWriter := &streamWriteTracker{writer: w}
+		var usage Usage
+		for {
+			usage, err = adapter.ChatStream(leaseCtx, route.Provider, route.ProviderModel, streamReq, streamWriter)
+			if leaseErr := coordinationLeaseError(leaseCtx); leaseErr != nil {
+				err = leaseErr
+			}
+			retryWithoutEffort := allowEffortFallback &&
+				streamReq.ReasoningEffort != nil &&
+				!streamWriter.Wrote() &&
+				isReasoningEffortRejection(err)
+			if !retryWithoutEffort {
+				finishProviderResourceAttempt(s.store, resourceID, leaseID, err, usage)
+			}
+			status, code := routeAttemptStatusAndCode(err, retryWithoutEffort)
+			attempts = append(attempts, RouteAttempt{
+				Selection: route,
+				Status:    status,
+				ErrorCode: code,
+				Error:     errorMessage(err),
+			})
+			if !retryWithoutEffort {
+				break
+			}
+
+			streamReq.ReasoningEffort = nil
+			if retryErr := s.store.CheckProviderResourceRetryCapacity(leaseCtx, resourceID, leaseID); retryErr != nil {
+				s.store.ReleaseProviderResourceCapacity(resourceID, leaseID)
+				err = retryErr
+				status, code = statusAndCode(retryErr)
+				attempts = append(attempts, RouteAttempt{
+					Selection: route,
+					Status:    status,
+					ErrorCode: code,
+					Error:     errorMessage(retryErr),
+				})
+				s.writeRouteHeaders(w, routed.Call, route, len(attempts))
+				usage = Usage{}
+				break
+			}
+			s.writeRouteHeaders(w, routed.Call, route, len(attempts)+1)
 		}
-		usage, err := adapter.ChatStream(leaseCtx, route.Provider, route.ProviderModel, req, w)
-		if leaseErr := coordinationLeaseError(leaseCtx); leaseErr != nil {
-			err = leaseErr
-		}
-		finishProviderResourceAttempt(s.store, resourceID, leaseID, err, usage)
 		status, code := statusAndCode(err)
 		if err == nil {
 			s.store.MarkRouteUsed(route.Route.ID)
 			s.store.MarkProviderResourceUsed(routeResourceID(route))
 		}
-		s.store.RecordRouteAttempts(routed.Call.RequestID, []RouteAttempt{{
-			Selection: route,
-			Status:    status,
-			ErrorCode: code,
-			Error:     errorMessage(err),
-		}})
+		s.store.RecordRouteAttempts(routed.Call.RequestID, attempts)
 		s.store.FinishCall(routed.Call, route, usage, status, code, s.clientIP(r), r.UserAgent())
 		s.recordRequestPayload(routed.Call.RequestID, req, auditStreamPayload(status, code, err))
+		if err != nil && !streamWriter.Wrote() {
+			w.Header().Del("cache-control")
+			writeError(w, r, err)
+		}
 		return
 	}
 
@@ -393,6 +428,17 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	routed, ok := s.startRoutedCall(w, r, project, key, req.Model, req)
 	if !ok {
+		return
+	}
+	if req.Stream {
+		err := NewHTTPError(
+			http.StatusNotImplemented,
+			"provider_capability_not_supported",
+			"Streaming responses are not supported",
+		)
+		s.finishFailedRoutedCall(r, routed, nil, err)
+		s.recordRequestPayload(routed.Call.RequestID, req, auditErrorPayload(err, routed.Call.RequestID))
+		writeError(w, r, err)
 		return
 	}
 	resp, route, usage, attempts, err := s.executeRoutedResponses(r, routed, req)
@@ -457,10 +503,12 @@ func (s *Server) startRoutedCall(w http.ResponseWriter, r *http.Request, project
 	if err != nil {
 		httpErr := AsHTTPError(err)
 		requestID := s.store.RecordRejectedRequest(project, key, model, httpErr.Status, httpErr.Code, s.clientIP(r), r.UserAgent())
+		w.Header().Set("x-request-id", requestID)
 		s.recordRequestPayload(requestID, requestPayload, auditErrorPayload(err, requestID))
 		writeError(w, r, err)
 		return RoutedCall{}, false
 	}
+	w.Header().Set("x-request-id", call.RequestID)
 	if call.requestContext != nil {
 		*r = *r.WithContext(call.requestContext)
 	}
@@ -476,7 +524,8 @@ func (s *Server) startRoutedCall(w http.ResponseWriter, r *http.Request, project
 }
 
 func (s *Server) executeRoutedChat(r *http.Request, routed RoutedCall, req ChatCompletionRequest) (any, RouteSelection, Usage, []RouteAttempt, error) {
-	return executeRoutedWithStore(r.Context(), s.store, routed, func(ctx context.Context, route RouteSelection) (any, Usage, error) {
+	allowEffortFallback := normalizedReasoningEffort(req.ReasoningEffort) != nil
+	return executeRoutedWithStore(r.Context(), s.store, routed, allowEffortFallback, func(ctx context.Context, route RouteSelection, omitReasoningEffort bool) (any, Usage, error) {
 		route, err := s.prepareRouteForUpstream(ctx, route)
 		if err != nil {
 			return nil, Usage{}, err
@@ -485,12 +534,17 @@ func (s *Server) executeRoutedChat(r *http.Request, routed RoutedCall, req ChatC
 		if err != nil {
 			return nil, Usage{}, err
 		}
-		return adapter.Chat(ctx, route.Provider, route.ProviderModel, req)
+		upstreamReq := req
+		if omitReasoningEffort {
+			upstreamReq.ReasoningEffort = nil
+		}
+		return adapter.Chat(ctx, route.Provider, route.ProviderModel, upstreamReq)
 	})
 }
 
 func (s *Server) executeRoutedResponses(r *http.Request, routed RoutedCall, req ResponsesRequest) (any, RouteSelection, Usage, []RouteAttempt, error) {
-	return executeRoutedWithStore(r.Context(), s.store, routed, func(ctx context.Context, route RouteSelection) (any, Usage, error) {
+	allowEffortFallback := normalizedReasoningEffort(responsesReasoningEffort(req)) != nil
+	return executeRoutedWithStore(r.Context(), s.store, routed, allowEffortFallback, func(ctx context.Context, route RouteSelection, omitReasoningEffort bool) (any, Usage, error) {
 		route, err := s.prepareRouteForUpstream(ctx, route)
 		if err != nil {
 			return nil, Usage{}, err
@@ -499,12 +553,16 @@ func (s *Server) executeRoutedResponses(r *http.Request, routed RoutedCall, req 
 		if err != nil {
 			return nil, Usage{}, err
 		}
-		return adapter.Responses(ctx, route.Provider, route.ProviderModel, req)
+		upstreamReq := req
+		if omitReasoningEffort {
+			upstreamReq.Reasoning = nil
+		}
+		return adapter.Responses(ctx, route.Provider, route.ProviderModel, upstreamReq)
 	})
 }
 
 func (s *Server) executeRoutedEmbeddings(r *http.Request, routed RoutedCall, req EmbeddingsRequest) (any, RouteSelection, Usage, []RouteAttempt, error) {
-	return executeRoutedWithStore(r.Context(), s.store, routed, func(ctx context.Context, route RouteSelection) (any, Usage, error) {
+	return executeRoutedWithStore(r.Context(), s.store, routed, false, func(ctx context.Context, route RouteSelection, _ bool) (any, Usage, error) {
 		route, err := s.prepareRouteForUpstream(ctx, route)
 		if err != nil {
 			return nil, Usage{}, err
@@ -600,10 +658,16 @@ func (s *Server) handleAdminPlaygroundChat(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-func executeRoutedWithStore[T any](ctx context.Context, store Store, routed RoutedCall, call func(context.Context, RouteSelection) (T, Usage, error)) (T, RouteSelection, Usage, []RouteAttempt, error) {
+func executeRoutedWithStore[T any](
+	ctx context.Context,
+	store Store,
+	routed RoutedCall,
+	allowReasoningEffortFallback bool,
+	call func(context.Context, RouteSelection, bool) (T, Usage, error),
+) (T, RouteSelection, Usage, []RouteAttempt, error) {
 	var zero T
 	var lastErr error = ErrProviderMissing
-	attempts := make([]RouteAttempt, 0, len(routed.Routes))
+	attempts := make([]RouteAttempt, 0, len(routed.Routes)+1)
 	for _, route := range routed.Routes {
 		if leaseErr := coordinationLeaseError(ctx); leaseErr != nil {
 			return zero, route, Usage{}, attempts, leaseErr
@@ -624,27 +688,63 @@ func executeRoutedWithStore[T any](ctx context.Context, store Store, routed Rout
 			}
 			continue
 		}
-		resp, usage, err := call(leaseCtx, route)
-		if leaseErr := coordinationLeaseError(leaseCtx); leaseErr != nil {
-			err = leaseErr
-		}
-		finishProviderResourceAttempt(store, resourceID, leaseID, err, usage)
-		status, code := statusAndCode(err)
-		attempts = append(attempts, RouteAttempt{
-			Selection: route,
-			Status:    status,
-			ErrorCode: code,
-			Error:     errorMessage(err),
-		})
-		if err == nil {
-			return resp, route, usage, attempts, nil
-		}
-		lastErr = err
-		if !shouldFailoverProviderError(err) {
-			return zero, route, usage, attempts, err
+		omitReasoningEffort := false
+		for {
+			resp, usage, err := call(leaseCtx, route, omitReasoningEffort)
+			if leaseErr := coordinationLeaseError(leaseCtx); leaseErr != nil {
+				err = leaseErr
+			}
+			retryWithoutEffort := allowReasoningEffortFallback &&
+				!omitReasoningEffort &&
+				isReasoningEffortRejection(err)
+			if !retryWithoutEffort {
+				finishProviderResourceAttempt(store, resourceID, leaseID, err, usage)
+			}
+			status, code := routeAttemptStatusAndCode(err, retryWithoutEffort)
+			attempts = append(attempts, RouteAttempt{
+				Selection: route,
+				Status:    status,
+				ErrorCode: code,
+				Error:     errorMessage(err),
+			})
+			if err == nil {
+				return resp, route, usage, attempts, nil
+			}
+			lastErr = err
+			if retryWithoutEffort {
+				if retryErr := store.CheckProviderResourceRetryCapacity(leaseCtx, resourceID, leaseID); retryErr != nil {
+					store.ReleaseProviderResourceCapacity(resourceID, leaseID)
+					status, code = statusAndCode(retryErr)
+					attempts = append(attempts, RouteAttempt{
+						Selection: route,
+						Status:    status,
+						ErrorCode: code,
+						Error:     errorMessage(retryErr),
+					})
+					lastErr = retryErr
+					if !shouldFailoverProviderError(retryErr) {
+						return zero, route, Usage{}, attempts, retryErr
+					}
+					break
+				}
+				omitReasoningEffort = true
+				continue
+			}
+			if !shouldFailoverProviderError(err) {
+				return zero, route, usage, attempts, err
+			}
+			break
 		}
 	}
 	return zero, RouteSelection{}, Usage{}, attempts, lastErr
+}
+
+func routeAttemptStatusAndCode(err error, reasoningEffortRejected bool) (int, string) {
+	if !reasoningEffortRejected {
+		return statusAndCode(err)
+	}
+	httpErr := AsHTTPError(err)
+	return httpErr.UpstreamStatus, "reasoning_effort_rejected"
 }
 
 func coordinationLeaseError(ctx context.Context) error {
@@ -663,6 +763,28 @@ func finishProviderResourceAttempt(store Store, resourceID string, leaseID strin
 		return
 	}
 	store.FinishProviderResourceAttempt(resourceID, leaseID, err == nil, usage)
+}
+
+type streamWriteTracker struct {
+	writer io.Writer
+	wrote  bool
+}
+
+func (w *streamWriteTracker) Write(data []byte) (int, error) {
+	if !w.wrote {
+		if responseWriter, ok := w.writer.(http.ResponseWriter); ok {
+			responseWriter.WriteHeader(http.StatusOK)
+			if flusher, ok := responseWriter.(http.Flusher); ok {
+				flusher.Flush()
+			}
+		}
+	}
+	w.wrote = true
+	return w.writer.Write(data)
+}
+
+func (w *streamWriteTracker) Wrote() bool {
+	return w != nil && w.wrote
 }
 
 func (s *Server) finishFailedRoutedCall(r *http.Request, routed RoutedCall, attempts []RouteAttempt, err error) {
@@ -6310,13 +6432,18 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	httpErr := AsHTTPError(err)
+	requestID := strings.TrimSpace(w.Header().Get("x-request-id"))
+	if requestID == "" {
+		requestID = NewID("req")
+	}
+	w.Header().Set("x-request-id", requestID)
 	writeJSON(w, httpErr.Status, map[string]any{
 		"error": map[string]any{
 			"message": httpErr.Message,
 			"type":    httpErr.Code,
 			"code":    httpErr.Code,
 		},
-		"request_id": NewID("req"),
+		"request_id": requestID,
 	})
 }
 
