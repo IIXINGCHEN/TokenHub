@@ -57,6 +57,34 @@ TokenHub は、日常的なモデル利用、チームガバナンス、プラ�
 - SQLite-first のプライベートデプロイと Docker Compose サポート。
 - コネクションプーリング対応の PostgreSQL による本番環境デプロイメントサポート。
 - 管理コンソールは英語、中国語、日本語の切り替えに対応。
+- TokenHub は OpenAI Codex のサブスクリプションアカウントリソースにも接続できます。分離および復旧が可能な Codex Profile を使用し、指定したローカル Codex CLI またはデスクトップセッションを TokenHub 経由で実行できます。
+
+## Codex の接続と利用
+
+管理者は、最初に TokenHub で OpenAI Codex Provider、サブスクリプションアカウントリソース、およびモデルルートを設定し、実際のプロジェクト用 API Key を作成します。
+
+ローカルでは、分離 Profile からの起動を推奨します。既存の Codex 既定設定は上書きされません。
+
+```bash
+read -r -s "TOKENHUB_API_KEY?TokenHub プロジェクト API Key: "
+export TOKENHUB_API_KEY
+echo
+
+codex --profile tokenhub
+```
+
+<p align="center">
+  <img src="docs/assets/codex-profile/codex-status-redacted.png" alt="TokenHub Profile から起動した Codex のステータス" width="900" />
+</p>
+
+<p align="center">
+  <sub>Codex は TokenHub Local Provider 経由で起動しています。ユーザー名、IP アドレス、Session ID はマスキング済みです。</sub>
+</p>
+
+現在の Codex セッションを終了後、Profile を指定せずに `codex` を実行すると既定環境へ戻ります。Key が不要になった場合は、`unset TOKENHUB_API_KEY` を実行してください。
+
+- [Codex を TokenHub に接続：Profile クイック設定](docs/ja/codex-tokenhub-profile-quick-start.md)：分離 Profile の作成、確認、復旧を短い手順で実施
+- [Codex を TokenHub に接続：4 つの設定方法と復旧](docs/ja/codex-tokenhub-configuration.md)：Profile、プロセス単位、CLI グローバル、デスクトップの各設定を比較
 
 ## マルチインスタンス構成
 

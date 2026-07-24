@@ -57,6 +57,34 @@ TokenHub separates everyday model usage, team governance, and platform administr
 - SQLite-first private deployment with Docker Compose support.
 - PostgreSQL support for production deployments with connection pooling. See the [PostgreSQL setup guide](docs/postgresql-setup.md).
 - Console language switching for English, Chinese, and Japanese.
+- TokenHub can also connect OpenAI Codex subscription resources and route selected local Codex CLI or desktop sessions through an isolated, recoverable Codex profile.
+
+## Codex Access and Usage
+
+Administrators first configure an OpenAI Codex provider, subscription account resources, and model routes in TokenHub, and then create an API key for the actual project.
+
+For local use, start Codex through an isolated profile. This does not overwrite the existing default Codex configuration:
+
+```bash
+read -r -s "TOKENHUB_API_KEY?TokenHub project API key: "
+export TOKENHUB_API_KEY
+echo
+
+codex --profile tokenhub
+```
+
+<p align="center">
+  <img src="docs/assets/codex-profile/codex-status-redacted.png" alt="Codex status after starting through the TokenHub profile" width="900" />
+</p>
+
+<p align="center">
+  <sub>Codex is running through the TokenHub local provider. The username, IP address, and session ID are redacted.</sub>
+</p>
+
+After exiting the current Codex session, run `codex` without the profile to restore the default environment. When the key is no longer needed, run `unset TOKENHUB_API_KEY`.
+
+- [Connect Codex to TokenHub: Profile Quick Setup](docs/codex-tokenhub-profile-quick-start.md): create, validate, and recover an isolated profile
+- [Connect Codex to TokenHub: Four Configuration Methods and Recovery](docs/codex-tokenhub-configuration.md): compare profile, process-local, global CLI, and desktop configuration
 
 ## Multi-Instance Architecture
 

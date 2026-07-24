@@ -57,6 +57,34 @@ TokenHub 将日常模型使用、团队治理和平台运维拆成清晰的角�
 - SQLite-first 私有化部署，内置 Docker Compose 一键部署。
 - PostgreSQL 支持生产环境部署，提供连接池配置。
 - 管理后台支持英文、中文、日文切换。
+- TokenHub 还支持接入 OpenAI Codex 订阅账号资源，并通过可隔离、可恢复的 Codex Profile，让指定的本地 Codex CLI 或桌面端会话经过 TokenHub。
+
+## Codex 接入与使用
+
+管理员先在 TokenHub 中接入 OpenAI Codex Provider、订阅账号资源和模型路由，再为实际项目创建 API Key。
+
+本地使用时，推荐通过独立 Profile 启动。它不会覆盖原来的 Codex 默认配置：
+
+```bash
+read -r -s "TOKENHUB_API_KEY?请输入 TokenHub 项目 API Key: "
+export TOKENHUB_API_KEY
+echo
+
+codex --profile tokenhub
+```
+
+<p align="center">
+  <img src="docs/assets/codex-profile/codex-status-redacted.png" alt="Codex 通过 TokenHub Profile 启动后的状态" width="900" />
+</p>
+
+<p align="center">
+  <sub>Codex 已通过 TokenHub Local Provider 启动；截图中的用户名、IP 地址和 Session ID 已隐藏。</sub>
+</p>
+
+退出当前 Codex 后，直接运行 `codex` 即可恢复原来的默认环境；不再使用当前 Key 时，执行 `unset TOKENHUB_API_KEY`。
+
+- [Codex 接入 TokenHub：Profile 快速配置](docs/zh-CN/codex-tokenhub-profile-quick-start.md)：适合仅需通过独立 Profile 快速完成配置、验证和恢复的用户
+- [Codex 接入 TokenHub：四种配置方式与恢复指南](docs/zh-CN/codex-tokenhub-configuration.md)：完整说明 Profile、进程级临时配置、CLI 全局配置和桌面端配置
 
 ## 多实例架构
 
