@@ -190,20 +190,22 @@ type ProviderCatalogEntry struct {
 }
 
 type ProviderCreateRequest struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	Type           string            `json:"type"`
-	BaseURL        string            `json:"base_url"`
-	APIKey         string            `json:"api_key"`
-	Status         string            `json:"status"`
-	Healthy        bool              `json:"healthy"`
-	Priority       int               `json:"priority"`
-	Headers        map[string]string `json:"headers"`
-	Options        map[string]string `json:"options"`
-	CatalogID      string            `json:"catalog_id"`
-	ModelCategory  string            `json:"model_category"`
-	CreateRoutes   *bool             `json:"create_routes"`
-	SelectedModels []string          `json:"selected_models"`
+	ID             string                 `json:"id"`
+	ProviderID     string                 `json:"provider_id"`
+	Name           string                 `json:"name"`
+	Type           string                 `json:"type"`
+	BaseURL        string                 `json:"base_url"`
+	APIKey         string                 `json:"api_key"`
+	Status         string                 `json:"status"`
+	Healthy        bool                   `json:"healthy"`
+	Priority       int                    `json:"priority"`
+	Headers        map[string]string      `json:"headers"`
+	Options        map[string]string      `json:"options"`
+	CatalogID      string                 `json:"catalog_id"`
+	ModelCategory  string                 `json:"model_category"`
+	CreateRoutes   *bool                  `json:"create_routes"`
+	SelectedModels []string               `json:"selected_models"`
+	CustomModels   []ProviderCatalogModel `json:"custom_models"`
 }
 
 type ProviderCreateResult struct {

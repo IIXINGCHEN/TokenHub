@@ -127,6 +127,7 @@ type Store interface {
 	DeleteAPIKey(id string) error
 	ValidateAPIKey(rawSecret string, clientIP string) (Project, APIKey, error)
 	AddProvider(provider Provider) Provider
+	GetProvider(id string) (Provider, bool)
 	ListProviders() []Provider
 	UpdateProvider(id string, patch Provider) (Provider, error)
 	DeleteProvider(id string) error
@@ -1185,6 +1186,15 @@ func (s *GormStore) ListProviders() []Provider {
 		items[i].APIKey = ""
 	}
 	return items
+}
+
+func (s *GormStore) GetProvider(id string) (Provider, bool) {
+	var provider Provider
+	if err := s.db.First(&provider, "id = ?", id).Error; err != nil {
+		return Provider{}, false
+	}
+	provider.APIKey = s.decryptSecret(provider.APIKey)
+	return provider, true
 }
 
 func (s *GormStore) UpdateProvider(id string, patch Provider) (Provider, error) {

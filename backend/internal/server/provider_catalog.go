@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -356,6 +358,114 @@ func customProviderCatalogEntry() ProviderCatalogEntry {
 			},
 		},
 		ModelsCount: 1,
+	}
+}
+
+func CustomProviderCatalogFromUpstream(ctx context.Context, client *http.Client, req ProviderCreateRequest) (ProviderCatalogEntry, error) {
+	baseURL := strings.TrimSpace(req.BaseURL)
+	if baseURL == "" {
+		return ProviderCatalogEntry{}, NewHTTPError(http.StatusBadRequest, "provider_base_url_required", "Base URL is required to load upstream models")
+	}
+	endpoint, err := url.Parse(strings.TrimRight(baseURL, "/") + "/models")
+	if err != nil || endpoint.Scheme == "" || endpoint.Host == "" {
+		return ProviderCatalogEntry{}, NewHTTPError(http.StatusBadRequest, "provider_base_url_invalid", "Base URL is invalid")
+	}
+	if client == nil {
+		client = http.DefaultClient
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return ProviderCatalogEntry{}, NewHTTPError(http.StatusBadGateway, "provider_models_request_failed", "Failed to create upstream models request")
+	}
+	if apiKey := strings.TrimSpace(req.APIKey); apiKey != "" {
+		httpReq.Header.Set("authorization", "Bearer "+apiKey)
+	}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return ProviderCatalogEntry{}, NewHTTPError(http.StatusBadGateway, "provider_models_request_failed", "Failed to request upstream models")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return ProviderCatalogEntry{}, NewHTTPError(statusForProvider(resp.StatusCode), "provider_models_upstream_error", resp.Status)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 5<<20)).Decode(&payload); err != nil {
+		return ProviderCatalogEntry{}, NewHTTPError(http.StatusBadGateway, "provider_models_invalid_response", "Upstream models response is invalid")
+	}
+	models := customProviderModelsFromPayload(payload)
+	if len(models) == 0 {
+		return ProviderCatalogEntry{}, NewHTTPError(http.StatusBadGateway, "provider_models_empty", "Upstream did not return any models")
+	}
+	categories, categoryCounts := catalogCategorySummary(models)
+	name := firstNonEmpty(strings.TrimSpace(req.Name), "自定义渠道商")
+	return ProviderCatalogEntry{
+		ID:             "custom",
+		Name:           name,
+		DisplayName:    name,
+		Type:           firstNonEmpty(strings.TrimSpace(req.Type), ProviderOpenAICompatible),
+		BaseURL:        baseURL,
+		Categories:     categories,
+		CategoryCounts: categoryCounts,
+		ModelsCount:    len(models),
+		Source:         "custom-upstream",
+		Models:         models,
+	}, nil
+}
+
+func customProviderModelsFromPayload(payload map[string]any) []ProviderCatalogModel {
+	rawModels, _ := payload["data"].([]any)
+	if len(rawModels) == 0 {
+		rawModels, _ = payload["models"].([]any)
+	}
+	models := make([]ProviderCatalogModel, 0, len(rawModels))
+	seen := map[string]bool{}
+	for _, raw := range rawModels {
+		id, displayName, object, ownedBy := customProviderModelFields(raw)
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		displayName = firstNonEmpty(displayName, id)
+		modelType := normalizeModelModality(strings.Join([]string{id, displayName, object}, " "))
+		metadata := map[string]string{"source": "custom-upstream"}
+		if object != "" {
+			metadata["object"] = object
+		}
+		if ownedBy != "" {
+			metadata["owned_by"] = ownedBy
+		}
+		models = append(models, ProviderCatalogModel{
+			ID:                  id,
+			Name:                id,
+			DisplayName:         displayName,
+			CanonicalName:       canonicalModelName(id, displayName),
+			Category:            inferModelCategory(id, displayName),
+			Family:              inferModelFamily(id),
+			Type:                modelType,
+			InputModalities:     []string{"text"},
+			OutputModalities:    []string{"text"},
+			Capabilities:        []string{modelType},
+			SupportedParameters: []string{},
+			Metadata:            metadata,
+		})
+	}
+	sort.SliceStable(models, func(i, j int) bool {
+		return strings.ToLower(models[i].ID) < strings.ToLower(models[j].ID)
+	})
+	return models
+}
+
+func customProviderModelFields(raw any) (string, string, string, string) {
+	switch item := raw.(type) {
+	case string:
+		return item, item, "", ""
+	case map[string]any:
+		id := firstNonEmpty(catalogStringField(item, "id"), catalogStringField(item, "name"), catalogStringField(item, "model"))
+		displayName := firstNonEmpty(catalogStringField(item, "display_name"), catalogStringField(item, "name"), id)
+		return id, displayName, catalogStringField(item, "object"), catalogStringField(item, "owned_by")
+	default:
+		return "", "", "", ""
 	}
 }
 

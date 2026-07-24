@@ -708,6 +708,8 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
         onToggleGroup={(title) =>
           setOpenNavGroups((current) => ({ ...current, [title]: current[title] === false }))
         }
+        baseURL={baseURL}
+        adminToken={adminToken}
       />
 
       <section className="workspace">
