@@ -11,4 +11,3 @@ func TestSplitProviderModelPreservesNestedModelPath(t *testing.T) {
 		t.Fatalf("unexpected provider name %q", providerName)
 	}
 }
-
