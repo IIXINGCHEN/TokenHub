@@ -39,6 +39,9 @@ export function identityProviderIconLabel(iconKey: string) {
   const normalized = normalizedIdentityProviderIconKey(iconKey);
   const labels: Record<string, string> = {
     auto: "自动",
+    dingtalk: "DingTalk",
+    feishu: "Feishu",
+    wecom: "WeCom",
     gitlab: "GitLab",
     github: "GitHub",
     google: "Google",

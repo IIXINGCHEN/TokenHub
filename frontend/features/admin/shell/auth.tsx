@@ -8,6 +8,9 @@ import { activeLanguage, tx } from "../i18n/runtime";
 
 export const identityProviderIconOptions = [
   "auto",
+  "dingtalk",
+  "feishu",
+  "wecom",
   "gitlab",
   "github",
   "google",
@@ -25,6 +28,7 @@ export type IdentityProviderEndpointDefaults = {
   authorize_url?: string;
   token_url?: string;
   userinfo_url?: string;
+  userdetail_url?: string;
 };
 
 export type IdentityProviderTemplate = {
@@ -33,12 +37,16 @@ export type IdentityProviderTemplate = {
   providerType: "oidc" | "oauth2";
   iconKey: string;
   loginLabel: string;
+  configurationGuideURL: string;
+  configurationGuideLabel?: string;
+  configurationHelp?: string;
   issuerPlaceholder: string;
   defaultIssuer?: string;
   scopes: string;
   usernameClaim: string;
   emailClaim: string;
   teamClaim: string;
+  subjectClaim: string;
   endpoints?: (issuerURL: string) => IdentityProviderEndpointDefaults;
 };
 
@@ -49,11 +57,76 @@ export const identityProviderTemplates: IdentityProviderTemplate[] = [
     providerType: "oidc",
     iconKey: "oidc",
     loginLabel: "SSO",
+    configurationGuideURL: "https://openid.net/specs/openid-connect-core-1_0.html",
+    configurationGuideLabel: "查看 OIDC 协议参考",
+    configurationHelp: "通用模板没有统一的应用管理后台，请查阅实际身份源的应用注册文档以获取 Client ID 和 Client Secret。",
     issuerPlaceholder: "https://sso.example.com",
     scopes: "openid, profile, email",
     usernameClaim: "preferred_username",
     emailClaim: "email",
     teamClaim: "department",
+    subjectClaim: "sub",
+  },
+  {
+    key: "dingtalk",
+    label: "钉钉",
+    providerType: "oauth2",
+    iconKey: "dingtalk",
+    loginLabel: "DingTalk",
+    configurationGuideURL: "https://open.dingtalk.com/document/orgapp/tutorial-obtaining-user-personal-information",
+    issuerPlaceholder: "https://login.dingtalk.com",
+    defaultIssuer: "https://login.dingtalk.com",
+    scopes: "openid",
+    usernameClaim: "unionId",
+    emailClaim: "email",
+    teamClaim: "",
+    subjectClaim: "unionId",
+    endpoints: () => ({
+      authorize_url: "https://login.dingtalk.com/oauth2/auth",
+      token_url: "https://api.dingtalk.com/v1.0/oauth2/userAccessToken",
+      userinfo_url: "https://api.dingtalk.com/v1.0/contact/users/me",
+    }),
+  },
+  {
+    key: "feishu",
+    label: "飞书",
+    providerType: "oauth2",
+    iconKey: "feishu",
+    loginLabel: "Feishu",
+    configurationGuideURL: "https://open.feishu.cn/document/common-capabilities/sso/web-application-sso/web-app-overview",
+    issuerPlaceholder: "https://open.feishu.cn",
+    defaultIssuer: "https://open.feishu.cn",
+    scopes: "",
+    usernameClaim: "union_id",
+    emailClaim: "enterprise_email",
+    teamClaim: "",
+    subjectClaim: "union_id",
+    endpoints: () => ({
+      authorize_url: "https://accounts.feishu.cn/open-apis/authen/v1/authorize",
+      token_url: "https://open.feishu.cn/open-apis/authen/v2/oauth/token",
+      userinfo_url: "https://open.feishu.cn/open-apis/authen/v1/user_info",
+    }),
+  },
+  {
+    key: "wecom",
+    label: "企业微信",
+    providerType: "oauth2",
+    iconKey: "wecom",
+    loginLabel: "WeCom",
+    configurationGuideURL: "https://developer.work.weixin.qq.com/document/path/91022",
+    issuerPlaceholder: "https://qyapi.weixin.qq.com",
+    defaultIssuer: "https://qyapi.weixin.qq.com",
+    scopes: "",
+    usernameClaim: "userid",
+    emailClaim: "biz_mail",
+    teamClaim: "main_department",
+    subjectClaim: "userid",
+    endpoints: () => ({
+      authorize_url: "https://login.work.weixin.qq.com/wwlogin/sso/login",
+      token_url: "https://qyapi.weixin.qq.com/cgi-bin/gettoken",
+      userinfo_url: "https://qyapi.weixin.qq.com/cgi-bin/auth/getuserinfo",
+      userdetail_url: "https://qyapi.weixin.qq.com/cgi-bin/user/get",
+    }),
   },
   {
     key: "gitlab",
@@ -61,11 +134,13 @@ export const identityProviderTemplates: IdentityProviderTemplate[] = [
     providerType: "oauth2",
     iconKey: "gitlab",
     loginLabel: "GitLab",
+    configurationGuideURL: "https://docs.gitlab.com/integration/oauth_provider/",
     issuerPlaceholder: "https://gitlab.example.com",
     scopes: "openid profile email read_user",
     usernameClaim: "username",
     emailClaim: "email",
     teamClaim: "department",
+    subjectClaim: "sub",
     endpoints: (issuerURL) => issuerURL ? ({
       authorize_url: `${issuerURL}/oauth/authorize`,
       token_url: `${issuerURL}/oauth/token`,
@@ -78,12 +153,14 @@ export const identityProviderTemplates: IdentityProviderTemplate[] = [
     providerType: "oidc",
     iconKey: "google",
     loginLabel: "Google",
+    configurationGuideURL: "https://developers.google.com/identity/protocols/oauth2/web-server",
     issuerPlaceholder: "https://accounts.google.com",
     defaultIssuer: "https://accounts.google.com",
     scopes: "openid profile email",
     usernameClaim: "email",
     emailClaim: "email",
     teamClaim: "hd",
+    subjectClaim: "sub",
     endpoints: () => ({
       authorize_url: "https://accounts.google.com/o/oauth2/v2/auth",
       token_url: "https://oauth2.googleapis.com/token",
@@ -96,11 +173,13 @@ export const identityProviderTemplates: IdentityProviderTemplate[] = [
     providerType: "oidc",
     iconKey: "microsoft",
     loginLabel: "Microsoft",
+    configurationGuideURL: "https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app",
     issuerPlaceholder: "https://login.microsoftonline.com/{tenant}/v2.0",
     scopes: "openid profile email User.Read",
     usernameClaim: "preferred_username",
     emailClaim: "email",
     teamClaim: "department",
+    subjectClaim: "sub",
     endpoints: (issuerURL) => issuerURL ? ({
       authorize_url: `${issuerURL}/oauth2/v2.0/authorize`,
       token_url: `${issuerURL}/oauth2/v2.0/token`,
@@ -113,11 +192,13 @@ export const identityProviderTemplates: IdentityProviderTemplate[] = [
     providerType: "oidc",
     iconKey: "okta",
     loginLabel: "Okta",
+    configurationGuideURL: "https://developer.okta.com/docs/guides/sign-into-web-app-redirect/",
     issuerPlaceholder: "https://company.okta.com/oauth2/default",
     scopes: "openid profile email",
     usernameClaim: "preferred_username",
     emailClaim: "email",
     teamClaim: "groups",
+    subjectClaim: "sub",
     endpoints: (issuerURL) => issuerURL ? ({
       authorize_url: `${issuerURL}/v1/authorize`,
       token_url: `${issuerURL}/v1/token`,
@@ -130,11 +211,13 @@ export const identityProviderTemplates: IdentityProviderTemplate[] = [
     providerType: "oidc",
     iconKey: "keycloak",
     loginLabel: "Keycloak",
+    configurationGuideURL: "https://www.keycloak.org/docs/latest/server_admin/#assembly-managing-clients_server_administration_guide",
     issuerPlaceholder: "https://keycloak.example.com/realms/company",
     scopes: "openid profile email",
     usernameClaim: "preferred_username",
     emailClaim: "email",
     teamClaim: "groups",
+    subjectClaim: "sub",
     endpoints: (issuerURL) => issuerURL ? ({
       authorize_url: `${issuerURL}/protocol/openid-connect/auth`,
       token_url: `${issuerURL}/protocol/openid-connect/token`,
@@ -147,11 +230,15 @@ export const identityProviderTemplates: IdentityProviderTemplate[] = [
     providerType: "oauth2",
     iconKey: "oauth2",
     loginLabel: "OAuth2",
+    configurationGuideURL: "https://www.rfc-editor.org/info/rfc6749/",
+    configurationGuideLabel: "查看 OAuth2 协议参考",
+    configurationHelp: "通用模板没有统一的应用管理后台，请查阅实际身份源的应用注册文档以获取 Client ID 和 Client Secret。",
     issuerPlaceholder: "https://oauth.example.com",
     scopes: "profile, email",
     usernameClaim: "username",
     emailClaim: "email",
     teamClaim: "department",
+    subjectClaim: "sub",
   },
 ];
 
@@ -197,7 +284,7 @@ export function loginIdentityProviderIconKey(provider: LoginIdentityProvider) {
   if (configured && configured !== "auto") return configured;
   const providerType = stringifyValue(provider.provider_type).trim().toLowerCase();
   const fingerprint = `${provider.name} ${provider.issuer_url ?? ""} ${providerType}`.toLowerCase();
-  for (const key of ["gitlab", "github", "google", "microsoft", "azure", "entra", "okta", "keycloak"]) {
+  for (const key of ["dingtalk", "feishu", "wecom", "gitlab", "github", "google", "microsoft", "azure", "entra", "okta", "keycloak"]) {
     if (fingerprint.includes(key)) {
       return key === "azure" || key === "entra" ? "microsoft" : key;
     }
@@ -253,7 +340,8 @@ export function applyIdentityProviderTemplate(values: Record<string, string>, te
   const next: Record<string, string> = { ...values, provider_template: template.key };
   next.provider_type = template.providerType;
   next.icon_key = template.iconKey;
-  if (template.defaultIssuer && (overwrite || !next.issuer_url)) next.issuer_url = template.defaultIssuer;
+  if (overwrite) next.issuer_url = template.defaultIssuer ?? "";
+  else if (template.defaultIssuer && !next.issuer_url) next.issuer_url = template.defaultIssuer;
   const issuer = normalizeIdentityProviderIssuer(next.issuer_url || template.defaultIssuer || "");
   for (const [key, value] of Object.entries({
     login_label: template.loginLabel,
@@ -261,19 +349,27 @@ export function applyIdentityProviderTemplate(values: Record<string, string>, te
     username_claim: template.usernameClaim,
     email_claim: template.emailClaim,
     team_claim: template.teamClaim,
+    subject_claim: template.subjectClaim,
   })) {
     if (overwrite || !next[key]) next[key] = value;
   }
   const endpoints = identityProviderEndpointDefaults(template, issuer);
-  for (const [key, value] of Object.entries(endpoints)) {
-    if (value && (overwrite || !next[key])) next[key] = value;
+  for (const key of ["authorize_url", "token_url", "userinfo_url", "userdetail_url"] as const) {
+    const value = endpoints[key] ?? "";
+    if (overwrite || (value && !next[key])) next[key] = value;
   }
+  if (overwrite && template.key !== "wecom") next.agent_id = "";
   return next;
 }
 
 export function identityProviderInitialFormValues(values: Record<string, string>, createMode: boolean) {
   const templateKey = inferIdentityProviderTemplateKey(values);
   const next: Record<string, string> = createMode ? applyIdentityProviderTemplate(values, templateKey, false) : { ...values, provider_template: templateKey };
+  if (createMode) {
+    if (next.client_id === "tokenhub-admin") next.client_id = "";
+    if (next.issuer_url === "https://sso.example.com") next.issuer_url = "";
+    if (next.redirect_uri === "http://localhost:8080/api/admin/auth/oauth/callback") next.redirect_uri = "";
+  }
   if (!next.default_role) next.default_role = "user";
   if (!next.default_project_role) next.default_project_role = "developer";
   return next;
@@ -281,14 +377,21 @@ export function identityProviderInitialFormValues(values: Record<string, string>
 
 export function updateIdentityProviderFormValue(values: Record<string, string>, key: string, value: string) {
   if (key === "provider_template") {
-    return applyIdentityProviderTemplate(values, value, true);
+    const currentTemplateKey = inferIdentityProviderTemplateKey(values);
+    const next = applyIdentityProviderTemplate(values, value, true);
+    if (currentTemplateKey !== next.provider_template) {
+      next.client_id = "";
+      next.client_secret = "";
+      next.agent_id = "";
+    }
+    return next;
   }
   const next = { ...values, [key]: value };
   if (key === "issuer_url") {
     const template = identityProviderTemplateByKey(next.provider_template || inferIdentityProviderTemplateKey(next));
     const previousEndpoints = identityProviderEndpointDefaults(template, values.issuer_url ?? "");
     const nextEndpoints = identityProviderEndpointDefaults(template, value);
-    for (const endpointKey of ["authorize_url", "token_url", "userinfo_url"] as const) {
+    for (const endpointKey of ["authorize_url", "token_url", "userinfo_url", "userdetail_url"] as const) {
       if (!values[endpointKey] || values[endpointKey] === previousEndpoints[endpointKey]) {
         next[endpointKey] = nextEndpoints[endpointKey] ?? "";
       }
@@ -356,8 +459,42 @@ export function MicrosoftBrandIcon({ size = 15 }: { size?: number }) {
   );
 }
 
+export function DingTalkBrandIcon({ size = 15 }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden="true">
+      <path fill="#1677ff" d="M19.7 3.4c-2.8-1-5.8-1.8-8.9-2.3-.4-.1-.7.3-.5.7l1.3 2.1c-2.4-.3-4.8-.2-7.1.2-.4.1-.5.6-.2.8l3 2.2-2.1.4c-.4.1-.5.6-.2.9l3.2 2.2-1.8.5c-.4.1-.5.7-.1.9l4.2 2.5-2.2 5.6c-.2.5.4.9.8.5l8.1-8.5c.3-.3.1-.8-.3-.8l-2.4-.1 5.7-7c.2-.3.1-.7-.5-.8Z" />
+    </svg>
+  );
+}
+
+export function FeishuBrandIcon({ size = 15 }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden="true">
+      <path fill="#3370ff" d="M12.1 2.2c2.5 0 4.7 1.2 6.1 3.1l-4 2.3a3.1 3.1 0 0 0-2.1-.8A3.2 3.2 0 0 0 8.9 10H4.3a7.8 7.8 0 0 1 7.8-7.8Z" />
+      <path fill="#00d6b9" d="M4.3 10h4.6a3.2 3.2 0 0 0 3.2 3.2v4.6A7.8 7.8 0 0 1 4.3 10Z" />
+      <path fill="#34c3ff" d="M12.1 13.2c1.2 0 2.2-.6 2.8-1.6l4 2.3a7.8 7.8 0 0 1-6.8 3.9v-4.6Z" />
+      <path fill="#ff5b5f" d="m14.2 7.6 4-2.3a7.7 7.7 0 0 1 .7 8.6l-4-2.3a3.2 3.2 0 0 0-.7-4Z" />
+    </svg>
+  );
+}
+
+export function WeComBrandIcon({ size = 15 }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden="true">
+      <path fill="#10b866" d="M9.8 3C4.9 3 1 6.2 1 10.2c0 2.3 1.3 4.3 3.3 5.6l-.8 2.8 3.2-1.7c1 .3 2 .5 3.1.5 4.9 0 8.8-3.2 8.8-7.2S14.7 3 9.8 3Z" />
+      <path fill="#58be6b" stroke="#fff" strokeWidth="1.2" d="M15.7 9.1c4 0 7.3 2.6 7.3 5.9 0 1.9-1.1 3.6-2.7 4.6l.7 2.3-2.7-1.4c-.8.3-1.7.4-2.6.4-4 0-7.3-2.6-7.3-5.9s3.3-5.9 7.3-5.9Z" />
+    </svg>
+  );
+}
+
 export function loginIdentityProviderIconConfig(key: string): { key: string; icon: LoginIdentityProviderIconComponent } {
   switch (key) {
+    case "dingtalk":
+      return { key, icon: DingTalkBrandIcon };
+    case "feishu":
+      return { key, icon: FeishuBrandIcon };
+    case "wecom":
+      return { key, icon: WeComBrandIcon };
     case "gitlab":
       return { key, icon: GitLabBrandIcon };
     case "github":
