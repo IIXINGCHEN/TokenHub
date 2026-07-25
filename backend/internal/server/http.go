@@ -905,7 +905,7 @@ func executeRoutedWithStore[T any](
 				disposition != ProviderErrorClient &&
 				isReasoningEffortRejection(err)
 			if !retryWithoutEffort {
-				finishProviderResourceAttempt(store, resourceID, leaseID, err, usage)
+				finishProviderResourceAttempt(leaseCtx, store, resourceID, leaseID, err, usage)
 			}
 			status, code := routeAttemptStatusAndCode(err, retryWithoutEffort)
 			attempts = append(attempts, RouteAttempt{
@@ -968,7 +968,7 @@ func coordinationLeaseError(ctx context.Context) error {
 	return nil
 }
 
-func finishProviderResourceAttempt(store Store, resourceID string, leaseID string, err error, usage Usage) {
+func finishProviderResourceAttempt(ctx context.Context, store Store, resourceID string, leaseID string, err error, usage Usage) {
 	if resourceID == "" {
 		return
 	}
@@ -976,7 +976,7 @@ func finishProviderResourceAttempt(store Store, resourceID string, leaseID strin
 		store.ReleaseProviderResourceCapacity(resourceID, leaseID)
 		return
 	}
-	store.FinishProviderResourceAttempt(resourceID, leaseID, providerAttemptCountsAsHealthy(err), usage)
+	store.FinishProviderResourceAttempt(ctx, resourceID, leaseID, providerAttemptOutcome(err), usage)
 }
 
 type streamWriteTracker struct {

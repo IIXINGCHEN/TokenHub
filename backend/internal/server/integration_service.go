@@ -48,9 +48,15 @@ func (s *IntegrationService) TestProviderResource(ctx context.Context, resourceI
 	}
 	startedAt := time.Now()
 	result, err := prober.Probe(ctx, provider, resource, probeRequest)
-	s.finishProbe(provider, resource, startedAt, err, result.Usage)
+	s.finishProbe(ctx, provider, resource, startedAt, err, result.Usage)
 	if err != nil {
 		return nil, err
+	}
+	// A probe that reached the upstream and came back clean is the one signal strong
+	// enough to clear the breaker. This is deliberately confined to the prober branch:
+	// the fallback above never contacts the upstream, so its "success" proves nothing.
+	if _, recoverErr := s.store.RecoverProviderResource(resource.ID); recoverErr != nil {
+		return nil, recoverErr
 	}
 	return result, nil
 }
@@ -98,12 +104,12 @@ func (s *IntegrationService) TestProvider(ctx context.Context, providerID string
 	return result, nil
 }
 
-func (s *IntegrationService) finishProbe(provider Provider, resource ProviderResource, startedAt time.Time, err error, usage Usage) {
+func (s *IntegrationService) finishProbe(ctx context.Context, provider Provider, resource ProviderResource, startedAt time.Time, err error, usage Usage) {
 	disposition := providerErrorDisposition(err)
 	if err == nil {
-		s.store.FinishProviderResourceAttempt(resource.ID, "", true, usage)
+		s.store.FinishProviderResourceAttempt(ctx, resource.ID, "", AttemptSucceeded, usage)
 	} else if disposition == ProviderErrorQuotaExhausted || disposition == ProviderErrorAuthBroken || disposition == ProviderErrorResourceBroken {
-		s.store.FinishProviderResourceAttempt(resource.ID, "", false, usage)
+		s.store.FinishProviderResourceAttempt(ctx, resource.ID, "", AttemptFailed, usage)
 	}
 	_, code := statusAndCode(err)
 	s.store.RecordProviderObservation(ProviderObservation{
