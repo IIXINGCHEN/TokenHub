@@ -40,6 +40,28 @@ TokenHub 会把最后一次成功获取的公共 Provider 目录保存在数据�
 | 禁用模型 | 对普通用户隐藏 |
 | Provider 路由不健康 | 在路由诊断和请求日志中可见 |
 
+## 指标
+
+TokenHub 在 `GET /metrics` 暴露 Prometheus 指标。该端点始终需要鉴权：指标会泄露模型名、Provider 和资源标识以及花费，因此不允许匿名访问。请使用 `Authorization: Bearer <token>`，令牌取自 `TOKENHUB_METRICS_TOKEN`；该变量为空时回落到管理员令牌。建议配置独立令牌，避免把管理员凭据放进 Prometheus 抓取配置。通过查询参数传令牌会被拒绝，因为它会被记进访问日志。
+
+| 指标 | 类型 | 含义 |
+| --- | --- | --- |
+| `tokenhub_gateway_requests_total` | counter | 逻辑模型 API 请求数。一次请求即使经过多个候选失败转移也只计一次。 |
+| `tokenhub_gateway_request_duration_seconds` | histogram | 端到端耗时，包含失败转移。分桶上限为 300 秒。 |
+| `tokenhub_gateway_requests_in_flight` | gauge | 正在处理的模型 API 请求数，不含管理后台流量和抓取请求。 |
+| `tokenhub_gateway_tokens_total` | counter | 按类型统计的 Token：`prompt`、`completion`、`cached`、`cache_write`、`reasoning`。 |
+| `tokenhub_gateway_cost_usd_total` | counter | 估算成本，与用量记录采用同一套价格。 |
+
+同时暴露 Go 运行时和进程指标。
+
+**Token 各类型之间不是互斥划分，不能相加。** `prompt` 已经包含 `cached` 和 `cache_write`，`reasoning` 是 `completion` 的子集，相加会重复计算。
+
+在路由之前就被拒绝的请求（API Key 无效、额度耗尽、模型不存在）只增加请求计数。它们没有到达任何 Provider，因此不产生 Token、成本和耗时。目录中不存在的模型名会被记为 `unknown` 而不是原样上报，避免客户端用随机模型名刷高时间序列数量。
+
+标签为 `model`、`provider_type`、`provider_id`、`resource_id`、`status_code`、`error_code` 和 `stream`。设置 `TOKENHUB_METRICS_PROJECT_LABEL=true` 会追加 `project_id`，使每个网关指标的时间序列数量按活跃项目数成倍增长；除非确实需要按项目看板，否则建议保持关闭，按 Key 的归因请改用用量报表。
+
+如果需要 push 而不是抓取，可以让 OpenTelemetry Collector 的 `prometheus` receiver 抓取该端点再转发；网关自身只提供 Prometheus exposition 格式。
+
 ## Prompt Cache 计价
 
 模型目录支持按每百万 Token 配置可选的缓存读取价格。配置后，命中缓存的输入 Token 按该价格估算成本；留空时，DeepSeek V4 Pro 按标准输入价的约 0.83% 估算，其他 DeepSeek 模型按 2% 估算，其余非 Embedding 模型按 10% 估算。模型定价表会标记估算值，并在悬停时说明采用的比例。

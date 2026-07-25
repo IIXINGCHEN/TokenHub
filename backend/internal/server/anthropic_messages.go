@@ -144,9 +144,10 @@ func (s *Server) startAnthropicRoutedCall(
 	req anthropicMessagesRequest,
 ) (RoutedCall, bool) {
 	call, err := s.store.StartCall(r.Context(), project, key, req.Model)
+	call.Stream = req.Stream
 	if err != nil {
 		httpErr := AsHTTPError(err)
-		requestID := s.store.RecordRejectedRequest(project, key, req.Model, httpErr.Status, httpErr.Code, s.clientIP(r), r.UserAgent())
+		requestID := s.store.RecordRejectedRequest(project, key, req.Model, req.Stream, httpErr.Status, httpErr.Code, s.clientIP(r), r.UserAgent())
 		w.Header().Set("x-request-id", requestID)
 		s.recordRequestPayload(requestID, req.Raw, auditErrorPayload(err, requestID))
 		writeAnthropicError(w, r, err)

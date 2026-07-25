@@ -37,6 +37,7 @@ type Server struct {
 	providerCatalog   *providerCatalogService
 	mux               *http.ServeMux
 	config            Config
+	metrics           *GatewayMetrics
 }
 
 func New(store Store) *Server {
@@ -83,6 +84,17 @@ func NewWithConfig(store Store, config Config) *Server {
 		mux:               http.NewServeMux(),
 		config:            config,
 	}
+	if config.MetricsEnabled {
+		s.metrics = NewGatewayMetrics(config.MetricsProjectLabel)
+		// Assert against the narrow MetricsSink interface rather than *GormStore, and
+		// report failure loudly: silently collecting nothing would be worse than not
+		// offering the endpoint at all.
+		if sink, ok := store.(MetricsSink); ok {
+			sink.SetGatewayMetrics(s.metrics)
+		} else {
+			log.Printf("[tokenhub] store does not implement MetricsSink; gateway request metrics will stay empty")
+		}
+	}
 	s.routes()
 	return s
 }
@@ -95,14 +107,19 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/livez", s.handleLive)
 	s.mux.HandleFunc("/readyz", s.handleHealth)
 	s.mux.HandleFunc("/healthz", s.handleHealth)
+	s.mux.HandleFunc("/metrics", s.handleMetrics)
 	s.mux.HandleFunc("/v1/models", s.handleModels)
 	s.mux.HandleFunc("/v1/models/", s.handleModel)
-	s.mux.HandleFunc("/v1/chat/completions", s.handleChatCompletions)
-	s.mux.HandleFunc("/v1/messages", s.handleAnthropicMessages)
+	// The in-flight gauge covers exactly the endpoints that route to an upstream, so
+	// it stays comparable with requests_total. Catalog lookups and count_tokens are
+	// local and never produce a request count, and admin traffic and scrapes are not
+	// gateway load at all.
+	s.mux.HandleFunc("/v1/chat/completions", s.gatewayInFlight(s.handleChatCompletions))
+	s.mux.HandleFunc("/v1/messages", s.gatewayInFlight(s.handleAnthropicMessages))
 	s.mux.HandleFunc("/v1/messages/count_tokens", s.handleAnthropicCountTokens)
-	s.mux.HandleFunc("/v1/responses", s.handleResponses)
-	s.mux.HandleFunc("/v1/responses/compact", s.handleResponsesCompact)
-	s.mux.HandleFunc("/v1/embeddings", s.handleEmbeddings)
+	s.mux.HandleFunc("/v1/responses", s.gatewayInFlight(s.handleResponses))
+	s.mux.HandleFunc("/v1/responses/compact", s.gatewayInFlight(s.handleResponsesCompact))
+	s.mux.HandleFunc("/v1/embeddings", s.gatewayInFlight(s.handleEmbeddings))
 
 	s.mux.HandleFunc("/api/admin/auth/login", s.handleAdminLogin)
 	s.mux.HandleFunc("/api/admin/auth/logout", s.handleAdminLogout)
@@ -363,7 +380,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	routed, ok := s.startRoutedCall(w, r, project, key, req.Model, req)
+	routed, ok := s.startRoutedCall(w, r, project, key, req.Model, req.Stream, req)
 	if !ok {
 		return
 	}
@@ -469,7 +486,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, NewHTTPError(400, "missing_model", "model is required"))
 		return
 	}
-	routed, ok := s.startRoutedCall(w, r, project, key, req.Model, req)
+	routed, ok := s.startRoutedCall(w, r, project, key, req.Model, req.Stream, req)
 	if !ok {
 		return
 	}
@@ -545,7 +562,7 @@ func (s *Server) handleResponsesCompact(w http.ResponseWriter, r *http.Request) 
 		writeError(w, r, NewHTTPError(http.StatusBadRequest, "missing_model", "model is required"))
 		return
 	}
-	routed, ok := s.startRoutedCall(w, r, project, key, model, request)
+	routed, ok := s.startRoutedCall(w, r, project, key, model, false, request)
 	if !ok {
 		return
 	}
@@ -599,7 +616,7 @@ func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, NewHTTPError(400, "missing_model", "model is required"))
 		return
 	}
-	routed, ok := s.startRoutedCall(w, r, project, key, req.Model, req)
+	routed, ok := s.startRoutedCall(w, r, project, key, req.Model, false, req)
 	if !ok {
 		return
 	}
@@ -620,11 +637,12 @@ func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *Server) startRoutedCall(w http.ResponseWriter, r *http.Request, project Project, key APIKey, model string, requestPayload any) (RoutedCall, bool) {
+func (s *Server) startRoutedCall(w http.ResponseWriter, r *http.Request, project Project, key APIKey, model string, stream bool, requestPayload any) (RoutedCall, bool) {
 	call, err := s.store.StartCall(r.Context(), project, key, model)
+	call.Stream = stream
 	if err != nil {
 		httpErr := AsHTTPError(err)
-		requestID := s.store.RecordRejectedRequest(project, key, model, httpErr.Status, httpErr.Code, s.clientIP(r), r.UserAgent())
+		requestID := s.store.RecordRejectedRequest(project, key, model, stream, httpErr.Status, httpErr.Code, s.clientIP(r), r.UserAgent())
 		w.Header().Set("x-request-id", requestID)
 		s.recordRequestPayload(requestID, requestPayload, auditErrorPayload(err, requestID))
 		writeError(w, r, err)

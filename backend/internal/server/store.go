@@ -171,7 +171,7 @@ type Store interface {
 	FinishCall(call CallContext, route RouteSelection, usage Usage, statusCode int, errorCode string, clientIP string, userAgent string)
 	RecordPlaygroundRequest(call CallContext, route RouteSelection, statusCode int, errorCode string, clientIP string, userAgent string)
 	RecordRouteAttempts(requestID string, attempts []RouteAttempt)
-	RecordRejectedRequest(project Project, key APIKey, modelName string, statusCode int, errorCode string, clientIP string, userAgent string) string
+	RecordRejectedRequest(project Project, key APIKey, modelName string, stream bool, statusCode int, errorCode string, clientIP string, userAgent string) string
 	RecordRequestPayload(requestID string, requestBody string, requestTruncated bool, responseBody string, responseTruncated bool)
 	ListUsageRecords() []UsageRecord
 	UsageSummary() map[string]any
@@ -238,6 +238,7 @@ type GormStore struct {
 	mu               *sync.Mutex
 	leaseHeartbeats  *sync.Map
 	secretKey        string
+	metrics          *GatewayMetrics
 	failureThreshold int
 	cooldownDuration time.Duration
 	sqliteDSN        string
@@ -2547,10 +2548,24 @@ func (s *GormStore) StartCall(ctx context.Context, project Project, key APIKey, 
 }
 
 func (s *GormStore) FinishCall(call CallContext, route RouteSelection, usage Usage, statusCode int, errorCode string, clientIP string, userAgent string) {
+	// Measured here rather than inside the deferred observation, so latency reflects
+	// what the client waited for and excludes the persistence and lock time that
+	// follows. FinishCall is invoked after the last streamed byte is written.
+	elapsed := time.Duration(0)
+	if !call.StartedAt.IsZero() {
+		elapsed = time.Since(call.StartedAt)
+	}
 	_ = s.stopInFlightLeaseHeartbeat(call.RequestID)
+	// priceUsage is pure, so it runs outside the lock and its result is final here.
+	usage = priceUsage(call.Model, usage)
+	// Registered before the lock is taken, so LIFO ordering runs it *after* the
+	// unlock: reporting metrics must not extend how long this request holds the
+	// store-wide mutex. Deferring also means the request is still counted when the
+	// transaction below fails or panics — losing persistence must not also lose the
+	// observation that the request happened.
+	defer s.observeGatewayCall(call, route, usage, statusCode, errorCode, elapsed)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	usage = priceUsage(call.Model, usage)
 	now := time.Now().UTC()
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		if call.Key.ID != "" {
@@ -2721,7 +2736,7 @@ func (s *GormStore) RecordRouteAttempts(requestID string, attempts []RouteAttemp
 	_ = s.db.Create(&items).Error
 }
 
-func (s *GormStore) RecordRejectedRequest(project Project, key APIKey, modelName string, statusCode int, errorCode string, clientIP string, userAgent string) string {
+func (s *GormStore) RecordRejectedRequest(project Project, key APIKey, modelName string, stream bool, statusCode int, errorCode string, clientIP string, userAgent string) string {
 	requestID := NewID("req")
 	_ = s.db.Create(&RequestLog{
 		ID:         NewID("log"),
@@ -2735,7 +2750,57 @@ func (s *GormStore) RecordRejectedRequest(project Project, key APIKey, modelName
 		UserAgent:  userAgent,
 		CreatedAt:  time.Now().UTC(),
 	}).Error
+	// A rejected request never reached a provider, so it contributes to the request
+	// counter only: no duration, no tokens, no cost. Emitting zeroes for those would
+	// create series that dilute every rate() over them.
+	//
+	// The model name here is unvalidated client input — this path is reached precisely
+	// when a request is refused, including for naming a model that does not exist.
+	// Using it verbatim as a label would let anyone mint unbounded series by looping
+	// over random model names, so it is collapsed unless the catalog knows it.
+	s.metrics.ObserveGatewayCall(GatewayCallSample{
+		Model:      s.knownModelLabel(modelName),
+		ProjectID:  project.ID,
+		Stream:     stream,
+		StatusCode: statusCode,
+		ErrorCode:  errorCode,
+	})
 	return requestID
+}
+
+// observeGatewayCall reports a completed gateway request. Kept separate from FinishCall
+// so the deferred call reads as one statement and the label mapping lives in one place.
+func (s *GormStore) observeGatewayCall(call CallContext, route RouteSelection, usage Usage, statusCode int, errorCode string, elapsed time.Duration) {
+	if s.metrics == nil {
+		return
+	}
+	sample := GatewayCallSample{
+		Model:        call.Model.Name,
+		ProviderType: route.Provider.Type,
+		ProviderID:   route.Provider.ID,
+		ResourceID:   routeResourceID(route),
+		ProjectID:    call.Project.ID,
+		StatusCode:   statusCode,
+		ErrorCode:    errorCode,
+		Stream:       call.Stream,
+		Usage:        usage,
+		Duration:     elapsed,
+	}
+	s.metrics.ObserveGatewayCall(sample)
+}
+
+// knownModelLabel keeps a model name as a label only when the catalog knows it,
+// bounding the label to configured models instead of arbitrary client input.
+func (s *GormStore) knownModelLabel(modelName string) string {
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" || s.metrics == nil {
+		return ""
+	}
+	var count int64
+	if err := s.db.Model(&Model{}).Where("name = ?", modelName).Limit(1).Count(&count).Error; err != nil || count == 0 {
+		return "unknown"
+	}
+	return modelName
 }
 
 func (s *GormStore) RecordRequestPayload(requestID string, requestBody string, requestTruncated bool, responseBody string, responseTruncated bool) {
@@ -4941,4 +5006,10 @@ func (s *GormStore) Ping(ctx context.Context) error {
 		return err
 	}
 	return sqlDB.PingContext(ctx)
+}
+
+// SetGatewayMetrics attaches the metrics collectors. It is called once during server
+// construction, before the store serves traffic.
+func (s *GormStore) SetGatewayMetrics(metrics *GatewayMetrics) {
+	s.metrics = metrics
 }

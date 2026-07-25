@@ -65,7 +65,7 @@ func TestProviderSpecificUsageIncludesCachedInputTokens(t *testing.T) {
 		"cache_read_input_tokens":     float64(300),
 		"output_tokens":               float64(50),
 	}})
-	if !reflect.DeepEqual(anthropic, Usage{PromptTokens: 600, CachedInputTokens: 300, CompletionTokens: 50, TotalTokens: 650}) {
+	if !reflect.DeepEqual(anthropic, Usage{PromptTokens: 600, CachedInputTokens: 300, CacheWriteInputTokens: 200, CompletionTokens: 50, TotalTokens: 650}) {
 		t.Fatalf("unexpected Anthropic usage: %+v", anthropic)
 	}
 
@@ -116,5 +116,44 @@ func TestCopyOpenAIStreamAndUsagePreservesStreamAndReturnsUsage(t *testing.T) {
 	want := Usage{PromptTokens: 100, CachedInputTokens: 64, CompletionTokens: 20, TotalTokens: 120}
 	if !reflect.DeepEqual(usage, want) {
 		t.Fatalf("stream usage = %+v, want %+v", usage, want)
+	}
+}
+
+// Cache-creation tokens bill above base input, so they must reach usage on their own
+// field rather than only being folded into the prompt total.
+func TestAnthropicUsageRecordsCacheWriteTokens(t *testing.T) {
+	usage := anthropicUsage(map[string]any{"usage": map[string]any{
+		"input_tokens":                float64(10),
+		"cache_creation_input_tokens": float64(40),
+		"cache_read_input_tokens":     float64(50),
+		"output_tokens":               float64(5),
+	}})
+
+	if usage.CacheWriteInputTokens != 40 {
+		t.Fatalf("cache write tokens = %d, want 40", usage.CacheWriteInputTokens)
+	}
+	// Prompt tokens keep their existing definition so cost accounting is unchanged.
+	if usage.PromptTokens != 100 {
+		t.Fatalf("prompt tokens = %d, want 100", usage.PromptTokens)
+	}
+	if usage.CachedInputTokens != 50 {
+		t.Fatalf("cached input tokens = %d, want 50", usage.CachedInputTokens)
+	}
+	if usage.TotalTokens != 105 {
+		t.Fatalf("total tokens = %d, want 105", usage.TotalTokens)
+	}
+}
+
+func TestAnthropicUsageWithoutCacheWriteReportsZero(t *testing.T) {
+	usage := anthropicUsage(map[string]any{"usage": map[string]any{
+		"input_tokens":  float64(10),
+		"output_tokens": float64(5),
+	}})
+
+	if usage.CacheWriteInputTokens != 0 {
+		t.Fatalf("cache write tokens = %d, want 0", usage.CacheWriteInputTokens)
+	}
+	if usage.PromptTokens != 10 {
+		t.Fatalf("prompt tokens = %d, want 10", usage.PromptTokens)
 	}
 }
