@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"path"
 	"strings"
 
 	"tokenhub/backend/internal/server"
@@ -39,15 +38,24 @@ func (c *AdminAPIClient) endpoint(parts ...string) string {
 			encoded = append(encoded, segment)
 		}
 	}
-	for _, part := range parts {
-		for _, segment := range strings.Split(strings.TrimSpace(strings.Trim(part, "/")), "/") {
+	if len(parts) > 0 {
+		// First part is the API path — split by "/" and escape each segment.
+		for _, segment := range strings.Split(strings.Trim(parts[0], "/"), "/") {
 			if segment == "" {
 				continue
 			}
 			encoded = append(encoded, url.PathEscape(segment))
 		}
+		// Subsequent parts are resource IDs or sub-resource names.
+		// Escape each as a whole segment to preserve "/" within IDs.
+		for _, part := range parts[1:] {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				encoded = append(encoded, url.PathEscape(part))
+			}
+		}
 	}
-	base.Path = path.Join(encoded...)
+	base.Path = "/" + strings.Join(encoded, "/")
 	return base.String()
 }
 

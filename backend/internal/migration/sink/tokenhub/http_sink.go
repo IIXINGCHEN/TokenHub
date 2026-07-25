@@ -1,7 +1,9 @@
 package tokenhub
 
 import (
+	"bytes"
 	"context"
+	"encoding/csv"
 	"fmt"
 	"strings"
 
@@ -116,6 +118,14 @@ func (s *HTTPSink) Apply(ctx context.Context, migrationBundle *bundle.CanonicalM
 		result.Checkpoint.Changes = append(result.Checkpoint.Changes, change)
 	}
 	users, _ = s.client.ListUsers(ctx)
+	// Backfill refIndex for newly created users so project owner refs resolve.
+	for _, item := range migrationBundle.Users {
+		if _, already := s.refIndex.users[item.ExternalRef.ID]; !already {
+			if found, ok := findAdminUserByIdentity(users, item.Spec); ok {
+				s.refIndex.users[item.ExternalRef.ID] = found.ID
+			}
+		}
+	}
 	for _, item := range migrationBundle.Projects {
 		change, created, err := s.applyProjectHTTP(ctx, projects, users, item)
 		if err != nil {
@@ -611,8 +621,12 @@ func (s *HTTPSink) applyUserHTTP(ctx context.Context, existing []server.AdminUse
 		action := chooseActionUser(current, item.Spec)
 		return Change{Resource: "user", ID: current.ID, Action: action}, nil
 	}
-	csv := fmt.Sprintf("username,name,email,role,team_id,status\n%s,%s,%s,%s,%s,%s\n", item.Spec.Username, item.Spec.Name, item.Spec.Email, item.Spec.Role, item.Spec.TeamID, item.Spec.Status)
-	if err := s.client.ImportUsersCSV(ctx, csv); err != nil {
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	_ = w.Write([]string{"username", "name", "email", "role", "team_id", "status"})
+	_ = w.Write([]string{item.Spec.Username, item.Spec.Name, item.Spec.Email, item.Spec.Role, item.Spec.TeamID, item.Spec.Status})
+	w.Flush()
+	if err := s.client.ImportUsersCSV(ctx, buf.String()); err != nil {
 		return Change{}, err
 	}
 	return Change{Resource: "user", ID: item.Spec.Email, Action: ActionCreate}, nil
