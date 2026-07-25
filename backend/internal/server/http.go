@@ -3373,7 +3373,7 @@ func (s *Server) handleAdminProviderCatalogItem(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, map[string]any{"data": entry, "source": source})
 }
 
-func (s *Server) providerFromCreateRequest(_ context.Context, req ProviderCreateRequest) (Provider, ProviderCatalogEntry, string, error) {
+func (s *Server) providerFromCreateRequest(ctx context.Context, req ProviderCreateRequest) (Provider, ProviderCatalogEntry, string, error) {
 	var catalog ProviderCatalogEntry
 	catalogSource := ""
 	catalogID := strings.TrimSpace(req.CatalogID)
