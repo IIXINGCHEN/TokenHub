@@ -144,6 +144,7 @@
             "modality": {"type": "string", "minLength": 1},
             "context_window": {"type": "integer"},
             "input_price_usd_per_1m": {"type": "number"},
+            "cache_read_price_usd_per_1m": {"type": "number"},
             "output_price_usd_per_1m": {"type": "number"},
             "embedding_price_usd_per_1m": {"type": "number"},
             "status": {"type": "string", "minLength": 1},
