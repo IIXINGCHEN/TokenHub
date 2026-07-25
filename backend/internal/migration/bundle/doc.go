@@ -10,6 +10,4 @@
 // The specification lives in docs/migration/bundle-schema.md and is
 // enforced by bundle.schema.json (embedded, validated with the
 // jsonschema/v6 library).
-//
-// The bundle specification lives in docs/migration/bundle-schema.md.
 package bundle
