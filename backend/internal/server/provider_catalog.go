@@ -18,11 +18,10 @@ import (
 const (
 	// Keep the historical snapshot ID so existing databases are upgraded in
 	// place instead of retaining a stale second catalog snapshot.
-	providerCatalogSnapshotID      = "public-provider-conf"
-	providerCatalogRefreshInterval = 24 * time.Hour
-	providerCatalogMinProviders    = 20
-	providerCatalogMinModels       = 100
-	providerCatalogMinRetention    = 0.8
+	providerCatalogSnapshotID   = "public-provider-conf"
+	providerCatalogMinProviders = 20
+	providerCatalogMinModels    = 100
+	providerCatalogMinRetention = 0.8
 )
 
 type providerCatalogService struct {
@@ -38,14 +37,7 @@ func newProviderCatalogService(store Store, catalogFile string) *providerCatalog
 	return &providerCatalogService{store: store, catalogFile: catalogFile}
 }
 
-// RefreshProviderCatalogIfStale refreshes the database snapshot from the
-// tracked local catalog without making ordinary Provider page requests depend
-// on filesystem reads.
-func (s *Server) RefreshProviderCatalogIfStale(ctx context.Context) (bool, error) {
-	return s.providerCatalog.RefreshIfStale(ctx, providerCatalogRefreshInterval)
-}
-
-// InitializeProviderCatalog replaces a fresh builtin snapshot with the tracked
+// InitializeProviderCatalog refreshes the database snapshot from the tracked
 // local catalog before the backend starts accepting requests.
 func (s *Server) InitializeProviderCatalog(ctx context.Context) (bool, error) {
 	return s.providerCatalog.Initialize(ctx)
@@ -104,28 +96,20 @@ func (s *providerCatalogService) Get(ctx context.Context, id string, refresh boo
 	return ProviderCatalogEntry{}, source, false, nil
 }
 
-func (s *providerCatalogService) RefreshIfStale(ctx context.Context, maxAge time.Duration) (bool, error) {
-	_, source, fetchedAt, err := s.loadStored(false)
-	if err != nil {
-		return false, err
-	}
-	if source == "local-provider-catalog" && maxAge > 0 && time.Since(fetchedAt) < maxAge {
-		return false, nil
-	}
-	_, _, err = s.reload(ctx)
-	return err == nil, err
-}
-
 func (s *providerCatalogService) Initialize(ctx context.Context) (bool, error) {
-	_, source, _, err := s.loadStored(false)
-	if err != nil {
-		return false, err
-	}
-	if source == "local-provider-catalog" {
-		return false, nil
-	}
-	_, _, err = s.reload(ctx)
-	return err == nil, err
+	initialized := false
+	err := s.store.RunClusterOperation(ctx, "provider-catalog-reload", func(context.Context) error {
+		entries, _, _, err := s.loadStored(false)
+		if err != nil {
+			return err
+		}
+		if _, err := s.reloadLocked(entries); err != nil {
+			return err
+		}
+		initialized = true
+		return nil
+	})
+	return initialized, err
 }
 
 func (s *providerCatalogService) loadStored(includeModels bool) ([]ProviderCatalogEntry, string, time.Time, error) {
@@ -161,32 +145,40 @@ func seedBuiltinProviderCatalog(store Store) error {
 func (s *providerCatalogService) reload(ctx context.Context) ([]ProviderCatalogEntry, string, error) {
 	var refreshed []ProviderCatalogEntry
 	err := s.store.RunClusterOperation(ctx, "provider-catalog-reload", func(context.Context) error {
-		previous, _, _, _ := s.loadStored(false)
-		entries, err := loadLocalProviderCatalog(s.catalogFile)
+		previous, _, _, err := s.loadStored(false)
 		if err != nil {
 			return err
 		}
-		if err := validateProviderCatalogRefresh(entries, previous); err != nil {
-			return err
-		}
-		filtered := entries[:0]
-		for _, entry := range entries {
-			if entry.ID != "custom" {
-				filtered = append(filtered, entry)
-			}
-		}
-		entries = append(filtered, customProviderCatalogEntry())
-		sortCatalogEntries(entries)
-		if err := s.store.SaveProviderCatalogSnapshot(entries, "local-provider-catalog", time.Now().UTC()); err != nil {
-			return err
-		}
-		refreshed = cloneCatalogEntries(entries, false)
-		return nil
+		refreshed, err = s.reloadLocked(previous)
+		return err
 	})
 	if err != nil {
 		return nil, "local-provider-catalog", err
 	}
 	return refreshed, "local-provider-catalog", nil
+}
+
+// reloadLocked refreshes the snapshot while provider-catalog-reload is held.
+func (s *providerCatalogService) reloadLocked(previous []ProviderCatalogEntry) ([]ProviderCatalogEntry, error) {
+	entries, err := loadLocalProviderCatalog(s.catalogFile)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateProviderCatalogRefresh(entries, previous); err != nil {
+		return nil, err
+	}
+	filtered := entries[:0]
+	for _, entry := range entries {
+		if entry.ID != "custom" {
+			filtered = append(filtered, entry)
+		}
+	}
+	entries = append(filtered, customProviderCatalogEntry())
+	sortCatalogEntries(entries)
+	if err := s.store.SaveProviderCatalogSnapshot(entries, "local-provider-catalog", time.Now().UTC()); err != nil {
+		return nil, err
+	}
+	return cloneCatalogEntries(entries, false), nil
 }
 
 func validateProviderCatalogRefresh(entries []ProviderCatalogEntry, previous []ProviderCatalogEntry) error {

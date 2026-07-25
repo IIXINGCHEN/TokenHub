@@ -4055,3 +4055,147 @@ models:
       tool_call: "true"
       vision: "false"
       reasoning_supported: "false"
+  - name: "kimi-k2.7-code-highspeed"
+    title: "Kimi K2.7 Code HighSpeed"
+    description: "High-speed Kimi K2.7 Code endpoint available through Tencent Cloud Token Plan."
+    category: "kimi"
+    family: "kimi"
+    modality: "chat"
+    context_window: 262144
+    input_price_usd_per_1m: 9.5
+    output_price_usd_per_1m: 40
+    input_modalities: ["text"]
+    output_modalities: ["text"]
+    capabilities: ["chat", "reasoning", "tools"]
+    supported_parameters: ["temperature", "tools", "reasoning"]
+    metadata:
+      source: "tokenhub-standard-catalog"
+      upstream_source: "tencent-token-plan"
+      provider_model_id: "kimi-k2.7-code-highspeed"
+      provider_model_name: "Kimi-K2.7-Code-HighSpeed"
+      endpoints: "chat/completions"
+      features: "function-calling,reasoning"
+      max_output_tokens: "262144"
+      tool_call: "true"
+      vision: "false"
+      reasoning_supported: "true"
+      reasoning_default: "true"
+  - name: "deepseek-v4-flash-202605"
+    title: "DeepSeek V4 Flash 原厂直供"
+    description: "DeepSeek V4 Flash direct model endpoint available through Tencent Cloud Token Plan."
+    category: "deepseek"
+    family: "deepseek"
+    modality: "chat"
+    context_window: 1048576
+    input_price_usd_per_1m: 1.4
+    output_price_usd_per_1m: 2.8
+    input_modalities: ["text"]
+    output_modalities: ["text"]
+    capabilities: ["chat", "reasoning", "tools", "structured_outputs"]
+    supported_parameters: ["temperature", "tools", "response_format", "reasoning"]
+    metadata:
+      source: "tokenhub-standard-catalog"
+      upstream_source: "tencent-token-plan"
+      provider_model_id: "deepseek-v4-flash-202605"
+      provider_model_name: "DeepSeek-V4-Flash 原厂直供"
+      endpoints: "chat/completions"
+      features: "function-calling,structured-outputs,reasoning"
+      max_output_tokens: "393216"
+      tool_call: "true"
+      vision: "false"
+      reasoning_supported: "true"
+      reasoning_default: "true"
+  - name: "deepseek-v4-pro-202606"
+    title: "DeepSeek V4 Pro 原厂直供"
+    description: "DeepSeek V4 Pro direct model endpoint available through Tencent Cloud Token Plan."
+    category: "deepseek"
+    family: "deepseek"
+    modality: "chat"
+    context_window: 1048576
+    input_price_usd_per_1m: 4.35
+    output_price_usd_per_1m: 8.7
+    input_modalities: ["text"]
+    output_modalities: ["text"]
+    capabilities: ["chat", "reasoning", "tools", "structured_outputs"]
+    supported_parameters: ["temperature", "tools", "response_format", "reasoning"]
+    metadata:
+      source: "tokenhub-standard-catalog"
+      upstream_source: "tencent-token-plan"
+      provider_model_id: "deepseek-v4-pro-202606"
+      provider_model_name: "DeepSeek-V4-Pro 原厂直供"
+      endpoints: "chat/completions"
+      features: "function-calling,structured-outputs,reasoning"
+      max_output_tokens: "393216"
+      tool_call: "true"
+      vision: "false"
+      reasoning_supported: "true"
+      reasoning_default: "true"
+  - name: "tc-code-latest"
+    title: "Tencent Cloud Token Plan Auto"
+    description: "Tencent Cloud Token Plan automatically selects a coding model for the request."
+    category: "custom"
+    family: "auto"
+    modality: "chat"
+    context_window: 131072
+    input_modalities: ["text"]
+    output_modalities: ["text"]
+    capabilities: ["chat", "reasoning", "tools"]
+    supported_parameters: ["temperature", "tools", "reasoning"]
+    metadata:
+      source: "tokenhub-standard-catalog"
+      upstream_source: "tencent-token-plan"
+      provider_model_id: "tc-code-latest"
+      provider_model_name: "Auto"
+      endpoints: "chat/completions"
+      features: "function-calling,reasoning"
+      max_output_tokens: "16384"
+      tool_call: "true"
+      vision: "false"
+      reasoning_supported: "true"
+      reasoning_default: "true"
+  - name: "hy3"
+    title: "Hy3"
+    description: "Tencent Cloud Hy3 model for coding agents, long documents, and multi-step workflows."
+    category: "custom"
+    family: "hy"
+    modality: "chat"
+    context_window: 256000
+    input_modalities: ["text"]
+    output_modalities: ["text"]
+    capabilities: ["chat", "reasoning", "tools"]
+    supported_parameters: ["temperature", "tools", "reasoning"]
+    metadata:
+      source: "tokenhub-standard-catalog"
+      upstream_source: "tencent-token-plan"
+      provider_model_id: "hy3"
+      provider_model_name: "Hy3"
+      endpoints: "chat/completions"
+      features: "function-calling,reasoning"
+      max_output_tokens: "64000"
+      tool_call: "true"
+      vision: "false"
+      reasoning_supported: "true"
+      reasoning_default: "false"
+  - name: "hy3-preview"
+    title: "Hy3 Preview"
+    description: "Tencent Cloud Hy3 preview alias, automatically routed upstream to Hy3."
+    category: "custom"
+    family: "hy"
+    modality: "chat"
+    context_window: 256000
+    input_modalities: ["text"]
+    output_modalities: ["text"]
+    capabilities: ["chat", "reasoning", "tools"]
+    supported_parameters: ["temperature", "tools", "reasoning"]
+    metadata:
+      source: "tokenhub-standard-catalog"
+      upstream_source: "tencent-token-plan"
+      provider_model_id: "hy3-preview"
+      provider_model_name: "Hy3 preview"
+      endpoints: "chat/completions"
+      features: "function-calling,reasoning"
+      max_output_tokens: "64000"
+      tool_call: "true"
+      vision: "false"
+      reasoning_supported: "true"
+      reasoning_default: "false"
