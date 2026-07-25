@@ -31,6 +31,15 @@ func main() {
 	}
 
 	app := server.NewWithConfig(store, config)
+	catalogInitializationSucceeded := true
+	catalogInitCtx, cancelCatalogInit := context.WithTimeout(context.Background(), 30*time.Second)
+	if initialized, initErr := app.InitializeProviderCatalog(catalogInitCtx); initErr != nil {
+		catalogInitializationSucceeded = false
+		log.Printf("[tokenhub] provider catalog initialization failed; using builtin database snapshot: %v", initErr)
+	} else if initialized {
+		log.Printf("[tokenhub] provider catalog database snapshot initialized")
+	}
+	cancelCatalogInit()
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           app.Handler(),
@@ -43,18 +52,20 @@ func main() {
 	go func() {
 		serveErr <- srv.ListenAndServe()
 	}()
-	go func() {
-		refreshCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		refreshed, refreshErr := app.RefreshProviderCatalogIfStale(refreshCtx)
-		if refreshErr != nil {
-			log.Printf("[tokenhub] provider catalog background refresh failed; using database snapshot: %v", refreshErr)
-			return
-		}
-		if refreshed {
-			log.Printf("[tokenhub] provider catalog database snapshot refreshed")
-		}
-	}()
+	if catalogInitializationSucceeded {
+		go func() {
+			refreshCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			refreshed, refreshErr := app.RefreshProviderCatalogIfStale(refreshCtx)
+			if refreshErr != nil {
+				log.Printf("[tokenhub] provider catalog background refresh failed; using database snapshot: %v", refreshErr)
+				return
+			}
+			if refreshed {
+				log.Printf("[tokenhub] provider catalog database snapshot refreshed")
+			}
+		}()
+	}
 
 	signalCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()

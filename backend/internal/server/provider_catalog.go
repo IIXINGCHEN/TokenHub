@@ -19,6 +19,9 @@ const (
 	providerCatalogResponseLimit   = 16 << 20
 	providerCatalogRequestTimeout  = 20 * time.Second
 	providerCatalogRefreshInterval = 24 * time.Hour
+	providerCatalogMinProviders    = 20
+	providerCatalogMinModels       = 100
+	providerCatalogMinRetention    = 0.8
 )
 
 type providerCatalogService struct {
@@ -41,6 +44,13 @@ func newProviderCatalogService(store Store, client *http.Client, upstreamURL str
 // ordinary Provider page requests depend on GitHub availability.
 func (s *Server) RefreshProviderCatalogIfStale(ctx context.Context) (bool, error) {
 	return s.providerCatalog.RefreshIfStale(ctx, providerCatalogRefreshInterval)
+}
+
+// InitializeProviderCatalog populates a fresh installation with the complete
+// public snapshot before the backend starts accepting requests. The builtin
+// database seed remains available when the upstream cannot be reached.
+func (s *Server) InitializeProviderCatalog(ctx context.Context) (bool, error) {
+	return s.providerCatalog.Initialize(ctx)
 }
 
 var standardModelCategories = map[string]bool{
@@ -108,6 +118,18 @@ func (s *providerCatalogService) RefreshIfStale(ctx context.Context, maxAge time
 	return err == nil, err
 }
 
+func (s *providerCatalogService) Initialize(ctx context.Context) (bool, error) {
+	_, source, _, err := s.loadStored(false)
+	if err != nil {
+		return false, err
+	}
+	if source != "builtin" {
+		return false, nil
+	}
+	_, _, err = s.refresh(ctx)
+	return err == nil, err
+}
+
 func (s *providerCatalogService) loadStored(includeModels bool) ([]ProviderCatalogEntry, string, time.Time, error) {
 	entries, source, fetchedAt, found, err := s.store.LoadProviderCatalogSnapshot(includeModels)
 	if err != nil {
@@ -139,25 +161,69 @@ func seedBuiltinProviderCatalog(store Store) error {
 }
 
 func (s *providerCatalogService) refresh(ctx context.Context) ([]ProviderCatalogEntry, string, error) {
-	entries, err := fetchPublicProviderCatalog(ctx, s.client, s.upstreamURL)
+	var refreshed []ProviderCatalogEntry
+	err := s.store.RunClusterOperation(ctx, "provider-catalog-refresh", func(refreshCtx context.Context) error {
+		previous, _, _, _ := s.loadStored(false)
+		entries, err := fetchPublicProviderCatalog(refreshCtx, s.client, s.upstreamURL)
+		if err != nil {
+			return err
+		}
+		if err := validateProviderCatalogRefresh(entries, previous); err != nil {
+			return err
+		}
+		filtered := entries[:0]
+		for _, entry := range entries {
+			if entry.ID != "custom" {
+				filtered = append(filtered, entry)
+			}
+		}
+		entries = append(filtered, customProviderCatalogEntry())
+		sortCatalogEntries(entries)
+		if err := s.store.SaveProviderCatalogSnapshot(entries, "public-provider-conf", time.Now().UTC()); err != nil {
+			return err
+		}
+		refreshed = cloneCatalogEntries(entries, false)
+		return nil
+	})
 	if err != nil {
 		return nil, "public-provider-conf", err
 	}
-	if len(entries) == 0 {
-		return nil, "public-provider-conf", NewHTTPError(http.StatusBadGateway, "provider_catalog_empty", "Provider catalog upstream returned no providers")
+	return refreshed, "public-provider-conf", nil
+}
+
+func validateProviderCatalogRefresh(entries []ProviderCatalogEntry, previous []ProviderCatalogEntry) error {
+	providerCount, modelCount, ids := providerCatalogStats(entries)
+	if providerCount < providerCatalogMinProviders || modelCount < providerCatalogMinModels {
+		return NewHTTPError(http.StatusBadGateway, "provider_catalog_incomplete", "Provider catalog upstream returned an incomplete snapshot")
 	}
-	filtered := entries[:0]
-	for _, entry := range entries {
-		if entry.ID != "custom" {
-			filtered = append(filtered, entry)
+	for _, requiredID := range []string{"openai", "anthropic", "google"} {
+		if !ids[requiredID] {
+			return NewHTTPError(http.StatusBadGateway, "provider_catalog_incomplete", "Provider catalog upstream is missing required providers")
 		}
 	}
-	entries = append(filtered, customProviderCatalogEntry())
-	sortCatalogEntries(entries)
-	if err := s.store.SaveProviderCatalogSnapshot(entries, "public-provider-conf", time.Now().UTC()); err != nil {
-		return nil, "public-provider-conf", err
+	previousProviders, previousModels, _ := providerCatalogStats(previous)
+	if previousProviders >= providerCatalogMinProviders && float64(providerCount) < float64(previousProviders)*providerCatalogMinRetention {
+		return NewHTTPError(http.StatusBadGateway, "provider_catalog_incomplete", "Provider catalog upstream provider count dropped unexpectedly")
 	}
-	return cloneCatalogEntries(entries, false), "public-provider-conf", nil
+	if previousModels >= providerCatalogMinModels && float64(modelCount) < float64(previousModels)*providerCatalogMinRetention {
+		return NewHTTPError(http.StatusBadGateway, "provider_catalog_incomplete", "Provider catalog upstream model count dropped unexpectedly")
+	}
+	return nil
+}
+
+func providerCatalogStats(entries []ProviderCatalogEntry) (int, int, map[string]bool) {
+	providerCount := 0
+	modelCount := 0
+	ids := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		if entry.ID == "custom" {
+			continue
+		}
+		providerCount++
+		modelCount += entry.ModelsCount
+		ids[entry.ID] = true
+	}
+	return providerCount, modelCount, ids
 }
 
 func fetchPublicProviderCatalog(ctx context.Context, client *http.Client, upstreamURL string) ([]ProviderCatalogEntry, error) {

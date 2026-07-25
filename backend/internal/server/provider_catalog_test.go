@@ -2,8 +2,9 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"io"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -79,7 +80,9 @@ func TestProviderCatalogRefreshPersistsLastGoodSnapshot(t *testing.T) {
 			t.Fatalf("unexpected catalog path %s", r.URL.Path)
 		}
 		w.Header().Set("content-type", "application/json")
-		_, _ = io.WriteString(w, `{"providers":{"fresh-provider":{"name":"Fresh Provider","api":"https://fresh.example/v1","models":[{"id":"fresh-model","name":"Fresh Model"}]}}}`)
+		if err := json.NewEncoder(w).Encode(completeProviderCatalogPayload()); err != nil {
+			t.Fatal(err)
+		}
 	}))
 	defer upstream.Close()
 
@@ -88,31 +91,40 @@ func TestProviderCatalogRefreshPersistsLastGoodSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if source != "public-provider-conf" || len(summaries) != 2 || summaries[0].ID != "fresh-provider" {
+	if source != "public-provider-conf" || len(summaries) != providerCatalogMinProviders+1 || !providerCatalogContains(summaries, "fresh-provider") {
 		t.Fatalf("unexpected refreshed catalog: source=%q entries=%+v", source, summaries)
 	}
 
-	failingClient := &http.Client{Transport: providerCatalogRoundTripper(func(*http.Request) (*http.Response, error) {
-		return nil, errors.New("github unavailable")
-	})}
-	restarted := newProviderCatalogService(store, failingClient, "https://catalog.invalid/all.json")
+	partial := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"providers":{"openai":{"name":"OpenAI","models":[{"id":"only-model"}]}}}`))
+	}))
+	defer partial.Close()
+	restarted := newProviderCatalogService(store, partial.Client(), partial.URL)
 	persisted, persistedSource, err := restarted.List(context.Background(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if persistedSource != "public-provider-conf" || len(persisted) != 2 || persisted[0].ID != "fresh-provider" {
+	if persistedSource != "public-provider-conf" || len(persisted) != providerCatalogMinProviders+1 || !providerCatalogContains(persisted, "fresh-provider") {
 		t.Fatalf("refreshed catalog was not persisted: source=%q entries=%+v", persistedSource, persisted)
 	}
 
-	if _, _, err := restarted.List(context.Background(), true); err == nil || !strings.Contains(err.Error(), "github unavailable") {
-		t.Fatalf("expected explicit refresh error, got %v", err)
+	if _, _, err := restarted.List(context.Background(), true); err == nil || !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("expected partial refresh to be rejected, got %v", err)
 	}
 	lastGood, _, err := restarted.List(context.Background(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(lastGood) != 2 || lastGood[0].ID != "fresh-provider" {
+	if len(lastGood) != providerCatalogMinProviders+1 || !providerCatalogContains(lastGood, "fresh-provider") {
 		t.Fatalf("failed refresh replaced the last good snapshot: %+v", lastGood)
+	}
+
+	failingClient := &http.Client{Transport: providerCatalogRoundTripper(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("github unavailable")
+	})}
+	failedRefresh := newProviderCatalogService(store, failingClient, "https://catalog.invalid/all.json")
+	if _, _, err := failedRefresh.List(context.Background(), true); err == nil || !strings.Contains(err.Error(), "github unavailable") {
+		t.Fatalf("expected explicit refresh error, got %v", err)
 	}
 }
 
@@ -133,4 +145,63 @@ func TestBootstrapSeedsProviderCatalogSnapshot(t *testing.T) {
 	if !found || source != "builtin" || len(entries) < 5 {
 		t.Fatalf("expected an installed builtin provider catalog, found=%v source=%q entries=%d", found, source, len(entries))
 	}
+}
+
+func TestProviderCatalogInitializeReplacesBuiltinSnapshot(t *testing.T) {
+	store := NewMemoryStore()
+	if err := seedBuiltinProviderCatalog(store); err != nil {
+		t.Fatal(err)
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if err := json.NewEncoder(w).Encode(completeProviderCatalogPayload()); err != nil {
+			t.Fatal(err)
+		}
+	}))
+	defer upstream.Close()
+
+	service := newProviderCatalogService(store, upstream.Client(), upstream.URL)
+	initialized, err := service.Initialize(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !initialized {
+		t.Fatal("expected builtin installation snapshot to be replaced")
+	}
+	entries, source, err := service.List(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source != "public-provider-conf" || !providerCatalogContains(entries, "fresh-provider") {
+		t.Fatalf("unexpected initialized snapshot: source=%q entries=%+v", source, entries)
+	}
+}
+
+func completeProviderCatalogPayload() map[string]any {
+	providers := map[string]any{}
+	ids := []string{"openai", "anthropic", "google", "fresh-provider"}
+	for index := len(ids); index < providerCatalogMinProviders; index++ {
+		ids = append(ids, fmt.Sprintf("provider-%02d", index))
+	}
+	for _, id := range ids {
+		models := make([]map[string]any, 0, 5)
+		for modelIndex := 0; modelIndex < 5; modelIndex++ {
+			modelID := fmt.Sprintf("%s-model-%d", id, modelIndex)
+			models = append(models, map[string]any{"id": modelID, "name": modelID})
+		}
+		providers[id] = map[string]any{
+			"name":   id,
+			"api":    "https://" + id + ".example/v1",
+			"models": models,
+		}
+	}
+	return map[string]any{"providers": providers}
+}
+
+func providerCatalogContains(entries []ProviderCatalogEntry, id string) bool {
+	for _, entry := range entries {
+		if entry.ID == id {
+			return true
+		}
+	}
+	return false
 }
