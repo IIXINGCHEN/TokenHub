@@ -33,6 +33,16 @@ export function IdentityProviderEditModal({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const templateKey = inferIdentityProviderTemplateKey(values);
   const template = identityProviderTemplateByKey(templateKey);
+  const platformClientSecretRequired = template.key === "dingtalk" || template.key === "feishu" || template.key === "wecom";
+  const clientIDLabel = template.key === "dingtalk" ? "App Key" : template.key === "feishu" ? "App ID" : template.key === "wecom" ? "Corp ID" : "Client ID";
+  const clientSecretLabel = template.key === "wecom" ? "Corp Secret" : template.key === "dingtalk" || template.key === "feishu" ? "App Secret" : "Client Secret";
+  const requiredFields = template.key === "dingtalk"
+    ? "App Key、App Secret、Callback URL"
+    : template.key === "feishu"
+      ? "App ID、App Secret、Callback URL"
+      : template.key === "wecom"
+        ? "Corp ID、Corp Secret、Agent ID、Callback URL"
+        : "Issuer、Client ID、Client Secret、Callback URL";
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -103,7 +113,7 @@ export function IdentityProviderEditModal({
             <div className="identity-template-summary">
               <DetailField label="登录按钮" value={values.login_label || template.loginLabel || template.label} />
               <DetailField label="默认 Scope" value={values.scopes || template.scopes} />
-              <DetailField label="必填项" value={tx("Issuer、Client ID、Client Secret、Callback URL")} />
+              <DetailField label="必填项" value={tx(requiredFields)} />
             </div>
           </section>
 
@@ -117,11 +127,14 @@ export function IdentityProviderEditModal({
               {renderField("provider_type")}
               {renderField("status")}
               {renderField("issuer_url", { placeholder: template.issuerPlaceholder })}
-              {renderField("client_id")}
+              {renderField("client_id", { label: clientIDLabel })}
               {renderField("client_secret", {
+                label: clientSecretLabel,
+                required: !state.item && platformClientSecretRequired,
                 placeholder: state.item ? "留空则不修改" : "",
                 help: state.item ? "留空则不修改已保存密钥。" : "来自身份源应用的密钥。",
               })}
+              {renderField("agent_id")}
               {renderField("redirect_uri")}
             </div>
           </section>
@@ -163,10 +176,12 @@ export function IdentityProviderEditModal({
               {renderField("authorize_url")}
               {renderField("token_url")}
               {renderField("userinfo_url")}
+              {renderField("userdetail_url")}
               {renderField("scopes")}
               {renderField("username_claim")}
               {renderField("email_claim")}
               {renderField("team_claim")}
+              {renderField("subject_claim")}
             </div>
           </details>
         </div>

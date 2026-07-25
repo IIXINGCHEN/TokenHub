@@ -1559,7 +1559,7 @@ func (s *Server) handleAdminOAuthStart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	target, err := buildOAuthAuthorizeURL(authorizeURL, clientID, redirectURI, identityProviderScopes(provider), state)
+	target, err := buildIdentityProviderAuthorizeURL(provider, redirectURI, state)
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -1583,6 +1583,9 @@ func (s *Server) handleAdminOAuthCallback(w http.ResponseWriter, r *http.Request
 	}
 	code := strings.TrimSpace(r.URL.Query().Get("code"))
 	if code == "" {
+		code = strings.TrimSpace(r.URL.Query().Get("authCode"))
+	}
+	if code == "" {
 		http.Redirect(w, r, oauthRedirectWithError(state.ReturnURL, "missing_code"), http.StatusFound)
 		return
 	}
@@ -1597,7 +1600,7 @@ func (s *Server) handleAdminOAuthCallback(w http.ResponseWriter, r *http.Request
 		http.Redirect(w, r, oauthRedirectWithError(state.ReturnURL, oauthErrorCode("token_exchange_failed", err)), http.StatusFound)
 		return
 	}
-	claims, err := s.fetchOAuthUserInfo(r.Context(), provider, token.AccessToken)
+	claims, err := s.fetchOAuthUserInfo(r.Context(), provider, token.AccessToken, code)
 	if err != nil {
 		http.Redirect(w, r, oauthRedirectWithError(state.ReturnURL, "userinfo_failed"), http.StatusFound)
 		return
@@ -1629,6 +1632,9 @@ func (s *Server) activeOAuthIdentityProviders() []AdminResource {
 			strings.TrimSpace(stringField(item.Fields, "token_url")) == "" ||
 			strings.TrimSpace(stringField(item.Fields, "userinfo_url")) == "" ||
 			strings.TrimSpace(stringField(item.Fields, "client_id")) == "" {
+			continue
+		}
+		if !identityProviderPlatformConfigurationComplete(item) {
 			continue
 		}
 		items = append(items, item)
@@ -1680,7 +1686,7 @@ func identityProviderIconKey(provider AdminResource) string {
 		stringField(provider.Fields, "authorize_url"),
 		providerType,
 	}, " "))
-	for _, key := range []string{"gitlab", "github", "google", "microsoft", "azure", "entra", "okta", "keycloak"} {
+	for _, key := range []string{"dingtalk", "feishu", "wecom", "gitlab", "github", "google", "microsoft", "azure", "entra", "okta", "keycloak"} {
 		if strings.Contains(fingerprint, key) {
 			if key == "azure" || key == "entra" {
 				return "microsoft"
@@ -1724,6 +1730,12 @@ func identityProviderIconDisplayName(iconKey string) string {
 		return "Okta"
 	case "keycloak":
 		return "Keycloak"
+	case "dingtalk":
+		return "DingTalk"
+	case "feishu":
+		return "Feishu"
+	case "wecom":
+		return "WeCom"
 	default:
 		return ""
 	}
@@ -1883,6 +1895,9 @@ func (s *Server) oauthStateSecret() string {
 }
 
 func (s *Server) exchangeOAuthCode(ctx context.Context, provider AdminResource, code string, redirectURI string) (oauthTokenResponse, error) {
+	if token, handled, err := exchangeConfiguredIdentityProviderOAuthCode(ctx, provider, code, redirectURI); handled {
+		return token, err
+	}
 	tokenURL := strings.TrimSpace(stringField(provider.Fields, "token_url"))
 	clientID := strings.TrimSpace(stringField(provider.Fields, "client_id"))
 	clientSecret := strings.TrimSpace(stringField(provider.Fields, "client_secret"))
@@ -1952,7 +1967,10 @@ func requestOAuthToken(ctx context.Context, tokenURL string, form url.Values, ba
 	return token, "", nil
 }
 
-func (s *Server) fetchOAuthUserInfo(ctx context.Context, provider AdminResource, accessToken string) (map[string]any, error) {
+func (s *Server) fetchOAuthUserInfo(ctx context.Context, provider AdminResource, accessToken string, code string) (map[string]any, error) {
+	if claims, handled, err := fetchConfiguredIdentityProviderUserInfo(ctx, provider, accessToken, code); handled {
+		return claims, err
+	}
 	userinfoURL := strings.TrimSpace(stringField(provider.Fields, "userinfo_url"))
 	if userinfoURL == "" {
 		return nil, NewHTTPError(400, "identity_provider_incomplete", "Identity provider userinfo URL is required")
@@ -1983,7 +2001,12 @@ func (s *Server) upsertOAuthAdminUser(provider AdminResource, claims map[string]
 	usernameClaim := strings.TrimSpace(stringField(provider.Fields, "username_claim"))
 	emailClaim := strings.TrimSpace(stringField(provider.Fields, "email_claim"))
 	teamClaim := strings.TrimSpace(stringField(provider.Fields, "team_claim"))
-	email := firstOAuthClaim(claims, emailClaim, "email", "public_email")
+	email := firstOAuthClaim(claims, emailClaim, "email", "enterprise_email", "biz_mail", "public_email")
+	allowUsernameMatch := true
+	if email == "" {
+		email = identityProviderFallbackEmail(provider, claims)
+		allowUsernameMatch = email == ""
+	}
 	if email == "" {
 		return AdminUser{}, NewHTTPError(400, "oauth_email_missing", "OAuth userinfo did not include an email")
 	}
@@ -1991,7 +2014,7 @@ func (s *Server) upsertOAuthAdminUser(provider AdminResource, claims map[string]
 	if username == "" {
 		username = strings.Split(email, "@")[0]
 	}
-	name := firstOAuthClaim(claims, "name", "display_name", usernameClaim, "username")
+	name := firstOAuthClaim(claims, "name", "nick", "display_name", "en_name", usernameClaim, "username")
 	if name == "" {
 		name = username
 	}
@@ -2002,7 +2025,7 @@ func (s *Server) upsertOAuthAdminUser(provider AdminResource, claims map[string]
 		teamID = defaultTeamID
 	}
 	users := s.store.ListAdminUsers()
-	if existing, ok := findOAuthAdminUser(users, email, username); ok {
+	if existing, ok := findOAuthAdminUser(users, email, username, allowUsernameMatch); ok {
 		if existing.Status != StatusActive {
 			return AdminUser{}, NewHTTPError(403, "admin_user_disabled", "Admin user is disabled")
 		}
@@ -2084,13 +2107,16 @@ func oauthClaimString(claims map[string]any, key string) string {
 	}
 }
 
-func findOAuthAdminUser(users []AdminUser, email string, username string) (AdminUser, bool) {
+func findOAuthAdminUser(users []AdminUser, email string, username string, allowUsernameMatch bool) (AdminUser, bool) {
 	email = strings.ToLower(strings.TrimSpace(email))
 	username = strings.ToLower(strings.TrimSpace(username))
 	for _, user := range users {
 		if email != "" && strings.ToLower(strings.TrimSpace(user.Email)) == email {
 			return user, true
 		}
+	}
+	if !allowUsernameMatch {
+		return AdminUser{}, false
 	}
 	for _, user := range users {
 		if username != "" && strings.ToLower(strings.TrimSpace(user.Username)) == username {

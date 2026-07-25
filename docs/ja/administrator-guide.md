@@ -54,6 +54,20 @@ Language: [English](../administrator-guide.md) | [简体中文](../zh-CN/adminis
 | Audit retention | リクエストログと管理イベントをコンプライアンス確認に十分な期間保持 |
 | Cost controls | 可能な限り各リクエストを user、project、team、cost center に配賦 |
 
+## 中国向け企業 ID プロバイダー
+
+**Identity Sources** で DingTalk、Feishu、WeCom の組み込みテンプレートを選択します。テンプレートは公開エンドポイントと Claim マッピングを自動入力します。企業プロキシまたは互換性のあるプライベート環境を使う場合のみ、詳細設定でエンドポイントを上書きしてください。
+
+TokenHub バックエンドの公開 URL と callback パス `/api/admin/auth/oauth/callback` を使用します。Callback URL を空欄にするとバックエンドリクエストの Host から自動生成します。明示的に設定する場合は、完全な URL を ID プロバイダー側のリダイレクト URL と完全に一致させてください。
+
+| プロバイダー | 必要なアプリ設定 | TokenHub の動作 |
+| --- | --- | --- |
+| DingTalk | Web アプリを作成し、ユーザー認可を有効にし、Callback URL と App Key / App Secret を設定 | DingTalk v1.0 JSON Token API と専用のユーザー Token ヘッダーを使用します。メールがない場合は `unionId` から安定した内部メールを生成します。 |
+| Feishu | 企業カスタムアプリを作成し、Web 認可、Callback URL、App ID / App Secret を設定。可能な場合はプロフィールと企業メールの権限も付与 | Feishu OAuth v2 Token API を使い、ユーザー情報応答の `data` を展開します。メールがない場合は `union_id` から内部メールを生成します。 |
+| WeCom | カスタムアプリと信頼済み Web 認可ドメインを設定し、Corp ID、アプリ Secret、Agent ID、必要なディレクトリ参照権限を設定 | WeCom CorpApp ログインを使い、アプリ Token の取得、callback code から `UserId` の解決、メンバー情報の取得を行います。`biz_mail` を優先し、必要な場合は `userid` から内部メールを生成します。 |
+
+生成されたアドレスの末尾は `<provider>.tokenhub.local` です。これは内部アカウント識別子であり、メール配送先ではありません。新しいログインを E2E で確認するまで、管理可能なパスワード管理者アカウントを残してください。
+
 ## スクリーンショット
 
 ![Routing policies](../assets/screenshots/routes-en.png)
