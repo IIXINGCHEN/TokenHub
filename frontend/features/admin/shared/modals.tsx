@@ -1,4 +1,4 @@
-import { Boxes, Check, KeyRound, ShieldCheck, Sparkles } from "lucide-react";
+import { BookOpen, Boxes, Check, ExternalLink, KeyRound, ShieldCheck, Sparkles } from "lucide-react";
 import { type Dispatch, type FormEvent, type SetStateAction, useMemo, useState } from "react";
 import { type AdminResource, type AdminUser, type AppData, type FieldConfig, type ModalState } from "../core/types";
 import { findProject, projectOwnerLabel, projectSelectOptions, projectTeamLabel } from "../domain/entities";
@@ -143,6 +143,16 @@ export function IdentityProviderEditModal({
         <div className="identity-provider-section-head">
           <h3>{tx("连接方式")}</h3>
           <span>{tx(template.label)}</span>
+        </div>
+        <div className="identity-provider-doc-help">
+          <span>
+            <BookOpen size={16} />
+            <span>{tx(template.configurationHelp || "不知道在哪里获取这些信息？请在身份源平台创建应用并复制对应凭据。")}</span>
+          </span>
+          <a href={template.configurationGuideURL} target="_blank" rel="noreferrer">
+            <span>{tx(template.configurationGuideLabel || "查看官方配置文档")}</span>
+            <ExternalLink size={14} />
+          </a>
         </div>
         <div className="identity-provider-grid">
           {renderField("name")}

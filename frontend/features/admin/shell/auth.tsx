@@ -37,6 +37,9 @@ export type IdentityProviderTemplate = {
   providerType: "oidc" | "oauth2";
   iconKey: string;
   loginLabel: string;
+  configurationGuideURL: string;
+  configurationGuideLabel?: string;
+  configurationHelp?: string;
   issuerPlaceholder: string;
   defaultIssuer?: string;
   scopes: string;
@@ -54,6 +57,9 @@ export const identityProviderTemplates: IdentityProviderTemplate[] = [
     providerType: "oidc",
     iconKey: "oidc",
     loginLabel: "SSO",
+    configurationGuideURL: "https://openid.net/specs/openid-connect-core-1_0.html",
+    configurationGuideLabel: "查看 OIDC 协议参考",
+    configurationHelp: "通用模板没有统一的应用管理后台，请查阅实际身份源的应用注册文档以获取 Client ID 和 Client Secret。",
     issuerPlaceholder: "https://sso.example.com",
     scopes: "openid, profile, email",
     usernameClaim: "preferred_username",
@@ -67,6 +73,7 @@ export const identityProviderTemplates: IdentityProviderTemplate[] = [
     providerType: "oauth2",
     iconKey: "dingtalk",
     loginLabel: "DingTalk",
+    configurationGuideURL: "https://open.dingtalk.com/document/orgapp/tutorial-obtaining-user-personal-information",
     issuerPlaceholder: "https://login.dingtalk.com",
     defaultIssuer: "https://login.dingtalk.com",
     scopes: "openid",
@@ -86,6 +93,7 @@ export const identityProviderTemplates: IdentityProviderTemplate[] = [
     providerType: "oauth2",
     iconKey: "feishu",
     loginLabel: "Feishu",
+    configurationGuideURL: "https://open.feishu.cn/document/common-capabilities/sso/web-application-sso/web-app-overview",
     issuerPlaceholder: "https://open.feishu.cn",
     defaultIssuer: "https://open.feishu.cn",
     scopes: "",
@@ -105,6 +113,7 @@ export const identityProviderTemplates: IdentityProviderTemplate[] = [
     providerType: "oauth2",
     iconKey: "wecom",
     loginLabel: "WeCom",
+    configurationGuideURL: "https://developer.work.weixin.qq.com/document/path/91022",
     issuerPlaceholder: "https://qyapi.weixin.qq.com",
     defaultIssuer: "https://qyapi.weixin.qq.com",
     scopes: "",
@@ -125,6 +134,7 @@ export const identityProviderTemplates: IdentityProviderTemplate[] = [
     providerType: "oauth2",
     iconKey: "gitlab",
     loginLabel: "GitLab",
+    configurationGuideURL: "https://docs.gitlab.com/integration/oauth_provider/",
     issuerPlaceholder: "https://gitlab.example.com",
     scopes: "openid profile email read_user",
     usernameClaim: "username",
@@ -143,6 +153,7 @@ export const identityProviderTemplates: IdentityProviderTemplate[] = [
     providerType: "oidc",
     iconKey: "google",
     loginLabel: "Google",
+    configurationGuideURL: "https://developers.google.com/identity/protocols/oauth2/web-server",
     issuerPlaceholder: "https://accounts.google.com",
     defaultIssuer: "https://accounts.google.com",
     scopes: "openid profile email",
@@ -162,6 +173,7 @@ export const identityProviderTemplates: IdentityProviderTemplate[] = [
     providerType: "oidc",
     iconKey: "microsoft",
     loginLabel: "Microsoft",
+    configurationGuideURL: "https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app",
     issuerPlaceholder: "https://login.microsoftonline.com/{tenant}/v2.0",
     scopes: "openid profile email User.Read",
     usernameClaim: "preferred_username",
@@ -180,6 +192,7 @@ export const identityProviderTemplates: IdentityProviderTemplate[] = [
     providerType: "oidc",
     iconKey: "okta",
     loginLabel: "Okta",
+    configurationGuideURL: "https://developer.okta.com/docs/guides/sign-into-web-app-redirect/",
     issuerPlaceholder: "https://company.okta.com/oauth2/default",
     scopes: "openid profile email",
     usernameClaim: "preferred_username",
@@ -198,6 +211,7 @@ export const identityProviderTemplates: IdentityProviderTemplate[] = [
     providerType: "oidc",
     iconKey: "keycloak",
     loginLabel: "Keycloak",
+    configurationGuideURL: "https://www.keycloak.org/docs/latest/server_admin/#assembly-managing-clients_server_administration_guide",
     issuerPlaceholder: "https://keycloak.example.com/realms/company",
     scopes: "openid profile email",
     usernameClaim: "preferred_username",
@@ -216,6 +230,9 @@ export const identityProviderTemplates: IdentityProviderTemplate[] = [
     providerType: "oauth2",
     iconKey: "oauth2",
     loginLabel: "OAuth2",
+    configurationGuideURL: "https://www.rfc-editor.org/info/rfc6749/",
+    configurationGuideLabel: "查看 OAuth2 协议参考",
+    configurationHelp: "通用模板没有统一的应用管理后台，请查阅实际身份源的应用注册文档以获取 Client ID 和 Client Secret。",
     issuerPlaceholder: "https://oauth.example.com",
     scopes: "profile, email",
     usernameClaim: "username",

@@ -484,6 +484,51 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.identity-provider-doc-help {
+  margin: -2px 0 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 14px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
+}
+
+.identity-provider-doc-help > span {
+  min-width: 0;
+  flex: 1 1 360px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.identity-provider-doc-help > span > svg {
+  margin-top: 1px;
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.identity-provider-doc-help a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 740;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.identity-provider-doc-help a:hover {
+  text-decoration: underline;
+}
+
 .identity-template-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
