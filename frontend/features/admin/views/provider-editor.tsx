@@ -5,7 +5,7 @@ import { type ApiContext, type Model, type ModelRoute, type Provider, type Provi
 import { buildCustomProviderCatalogEntry, canonicalModelNameForUI, catalogModelCategoryOptions, modelCategory, modelCategoryForCatalog, modelCategoryLabel, providerEntryCategoryCount, providerEntrySupportsCategory } from "../domain/catalog";
 import { compactNumber, formatModelPrice, modelCapabilities } from "../domain/formatting";
 import { providerTypeLabel } from "../domain/labels";
-import { countWithLabel, countWithUnit, tx } from "../i18n/runtime";
+import { clearCustomValidity, countWithUnit, handleRequiredFieldInvalid, providerSaveMessage, tx } from "../i18n/runtime";
 import { adminFetch, isAuthExpiredError, providerPayload, providerResourcePayload, providerUpdatePayload, readAdminError } from "../resources/payloads";
 import { assertProviderAccountResourceReady, defaultProviderResourceName, providerAccountTokenSummary, providerCreateAccountManualTokenFields, providerCreateAccountRuntimeFields, providerResourceDraftDefaults } from "../resources/provider-model-config";
 import { ReviewItem } from "../shared/modals";
@@ -927,6 +927,7 @@ export function ProviderUpsertModal({
     if (targetStep === 1) {
       return Boolean(selectedEntry && values.name?.trim());
     }
+    if (targetStep === 2 && credentialMode === "provider_api_key") return Boolean(values.api_key?.trim());
     if (targetStep === 2 && credentialMode === "account_integration") return providerAccountResourceReady(accountValues);
     return true;
   }
@@ -943,6 +944,10 @@ export function ProviderUpsertModal({
     }
     if (targetStep === 1 && !values.name?.trim()) {
       setError(tx(credentialMode === "account_integration" ? "请填写通道名称。" : "请填写渠道名称。"));
+      return false;
+    }
+    if (targetStep === 2 && credentialMode === "provider_api_key" && !values.api_key?.trim()) {
+      setError(tx("请填写 API Key。"));
       return false;
     }
     if (targetStep === 2 && credentialMode === "account_integration") {
@@ -1014,7 +1019,7 @@ export function ProviderUpsertModal({
         accountResourceCreated = true;
       }
       const routed = result.created_routes ?? 0;
-      setNotice(`${tx("Provider 已")}${tx(mode === "edit" ? "更新" : "新增")}${accountResourceCreated ? `，${tx("已创建账号资源")}` : ""}${routed ? `，${tx("创建")} ${countWithUnit(routed, `条${modelCategoryLabel(modelCategory)}路由`, `${modelCategoryLabel(modelCategory)} route`, `${modelCategoryLabel(modelCategory)} ルート`)}` : ""}`);
+      setNotice(providerSaveMessage(mode === "edit", accountResourceCreated, routed, modelCategoryLabel(modelCategory)));
       await onSaved();
     } catch (err) {
       if (isAuthExpiredError(err)) return;
@@ -1060,7 +1065,7 @@ export function ProviderUpsertModal({
             <section className="provider-catalog-pane">
             <div className="provider-catalog-head">
               <strong>{tx("模型类型")}</strong>
-              <span>{countWithLabel(availableCategories.length, "类")}</span>
+              <span>{countWithUnit(availableCategories.length, "类", "category", "カテゴリ", "categories")}</span>
             </div>
             <div className="provider-category-list">
               {availableCategories.map((category) => (
@@ -1071,7 +1076,7 @@ export function ProviderUpsertModal({
                   type="button"
                 >
                   <strong>{tx(category.label)}</strong>
-                  <span>{countWithLabel(category.count, "个模型")}</span>
+                  <span>{countWithUnit(category.count, "个模型", "model", "モデル")}</span>
                 </button>
               ))}
             </div>
@@ -1111,7 +1116,7 @@ export function ProviderUpsertModal({
                   type="button"
                 >
                   <strong>{entry.display_name || entry.name}</strong>
-                  <span>{providerTypeLabel(entry.type)} · {countWithLabel(providerEntryCategoryCount(entry, modelCategory), "个模型")}</span>
+                  <span>{providerTypeLabel(entry.type)} · {countWithUnit(providerEntryCategoryCount(entry, modelCategory), "个模型", "model", "モデル")}</span>
                 </button>
               ))}
             </div>
@@ -1283,7 +1288,7 @@ export function ProviderUpsertModal({
                 </div>
                 <div className="wizard-review-grid provider-create-review">
                   <ReviewItem label="渠道商" value={values.name || selectedEntry?.display_name || selectedEntry?.name || "-"} />
-                  <ReviewItem label="凭据方式" value={providerCredentialModeLabel(credentialMode)} />
+                  <ReviewItem label="凭据方式" value={tx(providerCredentialModeLabel(credentialMode))} />
                   <ReviewItem label="自动路由" value={autoRouteEnabled ? tx("开启") : tx("关闭开关")} />
                   <ReviewItem label="已选模型" value={selectedRouteCount ? String(selectedRouteCount) : tx("无")} />
                 </div>
@@ -1295,7 +1300,17 @@ export function ProviderUpsertModal({
                   <div className="provider-direct-key-fields">
                     <label className="field">
                       <span>API Key</span>
-                      <input value={values.api_key ?? ""} type="password" onChange={(event) => update("api_key", event.target.value)} />
+                      <input
+                        autoComplete="new-password"
+                        value={values.api_key ?? ""}
+                        type="password"
+                        onChange={(event) => {
+                          clearCustomValidity(event);
+                          update("api_key", event.target.value);
+                        }}
+                        onInvalid={handleRequiredFieldInvalid}
+                        required
+                      />
                     </label>
                   </div>
                 ) : credentialMode === "account_integration" ? (

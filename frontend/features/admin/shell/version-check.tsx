@@ -91,7 +91,7 @@ export function VersionCheck({ baseURL, adminToken }: { baseURL: string; adminTo
       </button>
 
       {open ? (
-        <div className="version-popover" role="dialog" aria-label={tx("版本更新")}>
+        <div className="version-popover" role="dialog" aria-label={tx("版本检测")}>
           <header className="version-popover-header">
             <strong>{tx("当前版本")}</strong>
             <button
@@ -107,7 +107,7 @@ export function VersionCheck({ baseURL, adminToken }: { baseURL: string; adminTo
           </header>
           <div className="version-popover-body">
             <strong className="version-current">v{currentVersion}</strong>
-            <span className="version-latest">{tx("最新版本")}: v{result.latestVersion}</span>
+            {status !== "error" ? <span className="version-latest">{tx("最新版本")}: v{result.latestVersion}</span> : null}
             {status === "available" ? (
               <div className="version-update-card">
                 <span className="version-update-icon">

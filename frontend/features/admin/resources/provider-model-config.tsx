@@ -50,7 +50,7 @@ export function providerConfig(): ResourceConfig<Provider> {
         label: "测试",
         title: "检测 Provider 可用性；Codex 订阅使用 Luna 中等推理标准速度真实测试",
         run: testProviderAvailability,
-        doneMessage: (item) => `${item.name} 检测完成`,
+        doneMessage: (item) => `${item.name} ${tx("检测完成")}`,
       },
     ],
     toForm: (item) => ({
