@@ -14,6 +14,7 @@ type Config struct {
 	DatabaseURL              string
 	SQLiteBackupDir          string
 	ModelCatalogFile         string
+	ProviderCatalogFile      string
 	SecretKey                string
 	TrustedProxyCIDRs        []string
 	CORSAllowedOrigins       []string
@@ -37,6 +38,7 @@ func ConfigFromEnv() Config {
 		DatabaseURL:              resolveDatabaseURL(),
 		SQLiteBackupDir:          getenv("TOKENHUB_SQLITE_BACKUP_DIR", defaultSQLiteBackupDir()),
 		ModelCatalogFile:         getenv("TOKENHUB_MODEL_CATALOG_FILE", defaultModelCatalogFile()),
+		ProviderCatalogFile:      getenv("TOKENHUB_PROVIDER_CATALOG_FILE", defaultProviderCatalogFile()),
 		SecretKey:                getenv("TOKENHUB_SECRET_KEY", "dev_tokenhub_secret_key"),
 		TrustedProxyCIDRs:        getenvList("TOKENHUB_TRUSTED_PROXY_CIDRS"),
 		CORSAllowedOrigins:       getenvList("TOKENHUB_CORS_ALLOWED_ORIGINS"),
@@ -186,6 +188,22 @@ func defaultModelCatalogFile() string {
 		}
 	}
 	return "data/model-catalog.yaml"
+}
+
+func defaultProviderCatalogFile() string {
+	for _, path := range []string{
+		"data/provider-catalog.json",
+		"../data/provider-catalog.json",
+		"../../data/provider-catalog.json",
+		"../../../data/provider-catalog.json",
+		"/app/catalog/provider-catalog.json",
+		"/app/data/provider-catalog.json",
+	} {
+		if pathExists(path) {
+			return path
+		}
+	}
+	return "data/provider-catalog.json"
 }
 
 func pathExists(path string) bool {

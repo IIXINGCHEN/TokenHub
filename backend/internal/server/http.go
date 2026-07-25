@@ -3103,7 +3103,7 @@ func (s *Server) handleAdminProviderCatalog(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	refresh := r.URL.Query().Get("refresh") == "true"
-	entries, source, err := LoadProviderCatalog(r.Context(), http.DefaultClient, refresh)
+	entries, source, err := LoadProviderCatalog(s.config.ProviderCatalogFile, refresh)
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -3167,7 +3167,7 @@ func (s *Server) handleAdminProviderCatalogItem(w http.ResponseWriter, r *http.R
 		return
 	}
 	refresh := r.URL.Query().Get("refresh") == "true"
-	entry, source, ok, err := GetProviderCatalogEntry(r.Context(), http.DefaultClient, id, refresh)
+	entry, source, ok, err := GetProviderCatalogEntry(s.config.ProviderCatalogFile, id, refresh)
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -3179,7 +3179,7 @@ func (s *Server) handleAdminProviderCatalogItem(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, map[string]any{"data": entry, "source": source})
 }
 
-func (s *Server) providerFromCreateRequest(ctx context.Context, req ProviderCreateRequest) (Provider, ProviderCatalogEntry, string, error) {
+func (s *Server) providerFromCreateRequest(_ context.Context, req ProviderCreateRequest) (Provider, ProviderCatalogEntry, string, error) {
 	var catalog ProviderCatalogEntry
 	catalogSource := ""
 	catalogID := strings.TrimSpace(req.CatalogID)
@@ -3187,7 +3187,7 @@ func (s *Server) providerFromCreateRequest(ctx context.Context, req ProviderCrea
 		catalog = s.codexProviderCatalogFromStandardModels(req.SelectedModels)
 		catalogSource = catalog.Source
 	} else if catalogID != "" {
-		entry, source, ok, err := GetProviderCatalogEntry(ctx, http.DefaultClient, catalogID, false)
+		entry, source, ok, err := GetProviderCatalogEntry(s.config.ProviderCatalogFile, catalogID, false)
 		if err != nil {
 			return Provider{}, ProviderCatalogEntry{}, source, err
 		}

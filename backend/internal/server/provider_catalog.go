@@ -1,23 +1,21 @@
 package server
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"net/http"
+	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
-	"time"
 )
-
-const publicProviderConfAllURL = "https://raw.githubusercontent.com/ThinkInAIXYZ/PublicProviderConf/main/dist/all.json"
 
 var catalogCache = struct {
 	sync.Mutex
-	entries   []ProviderCatalogEntry
-	fetchedAt time.Time
+	path    string
+	source  string
+	entries []ProviderCatalogEntry
 }{}
 
 var standardModelCategories = map[string]bool{
@@ -43,29 +41,31 @@ var standardModelCategories = map[string]bool{
 	"custom":       true,
 }
 
-func LoadProviderCatalog(ctx context.Context, client *http.Client, refresh bool) ([]ProviderCatalogEntry, string, error) {
+// LoadProviderCatalog loads provider templates and their candidate models from
+// the tracked local catalog. It never performs a runtime network request.
+func LoadProviderCatalog(catalogFile string, refresh bool) ([]ProviderCatalogEntry, string, error) {
+	catalogFile = strings.TrimSpace(catalogFile)
+	if catalogFile == "" {
+		catalogFile = defaultProviderCatalogFile()
+	}
+
 	catalogCache.Lock()
-	if !refresh && time.Since(catalogCache.fetchedAt) < time.Hour && len(catalogCache.entries) > 0 {
+	if !refresh && catalogCache.path == catalogFile && len(catalogCache.entries) > 0 {
 		entries := cloneCatalogEntries(catalogCache.entries, false)
+		source := catalogCache.source
 		catalogCache.Unlock()
-		return entries, "cache", nil
+		return entries, source, nil
 	}
 	catalogCache.Unlock()
 
-	entries, err := fetchPublicProviderCatalog(ctx, client)
+	entries, err := loadLocalProviderCatalog(catalogFile)
 	if err != nil {
-		catalogCache.Lock()
-		if len(catalogCache.entries) > 0 {
-			entries := cloneCatalogEntries(catalogCache.entries, false)
-			catalogCache.Unlock()
-			return entries, "cache", nil
-		}
-		catalogCache.Unlock()
 		entries := builtinProviderCatalog(true)
 		sortCatalogEntries(entries)
 		catalogCache.Lock()
+		catalogCache.path = catalogFile
+		catalogCache.source = "builtin"
 		catalogCache.entries = cloneCatalogEntries(entries, true)
-		catalogCache.fetchedAt = time.Now()
 		catalogCache.Unlock()
 		return cloneCatalogEntries(entries, false), "builtin", nil
 	}
@@ -74,19 +74,20 @@ func LoadProviderCatalog(ctx context.Context, client *http.Client, refresh bool)
 	sortCatalogEntries(entries)
 
 	catalogCache.Lock()
+	catalogCache.path = catalogFile
+	catalogCache.source = "local-provider-catalog"
 	catalogCache.entries = cloneCatalogEntries(entries, true)
-	catalogCache.fetchedAt = time.Now()
 	catalogCache.Unlock()
 
-	return cloneCatalogEntries(entries, false), "public-provider-conf", nil
+	return cloneCatalogEntries(entries, false), "local-provider-catalog", nil
 }
 
-func GetProviderCatalogEntry(ctx context.Context, client *http.Client, id string, refresh bool) (ProviderCatalogEntry, string, bool, error) {
+func GetProviderCatalogEntry(catalogFile string, id string, refresh bool) (ProviderCatalogEntry, string, bool, error) {
 	id = strings.TrimSpace(id)
 	if id == "custom" {
 		return customProviderCatalogEntry(), "builtin", true, nil
 	}
-	_, source, err := LoadProviderCatalog(ctx, client, refresh)
+	_, source, err := LoadProviderCatalog(catalogFile, refresh)
 	if err != nil {
 		return ProviderCatalogEntry{}, source, false, err
 	}
@@ -101,28 +102,19 @@ func GetProviderCatalogEntry(ctx context.Context, client *http.Client, id string
 	return ProviderCatalogEntry{}, source, false, nil
 }
 
-func fetchPublicProviderCatalog(ctx context.Context, client *http.Client) ([]ProviderCatalogEntry, error) {
-	if client == nil {
-		client = http.DefaultClient
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, publicProviderConfAllURL, nil)
+func loadLocalProviderCatalog(catalogFile string) ([]ProviderCatalogEntry, error) {
+	content, err := os.ReadFile(catalogFile)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read provider catalog %s: %w", catalogFile, err)
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return nil, NewHTTPError(statusForProvider(resp.StatusCode), "provider_catalog_fetch_failed", resp.Status)
-	}
-
 	var payload struct {
 		Providers map[string]map[string]any `json:"providers"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, err
+	if err := json.Unmarshal(content, &payload); err != nil {
+		return nil, fmt.Errorf("parse provider catalog %s: %w", catalogFile, err)
+	}
+	if len(payload.Providers) == 0 {
+		return nil, fmt.Errorf("provider catalog %s has no providers", catalogFile)
 	}
 	entries := make([]ProviderCatalogEntry, 0, len(payload.Providers))
 	for id, raw := range payload.Providers {
@@ -142,7 +134,7 @@ func normalizeProviderCatalogEntry(id string, raw map[string]any) ProviderCatalo
 		DisplayName: firstNonEmpty(catalogStringField(raw, "display_name"), catalogStringField(raw, "name"), id),
 		BaseURL:     normalizeProviderBaseURL(id, catalogStringField(raw, "api")),
 		DocURL:      catalogStringField(raw, "doc"),
-		Source:      "public-provider-conf",
+		Source:      "local-provider-catalog",
 	}
 	entry.Type = inferProviderType(entry.ID, entry.BaseURL)
 	if rawModels, ok := raw["models"].([]any); ok {
@@ -173,7 +165,7 @@ func normalizeProviderCatalogModel(raw map[string]any) ProviderCatalogModel {
 	limit := catalogObjectField(raw, "limit")
 	modalities := catalogObjectField(raw, "modalities")
 	metadata := map[string]string{
-		"source": "public-provider-conf",
+		"source": "local-provider-catalog",
 	}
 	for _, key := range []string{"knowledge", "release_date", "last_updated"} {
 		if value := catalogStringField(raw, key); value != "" {
