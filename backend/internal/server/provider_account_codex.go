@@ -54,7 +54,6 @@ type ProviderProbeResult struct {
 }
 
 type codexSubscriptionTestRequest = ProviderProbeRequest
-type codexSubscriptionTestResponse = ProviderProbeResult
 
 func (a CodexSubscriptionAdapter) Responses(ctx context.Context, provider Provider, providerModel string, request ResponsesRequest) (any, Usage, error) {
 	return a.ResponsesWithHeaders(ctx, provider, providerModel, request, nil)

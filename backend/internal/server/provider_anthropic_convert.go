@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -428,15 +427,4 @@ func anthropicFinishReason(stopReason string, hasToolCalls bool) (string, error)
 	default:
 		return "", invalidProviderResponseError(fmt.Sprintf("provider returned an unrecognized stop_reason %q", stopReason))
 	}
-}
-
-// anthropicRequestJSON renders the request payload, used by both adapter paths.
-func anthropicRequestJSON(payload map[string]any, stream bool) (map[string]any, error) {
-	if stream {
-		payload["stream"] = true
-	}
-	if _, err := json.Marshal(payload); err != nil {
-		return nil, err
-	}
-	return payload, nil
 }

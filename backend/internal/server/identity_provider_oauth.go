@@ -111,7 +111,7 @@ func exchangeConfiguredIdentityProviderOAuthCode(ctx context.Context, provider A
 	}
 	clientID := strings.TrimSpace(stringField(provider.Fields, "client_id"))
 	clientSecret := strings.TrimSpace(stringField(provider.Fields, "client_secret"))
-	payload := map[string]any{}
+	var payload map[string]any
 	if templateKey == identityProviderDingTalk {
 		payload = map[string]any{
 			"clientId":     clientID,
