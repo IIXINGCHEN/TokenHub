@@ -26,56 +26,38 @@ var extractCmd = &cobra.Command{
 		sourceName := args[0]
 		extractor, err := source.Get(sourceName)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			return fmt.Errorf("%w: %v", errExit(ExitSourceUnreadable), err)
+			return errExit(ExitSourceUnreadable, fmt.Sprintf("unknown source %q: %v", sourceName, err))
 		}
 
 		fromPath, _ := cmd.Flags().GetString("from")
 		outPath, _ := cmd.Flags().GetString("out")
 
-		b, err := extractor.Extract(context.Background(), source.ExtractOptions{
-			InputPath: fromPath,
-		})
+		migrationBundle, err := extractor.Extract(context.Background(), source.ExtractOptions{InputPath: fromPath})
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			return fmt.Errorf("%w: %v", errExit(ExitSourceUnreadable), err)
+			return errExit(ExitSourceUnreadable, err.Error())
 		}
 
-		data, err := bundle.Marshal(b)
+		payload, err := bundle.Marshal(migrationBundle)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			return fmt.Errorf("%w: %v", errExit(ExitSchemaMismatch), err)
+			return errExit(ExitSchemaMismatch, err.Error())
 		}
 
 		if outPath != "" {
-			if err := os.WriteFile(outPath, data, 0o644); err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
-				return err
+			if err := os.WriteFile(outPath, payload, 0o644); err != nil {
+				return errExit(ExitSinkRejected, err.Error())
 			}
 			fmt.Printf("Bundle written to %s\n", outPath)
 		} else {
-			fmt.Println(string(data))
+			_, _ = os.Stdout.Write(payload)
+			_, _ = os.Stdout.Write([]byte("\n"))
 		}
 
-		if len(b.Warnings) > 0 {
-			fmt.Fprintf(os.Stderr, "\nWarnings (%d):\n", len(b.Warnings))
-			for _, w := range b.Warnings {
-				fmt.Fprintf(os.Stderr, "  [%s] %s: %s\n", w.Severity, w.Code, w.Message)
+		if len(migrationBundle.Warnings) > 0 {
+			fmt.Fprintf(os.Stderr, "Warnings (%d):\n", len(migrationBundle.Warnings))
+			for _, warning := range migrationBundle.Warnings {
+				fmt.Fprintf(os.Stderr, "  [%s] %s: %s\n", warning.Severity, warning.Code, warning.Message)
 			}
 		}
-
 		return nil
 	},
-}
-
-type exitError struct {
-	code int
-}
-
-func (e exitError) Error() string {
-	return fmt.Sprintf("exit code %d", e.code)
-}
-
-func errExit(code int) error {
-	return exitError{code: code}
 }

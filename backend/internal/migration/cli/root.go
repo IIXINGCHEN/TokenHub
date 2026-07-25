@@ -1,10 +1,11 @@
 package cli
 
 import (
+	"errors"
+
 	"github.com/spf13/cobra"
 )
 
-// Exit codes as defined in docs/migration/PLAN.md §6.
 const (
 	ExitOK               = 0
 	ExitPartial          = 2
@@ -14,18 +15,40 @@ const (
 	ExitSchemaMismatch   = 6
 )
 
+type exitError struct {
+	code int
+	msg  string
+}
+
+func (e exitError) Error() string {
+	if e.msg != "" {
+		return e.msg
+	}
+	return "migration command failed"
+}
+
+func errExit(code int, msg string) error {
+	return exitError{code: code, msg: msg}
+}
+
+func ExitCode(err error) int {
+	var typed exitError
+	if errors.As(err, &typed) {
+		return typed.code
+	}
+	return 1
+}
+
 func Execute() error {
 	return rootCmd.Execute()
 }
 
 var rootCmd = &cobra.Command{
-	Use:   "tokenhub-migrate",
-	Short: "Migrate competing AI gateways into TokenHub",
-	Long: `tokenhub-migrate provides a repeatable, idempotent workflow
-for migrating competitor AI gateway configurations into TokenHub.
-
-Supported sources are listed by the "sources" command.`,
-	SilenceUsage: true,
+	Use:           "tokenhub-migrate",
+	Short:         "Migrate competing AI gateways into TokenHub",
+	Long:          "tokenhub-migrate provides a repeatable, idempotent workflow for migration foundations.",
+	SilenceUsage:  true,
+	SilenceErrors: true,
 }
 
 func init() {

@@ -55,6 +55,9 @@ func TestExtractBasicConfig(t *testing.T) {
 	if bundle.Routes[0].ModelRef == "" || bundle.Routes[0].ProviderRef == "" || bundle.Routes[0].ProviderResourceRef == "" {
 		t.Fatalf("expected route refs to be populated: %+v", bundle.Routes[0])
 	}
+	if bundle.Routes[0].Spec.ProviderModel == "" || bundle.Routes[0].Spec.ProviderModel == "openai/gpt-4o-mini" {
+		t.Fatalf("expected upstream provider model without provider prefix, got %q", bundle.Routes[0].Spec.ProviderModel)
+	}
 	for _, resource := range bundle.ProviderResources {
 		if resource.APIKeySecret == nil {
 			t.Fatal("expected provider resource secret ref")

@@ -3857,7 +3857,18 @@ func (s *Server) handleAdminProviderResourceNested(w http.ResponseWriter, r *htt
 	if !ok {
 		return
 	}
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/admin/provider-resources/"), "/")
+	remainder := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/admin/provider-resources/"), "/")
+	parts := []string{}
+	switch {
+	case remainder == "":
+		parts = []string{}
+	case strings.HasSuffix(remainder, "/health"):
+		parts = []string{strings.TrimSuffix(remainder, "/health"), "health"}
+	case strings.HasSuffix(remainder, "/test"):
+		parts = []string{strings.TrimSuffix(remainder, "/test"), "test"}
+	default:
+		parts = []string{remainder}
+	}
 	if len(parts) == 1 && parts[0] == "bulk" {
 		s.handleAdminProviderResourceBulk(w, r, user)
 		return
@@ -4195,8 +4206,20 @@ func (s *Server) handleAdminRouteItem(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/admin/routing-rules/"), "/"), "/")
-	routeID := parts[0]
+	remainder := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/admin/routing-rules/"), "/")
+	parts := []string{}
+	switch {
+	case remainder == "":
+		parts = []string{}
+	case strings.HasSuffix(remainder, "/explain"):
+		parts = []string{strings.TrimSuffix(remainder, "/explain"), "explain"}
+	default:
+		parts = []string{remainder}
+	}
+	routeID := ""
+	if len(parts) > 0 {
+		routeID = parts[0]
+	}
 	if routeID == "" || len(parts) > 2 {
 		writeError(w, r, NewHTTPError(404, "not_found", "Not found"))
 		return

@@ -304,6 +304,7 @@ func buildModelArtifacts(config *Config, b *bundle.CanonicalMigrationBundle) ([]
 		modelName := strings.TrimSpace(item.ModelName)
 		providerModel := strings.TrimSpace(item.LitellmParams.Model)
 		providerType, providerName := splitProviderModel(providerModel)
+		upstreamModel := providerName
 		if modelName == "" || providerType == "" || providerName == "" {
 			warn(b, "litellm_model_skipped", "model entry missing model_name or litellm_params.model", fmt.Sprintf("model_list[%d]", idx))
 			continue
@@ -397,7 +398,7 @@ func buildModelArtifacts(config *Config, b *bundle.CanonicalMigrationBundle) ([]
 			Spec: server.ModelRoute{
 				ID:            mustMintID(routeExternalRef(modelName, providerModel, resourceRefID)),
 				ModelName:     modelName,
-				ProviderModel: providerModel,
+				ProviderModel: upstreamModel,
 				Priority:      100,
 				Weight:        defaultWeight(item.LitellmParams.Weight),
 				Status:        "active",

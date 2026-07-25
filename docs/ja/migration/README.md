@@ -2,30 +2,16 @@
 
 TokenHub 移行フレームワークは、競合 AI ゲートウェイを TokenHub に移行するための反復可能で冪等なワークフローを提供します。
 
-## アーキテクチャ
+## 現在の状態
 
-フレームワーク設計と拡張ガイドについては [architecture.md](./architecture.md) を参照してください。
-
-## サポートされているソース
-
-| ソース | アダプター | サポートバージョン | ステータス |
-|--------|---------|-------------------|--------|
-| LiteLLM | `litellm` | ≥1.52.0, <1.70.0 | 基盤 |
-
-LiteLLM の詳細については [litellm.md](./litellm.md) を参照してください。
-
-## 正規バンドル
-
-ソースアダプターと TokenHub シンク間で使用される中間表現。[bundle-schema.md](./bundle-schema.md) でスキーマと互換性ポリシーを参照してください。
-
-## シークレット処理
-
-バンドル内のシークレットは `{"$secretRef": "ENV_NAME"}` 参照として保存されます。シンクは適用時に環境変数、ファイル、またはインタラクティブプロンプトから解決します。平文シークレットはバンドルに埋め込まれません。
+現在のブランチには、動作する canonical bundle、store-backed と remote Admin API-backed の両方を備えた TokenHub sink、LiteLLM のファイルベースアダプター、および `extract`、`plan`、`apply`、`verify`、`rollback` を実行できる CLI フローが含まれます。
 
 ## ドキュメント
 
 - [アーキテクチャ](./architecture.md)
-- [バンドルスキーマ](./bundle-schema.md)
+- [Bundle スキーマ](./bundle-schema.md)
 - [LiteLLM アダプター](./litellm.md)
-- [CLI リファレンス](./cli.md)
-- [E2E テスト](./e2e.md)
+- [CLI](./cli.md)
+- [E2E](./e2e.md)
+
+詳細な実装と完全なコマンド仕様は英語版 `docs/migration/` を参照してください。

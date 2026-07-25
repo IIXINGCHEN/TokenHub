@@ -23,15 +23,13 @@ var inspectCmd = &cobra.Command{
 		sourceName := args[0]
 		extractor, err := source.Get(sourceName)
 		if err != nil {
-			return fmt.Errorf("%w: %v", errExit(ExitSourceUnreadable), err)
+			return errExit(ExitSourceUnreadable, err.Error())
 		}
 
 		fromPath, _ := cmd.Flags().GetString("from")
-		info, err := extractor.Probe(context.Background(), source.ExtractOptions{
-			InputPath: fromPath,
-		})
+		info, err := extractor.Probe(context.Background(), source.ExtractOptions{InputPath: fromPath})
 		if err != nil {
-			return fmt.Errorf("%w: %v", errExit(ExitSourceUnreadable), err)
+			return errExit(ExitSourceUnreadable, err.Error())
 		}
 
 		fmt.Printf("Adapter: %s\n", info.Adapter)

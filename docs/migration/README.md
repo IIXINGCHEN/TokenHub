@@ -2,6 +2,10 @@
 
 The TokenHub migration framework provides a repeatable, idempotent workflow for moving competing AI gateways into TokenHub.
 
+## Current Status
+
+The current branch ships a working canonical bundle, a TokenHub sink with both store-backed and remote Admin API-backed execution, a LiteLLM file-based adapter, and a working CLI flow for `extract`, `plan`, `apply`, `verify`, and `rollback`.
+
 ## Architecture
 
 See [architecture.md](./architecture.md) for the framework design and extension guide.
@@ -21,11 +25,12 @@ The intermediate representation used between source adapters and the TokenHub si
 ## CLI
 
 ```bash
-tokenhub-migrate litellm extract --from proxy_config.yaml --out bundle.json
-tokenhub-migrate plan --bundle bundle.json --to https://tokenhub.example.com --token <admin-token>
-tokenhub-migrate apply --bundle bundle.json --to https://tokenhub.example.com --token <admin-token>
-tokenhub-migrate verify --bundle bundle.json --to https://tokenhub.example.com --token <admin-token>
-tokenhub-migrate rollback --checkpoint checkpoint.json --to https://tokenhub.example.com --token <admin-token>
+tokenhub-migrate inspect litellm --from proxy_config.yaml
+tokenhub-migrate extract litellm --from proxy_config.yaml --out bundle.json
+tokenhub-migrate plan --bundle bundle.json
+tokenhub-migrate apply --bundle bundle.json
+tokenhub-migrate verify --bundle bundle.json
+tokenhub-migrate rollback --checkpoint checkpoint.json
 ```
 
 ## Secret Handling

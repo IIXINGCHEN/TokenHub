@@ -539,12 +539,16 @@ func NewSQLiteStoreWithConfig(databaseURL string, config Config) (*GormStore, er
 	return NewStoreWithDialect(databaseURL, config)
 }
 
-func NewMemoryStore() *MemoryStore {
-	store, err := NewSQLiteStoreWithConfig(fmt.Sprintf("file:%s?mode=memory&cache=shared", NewID("mem")), ConfigFromEnv())
+func NewMemoryStoreWithConfig(config Config) *MemoryStore {
+	store, err := NewSQLiteStoreWithConfig(fmt.Sprintf("file:%s?mode=memory&cache=shared", NewID("mem")), config)
 	if err != nil {
 		panic(err)
 	}
 	return store
+}
+
+func NewMemoryStore() *MemoryStore {
+	return NewMemoryStoreWithConfig(ConfigFromEnv())
 }
 
 // RunClusterTask runs fn once for the requested monotonic revision across all
