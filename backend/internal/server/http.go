@@ -33,6 +33,7 @@ type Server struct {
 	adapterRegistry   *AdapterRegistry
 	integrations      *IntegrationService
 	codexSubscription *CodexSubscriptionAdapter
+	providerCatalog   *providerCatalogService
 	mux               *http.ServeMux
 	config            Config
 }
@@ -77,6 +78,7 @@ func NewWithConfig(store Store, config Config) *Server {
 		adapterRegistry:   registry,
 		integrations:      NewIntegrationService(store, registry),
 		codexSubscription: codexSubscription,
+		providerCatalog:   newProviderCatalogService(store, nil, publicProviderConfAllURL),
 		mux:               http.NewServeMux(),
 		config:            config,
 	}
@@ -3178,7 +3180,7 @@ func (s *Server) handleAdminProviderCatalog(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	refresh := r.URL.Query().Get("refresh") == "true"
-	entries, source, err := LoadProviderCatalog(r.Context(), http.DefaultClient, refresh)
+	entries, source, err := s.providerCatalog.List(r.Context(), refresh)
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -3272,7 +3274,7 @@ func (s *Server) handleAdminProviderCatalogItem(w http.ResponseWriter, r *http.R
 		return
 	}
 	refresh := r.URL.Query().Get("refresh") == "true"
-	entry, source, ok, err := GetProviderCatalogEntry(r.Context(), http.DefaultClient, id, refresh)
+	entry, source, ok, err := s.providerCatalog.Get(r.Context(), id, refresh)
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -3292,7 +3294,7 @@ func (s *Server) providerFromCreateRequest(ctx context.Context, req ProviderCrea
 		catalog = s.codexProviderCatalogFromStandardModels(req.SelectedModels)
 		catalogSource = catalog.Source
 	} else if catalogID != "" {
-		entry, source, ok, err := GetProviderCatalogEntry(ctx, http.DefaultClient, catalogID, false)
+		entry, source, ok, err := s.providerCatalog.Get(ctx, catalogID, false)
 		if err != nil {
 			return Provider{}, ProviderCatalogEntry{}, source, err
 		}

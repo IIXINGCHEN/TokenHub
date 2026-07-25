@@ -30,9 +30,10 @@ func main() {
 		log.Fatal(err)
 	}
 
+	app := server.NewWithConfig(store, config)
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           server.NewWithConfig(store, config).Handler(),
+		Handler:           app.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
@@ -41,6 +42,18 @@ func main() {
 	serveErr := make(chan error, 1)
 	go func() {
 		serveErr <- srv.ListenAndServe()
+	}()
+	go func() {
+		refreshCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		refreshed, refreshErr := app.RefreshProviderCatalogIfStale(refreshCtx)
+		if refreshErr != nil {
+			log.Printf("[tokenhub] provider catalog background refresh failed; using database snapshot: %v", refreshErr)
+			return
+		}
+		if refreshed {
+			log.Printf("[tokenhub] provider catalog database snapshot refreshed")
+		}
 	}()
 
 	signalCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
