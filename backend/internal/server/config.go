@@ -20,7 +20,9 @@ type Config struct {
 	SeedDemo                 bool
 	ResourceFailureThreshold int
 	ResourceCooldownSeconds  int
-	// MetricsEnabled turns on Prometheus collection and the /metrics endpoint.
+	// MetricsEnabled turns on Prometheus collection and the /metrics endpoint. Off by
+	// default: the endpoint discloses internal topology and spend, so exposing it is
+	// an explicit operator decision rather than something a deployment inherits.
 	MetricsEnabled bool
 	// MetricsToken authenticates scrapes. When empty the admin token is accepted so a
 	// default deployment is scrapeable, but a dedicated token is recommended: it keeps
@@ -64,7 +66,7 @@ func ConfigFromEnv() Config {
 		SeedDemo:                 getenvBool("TOKENHUB_SEED_DEMO", false),
 		ResourceFailureThreshold: getenvInt("TOKENHUB_RESOURCE_FAILURE_THRESHOLD", 3),
 		ResourceCooldownSeconds:  getenvInt("TOKENHUB_RESOURCE_COOLDOWN_SECONDS", 300),
-		MetricsEnabled:           getenvBool("TOKENHUB_METRICS_ENABLED", true),
+		MetricsEnabled:           getenvBool("TOKENHUB_METRICS_ENABLED", false),
 		MetricsToken:             getenv("TOKENHUB_METRICS_TOKEN", ""),
 		MetricsProjectLabel:      getenvBool("TOKENHUB_METRICS_PROJECT_LABEL", false),
 		InFlightLeaseTTLSeconds:  getenvInt("TOKENHUB_IN_FLIGHT_LEASE_TTL_SECONDS", 300),
