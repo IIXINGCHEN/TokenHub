@@ -30,7 +30,7 @@ func TestMintIDPrefixed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mint prefixed id: %v", err)
 	}
-	if got != "litellm/openai" {
+	if got != "litellm:openai" {
 		t.Fatalf("prefixed id mismatch: got %q", got)
 	}
 }

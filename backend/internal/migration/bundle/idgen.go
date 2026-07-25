@@ -42,7 +42,7 @@ func MintID(strategy IDStrategy, system, externalID string) (string, error) {
 		sum := sha256.Sum256([]byte(system + "\x00" + externalID))
 		return system + "-" + hex.EncodeToString(sum[:6]), nil
 	case IDStrategyPrefixed:
-		return system + "/" + externalID, nil
+		return system + ":" + externalID, nil
 	case IDStrategySource:
 		return externalID, nil
 	default:

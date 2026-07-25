@@ -35,7 +35,7 @@ func (c *AdminAPIClient) endpoint(parts ...string) string {
 	encoded := make([]string, 0, len(parts)+8)
 	for _, segment := range strings.Split(strings.Trim(base.Path, "/"), "/") {
 		if strings.TrimSpace(segment) != "" {
-			encoded = append(encoded, segment)
+			encoded = append(encoded, url.PathEscape(segment))
 		}
 	}
 	if len(parts) > 0 {
@@ -55,7 +55,8 @@ func (c *AdminAPIClient) endpoint(parts ...string) string {
 			}
 		}
 	}
-	base.Path = "/" + strings.Join(encoded, "/")
+	base.RawPath = "/" + strings.Join(encoded, "/")
+	base.Path, _ = url.PathUnescape(base.RawPath)
 	return base.String()
 }
 
