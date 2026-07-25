@@ -199,6 +199,13 @@ func (a OpenAICompatibleAdapter) Responses(ctx context.Context, provider Provide
 	return body, usageFromMap(body), nil
 }
 
+func (a OpenAICompatibleAdapter) OpenResponses(ctx context.Context, provider Provider, providerModel string, req ResponsesRequest, _ http.Header) (*http.Response, error) {
+	req.Model = providerModel
+	req.Stream = true
+	req = normalizedResponsesReasoning(req)
+	return a.doRaw(ctx, provider, http.MethodPost, "/responses", req)
+}
+
 func (a OpenAICompatibleAdapter) Embeddings(ctx context.Context, provider Provider, providerModel string, req EmbeddingsRequest) (any, Usage, error) {
 	req.Model = providerModel
 	var body map[string]any
