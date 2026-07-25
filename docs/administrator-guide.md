@@ -58,6 +58,8 @@ Deleting a model removes the database record and its routes, but it does not edi
 
 In **Identity Sources**, select a built-in DingTalk, Feishu, or WeCom template. The template fills the public endpoints and claim mappings; only override the advanced endpoints when traffic must pass through an enterprise proxy or a compatible private deployment.
 
+Creating an identity source uses three required steps: choose the source, enter its connection settings, and configure the login entry plus first-login grants. From the third step, templates with complete endpoint defaults can use **Skip and Finish**; otherwise the advanced endpoint fields become required. You can also open advanced settings to override endpoint, scope, and claim defaults. Editing an existing source keeps the complete form available on one screen.
+
 Use the public TokenHub backend URL with the callback path `/api/admin/auth/oauth/callback`. You may leave Callback URL blank to derive it from the incoming backend host; when setting it explicitly, the complete URL must exactly match the redirect URL registered with the identity provider.
 
 | Provider | Required application configuration | TokenHub behavior |

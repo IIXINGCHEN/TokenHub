@@ -323,7 +323,8 @@ export function applyIdentityProviderTemplate(values: Record<string, string>, te
   const next: Record<string, string> = { ...values, provider_template: template.key };
   next.provider_type = template.providerType;
   next.icon_key = template.iconKey;
-  if (template.defaultIssuer && (overwrite || !next.issuer_url)) next.issuer_url = template.defaultIssuer;
+  if (overwrite) next.issuer_url = template.defaultIssuer ?? "";
+  else if (template.defaultIssuer && !next.issuer_url) next.issuer_url = template.defaultIssuer;
   const issuer = normalizeIdentityProviderIssuer(next.issuer_url || template.defaultIssuer || "");
   for (const [key, value] of Object.entries({
     login_label: template.loginLabel,
@@ -336,16 +337,22 @@ export function applyIdentityProviderTemplate(values: Record<string, string>, te
     if (overwrite || !next[key]) next[key] = value;
   }
   const endpoints = identityProviderEndpointDefaults(template, issuer);
-  for (const [key, value] of Object.entries(endpoints)) {
-    if (value && (overwrite || !next[key])) next[key] = value;
+  for (const key of ["authorize_url", "token_url", "userinfo_url", "userdetail_url"] as const) {
+    const value = endpoints[key] ?? "";
+    if (overwrite || (value && !next[key])) next[key] = value;
   }
+  if (overwrite && template.key !== "wecom") next.agent_id = "";
   return next;
 }
 
 export function identityProviderInitialFormValues(values: Record<string, string>, createMode: boolean) {
   const templateKey = inferIdentityProviderTemplateKey(values);
   const next: Record<string, string> = createMode ? applyIdentityProviderTemplate(values, templateKey, false) : { ...values, provider_template: templateKey };
-  if (createMode && next.redirect_uri === "http://localhost:8080/api/admin/auth/oauth/callback") next.redirect_uri = "";
+  if (createMode) {
+    if (next.client_id === "tokenhub-admin") next.client_id = "";
+    if (next.issuer_url === "https://sso.example.com") next.issuer_url = "";
+    if (next.redirect_uri === "http://localhost:8080/api/admin/auth/oauth/callback") next.redirect_uri = "";
+  }
   if (!next.default_role) next.default_role = "user";
   if (!next.default_project_role) next.default_project_role = "developer";
   return next;
@@ -353,7 +360,14 @@ export function identityProviderInitialFormValues(values: Record<string, string>
 
 export function updateIdentityProviderFormValue(values: Record<string, string>, key: string, value: string) {
   if (key === "provider_template") {
-    return applyIdentityProviderTemplate(values, value, true);
+    const currentTemplateKey = inferIdentityProviderTemplateKey(values);
+    const next = applyIdentityProviderTemplate(values, value, true);
+    if (currentTemplateKey !== next.provider_template) {
+      next.client_id = "";
+      next.client_secret = "";
+      next.agent_id = "";
+    }
+    return next;
   }
   const next = { ...values, [key]: value };
   if (key === "issuer_url") {

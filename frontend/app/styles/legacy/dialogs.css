@@ -433,6 +433,15 @@
   gap: 14px;
 }
 
+.identity-provider-wizard-stepper {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.identity-provider-wizard-body {
+  min-height: 430px;
+  align-content: start;
+}
+
 .identity-provider-section,
 .identity-provider-advanced,
 .identity-provider-template-panel {
@@ -579,4 +588,3 @@
 .identity-provider-advanced .identity-provider-grid {
   padding: 14px;
 }
-
