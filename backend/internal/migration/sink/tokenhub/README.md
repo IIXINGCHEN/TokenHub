@@ -1,25 +1,27 @@
 # migration/sink/tokenhub
 
-Store-backed and future HTTP-backed TokenHub sink implementations for
-planning, applying, verifying, and rolling back migration bundles.
+Store-backed and HTTP-backed TokenHub sink implementations for planning,
+applying, verifying, and rolling back canonical migration bundles.
 
-Current foundation scope:
-- Applies providers, provider resources, models, routes, users,
-  projects, and API keys against a TokenHub store.
-- Verifies bundle presence by business keys and supports checkpoint-
-  based rollback for resources created during apply.
-- Uses canonical reference fields such as `provider_ref`, `team_ref`,
+Current scope:
+- applies providers, provider resources, models, routes, users,
+  projects, and API keys
+- verifies bundle presence by business keys and supports checkpoint-
+  based rollback for resources created during apply
+- uses canonical reference fields such as `provider_ref`, `team_ref`,
   and `project_ref` instead of requiring source external IDs inside the
-  embedded TokenHub specs.
-- Enforces zero-write idempotency on a second apply when the target
-  state already matches the bundle.
-- Keeps resolved raw API key secrets only for keys created during the
-  current sink instance lifecycle via `NewKeys()`.
-- Does not yet implement quota policy materialization or update/delete
-  rollback for pre-existing resources.
+  embedded TokenHub specs
+- enforces zero-write idempotency on a second apply when the target
+  state already matches the bundle
+- keeps resolved raw API key secrets only for keys created during the
+  current sink instance lifecycle via `NewKeys()`
 
-Owned by issue #2.
+Current limitations:
+- does not yet implement quota policy materialization
+- does not yet implement update/delete rollback for pre-existing resources
 
-Sink that applies a CanonicalMigrationBundle through TokenHub Admin API.
+Store-backed sink:
+- in-process sink used for unit and integration testing
 
-Owned by issue #2.
+HTTP-backed sink:
+- remote sink using the TokenHub Admin API for plan, apply, verify, and rollback flows

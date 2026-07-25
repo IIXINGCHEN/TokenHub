@@ -1,6 +1,6 @@
 # migration/source/litellm
 
-LiteLLM file-based source adapter. Owned by issue #3.
+LiteLLM file-based source adapter for the migration framework.
 
 Supported versions: `>=1.52.0, <1.70.0`.
 

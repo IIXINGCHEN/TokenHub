@@ -11,6 +11,5 @@
 // enforced by bundle.schema.json (embedded, validated with the
 // jsonschema/v6 library).
 //
-// Tracked by issue #2 of the migration framework design in
-// docs/migration/PLAN.md.
+// The bundle specification lives in docs/migration/bundle-schema.md.
 package bundle

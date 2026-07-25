@@ -1,3 +1,3 @@
 # migration/cli
 
-Command implementations for tokenhub-migrate. Owned by issue #4.
+Command implementations for the tokenhub-migrate CLI.

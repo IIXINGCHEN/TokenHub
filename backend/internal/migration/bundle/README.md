@@ -9,6 +9,4 @@ Current contract notes:
 - Secrets are represented as `{"$secretRef":"ENV_NAME"}` and never
   embedded as plaintext bundle fields.
 - `quota_policies` is reserved in the v1 bundle shape but is not yet
-  consumed by the TokenHub sink foundation.
-
-Owned by issue #2.
+  consumed by the TokenHub sink.
