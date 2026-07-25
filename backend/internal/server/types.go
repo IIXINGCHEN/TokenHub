@@ -190,20 +190,22 @@ type ProviderCatalogEntry struct {
 }
 
 type ProviderCreateRequest struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	Type           string            `json:"type"`
-	BaseURL        string            `json:"base_url"`
-	APIKey         string            `json:"api_key"`
-	Status         string            `json:"status"`
-	Healthy        bool              `json:"healthy"`
-	Priority       int               `json:"priority"`
-	Headers        map[string]string `json:"headers"`
-	Options        map[string]string `json:"options"`
-	CatalogID      string            `json:"catalog_id"`
-	ModelCategory  string            `json:"model_category"`
-	CreateRoutes   *bool             `json:"create_routes"`
-	SelectedModels []string          `json:"selected_models"`
+	ID             string                 `json:"id"`
+	ProviderID     string                 `json:"provider_id"`
+	Name           string                 `json:"name"`
+	Type           string                 `json:"type"`
+	BaseURL        string                 `json:"base_url"`
+	APIKey         string                 `json:"api_key"`
+	Status         string                 `json:"status"`
+	Healthy        bool                   `json:"healthy"`
+	Priority       int                    `json:"priority"`
+	Headers        map[string]string      `json:"headers"`
+	Options        map[string]string      `json:"options"`
+	CatalogID      string                 `json:"catalog_id"`
+	ModelCategory  string                 `json:"model_category"`
+	CreateRoutes   *bool                  `json:"create_routes"`
+	SelectedModels []string               `json:"selected_models"`
+	CustomModels   []ProviderCatalogModel `json:"custom_models"`
 }
 
 type ProviderCreateResult struct {
@@ -525,21 +527,55 @@ type SQLiteBackupRecord struct {
 }
 
 type ChatMessage struct {
-	Role    string `json:"role"`
-	Content any    `json:"content"`
+	Role       string `json:"role"`
+	Content    any    `json:"content"`
+	Name       string `json:"name,omitempty"`
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	ToolCalls  any    `json:"tool_calls,omitempty"`
+
+	// The OpenAI Chat Completions schema has no field for a provider's chain of
+	// thought, so the fields below are TokenHub extensions. ReasoningContent
+	// follows the convention DeepSeek introduced; the signature fields carry the
+	// opaque continuation blobs Anthropic and Gemini require to be echoed back
+	// verbatim on the next turn of a multi-step tool exchange.
+	//
+	// Signatures are prefixed with the provider that minted them so one
+	// provider's blob is never replayed to another. A missing or foreign
+	// signature degrades to dropping the reasoning block rather than failing the
+	// request.
+	ReasoningContent         string `json:"reasoning_content,omitempty"`
+	ReasoningSignature       string `json:"reasoning_signature,omitempty"`
+	RedactedReasoningContent string `json:"redacted_reasoning_content,omitempty"`
 }
 
 type ReasoningOptions = ResponsesReasoning
 
 type ChatCompletionRequest struct {
-	Model           string         `json:"model"`
-	Messages        []ChatMessage  `json:"messages"`
-	Stream          bool           `json:"stream,omitempty"`
-	StreamOptions   map[string]any `json:"stream_options,omitempty"`
-	MaxTokens       int            `json:"max_tokens,omitempty"`
-	Temperature     *float64       `json:"temperature,omitempty"`
-	ReasoningEffort *string        `json:"reasoning_effort,omitempty"`
-	Metadata        map[string]any `json:"metadata,omitempty"`
+	Model             string         `json:"model"`
+	Messages          []ChatMessage  `json:"messages"`
+	Stream            bool           `json:"stream,omitempty"`
+	StreamOptions     map[string]any `json:"stream_options,omitempty"`
+	MaxTokens         int            `json:"max_tokens,omitempty"`
+	Temperature       *float64       `json:"temperature,omitempty"`
+	TopP              *float64       `json:"top_p,omitempty"`
+	Stop              any            `json:"stop,omitempty"`
+	Tools             any            `json:"tools,omitempty"`
+	ToolChoice        any            `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool          `json:"parallel_tool_calls,omitempty"`
+	ResponseFormat    any            `json:"response_format,omitempty"`
+	ReasoningEffort   *string        `json:"reasoning_effort,omitempty"`
+	Metadata          map[string]any `json:"metadata,omitempty"`
+	// PromptCacheKey and User are hints upstreams use to route requests sharing a
+	// prefix to the same cache shard. The gateway must forward them verbatim, and
+	// they double as session affinity identifier sources.
+	//
+	// Typed as any rather than string: these fields were previously absent from the
+	// struct, so non-string values were silently ignored. Declaring them as string
+	// would make requests like `{"user": 123}` fail with 400 at decode time, and the
+	// gateway must not be stricter than the upstream. Affinity extraction only reads
+	// string values; other types are forwarded for the upstream to judge.
+	PromptCacheKey any `json:"prompt_cache_key,omitempty"`
+	User           any `json:"user,omitempty"`
 }
 
 type PlaygroundChatResponse struct {

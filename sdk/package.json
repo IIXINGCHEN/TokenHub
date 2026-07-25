@@ -5,6 +5,7 @@
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
+    "test:anthropic-messages": "node ./test-anthropic-messages.mjs",
     "test:deepseek": "node ./test-deepseek.mjs",
     "test:security-policy": "node ./test-security-policy.mjs"
   },

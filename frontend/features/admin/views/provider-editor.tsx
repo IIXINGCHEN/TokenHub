@@ -127,10 +127,13 @@ export function ProviderUpsertModal({
     () => catalogModelCategoryOptions(selectableProviderCatalog).filter((item) => mode !== "create" || item.key !== "codex"),
     [mode, selectableProviderCatalog],
   );
-  const initialCategory = editingCodexSubscription ? "codex" : availableCategories.find((item) => item.key !== "all")?.key ?? "custom";
+  const providerCatalogID = provider?.options?.catalog_id;
+  const providerModelCategory = provider?.options?.model_category;
+  const initialCategory = editingCodexSubscription ? "codex" : (providerModelCategory || availableCategories.find((item) => item.key !== "all")?.key || "custom");
   const initialEntry = editingCodexSubscription
     ? codexProviderCatalogSummary
-    : selectableProviderCatalog.find((entry) => providerEntrySupportsCategory(entry, initialCategory))
+    : selectableProviderCatalog.find((entry) => entry.id === providerCatalogID)
+      ?? selectableProviderCatalog.find((entry) => providerEntrySupportsCategory(entry, initialCategory))
       ?? selectableProviderCatalog.find((entry) => entry.id === "custom")
       ?? selectableProviderCatalog[0];
   const [modelCategory, setModelCategory] = useState(initialCategory);
@@ -215,6 +218,7 @@ export function ProviderUpsertModal({
 
   useEffect(() => {
     if (credentialMode === "account_integration" || catalogID === codexProviderCatalogSummary.id) return;
+    if (catalogID === "custom") return;
     if (categoryCatalog.length === 0) return;
     if (!categoryCatalog.some((entry) => entry.id === catalogID)) {
       selectCatalog(categoryCatalog[0]);
@@ -244,8 +248,43 @@ export function ProviderUpsertModal({
       };
     }
     if (catalogID === "custom") {
-      setDetail(customCatalogEntry);
-      setModelLoading(false);
+      if (!values.base_url?.trim()) {
+        setDetail(customCatalogEntry);
+        setModelLoading(false);
+        return () => {
+          cancelled = true;
+        };
+      }
+      setModelLoading(true);
+      adminFetch(api, "/api/admin/provider-catalog/custom", {
+        method: "POST",
+        body: JSON.stringify({
+          provider_id: mode === "edit" ? provider?.id : "",
+          name: values.name,
+          type: values.type || "openai_compatible",
+          base_url: values.base_url,
+          api_key: values.api_key,
+          model_category: modelCategory,
+        }),
+      })
+        .then(async (resp) => {
+          if (!resp.ok) throw new Error(await readAdminError(resp, tx("加载自定义上游模型")));
+          return (await resp.json()) as { data: ProviderCatalogEntry };
+        })
+        .then((payload) => {
+          if (cancelled) return;
+          setDetail(payload.data);
+          setModelError("");
+        })
+        .catch((err) => {
+          if (cancelled || isAuthExpiredError(err)) return;
+          const message = err instanceof Error ? err.message : tx("自定义上游模型加载失败");
+          setDetail(customCatalogEntry);
+          setModelError(message);
+        })
+        .finally(() => {
+          if (!cancelled) setModelLoading(false);
+        });
       return () => {
         cancelled = true;
       };
@@ -284,7 +323,7 @@ export function ProviderUpsertModal({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [catalogID, catalogReloadKey, customCatalogEntry, initialEntry?.display_name, mode]);
+  }, [api, catalogID, catalogReloadKey, customCatalogEntry, initialEntry?.display_name, mode, modelCategory, provider?.id]);
 
   useEffect(() => {
     if (!usesCodexCatalog || mode === "edit") return;
@@ -391,6 +430,14 @@ export function ProviderUpsertModal({
   }, [createStep, mode]);
 
   useEffect(() => {
+    if (mode === "create" && createStep === 3 && catalogID === "custom" && values.base_url?.trim()) {
+      setCatalogReloadKey((current) => current + 1);
+    }
+    // Load custom upstream models when the wizard reaches route confirmation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catalogID, createStep, mode]);
+
+  useEffect(() => {
     if (mode !== "edit" || editTab !== "quota") return;
     for (const resource of selectedAccountResources) {
       if (!accountQuotas[resource.id]) void queryAccountQuota(resource);
@@ -417,10 +464,11 @@ export function ProviderUpsertModal({
     () => (effectiveDetail?.models ?? []).filter((model) => {
       if (modelCategory !== "all" && modelCategoryForCatalog(model) !== modelCategory) return false;
       if (usesCodexCatalog) return true;
+      if (catalogID === "custom") return true;
       const canonical = model.canonical_name || canonicalModelNameForUI(model.id, model.display_name);
       return standardModels.some((standard) => canonicalModelNameForUI(standard.name, standard.name) === canonicalModelNameForUI(canonical, canonical));
     }),
-    [effectiveDetail, modelCategory, standardModels, usesCodexCatalog],
+    [catalogID, effectiveDetail, modelCategory, standardModels, usesCodexCatalog],
   );
   useEffect(() => {
     if (mode !== "create" || !effectiveDetail || values.create_routes !== "true") return;
@@ -863,6 +911,15 @@ export function ProviderUpsertModal({
     syncAccountDefaults(values.name || "Provider", "");
   }
 
+  function reloadSelectedCatalog() {
+    if (catalogID === "custom") {
+      setCatalogReloadKey((current) => current + 1);
+      setModelError("");
+      return;
+    }
+    if (selectedEntry) selectCatalog(selectedEntry);
+  }
+
   function canContinueCreateStep(targetStep = createStep) {
     if (mode !== "create") return true;
     if (targetStep === 0) return Boolean(credentialMode);
@@ -929,6 +986,7 @@ export function ProviderUpsertModal({
         catalog_id: catalogID,
         model_category: modelCategory,
         selected_models: selectedModelIDs.length > 0 ? selectedModelIDs.join(",") : "",
+        custom_models: catalogID === "custom" && effectiveDetail?.models ? JSON.stringify(effectiveDetail.models) : "",
       });
       const resp = await adminFetch(api, mode === "edit" && provider ? `/api/admin/providers/${provider.id}` : "/api/admin/providers", {
         method: mode === "edit" ? "PATCH" : "POST",
@@ -1028,7 +1086,7 @@ export function ProviderUpsertModal({
             >
               <Plus size={14} />
               <span>{tx("自定义渠道商")}</span>
-              <em>{modelCategoryLabel(modelCategory)} · {countWithLabel(customCatalogEntry.models_count, "个标准模型")}</em>
+              <em>{modelCategoryLabel(modelCategory)} · {tx("按 Base URL 加载上游模型")}</em>
             </button>
             <div className="provider-template-search">
               <Search size={14} />
@@ -1640,7 +1698,7 @@ export function ProviderUpsertModal({
               </div>
               <div className="provider-model-tools">
                 <input value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={tx("搜索模型、能力、参数")} />
-                <button className="secondary-button" onClick={() => selectedEntry && selectCatalog(selectedEntry)} type="button">
+                <button className="secondary-button" onClick={reloadSelectedCatalog} type="button">
                   {tx("重新加载")}
                 </button>
               </div>

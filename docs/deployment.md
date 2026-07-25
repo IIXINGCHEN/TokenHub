@@ -59,7 +59,7 @@ flowchart TB
 
     local["data/model-catalog.yaml<br/>Model master data"] -->|"Startup: parse + upsert<br/>cluster lease serializes replicas"| backend
     providerCatalog["data/provider-catalog.json<br/>Tracked Provider templates + candidate models"] -->|"Admin provider setup / refresh"| backend
-    backend <-->|"Models · Routes · shared state<br/>database locks"| postgres[("Shared PostgreSQL")]
+    backend <-->|"Models · Routes · Provider catalog snapshot<br/>shared state · database locks"| postgres[("Shared PostgreSQL")]
 
     backend -->|"Provider creation"| rule["Route creation rule<br/>provider candidate ∩ local Model → Route"]
     local -.-> rule
@@ -74,6 +74,7 @@ In multi-instance mode:
 - Lease expiry and ownership decisions use the PostgreSQL clock, avoiding early takeover caused by clock skew between hosts. Heartbeats cancel work when lease ownership is lost.
 - The configured model catalog is synchronized on every backend startup; a cluster lease serializes the idempotent synchronization across replicas.
 - Provider templates and candidate models are read from the tracked local provider catalog; runtime configuration does not depend on a remote catalog service.
+- The backend persists a local Provider-catalog snapshot in PostgreSQL, so replicas serve the same catalog and a missing local file falls back to the seeded built-in templates.
 - Coordination failures release provider capacity without incorrectly marking a healthy model provider as failed.
 
 Set the remote `TOKENHUB_DATABASE_URL`, public gateway URL, production secrets, and trusted proxy CIDR, then run:
@@ -237,6 +238,9 @@ Only use `down -v` when you intentionally want to delete local data.
 | `TOKENHUB_CLUSTER_LOCK_TTL_SECONDS` | `180` | Expiry and renewal basis for cluster coordination locks |
 | `TOKENHUB_GRACEFUL_SHUTDOWN_SECONDS` | `150` | Maximum time to drain in-flight requests during shutdown |
 | `TOKENHUB_STOP_GRACE_PERIOD` | `180s` | Compose grace period before Docker force-stops the backend |
+| `TOKENHUB_CACHE_AFFINITY_ENABLED` | `false` | Pin a session to one upstream account so the provider's prompt cache keeps hitting. Off by default because it changes routing behaviour |
+| `TOKENHUB_CACHE_AFFINITY_MODELS` | empty | Comma-separated model allowlist for staged rollout; empty means every model |
+| `TOKENHUB_CACHE_AFFINITY_ALLOW_USER_SCOPE` | `false` | Also accept user-scoped identifiers as affinity keys; off by default because one user's concurrent sessions would share a single account |
 | `TOKENHUB_DB_MAX_OPEN_CONNS` | `25` | Maximum open database connections (PostgreSQL only) |
 | `TOKENHUB_DB_MAX_IDLE_CONNS` | `5` | Maximum idle database connections (PostgreSQL only) |
 | `TOKENHUB_DB_CONN_MAX_LIFETIME_MINUTES` | `30` | Maximum connection lifetime in minutes (PostgreSQL only) |

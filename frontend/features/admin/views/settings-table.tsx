@@ -1,16 +1,16 @@
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Plus, Search, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Edit3, Info, Plus, Search, Trash2 } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { type AdminResource, type AdminUser, type APIKey, type AppData, type ModalState, type ResourceAction, type ResourceConfig, type SettingsTabKey, type ToolbarAction, type ViewKey } from "../core/types";
 import { filterRows } from "../domain/catalog";
-import { readPath, rowID } from "../domain/entities";
-import { formatNumber } from "../domain/formatting";
+import { readPath, rowID, stringifyValue } from "../domain/entities";
+import { formatNumber, formatTime } from "../domain/formatting";
 import { settingsTabLabel } from "../domain/labels";
 import { activeLanguage, type AppLanguage, countWithLabel, displayText, languageOptions, translatedCell, tx } from "../i18n/runtime";
 import { defaultFormValues } from "../resources/payloads";
 import { apiKeyStatusAction, APIKeyDownloadMenu, APIKeyStatusSwitch } from "../resources/project-key-config";
 import { identityProviderConfig, roleConfig, systemSettingConfig } from "../resources/settings-config";
 import { IdentityProviderEditModal } from "../shared/modals";
-import { FieldInput } from "../shared/ui";
+import { FieldInput, StatusPill } from "../shared/ui";
 import { identityProviderInitialFormValues } from "../shell/auth";
 import { CrudView } from "./crud-projects";
 
@@ -51,7 +51,6 @@ export function SettingsView({
 
   return (
     <div className="settings-view">
-      <LanguagePreferenceCard language={language} onChange={onLanguageChange} />
       <div className="settings-tabs" role="tablist" aria-label={tx("系统设置分类")}>
         {configs.map((config) => (
           <button
@@ -66,28 +65,38 @@ export function SettingsView({
           </button>
         ))}
       </div>
-      <CrudView
-        config={activeConfig}
-        data={data}
-        items={pagedItems}
-        totalItems={filteredItems.length}
-        loading={false}
-        query={query}
-        pagination={pagination}
-        categoryFilter="all"
-        onCategoryFilter={() => undefined}
-        onQuery={(value) => setQueries((current) => ({ ...current, [activeConfig.view]: value }))}
-        onCreate={() => onCreate(activeConfig)}
-        onEdit={(item) => onEdit(activeConfig, item)}
-        onDelete={(item) => onDelete(activeConfig, item)}
-        onAction={onAction}
-        onToolbarAction={(action) => onToolbarAction(action, filteredItems)}
-      />
+      {activeConfig.view === "settings" ? (
+        <SystemSettingsPanel
+          config={activeConfig}
+          items={filteredItems as AdminResource[]}
+          language={language}
+          onLanguageChange={onLanguageChange}
+          onEdit={(item) => onEdit(activeConfig, item)}
+        />
+      ) : (
+        <CrudView
+          config={activeConfig}
+          data={data}
+          items={pagedItems}
+          totalItems={filteredItems.length}
+          loading={false}
+          query={query}
+          pagination={pagination}
+          categoryFilter="all"
+          onCategoryFilter={() => undefined}
+          onQuery={(value) => setQueries((current) => ({ ...current, [activeConfig.view]: value }))}
+          onCreate={() => onCreate(activeConfig)}
+          onEdit={(item) => onEdit(activeConfig, item)}
+          onDelete={(item) => onDelete(activeConfig, item)}
+          onAction={onAction}
+          onToolbarAction={(action) => onToolbarAction(action, filteredItems)}
+        />
+      )}
     </div>
   );
 }
 
-export function LanguagePreferenceCard({
+export function LanguagePreferenceRow({
   language,
   onChange,
 }: {
@@ -96,8 +105,9 @@ export function LanguagePreferenceCard({
 }) {
   const current = languageOptions.find((option) => option.value === language) ?? languageOptions[0];
   return (
-    <section className="language-card">
+    <div className="system-settings-preference">
       <div>
+        <p className="eyebrow">{tx("控制台偏好")}</p>
         <strong>{tx("界面语言")}</strong>
         <span>{tx("选择控制台显示语言，偏好会保存在当前浏览器。")}</span>
       </div>
@@ -105,7 +115,7 @@ export function LanguagePreferenceCard({
         <small>{tx("当前语言")}: {languageOptionLabel(current, language)}</small>
         <LanguageSwitcher language={language} onChange={onChange} />
       </div>
-    </section>
+    </div>
   );
 }
 
@@ -138,6 +148,85 @@ export function LanguageSwitcher({
 
 export function languageOptionLabel(option: { label: string; nativeLabel: string }, language: AppLanguage) {
   return language === "en" ? option.label : option.nativeLabel;
+}
+
+export function SystemSettingsPanel({
+  config,
+  items,
+  language,
+  onLanguageChange,
+  onEdit,
+}: {
+  config: ResourceConfig<AdminResource>;
+  items: AdminResource[];
+  language: AppLanguage;
+  onLanguageChange: (language: AppLanguage) => void;
+  onEdit: (item: AdminResource) => void;
+}) {
+  const current = items.find((item) => item.id === "cfg_gateway") ?? items[0];
+  const settingFields = config.fields.filter((field) => !["name", "description", "status"].includes(field.key));
+  return (
+    <section className="section system-settings-section">
+      <div className="section-header">
+        <h2>{tx(config.eyebrow)}</h2>
+      </div>
+      <div className="section-body">
+        <LanguagePreferenceRow language={language} onChange={onLanguageChange} />
+        <div className="system-settings-intro">
+          <div>
+            <p className="eyebrow">{tx("全局平台范围")}</p>
+            <h3>{tx("网关基础设置")}</h3>
+            <p>{tx("这里维护 TokenHub 运行时读取的一组全局默认值；它不是配置模板，也不需要新增多条记录。")}</p>
+          </div>
+          {current ? (
+            <button className="button" onClick={() => onEdit(current)} type="button">
+              <Edit3 size={16} />
+              {tx("编辑配置")}
+            </button>
+          ) : null}
+        </div>
+        {current ? (
+          <>
+            <div className="system-settings-summary">
+              {settingFields.map((field) => (
+                <div className="system-setting-item" key={field.key}>
+                  <span>{tx(field.label)}</span>
+                  <strong>{settingValue(current, field.key)}</strong>
+                  {field.help ? <small>{tx(field.help)}</small> : null}
+                </div>
+              ))}
+            </div>
+            <div className="system-settings-meta">
+              <div>
+                <span>{tx("当前配置记录")}</span>
+                <code>{current.id}</code>
+                <StatusPill status={current.status} />
+              </div>
+              <small>{tx("更新时间")}: {formatTime(current.updated_at ?? "")}</small>
+            </div>
+            {items.length > 1 ? (
+              <div className="system-settings-note" role="note">
+                <Info size={16} />
+                <span>{tx("检测到多条系统设置记录；运行时优先读取 cfg_gateway。请编辑当前配置，不需要新增同类记录。")}</span>
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <div className="resource-empty">
+            <div className="resource-empty-icon">
+              <Search size={18} />
+            </div>
+            <strong>{tx("未找到基础设置")}</strong>
+            <span>{tx("系统启动时会初始化默认网关配置；请刷新数据或检查初始化脚本。")}</span>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function settingValue(item: AdminResource, key: string) {
+  return stringifyValue(item.fields?.[key]) || "-";
 }
 
 export function APIKeyFlowHint({ data }: { data: AppData }) {

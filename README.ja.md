@@ -47,7 +47,7 @@ TokenHub は、日常的なモデル利用、チームガバナンス、プラ�
 
 ## プラットフォーム機能
 
-- OpenAI-Compatible モデル API: `/v1/chat/completions`、`/v1/responses`、`/v1/embeddings`。
+- OpenAI-Compatible モデル API: `/v1/chat/completions`、`/v1/responses`、`/v1/embeddings`。Anthropic Messages API: `/v1/messages`、`/v1/messages/count_tokens`。
 - Provider チャネル: OpenAI-Compatible、Azure OpenAI、Anthropic、Gemini、DeepSeek、Qwen、ローカル vLLM/Ollama、カスタム上流。
 - モデルカタログとルーティングポリシー: 優先度、重み、フェイルオーバー順序、ルートヘルス診断に対応。
 - プロジェクト単位の Key 管理: チーム所有、メンバー権限、クォータ、並行数制限に対応。
@@ -83,6 +83,7 @@ cp deploy/.env.example deploy/.env
 ## ドキュメント
 
 - [ドキュメントホーム](docs/ja/README.md)
+- [全体アーキテクチャ](docs/ja/architecture.md)
 - [ユーザーガイド](docs/ja/user-guide.md)
 - [チームリーダーガイド](docs/ja/team-leader-guide.md)
 - [管理者ガイド](docs/ja/administrator-guide.md)
@@ -90,9 +91,27 @@ cp deploy/.env.example deploy/.env
 - [English documentation](docs/README.md)
 - [简体中文文档](docs/zh-CN/README.md)
 
+## Contributors
+
+TokenHub は、実際のエンタープライズ利用からのフィードバック、ゲートウェイ連携、ドキュメント、テスト、継続的なメンテナンスによって育っています。プロジェクトをより信頼できるものにしてくれるすべての方に感謝します。
+
+<p align="center">
+  <a href="https://github.com/astaxie/TokenHub/graphs/contributors">
+    <img src="https://contrib.rocks/image?repo=astaxie/TokenHub" alt="TokenHub contributors" />
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/astaxie/TokenHub/graphs/contributors">すべてのコントリビューターを見る</a>
+  ·
+  <a href="CONTRIBUTING.ja.md">コントリビュートを始める</a>
+</p>
+
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=astaxie%2FTokenHub&type=Date&legend=top-left)](https://www.star-history.com/?repos=astaxie%2FTokenHub&type=date&legend=top-left)
+[![GitHub Repo stars](https://img.shields.io/github/stars/astaxie/TokenHub?style=social)](https://github.com/astaxie/TokenHub/stargazers)
+
+TokenHub の成長は [Star History のライブチャート](https://star-history.com/#astaxie/TokenHub&Date)で確認できます。
 
 ## License
 

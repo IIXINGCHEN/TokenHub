@@ -47,7 +47,7 @@ TokenHub separates everyday model usage, team governance, and platform administr
 
 ## Platform Capabilities
 
-- OpenAI-compatible model APIs: `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`.
+- OpenAI-compatible model APIs: `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`; Anthropic Messages APIs: `/v1/messages`, `/v1/messages/count_tokens`.
 - Provider channels for OpenAI-compatible, Azure OpenAI, Anthropic, Gemini, DeepSeek, Qwen, local vLLM/Ollama, and custom upstreams.
 - Model catalog and routing policies with priority, weight, failover order, and route health diagnostics.
 - Project-scoped key management with team ownership, member permissions, quotas, and concurrency controls.
@@ -83,6 +83,7 @@ The deployment script validates production credentials, pulls published images, 
 ## Documentation
 
 - [Documentation home](docs/README.md)
+- [Architecture](docs/architecture.md)
 - [User Guide](docs/user-guide.md)
 - [Team Leader Guide](docs/team-leader-guide.md)
 - [Administrator Guide](docs/administrator-guide.md)
@@ -90,9 +91,27 @@ The deployment script validates production credentials, pulls published images, 
 - [简体中文文档](docs/zh-CN/README.md)
 - [日本語ドキュメント](docs/ja/README.md)
 
+## Contributors
+
+TokenHub grows through product feedback, gateway integrations, documentation, tests, and the steady care of people who run it in real enterprise environments.
+
+<p align="center">
+  <a href="https://github.com/astaxie/TokenHub/graphs/contributors">
+    <img src="https://contrib.rocks/image?repo=astaxie/TokenHub" alt="TokenHub contributors" />
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/astaxie/TokenHub/graphs/contributors">View all contributors</a>
+  ·
+  <a href="CONTRIBUTING.md">Start contributing</a>
+</p>
+
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=astaxie%2FTokenHub&type=Date&legend=top-left)](https://www.star-history.com/?repos=astaxie%2FTokenHub&type=date&legend=top-left)
+[![GitHub Repo stars](https://img.shields.io/github/stars/astaxie/TokenHub?style=social)](https://github.com/astaxie/TokenHub/stargazers)
+
+Track TokenHub's growth on the [live Star History chart](https://star-history.com/#astaxie/TokenHub&Date).
 
 ## License
 

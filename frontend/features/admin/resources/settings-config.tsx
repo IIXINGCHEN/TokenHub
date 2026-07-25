@@ -70,15 +70,20 @@ function createResourceConfigs(): Partial<Record<ViewKey, ResourceConfig<any>>> 
 }
 
 export function systemSettingConfig(): ResourceConfig<AdminResource> {
+  const base = genericResourceConfig("settings", "系统设置", "网关地址、审计保留、企业集成和默认策略", [
+    { key: "public_base_url", label: "公开 Base URL", help: "对外展示给业务系统和 API 文档示例的网关地址。" },
+    { key: "default_timeout", label: "默认超时", help: "网关转发上游请求的默认等待时间，例如 120s。" },
+    { key: "audit_retention", label: "审计保留", help: "请求审计日志的默认保留周期，例如 180d。" },
+    { key: "api_key_prefix", label: "API Key 前缀", placeholder: "sk_", help: "新建和轮换 Key 时使用；建议以 _ 结尾，例如 sk_。" },
+    { key: "api_key_random_length", label: "API Key 随机长度", type: "number", placeholder: "48", help: "前缀后面的随机字符数，系统会限制在 24-128 之间。" },
+    { key: "version_update_url", label: "更新检测地址", placeholder: "https://api.github.com/repos/astaxie/TokenHub/tags", help: "用于左上角版本提示；支持 GitHub Releases latest/tags API 或返回 latest_version/tag_name 的 JSON 地址。" },
+    { key: "version_release_url", label: "更新日志地址", placeholder: "https://github.com/astaxie/TokenHub/releases", help: "点击立即更新或查看更新日志时打开；留空时使用检测结果里的发布页面。" },
+  ]);
   return {
-    ...genericResourceConfig("settings", "系统设置", "网关地址、审计保留、企业集成和默认策略", [
-      { key: "public_base_url", label: "公开 Base URL" },
-      { key: "default_timeout", label: "默认超时" },
-      { key: "audit_retention", label: "审计保留" },
-      { key: "api_key_prefix", label: "API Key 前缀", placeholder: "sk_", help: "新建和轮换 Key 时使用；建议以 _ 结尾，例如 sk_。" },
-      { key: "api_key_random_length", label: "API Key 随机长度", type: "number", placeholder: "48", help: "前缀后面的随机字符数，系统会限制在 24-128 之间。" },
-    ]),
+    ...base,
     eyebrow: "基础设置",
+    create: undefined,
+    remove: undefined,
   };
 }
 
@@ -89,16 +94,19 @@ export function identityProviderConfig(): ResourceConfig<AdminResource> {
     { key: "icon_key", label: "登录图标", type: "select", options: identityProviderIconOptions, help: "auto 会根据名称、Issuer URL 和类型自动选择登录页图标。" },
     { key: "login_label", label: "登录按钮名称", placeholder: "Google", help: "留空时按图标、Issuer 或身份源名称自动推断。" },
     { key: "issuer_url", label: "Issuer URL" },
-    { key: "client_id", label: "Client ID" },
+    { key: "client_id", label: "Client ID", required: true },
     { key: "client_secret", label: "Client Secret", type: "password", help: "编辑时留空则不修改已保存密钥。" },
+    { key: "agent_id", label: "Agent ID", required: true, help: "企业微信自建应用的 Agent ID。", visible: (values) => values.provider_template === "wecom" },
     { key: "authorize_url", label: "授权端点" },
     { key: "token_url", label: "Token 端点" },
     { key: "userinfo_url", label: "用户信息端点" },
+    { key: "userdetail_url", label: "用户详情端点", help: "企微根据 UserId 读取成员详情的端点。", visible: (values) => values.provider_template === "wecom" },
     { key: "redirect_uri", label: "Callback URL", help: "必须与 OAuth 应用中登记的 Redirect URI 完全一致；留空时按当前后端访问地址自动生成。" },
     { key: "scopes", label: "授权范围" },
     { key: "username_claim", label: "用户名 Claim" },
     { key: "email_claim", label: "邮箱 Claim" },
     { key: "team_claim", label: "团队 Claim" },
+    { key: "subject_claim", label: "用户唯一标识 Claim", help: "平台不返回邮箱时，用该 Claim 生成稳定的内部邮箱。" },
     { key: "default_role", label: "默认角色", type: "select", options: ["user", "team_leader"], help: "首次 OAuth 登录创建用户时使用；不会覆盖已存在用户角色。" },
     { key: "default_team_id", label: "默认团队", type: "select", optionsFromData: teamSelectOptions, help: "团队字段无法映射时使用。" },
     { key: "default_project_id", label: "默认项目", type: "select", optionsFromData: projectMemberProjectSelectOptions, help: "登录后自动加入该项目空间。" },

@@ -3017,6 +3017,85 @@ func TestAdminProviderCatalogAndTemplateRouteMapping(t *testing.T) {
 	}
 }
 
+func TestAdminCustomProviderCatalogLoadsUpstreamModels(t *testing.T) {
+	app := newTestServer()
+	seenAuth := ""
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Fatalf("unexpected upstream path %s", r.URL.Path)
+		}
+		seenAuth = r.Header.Get("authorization")
+		writeJSON(w, http.StatusOK, map[string]any{
+			"object": "list",
+			"data": []map[string]any{
+				{"id": "gpt-4.1-mini", "object": "model", "owned_by": "agnes"},
+				{"id": "agnes-special", "object": "model", "owned_by": "agnes"},
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	catalogResp := doJSON(t, app, http.MethodPost, "/api/admin/provider-catalog/custom", map[string]any{
+		"name":     "Agnes",
+		"type":     ProviderOpenAICompatible,
+		"base_url": upstream.URL + "/v1",
+		"api_key":  "upstream-secret",
+	}, "")
+	if catalogResp.Code != http.StatusOK {
+		t.Fatalf("expected custom provider catalog, got %d: %s", catalogResp.Code, catalogResp.Body)
+	}
+	if seenAuth != "Bearer upstream-secret" {
+		t.Fatalf("expected upstream authorization header, got %q", seenAuth)
+	}
+	var catalogPayload struct {
+		Data ProviderCatalogEntry `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(catalogResp.Body), &catalogPayload); err != nil {
+		t.Fatal(err)
+	}
+	if catalogPayload.Data.Source != "custom-upstream" || catalogPayload.Data.ModelsCount != 2 {
+		t.Fatalf("expected upstream custom models, got %+v", catalogPayload.Data)
+	}
+	if catalogPayload.Data.Models[0].ID == "gpt-5" || !strings.Contains(catalogResp.Body, `"agnes-special"`) {
+		t.Fatalf("expected real upstream models instead of standard OpenAI catalog: %s", catalogResp.Body)
+	}
+
+	createResp := doJSON(t, app, http.MethodPost, "/api/admin/providers", map[string]any{
+		"catalog_id":      "custom",
+		"id":              "prv_agnes",
+		"name":            "Agnes",
+		"type":            ProviderOpenAICompatible,
+		"base_url":        upstream.URL + "/v1",
+		"api_key":         "upstream-secret",
+		"status":          "active",
+		"healthy":         true,
+		"create_routes":   true,
+		"selected_models": []string{"gpt-4.1-mini"},
+		"custom_models":   catalogPayload.Data.Models,
+	}, "")
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("expected custom provider created, got %d: %s", createResp.Code, createResp.Body)
+	}
+	var result ProviderCreateResult
+	if err := json.Unmarshal([]byte(createResp.Body), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.CreatedRoutes != 1 || result.ModelNames[0] != "gpt-4.1-mini" {
+		t.Fatalf("expected one custom upstream route, got %s", createResp.Body)
+	}
+
+	seenAuth = ""
+	savedCatalogResp := doJSON(t, app, http.MethodPost, "/api/admin/provider-catalog/custom", map[string]any{
+		"provider_id": "prv_agnes",
+	}, "")
+	if savedCatalogResp.Code != http.StatusOK {
+		t.Fatalf("expected saved custom provider catalog, got %d: %s", savedCatalogResp.Code, savedCatalogResp.Body)
+	}
+	if seenAuth != "Bearer upstream-secret" {
+		t.Fatalf("expected saved provider key to be used, got %q", seenAuth)
+	}
+}
+
 func TestProviderCatalogUsesStandardModelCategories(t *testing.T) {
 	entries := []ProviderCatalogEntry{
 		{

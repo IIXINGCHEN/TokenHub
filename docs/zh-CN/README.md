@@ -4,6 +4,12 @@ Language: [English](../README.md) | 简体中文 | [日本語](../ja/README.md)
 
 TokenHub 文档现在按企业 AI 网关里的三种角色组织。默认文档语言是英文；中文和日文版本复用同一套英文截图和英文样例数据，避免多语言截图不一致。
 
+## 架构与部署
+
+- [整体架构](architecture.md)：部署拓扑、控制面和数据面、模型请求链路、持久化与安全边界。
+- [部署](deployment.md)：Docker Compose、环境变量、数据与反向代理配置。
+- [PostgreSQL 设置指南](../postgresql-setup.md)：PostgreSQL 配置、运维和迁移。
+
 ## 角色指南
 
 | 指南 | 读者 | 主要工作流 |

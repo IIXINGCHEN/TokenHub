@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -33,6 +34,7 @@ type Server struct {
 	adapterRegistry   *AdapterRegistry
 	integrations      *IntegrationService
 	codexSubscription *CodexSubscriptionAdapter
+	providerCatalog   *providerCatalogService
 	mux               *http.ServeMux
 	config            Config
 }
@@ -77,6 +79,7 @@ func NewWithConfig(store Store, config Config) *Server {
 		adapterRegistry:   registry,
 		integrations:      NewIntegrationService(store, registry),
 		codexSubscription: codexSubscription,
+		providerCatalog:   newProviderCatalogService(store, config.ProviderCatalogFile),
 		mux:               http.NewServeMux(),
 		config:            config,
 	}
@@ -95,6 +98,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/v1/models", s.handleModels)
 	s.mux.HandleFunc("/v1/models/", s.handleModel)
 	s.mux.HandleFunc("/v1/chat/completions", s.handleChatCompletions)
+	s.mux.HandleFunc("/v1/messages", s.handleAnthropicMessages)
+	s.mux.HandleFunc("/v1/messages/count_tokens", s.handleAnthropicCountTokens)
 	s.mux.HandleFunc("/v1/responses", s.handleResponses)
 	s.mux.HandleFunc("/v1/responses/compact", s.handleResponsesCompact)
 	s.mux.HandleFunc("/v1/embeddings", s.handleEmbeddings)
@@ -198,11 +203,17 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	for _, model := range models {
 		data = append(data, buildModelListItem(model))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"object": "list",
-		"data":   data,
-		"models": []any{},
-	})
+	payload := map[string]any{
+		"object":   "list",
+		"data":     data,
+		"models":   []any{},
+		"has_more": false,
+	}
+	if len(data) > 0 {
+		payload["first_id"] = data[0].ID
+		payload["last_id"] = data[len(data)-1].ID
+	}
+	writeJSON(w, http.StatusOK, payload)
 }
 
 func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
@@ -246,12 +257,17 @@ type modelListItem struct {
 	ID                   string `json:"id"`
 	Created              int64  `json:"created"`
 	Object               string `json:"object"`
+	Type                 string `json:"type"`
 	OwnedBy              string `json:"owned_by,omitempty"`
 	InputTokenPricePerM  int64  `json:"input_token_price_per_m"`
 	OutputTokenPricePerM int64  `json:"output_token_price_per_m"`
 	Title                string `json:"title"`
+	DisplayName          string `json:"display_name"`
 	Description          string `json:"description"`
 	ContextSize          int64  `json:"context_size"`
+	CreatedAt            string `json:"created_at"`
+	MaxInputTokens       int64  `json:"max_input_tokens"`
+	MaxTokens            int64  `json:"max_tokens"`
 }
 
 func buildModelListItem(model Model) modelListItem {
@@ -263,12 +279,17 @@ func buildModelListItem(model Model) modelListItem {
 		ID:                   model.Name,
 		Created:              modelCreatedUnix(model),
 		Object:               "model",
+		Type:                 "model",
 		OwnedBy:              "tokenhub",
 		InputTokenPricePerM:  modelTokenPricePerM(inputPrice),
 		OutputTokenPricePerM: modelTokenPricePerM(model.OutputPriceUSDPer1M),
 		Title:                modelTitle(model),
+		DisplayName:          modelTitle(model),
 		Description:          modelDescription(model),
 		ContextSize:          model.ContextWindow,
+		CreatedAt:            modelCreatedAt(model),
+		MaxInputTokens:       model.ContextWindow,
+		MaxTokens:            modelMaxOutputTokens(model),
 	}
 }
 
@@ -277,6 +298,25 @@ func modelCreatedUnix(model Model) int64 {
 		return 0
 	}
 	return model.CreatedAt.Unix()
+}
+
+func modelCreatedAt(model Model) string {
+	if model.CreatedAt.IsZero() {
+		return time.Unix(0, 0).UTC().Format(time.RFC3339)
+	}
+	return model.CreatedAt.UTC().Format(time.RFC3339)
+}
+
+func modelMaxOutputTokens(model Model) int64 {
+	for _, key := range []string{"max_output_tokens", "max_tokens"} {
+		if value := strings.TrimSpace(model.Metadata[key]); value != "" {
+			parsed, err := strconv.ParseInt(value, 10, 64)
+			if err == nil && parsed >= 0 {
+				return parsed
+			}
+		}
+	}
+	return 0
 }
 
 func modelTokenPricePerM(priceUSDPer1M float64) int64 {
@@ -328,106 +368,67 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Stream {
-		route := routed.Routes[0]
-		resourceID := routeResourceID(route)
-		leaseID, leaseCtx, err := s.store.CheckProviderResourceCapacity(r.Context(), resourceID)
-		if err != nil {
-			s.finishFailedRoutedCall(r, routed, []RouteAttempt{{
-				Selection: route,
-				Status:    AsHTTPError(err).Status,
-				ErrorCode: AsHTTPError(err).Code,
-				Error:     err.Error(),
-			}}, err)
-			s.recordRequestPayload(routed.Call.RequestID, req, auditErrorPayload(err, routed.Call.RequestID))
-			writeError(w, r, err)
-			return
-		}
-		preparedRoute, err := s.prepareRouteForUpstream(leaseCtx, route)
-		if err != nil {
-			if leaseErr := coordinationLeaseError(leaseCtx); leaseErr != nil {
-				err = leaseErr
-			}
-			finishProviderResourceAttempt(s.store, resourceID, leaseID, err, Usage{})
-			httpErr := AsHTTPError(err)
-			s.store.FinishCall(routed.Call, route, Usage{}, httpErr.Status, httpErr.Code, s.clientIP(r), r.UserAgent())
-			s.recordRequestPayload(routed.Call.RequestID, req, auditErrorPayload(err, routed.Call.RequestID))
-			writeError(w, r, err)
-			return
-		}
-		route = preparedRoute
-		adapter, err := s.adapterForRoute(route)
-		if err != nil {
-			if leaseErr := coordinationLeaseError(leaseCtx); leaseErr != nil {
-				err = leaseErr
-			}
-			finishProviderResourceAttempt(s.store, resourceID, leaseID, err, Usage{})
-			httpErr := AsHTTPError(err)
-			s.store.FinishCall(routed.Call, route, Usage{}, httpErr.Status, httpErr.Code, s.clientIP(r), r.UserAgent())
-			s.recordRequestPayload(routed.Call.RequestID, req, auditErrorPayload(err, routed.Call.RequestID))
-			writeError(w, r, err)
-			return
-		}
-		w.Header().Set("content-type", "text/event-stream")
-		w.Header().Set("cache-control", "no-cache")
-		w.Header().Set("x-request-id", routed.Call.RequestID)
-		s.writeRouteHeaders(w, routed.Call, route, 1)
-		streamReq := req
-		allowEffortFallback := normalizedReasoningEffort(req.ReasoningEffort) != nil
-		attempts := make([]RouteAttempt, 0, 2)
-		streamWriter := &streamWriteTracker{writer: w}
-		var usage Usage
-		for {
-			usage, err = adapter.ChatStream(leaseCtx, route.Provider, route.ProviderModel, streamReq, streamWriter)
-			if leaseErr := coordinationLeaseError(leaseCtx); leaseErr != nil {
-				err = leaseErr
-			}
-			retryWithoutEffort := allowEffortFallback &&
-				streamReq.ReasoningEffort != nil &&
-				!streamWriter.Wrote() &&
-				isReasoningEffortRejection(err)
-			if !retryWithoutEffort {
-				finishProviderResourceAttempt(s.store, resourceID, leaseID, err, usage)
-			}
-			status, code := routeAttemptStatusAndCode(err, retryWithoutEffort)
-			attempts = append(attempts, RouteAttempt{
-				Selection: route,
-				Status:    status,
-				ErrorCode: code,
-				Error:     errorMessage(err),
-			})
-			if !retryWithoutEffort {
-				break
-			}
+	affinity, err := s.chatCacheLocalityAffinity(key.ID, r.Header, req)
+	if err != nil {
+		s.finishFailedRoutedCall(r, routed, nil, err)
+		s.recordRequestPayload(routed.Call.RequestID, req, auditErrorPayload(err, routed.Call.RequestID))
+		writeError(w, r, err)
+		return
+	}
+	if affinity != nil {
+		routed.Affinity = affinity
+		routed.Call.Affinity = affinity
+		routed.Routes = s.planRouteOrder(routed.Call, routed.Routes)
+	}
 
-			streamReq.ReasoningEffort = nil
-			if retryErr := s.store.CheckProviderResourceRetryCapacity(leaseCtx, resourceID, leaseID); retryErr != nil {
-				s.store.ReleaseProviderResourceCapacity(resourceID, leaseID)
-				err = retryErr
-				status, code = statusAndCode(retryErr)
-				attempts = append(attempts, RouteAttempt{
-					Selection: route,
-					Status:    status,
-					ErrorCode: code,
-					Error:     errorMessage(retryErr),
-				})
-				s.writeRouteHeaders(w, routed.Call, route, len(attempts))
-				usage = Usage{}
-				break
-			}
-			s.writeRouteHeaders(w, routed.Call, route, len(attempts)+1)
-		}
-		status, code := statusAndCode(err)
-		if err == nil {
+	if req.Stream {
+		tracker := &streamWriteTracker{writer: w}
+		allowEffortFallback := normalizedReasoningEffort(req.ReasoningEffort) != nil
+		_, route, usage, attempts, streamErr := executeRoutedWithStore(r.Context(), s.store, routed, allowEffortFallback,
+			func(ctx context.Context, candidate RouteSelection, omitReasoningEffort bool, attempt int) (struct{}, Usage, error) {
+				prepared, prepareErr := s.prepareRouteForUpstream(ctx, candidate)
+				if prepareErr != nil {
+					return struct{}{}, Usage{}, prepareErr
+				}
+				adapter, adapterErr := s.adapterForRoute(prepared)
+				if adapterErr != nil {
+					return struct{}{}, Usage{}, adapterErr
+				}
+				upstreamReq := req
+				if omitReasoningEffort {
+					upstreamReq.ReasoningEffort = nil
+				}
+				// Defer the response headers until the first byte is written, at
+				// which point prepared is the route that actually served it.
+				tracker.onFirstWrite = func() {
+					w.Header().Set("content-type", "text/event-stream")
+					w.Header().Set("cache-control", "no-cache")
+					w.Header().Set("x-request-id", routed.Call.RequestID)
+					s.writeRouteHeaders(w, routed.Call, prepared, attempt)
+				}
+				streamUsage, err := adapter.ChatStream(ctx, prepared.Provider, prepared.ProviderModel, upstreamReq, tracker)
+				return struct{}{}, streamUsage, classifyStreamError(ctx, err, tracker.Wrote())
+			})
+
+		status, code := statusAndCode(streamErr)
+		if streamErr == nil {
+			// An upstream may complete with 200 and an empty body, in which case
+			// onFirstWrite never ran and the client would receive none of the
+			// streaming headers.
+			tracker.ensureStarted()
 			s.store.MarkRouteUsed(route.Route.ID)
 			s.store.MarkProviderResourceUsed(routeResourceID(route))
 		}
 		s.store.RecordRouteAttempts(routed.Call.RequestID, attempts)
 		s.store.FinishCall(routed.Call, route, usage, status, code, s.clientIP(r), r.UserAgent())
-		s.recordRequestPayload(routed.Call.RequestID, req, auditStreamPayload(status, code, err))
-		if err != nil && !streamWriter.Wrote() {
+		s.recordRequestPayload(routed.Call.RequestID, req, auditStreamPayload(status, code, streamErr))
+		if streamErr != nil && !tracker.Wrote() {
+			// Nothing reached the client, so the response is a plain JSON error.
+			// Still emit routing headers here: onFirstWrite never ran, and callers
+			// rely on these headers to see how many candidates were attempted.
 			w.Header().Del("cache-control")
-			writeError(w, r, err)
+			s.writeRouteHeaders(w, routed.Call, lastAttemptRoute(attempts), len(attempts))
+			writeError(w, r, streamErr)
 		}
 		return
 	}
@@ -654,7 +655,7 @@ func (s *Server) startRoutedCall(w http.ResponseWriter, r *http.Request, project
 
 func (s *Server) executeRoutedChat(r *http.Request, routed RoutedCall, req ChatCompletionRequest) (any, RouteSelection, Usage, []RouteAttempt, error) {
 	allowEffortFallback := normalizedReasoningEffort(req.ReasoningEffort) != nil
-	return executeRoutedWithStore(r.Context(), s.store, routed, allowEffortFallback, func(ctx context.Context, route RouteSelection, omitReasoningEffort bool) (any, Usage, error) {
+	return executeRoutedWithStore(r.Context(), s.store, routed, allowEffortFallback, func(ctx context.Context, route RouteSelection, omitReasoningEffort bool, _ int) (any, Usage, error) {
 		route, err := s.prepareRouteForUpstream(ctx, route)
 		if err != nil {
 			return nil, Usage{}, err
@@ -673,7 +674,7 @@ func (s *Server) executeRoutedChat(r *http.Request, routed RoutedCall, req ChatC
 
 func (s *Server) executeRoutedResponses(r *http.Request, routed RoutedCall, req ResponsesRequest) (any, RouteSelection, Usage, []RouteAttempt, error) {
 	allowEffortFallback := normalizedReasoningEffort(responsesReasoningEffort(req)) != nil
-	return executeRoutedWithStore(r.Context(), s.store, routed, allowEffortFallback, func(ctx context.Context, route RouteSelection, omitReasoningEffort bool) (any, Usage, error) {
+	return executeRoutedWithStore(r.Context(), s.store, routed, allowEffortFallback, func(ctx context.Context, route RouteSelection, omitReasoningEffort bool, _ int) (any, Usage, error) {
 		route, err := s.prepareRouteForUpstream(ctx, route)
 		if err != nil {
 			return nil, Usage{}, err
@@ -703,7 +704,7 @@ func (s *Server) executeRoutedResponses(r *http.Request, routed RoutedCall, req 
 }
 
 func (s *Server) executeRoutedCompact(r *http.Request, routed RoutedCall, request map[string]json.RawMessage) (any, RouteSelection, Usage, []RouteAttempt, error) {
-	return executeRoutedWithStore(r.Context(), s.store, routed, false, func(ctx context.Context, route RouteSelection, _ bool) (any, Usage, error) {
+	return executeRoutedWithStore(r.Context(), s.store, routed, false, func(ctx context.Context, route RouteSelection, _ bool, _ int) (any, Usage, error) {
 		prepared, err := s.prepareRouteForUpstream(ctx, route)
 		if err != nil {
 			return nil, Usage{}, err
@@ -725,7 +726,7 @@ func (s *Server) executeRoutedCompact(r *http.Request, routed RoutedCall, reques
 }
 
 func (s *Server) executeRoutedEmbeddings(r *http.Request, routed RoutedCall, req EmbeddingsRequest) (any, RouteSelection, Usage, []RouteAttempt, error) {
-	return executeRoutedWithStore(r.Context(), s.store, routed, false, func(ctx context.Context, route RouteSelection, _ bool) (any, Usage, error) {
+	return executeRoutedWithStore(r.Context(), s.store, routed, false, func(ctx context.Context, route RouteSelection, _ bool, _ int) (any, Usage, error) {
 		route, err := s.prepareRouteForUpstream(ctx, route)
 		if err != nil {
 			return nil, Usage{}, err
@@ -831,7 +832,11 @@ func executeRoutedWithStore[T any](
 	store Store,
 	routed RoutedCall,
 	allowReasoningEffortFallback bool,
-	call func(context.Context, RouteSelection, bool) (T, Usage, error),
+	// call receives the 1-based attempt number, counted across every candidate
+	// including ones that never ran because capacity acquisition failed. Callbacks
+	// must not derive it locally: those failures are appended to attempts here
+	// without invoking the callback, so a local counter would undercount them.
+	call func(context.Context, RouteSelection, bool, int) (T, Usage, error),
 ) (T, RouteSelection, Usage, []RouteAttempt, error) {
 	var zero T
 	var lastErr error = ErrProviderMissing
@@ -866,12 +871,20 @@ func executeRoutedWithStore[T any](
 		}
 		omitReasoningEffort := false
 		for {
-			resp, usage, err := call(leaseCtx, route, omitReasoningEffort)
+			resp, usage, err := call(leaseCtx, route, omitReasoningEffort, len(attempts)+1)
 			if leaseErr := coordinationLeaseError(leaseCtx); leaseErr != nil {
 				err = leaseErr
 			}
+			// Neither a committed stream nor a client disconnect may be retried,
+			// not even via the effort fallback on the same route. These checks are
+			// load-bearing: ProviderInvocationError implements Unwrap, so
+			// isReasoningEffortRejection sees through the wrapper and would
+			// otherwise return true for an error that must not be retried.
+			disposition := providerErrorDisposition(err)
 			retryWithoutEffort := allowReasoningEffortFallback &&
 				!omitReasoningEffort &&
+				disposition != ProviderErrorStreamCommitted &&
+				disposition != ProviderErrorClient &&
 				isReasoningEffortRejection(err)
 			if !retryWithoutEffort {
 				finishProviderResourceAttempt(store, resourceID, leaseID, err, usage)
@@ -951,10 +964,18 @@ func finishProviderResourceAttempt(store Store, resourceID string, leaseID strin
 type streamWriteTracker struct {
 	writer io.Writer
 	wrote  bool
+	// onFirstWrite runs once, just before the first byte is written. Response
+	// headers must wait until that moment: failover can move to another candidate,
+	// and writing early would expose the preferred route rather than the one that
+	// actually served the request.
+	onFirstWrite func()
 }
 
 func (w *streamWriteTracker) Write(data []byte) (int, error) {
 	if !w.wrote {
+		if w.onFirstWrite != nil {
+			w.onFirstWrite()
+		}
 		if responseWriter, ok := w.writer.(http.ResponseWriter); ok {
 			responseWriter.WriteHeader(http.StatusOK)
 			if flusher, ok := responseWriter.(http.Flusher); ok {
@@ -966,8 +987,61 @@ func (w *streamWriteTracker) Write(data []byte) (int, error) {
 	return w.writer.Write(data)
 }
 
+// classifyStreamError decides whether a streaming failure may move to the next
+// candidate.
+//
+// Two cases must never fail over:
+//   - The first byte was already written: the client has a 200 and partial events,
+//     so switching upstreams would emit two contradictory streams. Note this
+//     disposition is not produced automatically and must be wrapped explicitly here.
+//   - The client disconnected: retrying only burns the next account's quota.
+//     Without this check, a cancellation error falls through to the status >= 500
+//     branch at the end of shouldFailoverRoutedError and is mistaken for retryable.
+func classifyStreamError(ctx context.Context, err error, wrote bool) error {
+	if err == nil {
+		return nil
+	}
+	// Cancellation is checked before commitment. Both dispositions forbid failover,
+	// but only ProviderErrorClient counts as healthy in
+	// providerAttemptCountsAsHealthy. Classifying a mid-stream client disconnect as
+	// StreamCommitted would charge it to the upstream, so repeated disconnects could
+	// accumulate failures and cool down a perfectly healthy account.
+	if errors.Is(err, context.Canceled) || (ctx != nil && errors.Is(ctx.Err(), context.Canceled)) {
+		return &ProviderInvocationError{Err: err, Disposition: ProviderErrorClient}
+	}
+	if wrote {
+		return &ProviderInvocationError{Err: err, Disposition: ProviderErrorStreamCommitted}
+	}
+	return err
+}
+
 func (w *streamWriteTracker) Wrote() bool {
 	return w != nil && w.wrote
+}
+
+// ensureStarted runs the deferred hook even when the upstream produced no bytes.
+// A 200 response with an empty body would otherwise reach the client with none of
+// the headers onFirstWrite installs, including content-type.
+func (w *streamWriteTracker) ensureStarted() {
+	if w == nil || w.wrote {
+		return
+	}
+	if w.onFirstWrite != nil {
+		w.onFirstWrite()
+	}
+	if responseWriter, ok := w.writer.(http.ResponseWriter); ok {
+		responseWriter.WriteHeader(http.StatusOK)
+	}
+	w.wrote = true
+}
+
+func (w *streamWriteTracker) Flush() {
+	if w == nil {
+		return
+	}
+	if flusher, ok := w.writer.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }
 
 func (s *Server) finishFailedRoutedCall(r *http.Request, routed RoutedCall, attempts []RouteAttempt, err error) {
@@ -1041,7 +1115,14 @@ func (s *Server) planRouteOrder(call CallContext, routes []RouteSelection) []Rou
 				priorityGroup = priorityGroup[groupEnd:]
 				continue
 			}
-			if group[0].Route.StickySession {
+			cacheLocality := call.Affinity != nil &&
+				call.Affinity.KeyHash != "" &&
+				call.Affinity.Kind == AffinityKindCacheLocality
+			// Sticky pops one candidate out of the group first, which weakens session
+			// affinity. Cache locality works at the finer session granularity, so it
+			// takes over; Codex's stateful binding relies on sticky choosing the
+			// provider first and is left untouched.
+			if group[0].Route.StickySession && !cacheLocality {
 				index := stickyRouteIndex(call, group)
 				planned = append(planned, group[index])
 				group = append(group[:index], group[index+1:]...)
@@ -1051,9 +1132,18 @@ func (s *Server) planRouteOrder(call CallContext, routes []RouteSelection) []Rou
 				routingKey = call.Affinity.KeyHash
 			}
 			if call.Affinity != nil && call.Affinity.KeyHash != "" {
+				identity := routeSortID
+				score := weightedRendezvousScore
+				if cacheLocality {
+					// Score by cache domain rather than route identity: several routes
+					// sharing an account and upstream model score identically and sort
+					// adjacently, so failover prefers a sibling whose cache is still warm.
+					identity = cacheDomainID
+					score = weightedCacheDomainScore
+				}
 				sort.SliceStable(group, func(i, j int) bool {
-					left := weightedRendezvousScore(routingKey, group[i])
-					right := weightedRendezvousScore(routingKey, group[j])
+					left := score(routingKey, identity(group[i]), routeEffectiveWeight(group[i].Route))
+					right := score(routingKey, identity(group[j]), routeEffectiveWeight(group[j].Route))
 					if left != right {
 						return left > right
 					}
@@ -1075,13 +1165,52 @@ func (s *Server) planRouteOrder(call CallContext, routes []RouteSelection) []Rou
 	return planned
 }
 
-func weightedRendezvousScore(key string, route RouteSelection) float64 {
+// weightedRendezvousScore scores candidates for Codex session affinity, where
+// identity is routeSortID.
+//
+// FNV-1a is kept deliberately: routeSortID embeds randomly generated route and
+// resource IDs, so it has enough entropy and none of the similarity problem that
+// cache domain identities have. Changing the hash would reassign every Codex
+// session that has no binding yet, and that change is not guarded by
+// CACHE_AFFINITY_ENABLED - with the switch off, routing must stay byte-identical
+// to the pre-change behaviour.
+func weightedRendezvousScore(key string, identity string, weight int) float64 {
 	hash := fnv.New64a()
 	_, _ = hash.Write([]byte(key))
 	_, _ = hash.Write([]byte{0})
-	_, _ = hash.Write([]byte(routeSortID(route)))
+	_, _ = hash.Write([]byte(identity))
+	// Deliberately keeps the original normalisation, without the clamp applied to
+	// cache-domain scoring. Adding the clamp here would change scores for
+	// near-maximum hashes from -Inf to a large finite value, which contradicts the
+	// byte-identical guarantee this function is required to uphold.
 	unit := (float64(hash.Sum64()) + 1) / (float64(^uint64(0)) + 2)
-	return float64(routeEffectiveWeight(route.Route)) / -math.Log(unit)
+	return float64(weight) / -math.Log(unit)
+}
+
+// weightedCacheDomainScore scores candidates for cache locality routing, where
+// identity is cacheDomainID.
+//
+// SHA-256 is required here: cacheDomainID values are highly similar (under one
+// provider they often differ only in the last few characters), and FNV-1a's
+// avalanche is too weak to separate them - measured, three equally weighted
+// candidates received 154/66/80 instead of an even 100/100/100.
+//
+// This is a durable contract: changing the hash, the concatenation order, or the
+// scoring formula invalidates every upstream cache at once and must be versioned.
+func weightedCacheDomainScore(key string, identity string, weight int) float64 {
+	sum := sha256.Sum256(append(append([]byte(key), 0), identity...))
+	return cacheDomainScoreFromHash(binary.BigEndian.Uint64(sum[:8]), weight)
+}
+
+func cacheDomainScoreFromHash(raw uint64, weight int) float64 {
+	// The +1 / +2 keeps unit inside the open interval (0,1): float64 rounding near
+	// the maximum can otherwise yield exactly 1, and -math.Log(1) returns negative
+	// zero, making the score -Inf so that candidate would sort last forever.
+	unit := (float64(raw) + 1) / (float64(^uint64(0)) + 2)
+	if unit >= 1 {
+		unit = 0.99999999999999988
+	}
+	return float64(weight) / -math.Log(unit)
 }
 
 func routesContainAdapterType(routes []RouteSelection, adapterType string) bool {
@@ -1239,6 +1368,12 @@ func shouldFailoverRoutedError(err error, routeIsBound bool) bool {
 	if errors.Is(err, ErrCoordinationLeaseLost) {
 		return false
 	}
+	// The client is gone; trying the next account only burns its quota. This also
+	// covers cancellations surfaced by the capacity check, which never reach
+	// classifyStreamError.
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
 	switch providerErrorDisposition(err) {
 	case ProviderErrorClient, ProviderErrorPolicy, ProviderErrorStreamCommitted:
 		return false
@@ -1340,14 +1475,17 @@ func (s *Server) writeRouteHeaders(w http.ResponseWriter, call CallContext, rout
 
 func (s *Server) authenticate(r *http.Request) (Project, APIKey, error) {
 	auth := r.Header.Get("authorization")
-	if auth == "" {
-		return Project{}, APIKey{}, ErrInvalidAPIKey
+	if auth != "" {
+		const prefix = "Bearer "
+		if !strings.HasPrefix(auth, prefix) {
+			return Project{}, APIKey{}, ErrInvalidAPIKey
+		}
+		return s.store.ValidateAPIKey(strings.TrimSpace(strings.TrimPrefix(auth, prefix)), s.clientIP(r))
 	}
-	const prefix = "Bearer "
-	if !strings.HasPrefix(auth, prefix) {
-		return Project{}, APIKey{}, ErrInvalidAPIKey
+	if apiKey := strings.TrimSpace(r.Header.Get("x-api-key")); apiKey != "" {
+		return s.store.ValidateAPIKey(apiKey, s.clientIP(r))
 	}
-	return s.store.ValidateAPIKey(strings.TrimSpace(strings.TrimPrefix(auth, prefix)), s.clientIP(r))
+	return Project{}, APIKey{}, ErrInvalidAPIKey
 }
 
 func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
@@ -1510,7 +1648,7 @@ func (s *Server) handleAdminOAuthStart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	target, err := buildOAuthAuthorizeURL(authorizeURL, clientID, redirectURI, identityProviderScopes(provider), state)
+	target, err := buildIdentityProviderAuthorizeURL(provider, redirectURI, state)
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -1534,6 +1672,9 @@ func (s *Server) handleAdminOAuthCallback(w http.ResponseWriter, r *http.Request
 	}
 	code := strings.TrimSpace(r.URL.Query().Get("code"))
 	if code == "" {
+		code = strings.TrimSpace(r.URL.Query().Get("authCode"))
+	}
+	if code == "" {
 		http.Redirect(w, r, oauthRedirectWithError(state.ReturnURL, "missing_code"), http.StatusFound)
 		return
 	}
@@ -1548,7 +1689,7 @@ func (s *Server) handleAdminOAuthCallback(w http.ResponseWriter, r *http.Request
 		http.Redirect(w, r, oauthRedirectWithError(state.ReturnURL, oauthErrorCode("token_exchange_failed", err)), http.StatusFound)
 		return
 	}
-	claims, err := s.fetchOAuthUserInfo(r.Context(), provider, token.AccessToken)
+	claims, err := s.fetchOAuthUserInfo(r.Context(), provider, token.AccessToken, code)
 	if err != nil {
 		http.Redirect(w, r, oauthRedirectWithError(state.ReturnURL, "userinfo_failed"), http.StatusFound)
 		return
@@ -1580,6 +1721,9 @@ func (s *Server) activeOAuthIdentityProviders() []AdminResource {
 			strings.TrimSpace(stringField(item.Fields, "token_url")) == "" ||
 			strings.TrimSpace(stringField(item.Fields, "userinfo_url")) == "" ||
 			strings.TrimSpace(stringField(item.Fields, "client_id")) == "" {
+			continue
+		}
+		if !identityProviderPlatformConfigurationComplete(item) {
 			continue
 		}
 		items = append(items, item)
@@ -1631,7 +1775,7 @@ func identityProviderIconKey(provider AdminResource) string {
 		stringField(provider.Fields, "authorize_url"),
 		providerType,
 	}, " "))
-	for _, key := range []string{"gitlab", "github", "google", "microsoft", "azure", "entra", "okta", "keycloak"} {
+	for _, key := range []string{"dingtalk", "feishu", "wecom", "gitlab", "github", "google", "microsoft", "azure", "entra", "okta", "keycloak"} {
 		if strings.Contains(fingerprint, key) {
 			if key == "azure" || key == "entra" {
 				return "microsoft"
@@ -1675,6 +1819,12 @@ func identityProviderIconDisplayName(iconKey string) string {
 		return "Okta"
 	case "keycloak":
 		return "Keycloak"
+	case "dingtalk":
+		return "DingTalk"
+	case "feishu":
+		return "Feishu"
+	case "wecom":
+		return "WeCom"
 	default:
 		return ""
 	}
@@ -1834,6 +1984,9 @@ func (s *Server) oauthStateSecret() string {
 }
 
 func (s *Server) exchangeOAuthCode(ctx context.Context, provider AdminResource, code string, redirectURI string) (oauthTokenResponse, error) {
+	if token, handled, err := exchangeConfiguredIdentityProviderOAuthCode(ctx, provider, code, redirectURI); handled {
+		return token, err
+	}
 	tokenURL := strings.TrimSpace(stringField(provider.Fields, "token_url"))
 	clientID := strings.TrimSpace(stringField(provider.Fields, "client_id"))
 	clientSecret := strings.TrimSpace(stringField(provider.Fields, "client_secret"))
@@ -1903,7 +2056,10 @@ func requestOAuthToken(ctx context.Context, tokenURL string, form url.Values, ba
 	return token, "", nil
 }
 
-func (s *Server) fetchOAuthUserInfo(ctx context.Context, provider AdminResource, accessToken string) (map[string]any, error) {
+func (s *Server) fetchOAuthUserInfo(ctx context.Context, provider AdminResource, accessToken string, code string) (map[string]any, error) {
+	if claims, handled, err := fetchConfiguredIdentityProviderUserInfo(ctx, provider, accessToken, code); handled {
+		return claims, err
+	}
 	userinfoURL := strings.TrimSpace(stringField(provider.Fields, "userinfo_url"))
 	if userinfoURL == "" {
 		return nil, NewHTTPError(400, "identity_provider_incomplete", "Identity provider userinfo URL is required")
@@ -1934,7 +2090,12 @@ func (s *Server) upsertOAuthAdminUser(provider AdminResource, claims map[string]
 	usernameClaim := strings.TrimSpace(stringField(provider.Fields, "username_claim"))
 	emailClaim := strings.TrimSpace(stringField(provider.Fields, "email_claim"))
 	teamClaim := strings.TrimSpace(stringField(provider.Fields, "team_claim"))
-	email := firstOAuthClaim(claims, emailClaim, "email", "public_email")
+	email := firstOAuthClaim(claims, emailClaim, "email", "enterprise_email", "biz_mail", "public_email")
+	allowUsernameMatch := true
+	if email == "" {
+		email = identityProviderFallbackEmail(provider, claims)
+		allowUsernameMatch = email == ""
+	}
 	if email == "" {
 		return AdminUser{}, NewHTTPError(400, "oauth_email_missing", "OAuth userinfo did not include an email")
 	}
@@ -1942,7 +2103,7 @@ func (s *Server) upsertOAuthAdminUser(provider AdminResource, claims map[string]
 	if username == "" {
 		username = strings.Split(email, "@")[0]
 	}
-	name := firstOAuthClaim(claims, "name", "display_name", usernameClaim, "username")
+	name := firstOAuthClaim(claims, "name", "nick", "display_name", "en_name", usernameClaim, "username")
 	if name == "" {
 		name = username
 	}
@@ -1953,7 +2114,7 @@ func (s *Server) upsertOAuthAdminUser(provider AdminResource, claims map[string]
 		teamID = defaultTeamID
 	}
 	users := s.store.ListAdminUsers()
-	if existing, ok := findOAuthAdminUser(users, email, username); ok {
+	if existing, ok := findOAuthAdminUser(users, email, username, allowUsernameMatch); ok {
 		if existing.Status != StatusActive {
 			return AdminUser{}, NewHTTPError(403, "admin_user_disabled", "Admin user is disabled")
 		}
@@ -2035,13 +2196,16 @@ func oauthClaimString(claims map[string]any, key string) string {
 	}
 }
 
-func findOAuthAdminUser(users []AdminUser, email string, username string) (AdminUser, bool) {
+func findOAuthAdminUser(users []AdminUser, email string, username string, allowUsernameMatch bool) (AdminUser, bool) {
 	email = strings.ToLower(strings.TrimSpace(email))
 	username = strings.ToLower(strings.TrimSpace(username))
 	for _, user := range users {
 		if email != "" && strings.ToLower(strings.TrimSpace(user.Email)) == email {
 			return user, true
 		}
+	}
+	if !allowUsernameMatch {
+		return AdminUser{}, false
 	}
 	for _, user := range users {
 		if username != "" && strings.ToLower(strings.TrimSpace(user.Username)) == username {
@@ -3103,7 +3267,7 @@ func (s *Server) handleAdminProviderCatalog(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	refresh := r.URL.Query().Get("refresh") == "true"
-	entries, source, err := LoadProviderCatalog(s.config.ProviderCatalogFile, refresh)
+	entries, source, err := s.providerCatalog.List(r.Context(), refresh)
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -3162,12 +3326,42 @@ func (s *Server) handleAdminProviderCatalogItem(w http.ResponseWriter, r *http.R
 		writeJSON(w, http.StatusOK, map[string]any{"data": entry, "source": entry.Source})
 		return
 	}
+	if id == "custom" && r.Method == http.MethodPost {
+		var req ProviderCreateRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, r, NewHTTPError(http.StatusBadRequest, "invalid_request", err.Error()))
+			return
+		}
+		if providerID := firstNonEmpty(strings.TrimSpace(req.ProviderID), strings.TrimSpace(req.ID)); providerID != "" {
+			if provider, ok := s.store.GetProvider(providerID); ok {
+				if req.Name == "" {
+					req.Name = provider.Name
+				}
+				if req.Type == "" {
+					req.Type = provider.Type
+				}
+				if req.BaseURL == "" {
+					req.BaseURL = provider.BaseURL
+				}
+				if req.APIKey == "" {
+					req.APIKey = provider.APIKey
+				}
+			}
+		}
+		entry, err := CustomProviderCatalogFromUpstream(r.Context(), http.DefaultClient, req)
+		if err != nil {
+			writeError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": entry, "source": entry.Source})
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
 		return
 	}
 	refresh := r.URL.Query().Get("refresh") == "true"
-	entry, source, ok, err := GetProviderCatalogEntry(s.config.ProviderCatalogFile, id, refresh)
+	entry, source, ok, err := s.providerCatalog.Get(r.Context(), id, refresh)
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -3187,7 +3381,7 @@ func (s *Server) providerFromCreateRequest(_ context.Context, req ProviderCreate
 		catalog = s.codexProviderCatalogFromStandardModels(req.SelectedModels)
 		catalogSource = catalog.Source
 	} else if catalogID != "" {
-		entry, source, ok, err := GetProviderCatalogEntry(s.config.ProviderCatalogFile, catalogID, false)
+		entry, source, ok, err := s.providerCatalog.Get(ctx, catalogID, false)
 		if err != nil {
 			return Provider{}, ProviderCatalogEntry{}, source, err
 		}
@@ -3198,7 +3392,12 @@ func (s *Server) providerFromCreateRequest(_ context.Context, req ProviderCreate
 		catalogSource = source
 	}
 	if catalog.ID == "custom" {
-		catalog = s.customProviderCatalogFromStandardModels(req.ModelCategory)
+		if len(req.CustomModels) > 0 {
+			catalog = customProviderCatalogFromModels(req.CustomModels, req.ModelCategory)
+		} else {
+			catalog = s.customProviderCatalogFromStandardModels(req.ModelCategory)
+		}
+		catalogSource = catalog.Source
 	}
 	id := strings.TrimSpace(req.ID)
 	if id == "" && catalog.ID != "" && catalog.ID != "custom" {
@@ -3316,6 +3515,47 @@ func (s *Server) customProviderCatalogFromStandardModels(category string) Provid
 	entry.CategoryCounts = categoryCounts
 	entry.Models = models
 	entry.ModelsCount = len(models)
+	return entry
+}
+
+func customProviderCatalogFromModels(input []ProviderCatalogModel, category string) ProviderCatalogEntry {
+	normalizedCategory := strings.TrimSpace(category)
+	if normalizedCategory != "" {
+		normalizedCategory = standardModelCategory(normalizedCategory)
+	}
+	models := make([]ProviderCatalogModel, 0, len(input))
+	seen := map[string]bool{}
+	for _, model := range input {
+		model.ID = strings.TrimSpace(model.ID)
+		if model.ID == "" || seen[model.ID] {
+			continue
+		}
+		seen[model.ID] = true
+		model.Name = firstNonEmpty(strings.TrimSpace(model.Name), model.ID)
+		model.DisplayName = firstNonEmpty(strings.TrimSpace(model.DisplayName), model.Name)
+		model.CanonicalName = firstNonEmpty(strings.TrimSpace(model.CanonicalName), canonicalModelName(model.ID, model.DisplayName))
+		model.Category = standardModelCategory(firstNonEmpty(model.Category, inferModelCategory(model.ID, model.DisplayName)))
+		if normalizedCategory != "" && normalizedCategory != "all" && model.Category != normalizedCategory {
+			continue
+		}
+		model.Family = firstNonEmpty(model.Family, inferModelFamily(model.ID))
+		model.Type = firstNonEmpty(model.Type, normalizeModelModality(model.ID))
+		if model.Metadata == nil {
+			model.Metadata = map[string]string{}
+		}
+		if model.Metadata["source"] == "" {
+			model.Metadata["source"] = "custom-upstream"
+		}
+		models = append(models, model)
+	}
+	sort.SliceStable(models, func(i, j int) bool {
+		return strings.ToLower(models[i].ID) < strings.ToLower(models[j].ID)
+	})
+	entry := customProviderCatalogEntry()
+	entry.Source = "custom-upstream"
+	entry.Models = models
+	entry.ModelsCount = len(models)
+	entry.Categories, entry.CategoryCounts = catalogCategorySummary(models)
 	return entry
 }
 

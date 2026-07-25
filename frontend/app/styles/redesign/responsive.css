@@ -157,6 +157,21 @@
     width: fit-content;
   }
 
+  .system-settings-preference,
+  .system-settings-intro,
+  .system-settings-meta {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .system-settings-intro .button {
+    width: fit-content;
+  }
+
+  .system-settings-summary {
+    grid-template-columns: 1fr;
+  }
+
   .topbar-spacer {
     display: none;
   }
@@ -381,6 +396,10 @@
   }
 
   .wizard-panel {
+    min-height: 0;
+  }
+
+  .identity-provider-wizard-body {
     min-height: 0;
   }
 

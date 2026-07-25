@@ -4,6 +4,12 @@ Language: English | [简体中文](zh-CN/README.md) | [日本語](ja/README.md)
 
 TokenHub documentation is now organized around the three roles used in an enterprise AI gateway. The default documentation language is English. Localized Chinese and Japanese versions use the same English screenshots and the same English sample data set.
 
+## Architecture and Deployment
+
+- [Architecture](architecture.md): deployment modes, control and data planes, model request flow, persistence, and security boundaries.
+- [Deployment](deployment.md): Docker Compose, environment variables, databases, reverse proxying, and health checks.
+- [PostgreSQL Setup Guide](postgresql-setup.md): PostgreSQL configuration, operations, and migration.
+
 ## Role Guides
 
 | Guide | Audience | Primary workflow |

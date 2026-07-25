@@ -47,7 +47,7 @@ TokenHub 将日常模型使用、团队治理和平台运维拆成清晰的角�
 
 ## 平台能力
 
-- OpenAI-Compatible 模型 API：`/v1/chat/completions`、`/v1/responses`、`/v1/embeddings`。
+- OpenAI-Compatible 模型 API：`/v1/chat/completions`、`/v1/responses`、`/v1/embeddings`；Anthropic Messages API：`/v1/messages`、`/v1/messages/count_tokens`。
 - Provider 渠道：OpenAI-Compatible、Azure OpenAI、Anthropic、Gemini、DeepSeek、Qwen、本地 vLLM/Ollama 和自定义上游。
 - 模型目录和路由策略：支持优先级、权重、失败回退顺序和路由健康诊断。
 - 按项目归属的 Key 管理：支持团队归属、成员权限、额度和并发限制。
@@ -83,6 +83,7 @@ cp deploy/.env.example deploy/.env
 ## 文档
 
 - [文档首页](docs/zh-CN/README.md)
+- [整体架构](docs/zh-CN/architecture.md)
 - [普通用户指南](docs/zh-CN/user-guide.md)
 - [团队负责人指南](docs/zh-CN/team-leader-guide.md)
 - [管理员指南](docs/zh-CN/administrator-guide.md)
@@ -90,9 +91,27 @@ cp deploy/.env.example deploy/.env
 - [English documentation](docs/README.md)
 - [日本語ドキュメント](docs/ja/README.md)
 
+## Contributors
+
+TokenHub 的演进离不开真实企业场景里的使用反馈、网关集成、文档完善、测试补充和持续维护。感谢每一位让项目变得更可靠的人。
+
+<p align="center">
+  <a href="https://github.com/astaxie/TokenHub/graphs/contributors">
+    <img src="https://contrib.rocks/image?repo=astaxie/TokenHub" alt="TokenHub contributors" />
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/astaxie/TokenHub/graphs/contributors">查看全部贡献者</a>
+  ·
+  <a href="CONTRIBUTING.zh-CN.md">参与贡献</a>
+</p>
+
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=astaxie%2FTokenHub&type=Date&legend=top-left)](https://www.star-history.com/?repos=astaxie%2FTokenHub&type=date&legend=top-left)
+[![GitHub Repo stars](https://img.shields.io/github/stars/astaxie/TokenHub?style=social)](https://github.com/astaxie/TokenHub/stargazers)
+
+在 [Star History 实时图表](https://star-history.com/#astaxie/TokenHub&Date)查看 TokenHub 的增长趋势。
 
 ## License
 

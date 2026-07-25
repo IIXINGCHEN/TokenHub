@@ -365,6 +365,10 @@
     min-height: 0;
   }
 
+  .identity-provider-wizard-body {
+    min-height: 0;
+  }
+
   .identity-template-card {
     min-height: 0;
   }

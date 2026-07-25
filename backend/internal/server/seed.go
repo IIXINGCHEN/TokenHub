@@ -159,6 +159,9 @@ func BootstrapBaseDataWithConfig(store Store, config Config) error {
 	}
 	seedDefaultOrgResources(store)
 	seedDefaultProject(store)
+	if err := seedBuiltinProviderCatalog(store); err != nil {
+		return err
+	}
 	pruneProviderImportedModelCatalog(store)
 	if err := seedDefaultModelCatalog(store, config.ModelCatalogFile); err != nil {
 		return err
@@ -244,6 +247,8 @@ func seedDefaultOrgResources(store Store) {
 			"audit_retention":       "180d",
 			"api_key_prefix":        DefaultAPIKeyPrefix,
 			"api_key_random_length": DefaultAPIKeyRandomLength,
+			"version_update_url":    "https://api.github.com/repos/astaxie/TokenHub/tags",
+			"version_release_url":   "https://github.com/astaxie/TokenHub/releases",
 		},
 	})
 	seedResourceIfMissing(store, "identity-providers", AdminResource{
@@ -369,6 +374,8 @@ func seedAdminResources(store Store) {
 			"audit_retention":       "180d",
 			"api_key_prefix":        DefaultAPIKeyPrefix,
 			"api_key_random_length": DefaultAPIKeyRandomLength,
+			"version_update_url":    "https://api.github.com/repos/astaxie/TokenHub/tags",
+			"version_release_url":   "https://github.com/astaxie/TokenHub/releases",
 		},
 	})
 	store.CreateResource("security-policies", AdminResource{
