@@ -15,6 +15,7 @@
 
 .sidebar {
   height: 100dvh;
+  overflow: visible;
   padding: 0;
   border-right: 1px solid var(--border);
   background: var(--surface);
