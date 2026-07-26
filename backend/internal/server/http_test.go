@@ -331,6 +331,119 @@ func TestAdminPlaygroundChatUsesRoutesWithoutProjectBilling(t *testing.T) {
 	}
 }
 
+func TestAdminPlaygroundChatUsesResponsesForCodexSubscription(t *testing.T) {
+	store := NewMemoryStore()
+	provider := store.AddProvider(Provider{
+		ID:      "prv_playground_codex",
+		Name:    "Playground Codex",
+		Type:    ProviderOpenAICodex,
+		Status:  StatusActive,
+		Healthy: true,
+	})
+	resource, err := store.AddProviderResource(ProviderResource{
+		ID:           "rsrc_playground_codex",
+		ProviderID:   provider.ID,
+		Name:         "Playground Codex Account",
+		ResourceType: ProviderResourceOpenAISubscription,
+		Status:       StatusActive,
+		Healthy:      true,
+		Options:      codexCapabilityOptionsForTest("gpt-playground-codex"),
+		Credentials: &ProviderResourceCredentials{
+			AccessToken: "access_playground_codex",
+			AccountID:   "account_playground_codex",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.AddModel(Model{Name: "gpt-playground-codex", Status: StatusActive})
+	store.AddRoute(ModelRoute{
+		ID:                 "route_playground_codex",
+		ModelName:          "gpt-playground-codex",
+		ProviderID:         provider.ID,
+		ProviderResourceID: resource.ID,
+		ProviderModel:      "gpt-playground-codex",
+		Status:             StatusActive,
+	})
+
+	server := New(store)
+	server.codexSubscription.Client = &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/backend-api/codex/responses" {
+			t.Fatalf("expected Codex Responses endpoint, got %s", req.URL)
+		}
+		if req.Header.Get("Authorization") != "Bearer access_playground_codex" || req.Header.Get("ChatGPT-Account-ID") != "account_playground_codex" {
+			t.Fatalf("expected OAuth account credentials, got %#v", req.Header)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["model"] != "gpt-playground-codex" || payload["instructions"] != "Be concise." || payload["stream"] != true {
+			t.Fatalf("unexpected Codex playground payload: %#v", payload)
+		}
+		if _, ok := payload["max_output_tokens"]; ok {
+			t.Fatalf("Codex playground request must not send max_output_tokens: %#v", payload)
+		}
+		if _, ok := payload["temperature"]; ok {
+			t.Fatalf("Codex playground request must not send temperature: %#v", payload)
+		}
+		reasoning, _ := payload["reasoning"].(map[string]any)
+		if reasoning["effort"] != "high" {
+			t.Fatalf("expected playground reasoning effort, got %#v", payload["reasoning"])
+		}
+		input, _ := payload["input"].([]any)
+		if len(input) != 3 {
+			t.Fatalf("expected user, assistant, and user history in Responses input, got %#v", payload["input"])
+		}
+		first, _ := input[0].(map[string]any)
+		second, _ := input[1].(map[string]any)
+		third, _ := input[2].(map[string]any)
+		if first["role"] != "user" || second["role"] != "assistant" || third["role"] != "user" {
+			t.Fatalf("unexpected Responses roles: %#v", input)
+		}
+		firstContent, _ := first["content"].([]any)
+		secondContent, _ := second["content"].([]any)
+		firstPart, _ := firstContent[0].(map[string]any)
+		secondPart, _ := secondContent[0].(map[string]any)
+		if firstPart["type"] != "input_text" || firstPart["text"] != "First question" || secondPart["type"] != "output_text" || secondPart["text"] != "First answer" {
+			t.Fatalf("unexpected Responses content: %#v", input)
+		}
+		stream := strings.Join([]string{
+			"event: response.output_text.delta",
+			`data: {"type":"response.output_text.delta","delta":"Codex playground works."}`,
+			"",
+			"event: response.completed",
+			`data: {"type":"response.completed","response":{"id":"resp_playground","status":"completed","model":"gpt-playground-codex","output":[],"usage":{"input_tokens":5,"output_tokens":4,"total_tokens":9}}}`,
+			"",
+		}, "\n")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(stream)),
+			Request:    req,
+		}, nil
+	})}
+
+	resp := doJSON(t, server.Handler(), http.MethodPost, "/api/admin/playground/chat", map[string]any{
+		"model": "gpt-playground-codex",
+		"messages": []map[string]any{
+			{"role": "system", "content": "Be concise."},
+			{"role": "user", "content": "First question"},
+			{"role": "assistant", "content": "First answer"},
+			{"role": "user", "content": "Second question"},
+		},
+		"max_tokens":       321,
+		"temperature":      0.2,
+		"reasoning_effort": "high",
+	}, "")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected Codex playground request to succeed, got %d: %s", resp.Code, resp.Body)
+	}
+	if !strings.Contains(resp.Body, "Codex playground works.") || !strings.Contains(resp.Body, `"prompt_tokens":5`) || !strings.Contains(resp.Body, `"completion_tokens":4`) {
+		t.Fatalf("unexpected Codex playground response: %s", resp.Body)
+	}
+}
+
 func TestGatewayEmbeddings(t *testing.T) {
 	app := newTestServer()
 	resp := doJSON(t, app, http.MethodPost, "/v1/embeddings", map[string]any{
