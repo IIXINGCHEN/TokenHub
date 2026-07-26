@@ -50,9 +50,22 @@ PostgreSQL 的详细配置见 [PostgreSQL 设置指南](../postgresql-setup.md)�
 
 默认安装使用 SQLite 启动一个前端实例和一个后端实例。需要横向扩容且数据库由 Compose 项目之外的平台托管时，使用 `deploy/docker-compose.remote-postgres.yml`。该配置在可扩容的前后端服务前提供 Nginx 网关，并且不会启动本地数据库。
 
-<p align="center">
-  <img src="../assets/architecture/tokenhub-multi-instance.png" alt="TokenHub 多实例架构" width="1200" />
-</p>
+```mermaid
+flowchart TB
+    clients["客户端<br/>管理后台 · OpenAI SDK"] --> nginx["Nginx 网关<br/>负载均衡 · 健康检查"]
+    nginx --> frontend["前端副本 × N"]
+    frontend --> backend["后端副本 × N"]
+    backend <--> providers["模型 Provider"]
+
+    local["data/model-catalog.yaml<br/>模型主数据"] -->|"启动时解析并写入<br/>集群租约串行化各副本"| backend
+    providerCatalog["data/provider-catalog.json<br/>受版本控制的 Provider 模板与候选模型"] -->|"管理员新建或刷新 Provider"| backend
+    backend <-->|"模型 · 路由 · Provider 目录快照<br/>共享状态 · 数据库锁"| postgres[("共享 PostgreSQL")]
+
+    backend -->|"创建 Provider"| rule["路由创建规则<br/>Provider 候选模型 ∩ 本地 Model → Route"]
+    local -.-> rule
+    providerCatalog -.-> rule
+    rule -->|"创建匹配的 Route"| postgres
+```
 
 多实例模式下：
 
@@ -60,6 +73,8 @@ PostgreSQL 的详细配置见 [PostgreSQL 设置指南](../postgresql-setup.md)�
 - 后端副本将持久化配置、OAuth 会话、配额计数、审计数据、集群锁和请求并发租约统一存储在 PostgreSQL 中。
 - 租约过期和归属判断使用 PostgreSQL 时钟，避免不同宿主机的时钟偏差导致租约被提前接管；失去租约后，心跳会取消对应任务或请求。
 - 每个后端启动时都会同步当前配置的模型目录，并通过集群租约串行执行幂等同步。
+- Provider 模板和候选模型从仓库中受版本控制的本地目录读取，运行时不依赖远端目录服务。
+- 后端会将本地 Provider 目录快照持久化到 PostgreSQL，使各副本使用同一目录；本地文件缺失时则回退至已写入数据库的内置模板。
 - 数据库协调故障只释放 Provider 容量，不会把健康的模型 Provider 错误计为失败。
 
 配置远端 `TOKENHUB_DATABASE_URL`、公网网关地址、生产密钥和可信代理 CIDR 后运行：
@@ -214,6 +229,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_DATABASE_URL` | `sqlite:///app/data/tokenhub.db` | 容器内 SQLite 数据库路径 |
 | `TOKENHUB_SQLITE_BACKUP_DIR` | `/app/data/backups` | 备份目录 |
 | `TOKENHUB_MODEL_CATALOG_FILE` | `/app/catalog/model-catalog.yaml` | 标准模型目录文件 |
+| `TOKENHUB_PROVIDER_CATALOG_FILE` | `/app/catalog/provider-catalog.json` | Provider 模板与候选模型目录文件 |
 | `TOKENHUB_SEED_DEMO` | `false` | 是否写入演示数据 |
 | `TOKENHUB_LOG_LEVEL` | `info` | 日志级别 |
 | `TOKENHUB_RESOURCE_FAILURE_THRESHOLD` | `3` | Provider 资源进入冷却前的失败阈值 |
@@ -250,9 +266,9 @@ SQLite 是项目、Key、Provider、路由、用户、请求日志、用量、�
 - 按保留策略清理旧备份。
 - 将 Provider 凭证和 Admin Token 放在密钥管理系统或受保护的环境变量中。
 
-## 模型目录
+## 目录文件
 
-发布的后端镜像会把对应版本的 `data/model-catalog.yaml` 放在 `/app/catalog/model-catalog.yaml`。默认部署直接使用镜像内文件，确保后端程序和模型目录来自同一镜像版本。
+发布的后端镜像会把对应版本的 `data/model-catalog.yaml` 和 `data/provider-catalog.json` 放在 `/app/catalog/`。默认部署直接使用镜像内文件，确保后端程序和两类目录来自同一镜像版本。Provider 目录由 PublicProviderConf 数据迁入并随仓库维护，TokenHub 运行时不会拉取远端目录数据。
 
 需要使用自定义模型目录时，显式指定挂载文件：
 
@@ -263,6 +279,8 @@ SQLite 是项目、Key、Provider、路由、用户、请求日志、用量、�
 自定义文件会覆盖镜像内的模型目录，其版本需要与 `TOKENHUB_IMAGE_TAG` 分别管理。更新文件后，重启后端容器，并在管理后台的「模型目录」中确认结果。
 
 更新当前配置的目录文件后，可以重启后端，也可以在管理后台「模型目录」中点击「恢复出厂目录」来重新导入当前文件；手动新增的其他模型会保留。
+
+`data/model-catalog.yaml` 仍是模型主数据和路由准入清单。`data/provider-catalog.json` 提供 Provider 模板与候选模型；仅当候选模型也存在于模型目录时才会创建路由。如需使用自定义 Provider 目录，将 `TOKENHUB_PROVIDER_CATALOG_FILE` 指向具有相同 `providers` 结构的本地 JSON 文件。
 
 ## 反向代理
 

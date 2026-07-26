@@ -50,9 +50,22 @@ For detailed PostgreSQL configuration, see the [PostgreSQL Setup Guide](postgres
 
 The default installation starts one frontend and one backend with SQLite. For horizontal scaling with PostgreSQL managed outside this Compose project, use `deploy/docker-compose.remote-postgres.yml`. It adds an Nginx gateway in front of scalable backend and frontend services and does not start a local database.
 
-<p align="center">
-  <img src="assets/architecture/tokenhub-multi-instance.png" alt="TokenHub multi-instance architecture" width="1200" />
-</p>
+```mermaid
+flowchart TB
+    clients["Clients<br/>Admin Console · OpenAI SDKs"] --> nginx["Nginx Gateway<br/>Load balancing · Health checks"]
+    nginx --> frontend["Frontend replicas × N"]
+    frontend --> backend["Backend replicas × N"]
+    backend <--> providers["Model Providers"]
+
+    local["data/model-catalog.yaml<br/>Model master data"] -->|"Startup: parse + upsert<br/>cluster lease serializes replicas"| backend
+    providerCatalog["data/provider-catalog.json<br/>Tracked Provider templates + candidate models"] -->|"Admin provider setup / refresh"| backend
+    backend <-->|"Models · Routes · Provider catalog snapshot<br/>shared state · database locks"| postgres[("Shared PostgreSQL")]
+
+    backend -->|"Provider creation"| rule["Route creation rule<br/>provider candidate ∩ local Model → Route"]
+    local -.-> rule
+    providerCatalog -.-> rule
+    rule -->|"Create matching Route"| postgres
+```
 
 In multi-instance mode:
 
@@ -60,6 +73,8 @@ In multi-instance mode:
 - Backend replicas keep durable configuration, OAuth sessions, quota buckets, audit data, cluster locks, and in-flight concurrency leases in PostgreSQL.
 - Lease expiry and ownership decisions use the PostgreSQL clock, avoiding early takeover caused by clock skew between hosts. Heartbeats cancel work when lease ownership is lost.
 - The configured model catalog is synchronized on every backend startup; a cluster lease serializes the idempotent synchronization across replicas.
+- Provider templates and candidate models are read from the tracked local provider catalog; runtime configuration does not depend on a remote catalog service.
+- The backend persists a local Provider-catalog snapshot in PostgreSQL, so replicas serve the same catalog and a missing local file falls back to the seeded built-in templates.
 - Coordination failures release provider capacity without incorrectly marking a healthy model provider as failed.
 
 Set the remote `TOKENHUB_DATABASE_URL`, public gateway URL, production secrets, and trusted proxy CIDR, then run:
@@ -214,6 +229,7 @@ Only use `down -v` when you intentionally want to delete local data.
 | `TOKENHUB_DATABASE_URL` | `sqlite:///app/data/tokenhub.db` | Database connection URL (sqlite:// or postgresql://) |
 | `TOKENHUB_SQLITE_BACKUP_DIR` | `/app/data/backups` | Backup output directory |
 | `TOKENHUB_MODEL_CATALOG_FILE` | `/app/catalog/model-catalog.yaml` | Standard model catalog file |
+| `TOKENHUB_PROVIDER_CATALOG_FILE` | `/app/catalog/provider-catalog.json` | Provider templates and candidate-model catalog file |
 | `TOKENHUB_SEED_DEMO` | `false` | Whether to seed demo data |
 | `TOKENHUB_LOG_LEVEL` | `info` | Log level |
 | `TOKENHUB_RESOURCE_FAILURE_THRESHOLD` | `3` | Provider resource failure threshold before cooldown |
@@ -253,9 +269,9 @@ Recommended production setup:
 - Rotate old backups according to your retention policy.
 - Keep provider credentials and admin tokens in a secret manager or protected environment variables.
 
-## Model Catalog
+## Catalog Files
 
-Published backend images include the matching `data/model-catalog.yaml` at `/app/catalog/model-catalog.yaml`. Default deployments use this copy so the backend binary and catalog always come from the same image version.
+Published backend images include the matching `data/model-catalog.yaml` and `data/provider-catalog.json` at `/app/catalog/`. Default deployments use these copies so the backend binary and both catalogs always come from the same image version. The Provider catalog is vendored from PublicProviderConf and is read locally at runtime; TokenHub does not fetch remote catalog data.
 
 To mount a custom catalog explicitly:
 
@@ -266,6 +282,8 @@ To mount a custom catalog explicitly:
 After editing the configured catalog file, restart the backend or use **Restore Factory Catalog** in the admin Model Catalog page to re-import the current file without removing manually added models.
 
 The custom mount intentionally overrides the image catalog and is therefore managed separately from `TOKENHUB_IMAGE_TAG`. After updating that file, restart the backend container and confirm the entries in `Model Catalog`.
+
+`data/model-catalog.yaml` remains the model master data and route allowlist. `data/provider-catalog.json` provides Provider templates and candidate models; a route is created only when its candidate also exists in the model catalog. To use a custom Provider catalog, set `TOKENHUB_PROVIDER_CATALOG_FILE` to a local JSON file using the same `providers` structure.
 
 ## Reverse Proxy
 

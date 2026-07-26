@@ -9,6 +9,7 @@ COPY backend/go.sum ./backend/go.sum
 COPY backend/cmd ./backend/cmd
 COPY backend/internal ./backend/internal
 COPY data/model-catalog.yaml ./catalog/model-catalog.yaml
+COPY data/provider-catalog.json ./catalog/provider-catalog.json
 RUN cd backend && CGO_ENABLED=1 GOOS=linux go build -o /out/tokenhub ./cmd/tokenhub
 
 FROM alpine:3.20
@@ -18,5 +19,6 @@ USER tokenhub
 WORKDIR /app
 COPY --from=builder /out/tokenhub /app/tokenhub
 COPY --from=builder --chown=tokenhub:tokenhub /src/catalog/model-catalog.yaml /app/catalog/model-catalog.yaml
+COPY --from=builder --chown=tokenhub:tokenhub /src/catalog/provider-catalog.json /app/catalog/provider-catalog.json
 EXPOSE 8080
 ENTRYPOINT ["/app/tokenhub"]

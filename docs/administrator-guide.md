@@ -27,7 +27,7 @@ This guide is for platform administrators, security operators, and infrastructur
 
 ## Provider Catalog Availability
 
-TokenHub stores the last known-good public provider catalog in the database. A new installation seeds a built-in catalog and attempts to download the complete public catalog before the backend starts accepting requests. If that initialization download fails, the backend starts with the built-in snapshot and retries on the next startup. Public snapshots older than 24 hours refresh in the background. Ordinary **Provider Channels** requests only read the database, and a refresh atomically replaces the snapshot only after the download passes completeness validation. If GitHub is slow or unavailable, administrators continue using the stored snapshot.
+TokenHub stores the last known-good provider catalog in the database. On every backend startup, it validates and loads the configured local `provider-catalog.json`, then atomically replaces the database snapshot. Ordinary **Provider Channels** requests only read the database snapshot, and administrators can manually refresh the same local catalog. If local catalog reading, parsing, or completeness validation fails, TokenHub keeps using the last known-good snapshot.
 
 ## Routing Requirements
 

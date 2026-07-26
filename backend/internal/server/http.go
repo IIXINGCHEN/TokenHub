@@ -79,7 +79,7 @@ func NewWithConfig(store Store, config Config) *Server {
 		adapterRegistry:   registry,
 		integrations:      NewIntegrationService(store, registry),
 		codexSubscription: codexSubscription,
-		providerCatalog:   newProviderCatalogService(store, nil, publicProviderConfAllURL),
+		providerCatalog:   newProviderCatalogService(store, config.ProviderCatalogFile),
 		mux:               http.NewServeMux(),
 		config:            config,
 	}

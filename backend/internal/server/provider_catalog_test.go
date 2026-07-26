@@ -3,128 +3,149 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
-	"strings"
-	"sync/atomic"
+	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
 
-type providerCatalogRoundTripper func(*http.Request) (*http.Response, error)
-
-func (fn providerCatalogRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	return fn(req)
-}
-
-func TestProviderCatalogServiceReadsDatabaseWithoutUpstream(t *testing.T) {
+func TestProviderCatalogServiceReloadsTrackedLocalFile(t *testing.T) {
 	store := NewMemoryStore()
-	entries := []ProviderCatalogEntry{{
-		ID:          "stored-provider",
-		Name:        "Stored Provider",
-		DisplayName: "Stored Provider",
-		Type:        ProviderOpenAICompatible,
-		ModelsCount: 1,
-		Source:      "test-snapshot",
-		Models: []ProviderCatalogModel{{
-			ID:          "stored-model",
-			DisplayName: "Stored Model",
-		}},
-	}}
-	if err := store.SaveProviderCatalogSnapshot(entries, "test-snapshot", time.Now().UTC()); err != nil {
-		t.Fatal(err)
-	}
+	catalogFile := filepath.Join(t.TempDir(), "provider-catalog.json")
+	writeProviderCatalogFixture(t, catalogFile)
 
-	var upstreamCalls atomic.Int32
-	client := &http.Client{Transport: providerCatalogRoundTripper(func(*http.Request) (*http.Response, error) {
-		upstreamCalls.Add(1)
-		return nil, errors.New("upstream must not be called")
-	})}
-	service := newProviderCatalogService(store, client, "https://catalog.invalid/all.json")
-
-	summaries, source, err := service.List(context.Background(), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if source != "test-snapshot" || len(summaries) != 1 || summaries[0].ID != "stored-provider" {
-		t.Fatalf("unexpected stored catalog: source=%q entries=%+v", source, summaries)
-	}
-	if len(summaries[0].Models) != 0 || summaries[0].ModelsCount != 1 {
-		t.Fatalf("list should use stored summaries without models: %+v", summaries[0])
-	}
-
-	entry, source, ok, err := service.Get(context.Background(), "stored-provider", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok || source != "test-snapshot" || len(entry.Models) != 1 || entry.Models[0].ID != "stored-model" {
-		t.Fatalf("unexpected stored catalog entry: source=%q ok=%v entry=%+v", source, ok, entry)
-	}
-	if upstreamCalls.Load() != 0 {
-		t.Fatalf("ordinary database reads made %d upstream calls", upstreamCalls.Load())
-	}
-}
-
-func TestProviderCatalogRefreshPersistsLastGoodSnapshot(t *testing.T) {
-	store := NewMemoryStore()
-	if err := store.SaveProviderCatalogSnapshot([]ProviderCatalogEntry{{
-		ID: "old-provider", Name: "Old Provider", DisplayName: "Old Provider", Source: "old-snapshot",
-	}}, "old-snapshot", time.Now().UTC().Add(-24*time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/all.json" {
-			t.Fatalf("unexpected catalog path %s", r.URL.Path)
-		}
-		w.Header().Set("content-type", "application/json")
-		if err := json.NewEncoder(w).Encode(completeProviderCatalogPayload()); err != nil {
-			t.Fatal(err)
-		}
-	}))
-	defer upstream.Close()
-
-	service := newProviderCatalogService(store, upstream.Client(), upstream.URL+"/all.json")
+	service := newProviderCatalogService(store, catalogFile)
 	summaries, source, err := service.List(context.Background(), true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if source != "public-provider-conf" || len(summaries) != providerCatalogMinProviders+1 || !providerCatalogContains(summaries, "fresh-provider") {
-		t.Fatalf("unexpected refreshed catalog: source=%q entries=%+v", source, summaries)
+	if source != "local-provider-catalog" || len(summaries) != providerCatalogMinProviders+1 ||
+		!providerCatalogContains(summaries, "fresh-provider") {
+		t.Fatalf("unexpected local catalog summary: source=%q entries=%+v", source, summaries)
+	}
+	if len(summaries[0].Models) != 0 {
+		t.Fatalf("list should return summaries without models: %+v", summaries[0])
 	}
 
-	partial := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"providers":{"openai":{"name":"OpenAI","models":[{"id":"only-model"}]}}}`))
-	}))
-	defer partial.Close()
-	restarted := newProviderCatalogService(store, partial.Client(), partial.URL)
-	persisted, persistedSource, err := restarted.List(context.Background(), false)
+	entry, source, ok, err := service.Get(context.Background(), "fresh-provider", false)
+	if err != nil || !ok {
+		t.Fatalf("expected local provider entry, ok=%v err=%v", ok, err)
+	}
+	if source != "local-provider-catalog" || len(entry.Models) != 5 {
+		t.Fatalf("unexpected local provider entry: source=%q entry=%+v", source, entry)
+	}
+
+	restarted := newProviderCatalogService(store, filepath.Join(t.TempDir(), "missing.json"))
+	persisted, source, err := restarted.List(context.Background(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if persistedSource != "public-provider-conf" || len(persisted) != providerCatalogMinProviders+1 || !providerCatalogContains(persisted, "fresh-provider") {
-		t.Fatalf("refreshed catalog was not persisted: source=%q entries=%+v", persistedSource, persisted)
+	if source != "local-provider-catalog" || !providerCatalogContains(persisted, "fresh-provider") {
+		t.Fatalf("expected persisted local catalog, source=%q entries=%+v", source, persisted)
 	}
+}
 
-	if _, _, err := restarted.List(context.Background(), true); err == nil || !strings.Contains(err.Error(), "incomplete") {
-		t.Fatalf("expected partial refresh to be rejected, got %v", err)
-	}
-	lastGood, _, err := restarted.List(context.Background(), false)
+func TestProviderCatalogServiceRetainsBuiltinSnapshotWhenLocalFileIsMissing(t *testing.T) {
+	store := NewMemoryStore()
+	service := newProviderCatalogService(store, filepath.Join(t.TempDir(), "missing.json"))
+
+	entries, source, err := service.List(context.Background(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(lastGood) != providerCatalogMinProviders+1 || !providerCatalogContains(lastGood, "fresh-provider") {
-		t.Fatalf("failed refresh replaced the last good snapshot: %+v", lastGood)
+	if source != "builtin" || len(entries) == 0 {
+		t.Fatalf("expected builtin catalog, source=%q entries=%d", source, len(entries))
+	}
+	if initialized, err := service.Initialize(context.Background()); err == nil || initialized {
+		t.Fatalf("expected missing local catalog to keep builtin snapshot, initialized=%v err=%v", initialized, err)
 	}
 
-	failingClient := &http.Client{Transport: providerCatalogRoundTripper(func(*http.Request) (*http.Response, error) {
-		return nil, errors.New("github unavailable")
-	})}
-	failedRefresh := newProviderCatalogService(store, failingClient, "https://catalog.invalid/all.json")
-	if _, _, err := failedRefresh.List(context.Background(), true); err == nil || !strings.Contains(err.Error(), "github unavailable") {
-		t.Fatalf("expected explicit refresh error, got %v", err)
+	entries, source, err = service.List(context.Background(), false)
+	if err != nil || source != "builtin" || len(entries) == 0 {
+		t.Fatalf("expected builtin snapshot to remain available, source=%q entries=%d err=%v", source, len(entries), err)
+	}
+}
+
+func TestProviderCatalogServiceInitializeReloadsLocalCatalogOnEveryStart(t *testing.T) {
+	store := NewMemoryStore()
+	catalogFile := filepath.Join(t.TempDir(), "provider-catalog.json")
+	writeProviderCatalogFixture(t, catalogFile)
+
+	service := newProviderCatalogService(store, catalogFile)
+	initialized, err := service.Initialize(context.Background())
+	if err != nil || !initialized {
+		t.Fatalf("expected first local catalog refresh, initialized=%v err=%v", initialized, err)
+	}
+	replaceProviderCatalogFixtureURL(t, catalogFile, "fresh-provider", "https://refreshed-provider.example/v1")
+
+	initialized, err = service.Initialize(context.Background())
+	if err != nil || !initialized {
+		t.Fatalf("expected second local catalog refresh, initialized=%v err=%v", initialized, err)
+	}
+	entry, source, ok, err := service.Get(context.Background(), "fresh-provider", false)
+	if err != nil || !ok || source != "local-provider-catalog" || entry.BaseURL != "https://refreshed-provider.example/v1" {
+		t.Fatalf("expected refreshed provider entry, source=%q entry=%+v ok=%v err=%v", source, entry, ok, err)
+	}
+}
+
+func TestProviderCatalogServiceInitializeRetainsLocalSnapshotWhenFileIsMissing(t *testing.T) {
+	store := NewMemoryStore()
+	catalogFile := filepath.Join(t.TempDir(), "provider-catalog.json")
+	writeProviderCatalogFixture(t, catalogFile)
+	if _, _, err := newProviderCatalogService(store, catalogFile).List(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+
+	service := newProviderCatalogService(store, filepath.Join(t.TempDir(), "missing.json"))
+	if initialized, err := service.Initialize(context.Background()); err == nil || initialized {
+		t.Fatalf("expected failed initialization, initialized=%v err=%v", initialized, err)
+	}
+	entries, source, err := service.List(context.Background(), false)
+	if err != nil || source != "local-provider-catalog" || !providerCatalogContains(entries, "fresh-provider") {
+		t.Fatalf("expected retained local snapshot, source=%q entries=%+v err=%v", source, entries, err)
+	}
+}
+
+func TestProviderCatalogServiceInitializeSerializesConcurrentRefreshes(t *testing.T) {
+	store := NewMemoryStore()
+	catalogFile := filepath.Join(t.TempDir(), "provider-catalog.json")
+	writeProviderCatalogFixture(t, catalogFile)
+
+	probe := newProviderCatalogConcurrentInitializeProbe()
+	services := []*providerCatalogService{
+		newProviderCatalogService(&providerCatalogConcurrentInitializeStore{Store: store, probe: probe}, catalogFile),
+		newProviderCatalogService(&providerCatalogConcurrentInitializeStore{Store: store, probe: probe}, catalogFile),
+	}
+	errors := make(chan error, len(services))
+	for _, service := range services {
+		go func(service *providerCatalogService) {
+			_, err := service.Initialize(context.Background())
+			errors <- err
+		}(service)
+	}
+
+	for range services {
+		select {
+		case err := <-errors:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("concurrent catalog initialization did not complete")
+		}
+	}
+
+	if writes := probe.localSnapshotWriteCount(); writes != len(services) {
+		t.Fatalf("expected %d serialized local catalog refreshes, got %d", len(services), writes)
+	}
+	if max := probe.maxConcurrentLocalSnapshotWrites(); max != 1 {
+		t.Fatalf("expected serialized snapshot writes, max concurrent writes=%d", max)
+	}
+	entries, source, err := services[0].List(context.Background(), false)
+	if err != nil || source != "local-provider-catalog" || !providerCatalogContains(entries, "fresh-provider") {
+		t.Fatalf("unexpected concurrently upgraded catalog: source=%q entries=%+v err=%v", source, entries, err)
 	}
 }
 
@@ -143,40 +164,12 @@ func TestBootstrapSeedsProviderCatalogSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !found || source != "builtin" || len(entries) < 5 {
-		t.Fatalf("expected an installed builtin provider catalog, found=%v source=%q entries=%d", found, source, len(entries))
+		t.Fatalf("expected builtin provider catalog, found=%v source=%q entries=%d", found, source, len(entries))
 	}
 }
 
-func TestProviderCatalogInitializeReplacesBuiltinSnapshot(t *testing.T) {
-	store := NewMemoryStore()
-	if err := seedBuiltinProviderCatalog(store); err != nil {
-		t.Fatal(err)
-	}
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if err := json.NewEncoder(w).Encode(completeProviderCatalogPayload()); err != nil {
-			t.Fatal(err)
-		}
-	}))
-	defer upstream.Close()
-
-	service := newProviderCatalogService(store, upstream.Client(), upstream.URL)
-	initialized, err := service.Initialize(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !initialized {
-		t.Fatal("expected builtin installation snapshot to be replaced")
-	}
-	entries, source, err := service.List(context.Background(), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if source != "public-provider-conf" || !providerCatalogContains(entries, "fresh-provider") {
-		t.Fatalf("unexpected initialized snapshot: source=%q entries=%+v", source, entries)
-	}
-}
-
-func completeProviderCatalogPayload() map[string]any {
+func writeProviderCatalogFixture(t *testing.T, catalogFile string) {
+	t.Helper()
 	providers := map[string]any{}
 	ids := []string{"openai", "anthropic", "google", "fresh-provider"}
 	for index := len(ids); index < providerCatalogMinProviders; index++ {
@@ -194,7 +187,39 @@ func completeProviderCatalogPayload() map[string]any {
 			"models": models,
 		}
 	}
-	return map[string]any{"providers": providers}
+	content, err := json.Marshal(map[string]any{"providers": providers})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(catalogFile, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func replaceProviderCatalogFixtureURL(t *testing.T, catalogFile string, providerID string, baseURL string) {
+	t.Helper()
+	content, err := os.ReadFile(catalogFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Providers map[string]map[string]any `json:"providers"`
+	}
+	if err := json.Unmarshal(content, &payload); err != nil {
+		t.Fatal(err)
+	}
+	provider, ok := payload.Providers[providerID]
+	if !ok {
+		t.Fatalf("missing fixture provider %q", providerID)
+	}
+	provider["api"] = baseURL
+	content, err = json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(catalogFile, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func providerCatalogContains(entries []ProviderCatalogEntry, id string) bool {
@@ -204,4 +229,61 @@ func providerCatalogContains(entries []ProviderCatalogEntry, id string) bool {
 		}
 	}
 	return false
+}
+
+type providerCatalogConcurrentInitializeStore struct {
+	Store
+	probe *providerCatalogConcurrentInitializeProbe
+}
+
+func (s *providerCatalogConcurrentInitializeStore) SaveProviderCatalogSnapshot(entries []ProviderCatalogEntry, source string, fetchedAt time.Time) error {
+	if source == "local-provider-catalog" {
+		s.probe.beginLocalSnapshotWrite()
+	}
+	err := s.Store.SaveProviderCatalogSnapshot(entries, source, fetchedAt)
+	if source == "local-provider-catalog" {
+		s.probe.endLocalSnapshotWrite(err == nil)
+	}
+	return err
+}
+
+type providerCatalogConcurrentInitializeProbe struct {
+	mu                        sync.Mutex
+	localSnapshotWrites       int
+	activeLocalSnapshotWrites int
+	maxLocalSnapshotWrites    int
+}
+
+func newProviderCatalogConcurrentInitializeProbe() *providerCatalogConcurrentInitializeProbe {
+	return &providerCatalogConcurrentInitializeProbe{}
+}
+
+func (p *providerCatalogConcurrentInitializeProbe) beginLocalSnapshotWrite() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.activeLocalSnapshotWrites++
+	if p.activeLocalSnapshotWrites > p.maxLocalSnapshotWrites {
+		p.maxLocalSnapshotWrites = p.activeLocalSnapshotWrites
+	}
+}
+
+func (p *providerCatalogConcurrentInitializeProbe) endLocalSnapshotWrite(succeeded bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.activeLocalSnapshotWrites--
+	if succeeded {
+		p.localSnapshotWrites++
+	}
+}
+
+func (p *providerCatalogConcurrentInitializeProbe) localSnapshotWriteCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.localSnapshotWrites
+}
+
+func (p *providerCatalogConcurrentInitializeProbe) maxConcurrentLocalSnapshotWrites() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.maxLocalSnapshotWrites
 }

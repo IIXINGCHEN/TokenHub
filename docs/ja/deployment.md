@@ -50,9 +50,22 @@ PostgreSQL の詳細な設定については、[PostgreSQL セットアップガ
 
 デフォルトのインストールでは、SQLite を使用するフロントエンド 1 台とバックエンド 1 台を起動します。水平スケールが必要で、データベースを Compose プロジェクト外で管理する場合は `deploy/docker-compose.remote-postgres.yml` を使用します。この構成はスケール可能なバックエンドとフロントエンドの前に Nginx ゲートウェイを配置し、ローカルデータベースを起動しません。
 
-<p align="center">
-  <img src="../assets/architecture/tokenhub-multi-instance.png" alt="TokenHub マルチインスタンス構成" width="1200" />
-</p>
+```mermaid
+flowchart TB
+    clients["クライアント<br/>管理コンソール · OpenAI SDK"] --> nginx["Nginx ゲートウェイ<br/>負荷分散 · ヘルスチェック"]
+    nginx --> frontend["フロントエンドレプリカ × N"]
+    frontend --> backend["バックエンドレプリカ × N"]
+    backend <--> providers["モデル Provider"]
+
+    local["data/model-catalog.yaml<br/>モデルのマスターデータ"] -->|"起動時に解析して upsert<br/>クラスタリースでレプリカを直列化"| backend
+    providerCatalog["data/provider-catalog.json<br/>バージョン管理された Provider テンプレートと候補モデル"] -->|"管理者による Provider の作成・更新"| backend
+    backend <-->|"モデル · ルート · Provider カタログスナップショット<br/>共有状態 · データベースロック"| postgres[("共有 PostgreSQL")]
+
+    backend -->|"Provider を作成"| rule["ルート作成ルール<br/>Provider 候補モデル ∩ ローカル Model → Route"]
+    local -.-> rule
+    providerCatalog -.-> rule
+    rule -->|"一致する Route を作成"| postgres
+```
 
 マルチインスタンスモードでは：
 
@@ -60,6 +73,8 @@ PostgreSQL の詳細な設定については、[PostgreSQL セットアップガ
 - バックエンドレプリカは、永続設定、OAuth セッション、クォータカウンター、監査データ、クラスターロック、実行中リクエストの並行数リースを PostgreSQL で共有します。
 - リースの期限と所有権は PostgreSQL のクロックで判定し、ホスト間の時刻ずれによる早期引き継ぎを防ぎます。所有権を失った処理はハートビートによってキャンセルされます。
 - 設定されたモデルカタログはバックエンドの起動ごとに同期され、冪等な同期処理はクラスターロックによって直列化されます。
+- Provider テンプレートと候補モデルは、リポジトリでバージョン管理されたローカルカタログから読み込まれ、実行時にリモートカタログサービスへ依存しません。
+- バックエンドはローカル Provider カタログのスナップショットを PostgreSQL に永続化するため、全レプリカで同じカタログを使用できます。ローカルファイルがない場合は、データベースへ保存された組み込みテンプレートにフォールバックします。
 - データベースの調整障害では Provider の容量だけを解放し、正常なモデル Provider を誤って失敗扱いにしません。
 
 リモート `TOKENHUB_DATABASE_URL`、公開ゲートウェイ URL、本番用シークレット、信頼するプロキシ CIDR を設定して実行します。
@@ -214,6 +229,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_DATABASE_URL` | `sqlite:///app/data/tokenhub.db` | コンテナ内 SQLite データベースパス |
 | `TOKENHUB_SQLITE_BACKUP_DIR` | `/app/data/backups` | バックアップ出力ディレクトリ |
 | `TOKENHUB_MODEL_CATALOG_FILE` | `/app/catalog/model-catalog.yaml` | 標準モデルカタログファイル |
+| `TOKENHUB_PROVIDER_CATALOG_FILE` | `/app/catalog/provider-catalog.json` | Provider テンプレートと候補モデルのカタログファイル |
 | `TOKENHUB_SEED_DEMO` | `false` | デモデータを投入するか |
 | `TOKENHUB_LOG_LEVEL` | `info` | ログレベル |
 | `TOKENHUB_RESOURCE_FAILURE_THRESHOLD` | `3` | Provider リソースをクールダウンするまでの失敗しきい値 |
@@ -250,9 +266,9 @@ SQLite は、プロジェクト、Key、Provider、ルート、ユーザー、�
 - 保持ポリシーに従って古いバックアップを削除します。
 - Provider 認証情報と Admin Token はシークレット管理または保護された環境変数で扱います。
 
-## モデルカタログ
+## カタログファイル
 
-公開済みバックエンドイメージには、対応するバージョンの `data/model-catalog.yaml` が `/app/catalog/model-catalog.yaml` に含まれます。デフォルトのデプロイではこのファイルを使用し、バックエンドプログラムとモデルカタログを同じイメージバージョンにそろえます。
+公開済みバックエンドイメージには、対応するバージョンの `data/model-catalog.yaml` と `data/provider-catalog.json` が `/app/catalog/` に含まれます。デフォルトのデプロイではこれらのファイルを使用し、バックエンドプログラムと両方のカタログを同じイメージバージョンにそろえます。Provider カタログは PublicProviderConf のデータをリポジトリへ取り込んで管理しており、TokenHub は実行時にリモートカタログを取得しません。
 
 カスタムモデルカタログを使用する場合は、マウントするファイルを明示します。
 
@@ -263,6 +279,8 @@ SQLite は、プロジェクト、Key、Provider、ルート、ユーザー、�
 カスタムファイルはイメージ内のモデルカタログを上書きするため、そのバージョンは `TOKENHUB_IMAGE_TAG` とは別に管理します。ファイルを更新した後、バックエンドコンテナを再起動し、管理コンソールの `Model Catalog` で内容を確認します。
 
 設定済みカタログファイルを更新した後は、バックエンドを再起動するか、管理コンソールの Model Catalog で「出荷時カタログに復元」を実行して現在のファイルを再インポートできます。手動で追加したその他のモデルは保持されます。
+
+`data/model-catalog.yaml` はモデルのマスターデータおよびルートの許可リストです。`data/provider-catalog.json` は Provider テンプレートと候補モデルを提供し、候補モデルがモデルカタログにも存在する場合だけルートが作成されます。カスタム Provider カタログを使うには、同じ `providers` 構造を持つローカル JSON ファイルを `TOKENHUB_PROVIDER_CATALOG_FILE` に指定します。
 
 ## リバースプロキシ
 
