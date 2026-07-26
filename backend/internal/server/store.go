@@ -3845,7 +3845,10 @@ func (s *GormStore) copySQLiteDatabase(path string, restore bool) error {
 			if err != nil {
 				return err
 			}
-			defer backup.Finish()
+			// Finish only releases the backup handle; the copy's success is decided
+			// by Step above, and this runs in a defer where nothing could act on a
+			// failure anyway.
+			defer backup.Finish() //nolint:errcheck // release-only, result not actionable
 			for {
 				done, err := backup.Step(64)
 				if err != nil {

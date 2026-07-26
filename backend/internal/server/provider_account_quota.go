@@ -173,10 +173,6 @@ func (s *Server) providerResourceByID(resourceID string) (ProviderResource, bool
 	return ProviderResource{}, false
 }
 
-func fetchOpenAIAccountQuota(ctx context.Context, creds ProviderResourceCredentials) (OpenAIAccountQuota, int, error) {
-	return fetchOpenAIAccountQuotaWithClient(ctx, nil, openAIAccountQuotaURL, creds)
-}
-
 func fetchOpenAIAccountQuotaWithClient(ctx context.Context, client *http.Client, endpoint string, creds ProviderResourceCredentials) (OpenAIAccountQuota, int, error) {
 	accessToken := strings.TrimSpace(creds.AccessToken)
 	accountID := strings.TrimSpace(creds.AccountID)

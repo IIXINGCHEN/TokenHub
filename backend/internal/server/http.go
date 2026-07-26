@@ -1357,10 +1357,6 @@ func routeStrategy(route ModelRoute) string {
 	return strategy
 }
 
-func shouldFailoverProviderError(err error) bool {
-	return shouldFailoverRoutedError(err, false)
-}
-
 func shouldFailoverRoutedError(err error, routeIsBound bool) bool {
 	if err == nil {
 		return false
@@ -2425,14 +2421,13 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	providers := []Provider{}
 	providerResources := []ProviderResource{}
-	models := []Model{}
 	alerts := []AlertEvent{}
 	if s.canViewGlobalOperations(user) {
 		providers = s.store.ListProviders()
 		providerResources = s.store.ListProviderResources()
 		alerts = s.store.ListAlerts()
 	}
-	models = s.accessibleModelsForAdminUser(user)
+	models := s.accessibleModelsForAdminUser(user)
 	routes := []ModelRoute{}
 	if s.canViewGlobalOperations(user) {
 		routes = s.store.ListRoutes()
@@ -5717,7 +5712,10 @@ func sendEmail(ctx context.Context, fields map[string]any, recipients []string, 
 		_ = conn.Close()
 		return err
 	}
-	defer client.Close()
+	// Close force-drops the connection as a safety net. Delivery is decided by Quit
+	// below, whose error is returned; a Close failure after that adds no information.
+	// The static type is *smtp.Client, so the io.Closer exemption does not apply.
+	defer client.Close() //nolint:errcheck // delivery result comes from Quit
 
 	if ok, _ := client.Extension("STARTTLS"); ok {
 		if err := client.StartTLS(&tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}); err != nil {
@@ -6175,11 +6173,6 @@ func quotaLimitsFromPayload(value any) QuotaLimits {
 	default:
 		return QuotaLimits{}
 	}
-}
-
-func (s *Server) authorizeAdmin(w http.ResponseWriter, r *http.Request) bool {
-	_, ok := s.requireAdmin(w, r, "overview", r.Method)
-	return ok
 }
 
 func (s *Server) authorizeAdminUser(w http.ResponseWriter, r *http.Request) (AdminUser, bool) {

@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -78,9 +77,9 @@ func TestWithoutGatewayExtensionsStripsExplicitEmptyRawFields(t *testing.T) {
 func TestDeepSeekAdapterForwardsReasoningContentOnly(t *testing.T) {
 	var received map[string]any
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&received)
+		decodeFixtureRequest(t, r.Body, &received)
 		w.Header().Set("content-type", "application/json")
-		io.WriteString(w, `{"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{}}`)
+		writeFixture(t, w, `{"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{}}`)
 	}))
 	defer upstream.Close()
 
@@ -115,9 +114,9 @@ func TestDeepSeekAdapterForwardsReasoningContentOnly(t *testing.T) {
 func TestOpenAICompatibleAdapterDoesNotForwardGatewayExtensions(t *testing.T) {
 	var received map[string]any
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&received)
+		decodeFixtureRequest(t, r.Body, &received)
 		w.Header().Set("content-type", "application/json")
-		io.WriteString(w, `{"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{}}`)
+		writeFixture(t, w, `{"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{}}`)
 	}))
 	defer upstream.Close()
 

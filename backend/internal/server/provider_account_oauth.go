@@ -516,21 +516,6 @@ func providerAccountCredentialSummary(creds ProviderResourceCredentials) map[str
 	return options
 }
 
-func providerAccountOAuthCallbackURL(r *http.Request) string {
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	if forwarded := firstForwardedValue(r.Header.Get("x-forwarded-proto")); forwarded != "" {
-		scheme = forwarded
-	}
-	host := r.Host
-	if forwarded := firstForwardedValue(r.Header.Get("x-forwarded-host")); forwarded != "" {
-		host = forwarded
-	}
-	return fmt.Sprintf("%s://%s/api/admin/provider-account-oauth/openai/oauth/callback", scheme, host)
-}
-
 func providerAccountOAuthRedirectWithError(returnURL string, code string) string {
 	target, err := url.Parse(returnURL)
 	if err != nil {

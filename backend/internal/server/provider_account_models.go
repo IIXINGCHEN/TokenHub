@@ -468,16 +468,6 @@ func (s *Server) filterCodexRoutesByModel(_ context.Context, modelName string, r
 	)
 }
 
-func providerCatalogModelIDs(models []ProviderCatalogModel) []string {
-	modelIDs := make([]string, 0, len(models))
-	for _, model := range models {
-		if modelID := strings.TrimSpace(model.ID); modelID != "" {
-			modelIDs = append(modelIDs, modelID)
-		}
-	}
-	return modelIDs
-}
-
 func (s *Server) removeCodexResourceModel(resourceID string, modelName string) {
 	resource, ok := s.providerResourceByID(resourceID)
 	if !ok {
@@ -583,15 +573,6 @@ func (s *Server) codexProviderCatalogFromStandardModels(selected []string) Provi
 		Source:         "openai-codex-live",
 		Models:         models,
 	}
-}
-
-func codexCatalogModelByID(models []ProviderCatalogModel, id string) (ProviderCatalogModel, bool) {
-	for _, model := range models {
-		if model.ID == id {
-			return model, true
-		}
-	}
-	return ProviderCatalogModel{}, false
 }
 
 func cloneStringMap(values map[string]string) map[string]string {
