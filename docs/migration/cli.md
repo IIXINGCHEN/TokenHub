@@ -35,9 +35,10 @@ with code 5.
 | `--checkpoint-out` | Rollback checkpoint JSON (written with mode 0600) | `<bundle>.checkpoint.json` |
 | `--new-keys-out` | Newly generated API key secrets JSON (mode 0600, plaintext visible once — distribute securely, then delete) | `<bundle>.new-keys.json` |
 
-> Note: `apply` creates users through the Admin CSV import endpoint. If the
-> target TokenHub instance has a password-reset mail channel configured, each
-> newly imported user receives a password-reset email during apply.
+> Note: `apply` creates users through the Admin CSV import endpoint, which
+> requires an active email notification channel on the target instance.
+> Applying a bundle that creates new users fails without one, and each newly
+> imported user receives a password-reset email during apply.
 
 ## Exit Codes
 

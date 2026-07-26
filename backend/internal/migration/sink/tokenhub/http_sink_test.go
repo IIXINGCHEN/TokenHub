@@ -263,6 +263,16 @@ func TestHTTPSinkApplyUserCreatesAndUpdates(t *testing.T) {
 	if result.Report.Created != 0 || result.Report.Updated != 0 {
 		t.Fatalf("expected unchanged re-apply to skip, got %+v", result.Report)
 	}
+
+	// A fresh sink instance (the CLI constructs one per run) must converge to
+	// Skip as well, starting from an empty refIndex.
+	result, err = NewHTTPSink(client, bundle.StaticResolver{}).Apply(context.Background(), migrationBundle)
+	if err != nil {
+		t.Fatalf("fresh sink apply: %v", err)
+	}
+	if result.Report.Created != 0 || result.Report.Updated != 0 {
+		t.Fatalf("expected fresh sink re-apply to skip, got %+v", result.Report)
+	}
 }
 
 func TestSameAdminUserEmptyDesiredFieldsMeanKeep(t *testing.T) {
