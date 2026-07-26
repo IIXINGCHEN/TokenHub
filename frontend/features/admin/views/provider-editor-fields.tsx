@@ -111,7 +111,13 @@ export function providerCredentialOptions(): Array<{ key: ProviderCredentialMode
   ];
 }
 
-export function providerCreateWizardSteps(): Array<{ title: string; icon: typeof Search }> {
+export function providerCreateWizardSteps(credentialMode: ProviderCredentialMode): Array<{ title: string; icon: typeof Search }> {
+  if (credentialMode === "provider_api_key") {
+    return [
+      { title: "接入方式", icon: UserRoundCheck },
+      { title: "渠道与 API Key", icon: KeyRound },
+    ];
+  }
   return [
     { title: "接入方式", icon: UserRoundCheck },
     { title: "渠道信息", icon: Server },

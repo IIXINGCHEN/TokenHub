@@ -2,7 +2,7 @@ import { AlertCircle, Ban, Check, Copy, KeyRound, Plus, Search, Send, Trash2, Us
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { clearPendingProviderAccountOAuthSession, consumePendingProviderAccountOAuthResult, hasPendingProviderAccountOAuthResult, parseProviderAccountOAuthResult, providerAccountOAuthCallbackURL, type ProviderAccountOAuthGenerateResponse, type ProviderAccountOAuthResult, readPendingProviderAccountOAuthSession, savePendingProviderAccountOAuthSession } from "../core/session";
 import { type ApiContext, type Model, type ModelRoute, type Provider, type ProviderCatalogEntry, type ProviderCredentialMode, type ProviderResource } from "../core/types";
-import { buildCustomProviderCatalogEntry, canonicalModelNameForUI, catalogModelCategoryOptions, modelCategory, modelCategoryForCatalog, modelCategoryLabel, providerEntryCategoryCount, providerEntrySupportsCategory, providerTypeToModelCategory } from "../domain/catalog";
+import { buildCustomProviderCatalogEntry, canonicalModelNameForUI, catalogModelCategoryOptions, modelCategory, modelCategoryForCatalog, modelCategoryLabel, providerEntryCategoryCount, providerEntrySupportsCategory } from "../domain/catalog";
 import { compactNumber, formatModelPrice, modelCapabilities } from "../domain/formatting";
 import { providerTypeLabel } from "../domain/labels";
 import { clearCustomValidity, countWithUnit, handleRequiredFieldInvalid, providerSaveMessage, tx } from "../i18n/runtime";
@@ -10,6 +10,7 @@ import { adminFetch, isAuthExpiredError, providerPayload, providerResourcePayloa
 import { assertProviderAccountResourceReady, defaultProviderResourceName, providerAccountTokenSummary, providerCreateAccountManualTokenFields, providerCreateAccountRuntimeFields, providerResourceDraftDefaults } from "../resources/provider-model-config";
 import { ReviewItem } from "../shared/modals";
 import { providerTypeOptions } from "../shared/ui";
+import { ProviderAPIQuickCatalog, ProviderAPIQuickConnect } from "./provider-api-quick-connect";
 import { ProviderInlineField, providerAccountResourceReady, providerCreateWizardSteps, providerCreateWizardStepTitle, providerCredentialModeLabel, providerCredentialOptions } from "./provider-editor-fields";
 
 const openAIAccountOAuthRedirectURI = "http://localhost:1455/auth/callback";
@@ -133,7 +134,7 @@ export function ProviderUpsertModal({
   const initialCategory = editingCodexSubscription
     ? "codex"
     : providerModelCategory || (mode === "edit" && provider
-      ? providerTypeToModelCategory(provider.type)
+      ? "all"
       : availableCategories.find((item) => item.key !== "all")?.key || "custom");
   const initialEntry = editingCodexSubscription
     ? codexProviderCatalogSummary
@@ -196,7 +197,9 @@ export function ProviderUpsertModal({
   const [codexTestResults, setCodexTestResults] = useState<Record<string, CodexSubscriptionTestResult>>({});
   const [editTab, setEditTab] = useState<ProviderEditTab>(editingCodexSubscription ? "quota" : "settings");
   const [createStep, setCreateStep] = useState(0);
-  const createSteps = useMemo(() => providerCreateWizardSteps(), []);
+  const quickAPIFlow = mode === "create" && credentialMode === "provider_api_key";
+  const quickAPIConnect = quickAPIFlow && createStep === 1;
+  const createSteps = useMemo(() => providerCreateWizardSteps(credentialMode), [credentialMode]);
   const lastCreateStep = createSteps.length - 1;
   const accountCallbackURL = useMemo(() => providerAccountOAuthCallbackURL(), []);
   const modalRef = useRef<HTMLFormElement | null>(null);
@@ -485,9 +488,13 @@ export function ProviderUpsertModal({
     }
     setSelectedModels(nextSelected);
   }, [effectiveDetail, mode, models, values.create_routes]);
+  const listedCatalog = useMemo(
+    () => quickAPIFlow ? directCredentialCatalog.filter((entry) => entry.id !== "custom") : categoryCatalog,
+    [categoryCatalog, directCredentialCatalog, quickAPIFlow],
+  );
   const filteredCatalog = useMemo(() => {
     const normalized = catalogQuery.trim().toLowerCase();
-    const entries = categoryCatalog;
+    const entries = listedCatalog;
     if (!normalized) return entries;
     return entries.filter((entry) =>
       [
@@ -496,7 +503,7 @@ export function ProviderUpsertModal({
         entry.display_name,
       ].filter(Boolean).join(" ").toLowerCase().includes(normalized),
     );
-  }, [categoryCatalog, catalogQuery]);
+  }, [catalogQuery, listedCatalog]);
   const filteredModels = useMemo(() => {
     const normalized = modelQuery.trim().toLowerCase();
     if (!normalized) return models.slice(0, 80);
@@ -513,7 +520,9 @@ export function ProviderUpsertModal({
     ? codexCatalog ?? codexProviderCatalogSummary
     : detail ?? (catalogID === "custom" ? customCatalogEntry : catalog.find((entry) => entry.id === catalogID));
   const showProviderCatalog = mode === "create" && createStep === 1 && credentialMode !== "account_integration";
-  const providerBodyClassName = !showProviderCatalog ? "provider-modal-body provider-wizard-single" : "provider-modal-body";
+  const providerBodyClassName = !showProviderCatalog
+    ? "provider-modal-body provider-wizard-single"
+    : quickAPIConnect ? "provider-modal-body provider-api-quick-layout" : "provider-modal-body";
   const accountRuntimeFields = useMemo(() => providerCreateAccountRuntimeFields(), []);
   const accountManualTokenFields = useMemo(() => providerCreateAccountManualTokenFields(), []);
   const accountTokenSummary = useMemo(() => providerAccountTokenSummary(accountValues), [accountValues]);
@@ -897,6 +906,7 @@ export function ProviderUpsertModal({
       name: mode === "create" ? entry.display_name || entry.name || current.name : current.name,
       type: entry.type || current.type || "openai_compatible",
       base_url: mode === "create" ? entry.base_url ?? "" : current.base_url,
+      create_routes: quickAPIFlow ? "true" : current.create_routes,
     }));
     syncAccountDefaults(nextName, entry.base_url);
   }
@@ -914,6 +924,7 @@ export function ProviderUpsertModal({
       name: mode === "create" ? "" : current.name,
       type: current.type || "openai_compatible",
       base_url: mode === "create" ? "" : current.base_url,
+      create_routes: quickAPIFlow ? "false" : current.create_routes,
     }));
     syncAccountDefaults(values.name || "Provider", "");
   }
@@ -925,17 +936,6 @@ export function ProviderUpsertModal({
       return;
     }
     if (selectedEntry) selectCatalog(selectedEntry);
-  }
-
-  function canContinueCreateStep(targetStep = createStep) {
-    if (mode !== "create") return true;
-    if (targetStep === 0) return Boolean(credentialMode);
-    if (targetStep === 1) {
-      return Boolean(selectedEntry && values.name?.trim());
-    }
-    if (targetStep === 2 && credentialMode === "provider_api_key") return Boolean(values.api_key?.trim());
-    if (targetStep === 2 && credentialMode === "account_integration") return providerAccountResourceReady(accountValues);
-    return true;
   }
 
   function validateCreateStep(targetStep = createStep) {
@@ -952,7 +952,11 @@ export function ProviderUpsertModal({
       setError(tx(credentialMode === "account_integration" ? "请填写通道名称。" : "请填写渠道名称。"));
       return false;
     }
-    if (targetStep === 2 && credentialMode === "provider_api_key" && !values.api_key?.trim()) {
+    if (targetStep === 1 && credentialMode === "provider_api_key" && catalogID === "custom" && !values.base_url?.trim()) {
+      setError(tx("请填写 Base URL。"));
+      return false;
+    }
+    if (targetStep === 1 && credentialMode === "provider_api_key" && !values.api_key?.trim()) {
       setError(tx("请填写 API Key。"));
       return false;
     }
@@ -991,13 +995,14 @@ export function ProviderUpsertModal({
         if (accountResourceNameConflict) throw new Error(tx("账号资源名称已存在，请使用唯一名称。"));
         assertProviderAccountResourceReady(accountValues);
       }
+      const createAllCatalogRoutes = quickAPIFlow && catalogID !== "custom";
       const payload = (mode === "edit" ? providerUpdatePayload : providerPayload)({
         ...values,
         api_key: mode === "create" && credentialMode !== "provider_api_key" ? "" : values.api_key,
-        create_routes: autoRouteEnabled && selectedModelIDs.length > 0 ? "true" : "false",
+        create_routes: autoRouteEnabled && (selectedModelIDs.length > 0 || createAllCatalogRoutes) ? "true" : "false",
         catalog_id: catalogID,
-        model_category: modelCategory,
-        selected_models: selectedModelIDs.length > 0 ? selectedModelIDs.join(",") : "",
+        model_category: quickAPIFlow || (mode === "edit" && !providerModelCategory) ? "" : modelCategory,
+        selected_models: quickAPIFlow ? "" : selectedModelIDs.length > 0 ? selectedModelIDs.join(",") : "",
         custom_models: catalogID === "custom" && effectiveDetail?.models ? JSON.stringify(effectiveDetail.models) : "",
       });
       const resp = await adminFetch(api, mode === "edit" && provider ? `/api/admin/providers/${provider.id}` : "/api/admin/providers", {
@@ -1068,6 +1073,17 @@ export function ProviderUpsertModal({
         ) : null}
         <div className={providerBodyClassName}>
           {showProviderCatalog ? (
+            quickAPIConnect ? (
+              <ProviderAPIQuickCatalog
+                entries={filteredCatalog}
+                total={listedCatalog.length}
+                selectedID={catalogID}
+                query={catalogQuery}
+                onQueryChange={setCatalogQuery}
+                onSelect={selectCatalog}
+                onSelectCustom={selectCustomCatalog}
+              />
+            ) : (
             <section className="provider-catalog-pane">
             <div className="provider-catalog-head">
               <strong>{tx("模型类型")}</strong>
@@ -1127,6 +1143,7 @@ export function ProviderUpsertModal({
               ))}
             </div>
           </section>
+            )
           ) : null}
 
           <section className="provider-config-pane">
@@ -1154,7 +1171,7 @@ export function ProviderUpsertModal({
                   ))}
                 </select>
               </div>
-            ) : mode === "create" && createStep > 0 ? (
+            ) : mode === "create" && createStep > 0 && !quickAPIConnect ? (
               <div className="provider-selected-summary">
                 <strong>{modelCategoryLabel(modelCategory)}</strong>
                 {credentialMode === "account_integration" ? (
@@ -1251,6 +1268,15 @@ export function ProviderUpsertModal({
               </section>
             ) : null}
             {mode === "create" && createStep === 1 ? (
+              quickAPIConnect ? (
+                <ProviderAPIQuickConnect
+                  catalogID={catalogID}
+                  entry={selectedEntry}
+                  modelCount={effectiveDetail?.models_count ?? selectedEntry?.models_count ?? 0}
+                  values={values}
+                  onUpdate={update}
+                />
+              ) : (
               <section className="provider-wizard-panel">
                 <div className="wizard-panel-head">
                   <h3>{tx(credentialMode === "account_integration" ? "确认账号通道和基础信息" : "选择渠道和基础信息")}</h3>
@@ -1271,6 +1297,7 @@ export function ProviderUpsertModal({
                   </div>
                 ) : null}
               </section>
+              )
             ) : null}
             {mode === "create" && createStep === 2 ? (
               <section className="provider-wizard-panel">
@@ -1637,7 +1664,7 @@ export function ProviderUpsertModal({
                 {codexTestErrors.selection ? <p className="provider-quota-error">{codexTestErrors.selection}</p> : null}
               </section>
             ) : null}
-            {(mode === "edit" && editTab === "settings") || (mode === "create" && createStep === 1) ? (
+            {(mode === "edit" && editTab === "settings") || (mode === "create" && createStep === 1 && !quickAPIConnect) ? (
               mode === "edit" && editingCodexSubscription && selectedAccountID === "all" ? (
                 <div className="provider-account-selection-empty">
                   <UserRoundCheck size={28} />
@@ -1775,7 +1802,7 @@ export function ProviderUpsertModal({
           <button className="button" disabled={loading} type="submit">
             {mode === "create"
               ? createStep === lastCreateStep
-                ? loading ? tx("保存中") : tx("保存 Provider")
+                ? loading ? tx("保存中") : tx(quickAPIConnect ? "新增 Provider" : "保存 Provider")
                 : tx("下一步")
               : tx("保存")}
           </button>
