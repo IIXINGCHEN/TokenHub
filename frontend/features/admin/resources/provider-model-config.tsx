@@ -195,7 +195,7 @@ export function assertProviderAccountResourceReady(values: Record<string, string
     throw new Error(tx("请先完成账号授权回填，或在高级选项中手动粘贴 Token。"));
   }
   if (!values.api_key?.trim()) {
-    throw new Error(tx("请填写账号资源的 API Key，或切换为稍后配置。"));
+    throw new Error(tx("请填写账号资源的 API Key。"));
   }
 }
 
