@@ -90,6 +90,60 @@ All replicas must use the same `TOKENHUB_SECRET_KEY`. Size `TOKENHUB_DB_MAX_OPEN
 
 Run the real two-instance PostgreSQL E2E suite with `./deploy/test-multi-instance.sh`.
 
+## Native Release with systemd
+
+Use the native Release installer for a single Linux host with systemd. Native packages support `linux/amd64` and `linux/arm64` and bundle the Go backend, the standalone Next.js console, and a matching Node.js runtime.
+
+Download and inspect the installer, then install the latest stable Release:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/astaxie/TokenHub/main/deploy/native/install.sh \
+  -o /tmp/tokenhub-install.sh
+sudo bash /tmp/tokenhub-install.sh install
+```
+
+Set `TOKENHUB_PUBLIC_HOST` when the server's first detected IP is not the address users will open:
+
+```bash
+sudo env TOKENHUB_PUBLIC_HOST=tokenhub.example.com \
+  bash /tmp/tokenhub-install.sh install
+```
+
+The first installation generates production secrets and an initial admin password. The password is printed once. Runtime files are kept in separate locations:
+
+- Releases and the `current` symlink: `/opt/tokenhub`
+- Configuration and secrets: `/etc/tokenhub/tokenhub.env`
+- SQLite database and backups: `/var/lib/tokenhub`
+- systemd unit: `/etc/systemd/system/tokenhub.service`
+
+Edit `/etc/tokenhub/tokenhub.env` when changing public URLs, CORS origins, ports, database settings, or secrets, then restart the service:
+
+```bash
+sudo systemctl restart tokenhub
+sudo systemctl status tokenhub
+sudo journalctl -u tokenhub -f
+```
+
+The installer verifies the Release archive against `checksums.txt` before activation and preserves configuration and data during upgrades:
+
+```bash
+sudo bash /tmp/tokenhub-install.sh upgrade
+sudo bash /tmp/tokenhub-install.sh upgrade --version 0.3.3
+sudo bash /tmp/tokenhub-install.sh rollback --version 0.3.2
+sudo bash /tmp/tokenhub-install.sh uninstall
+```
+
+`uninstall` preserves `/etc/tokenhub` and `/var/lib/tokenhub`. Use `uninstall --purge` only when configuration and application data should also be deleted.
+
+For a fork, use its installer URL and tell TokenHub which public Release repository to query:
+
+```bash
+sudo env TOKENHUB_RELEASE_REPOSITORY=your-account/TokenHub \
+  bash /tmp/tokenhub-install.sh install --version 0.3.3
+```
+
+Native Release installations are labeled `Native Release` in the version panel. Administrators can download and verify an update or rollback directly from the panel, then select **Restart now** to activate it through systemd. Each GitHub Release must contain the platform archive and `checksums.txt`; `.github/workflows/native-release.yml` builds and attaches those assets when a Release is published.
+
 ## Docker Compose
 
 Create a deployment environment file:
@@ -138,7 +192,7 @@ Each image is first pushed under a run-specific staging tag. The workflow verifi
 
 The first GHCR publication creates private packages. The repository owner must make both packages public before anonymous deployments can pull them. Until then, a deployment using the default `latest` tag remains usable by automatically falling back to a local source build. If an explicit `TOKENHUB_IMAGE_TAG` cannot be pulled, the installer exits instead of labeling current source as that version.
 
-### Version status and rollback
+### Docker version status and rollback
 
 Platform administrators can select the version badge below the TokenHub logo to inspect the running version, check the latest stable GitHub Release, and list up to three older stable releases. Release builds receive their exact version from the publication workflow; local source builds use the package version and are labeled as source builds.
 
@@ -150,7 +204,7 @@ For example, check a fork while running from source:
 TOKENHUB_RELEASE_REPOSITORY=your-account/TokenHub ./start.sh
 ```
 
-TokenHub deploys separate backend and frontend containers, so the application does not mount the Docker socket or mutate its host. The panel instead generates Compose commands that apply the same exact `TOKENHUB_IMAGE_TAG` to both images. Pin that tag in `deploy/.env` before running the commands so a later Compose operation does not move the deployment back to `latest`. Before rollback, create a database backup and confirm that the target release supports the current schema.
+TokenHub deploys separate backend and frontend containers, so the application does not mount the Docker socket or mutate its host. For Docker deployments, the panel continues to generate Compose commands that apply the same exact `TOKENHUB_IMAGE_TAG` to both images; it does not perform an in-container update. Pin that tag in `deploy/.env` before running the commands so a later Compose operation does not move the deployment back to `latest`. Source deployments continue to show manual update guidance. Before rollback, create a database backup and confirm that the target release supports the current schema.
 
 ### Optional local build
 
@@ -236,6 +290,7 @@ Only use `down -v` when you intentionally want to delete local data.
 | `TOKENHUB_HTTP_ADDR` | `:8080` | Backend listen address |
 | `TOKENHUB_PUBLIC_BASE_URL` | `http://localhost:8080` | Public backend URL shown to users |
 | `TOKENHUB_RELEASE_REPOSITORY` | `astaxie/TokenHub` | Trusted public GitHub repository used for version checks, in `owner/repository` form |
+| `TOKENHUB_INSTALL_ROOT` | `/opt/tokenhub` | Native Release installation root used for online update and rollback |
 | `TOKENHUB_TRUSTED_PROXY_CIDRS` | empty | Comma-separated proxy IPs or CIDRs allowed to supply `X-Forwarded-For` |
 | `TOKENHUB_CORS_ALLOWED_ORIGINS` | public URL | Comma-separated browser origins allowed to call the backend |
 | `TOKENHUB_ADMIN_TOKEN` | `change-me-tokenhub-admin-token` | Bootstrap admin token for Admin API access |

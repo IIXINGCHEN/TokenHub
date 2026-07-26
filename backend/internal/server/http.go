@@ -215,6 +215,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/admin/approvals/", s.handleAdminApprovalItem)
 	s.mux.HandleFunc("/api/admin/system/db-status", s.handleAdminSystemDBStatus)
 	s.mux.HandleFunc("/api/admin/system/version", s.handleAdminSystemVersion)
+	s.mux.HandleFunc("/api/admin/system/update", s.handleAdminSystemUpdate)
+	s.mux.HandleFunc("/api/admin/system/rollback", s.handleAdminSystemRollback)
+	s.mux.HandleFunc("/api/admin/system/restart", s.handleAdminSystemRestart)
 	s.mux.HandleFunc("/api/admin/system/rollback-versions", s.handleAdminRollbackVersions)
 }
 

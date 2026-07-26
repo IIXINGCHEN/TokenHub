@@ -83,6 +83,18 @@ func TestValidateForStartupRejectsInvalidReleaseRepository(t *testing.T) {
 	}
 }
 
+func TestValidateForStartupRejectsInvalidNativeInstallRoot(t *testing.T) {
+	config := Config{
+		Environment:    "dev",
+		BuildType:      releaseBuildType,
+		DeploymentType: nativeDeploymentType,
+		InstallRoot:    "relative/path",
+	}
+	if err := config.ValidateForStartup(); err == nil {
+		t.Fatal("ValidateForStartup accepted a relative native install root")
+	}
+}
+
 func TestVersionServiceChecksLatestReleaseAndCachesResult(t *testing.T) {
 	var calls atomic.Int32
 	releases := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +120,7 @@ func TestVersionServiceChecksLatestReleaseAndCachesResult(t *testing.T) {
 	if info.CurrentVersion != "0.3.0" || info.LatestVersion != "0.4.0" || !info.HasUpdate {
 		t.Fatalf("unexpected version info: %+v", info)
 	}
-	if info.BuildType != releaseBuildType || info.ReleaseInfo == nil {
+	if info.BuildType != releaseBuildType || info.DeploymentType != containerDeploymentType || info.ReleaseInfo == nil {
 		t.Fatalf("missing release metadata: %+v", info)
 	}
 	if info.ReleaseInfo.HTMLURL != "https://github.com/astaxie/TokenHub/releases/tag/v0.4.0" {

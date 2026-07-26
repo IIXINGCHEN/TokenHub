@@ -13,7 +13,7 @@ COPY data/model-catalog.yaml ./catalog/model-catalog.yaml
 COPY data/provider-catalog.json ./catalog/provider-catalog.json
 RUN cd backend && CGO_ENABLED=1 GOOS=linux go build \
     -trimpath \
-    -ldflags="-s -w -X main.buildVersion=${TOKENHUB_VERSION} -X main.buildType=release" \
+    -ldflags="-s -w -X main.buildVersion=${TOKENHUB_VERSION} -X main.buildType=release -X main.deploymentType=container" \
     -o /out/tokenhub ./cmd/tokenhub
 
 FROM alpine:3.20

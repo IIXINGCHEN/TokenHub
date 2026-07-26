@@ -55,12 +55,22 @@ TokenHub 将日常模型使用、团队治理和平台运维拆成清晰的角�
 - 用量统计和请求日志：可归因到用户、项目、团队、模型和成本中心。
 - 身份源配置：支持 OAuth/OIDC 企业登录，并配合 RBAC 和审计追踪。
 - 简洁控制台：分角色导航、全局搜索、黑白主题，以及左侧 API 导航 + 右侧详情的接口文档。
-- SQLite-first 私有化部署，内置 Docker Compose 一键部署。
+- SQLite-first 私有化部署，提供原生 systemd 和 Docker Compose 两种方式。
 - PostgreSQL 支持多实例部署：通过远端 PostgreSQL 共享状态，实现前后端实例横向扩展，并提供连接池配置。参见[部署指南](docs/zh-CN/deployment.md)。
 - 管理后台支持英文、中文、日文切换。
 - TokenHub 还支持接入 OpenAI Codex 订阅账号资源，并通过可隔离、可恢复的 Codex Profile，让指定的本地 Codex CLI 或桌面端会话经过 TokenHub。参见 [Codex 接入指南](docs/zh-CN/codex-tokenhub-profile-quick-start.md)。
 
 ## 快速开始
+
+Linux systemd 主机使用原生 Release：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/astaxie/TokenHub/main/deploy/native/install.sh \
+  -o /tmp/tokenhub-install.sh
+sudo bash /tmp/tokenhub-install.sh install
+```
+
+从仓库检出目录使用 Docker Compose：
 
 ```bash
 cp deploy/.env.example deploy/.env
@@ -77,9 +87,10 @@ cp deploy/.env.example deploy/.env
 初始管理员账号：
 
 - 用户名：`admin`
-- 密码：`TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD` 的配置值
+- 原生安装密码：由安装脚本输出一次
+- Docker 密码：`TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD` 的配置值
 
-部署脚本会校验生产凭证，拉取已发布镜像并启动容器，不在部署服务器构建镜像。镜像尚未公开时，如果默认 `latest` 标签拉取失败，脚本会自动改为从本地源码构建；显式指定的标签不会触发该行为。校验失败时会列出不安全的变量，但不会输出敏感值。如果本次创建或重启的后端容器异常导致 Compose 失败，脚本只会自动显示本次启动产生的后端近期日志。需要明确从当前代码构建时，使用 `./deploy/install.sh --build`。
+原生安装脚本会校验 Release 文件、安装 systemd 服务，并在版本面板提供直接更新、回退和重启。Docker 部署脚本会校验生产凭证，拉取已发布镜像并启动容器；Docker 的版本面板继续提供可复制的更新命令。两种方式的完整说明见[部署指南](docs/zh-CN/deployment.md)。
 
 ## 文档
 

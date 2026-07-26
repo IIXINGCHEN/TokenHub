@@ -347,6 +347,92 @@
   background: color-mix(in srgb, currentColor 9%, transparent);
 }
 
+.version-native-action {
+  width: 100%;
+  min-height: 44px;
+  border-radius: 9px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--ink);
+  color: var(--surface);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    filter 180ms ease,
+    opacity 180ms ease;
+}
+
+.version-native-action.rollback {
+  background: var(--red);
+  color: #fff;
+}
+
+.version-native-action:hover:not(:disabled) {
+  filter: brightness(0.94);
+}
+
+.version-native-action:focus-visible,
+.version-native-result button:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  outline-offset: 2px;
+}
+
+.version-native-action:disabled,
+.version-native-result button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.version-native-result {
+  min-height: 68px;
+  border: 1px solid color-mix(in srgb, var(--pos) 30%, var(--border));
+  border-radius: 10px;
+  padding: 10px 10px 10px 12px;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  background: var(--pos-weak);
+  color: var(--pos);
+}
+
+.version-native-result > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.version-native-result strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.version-native-result span {
+  color: var(--ink-3);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.version-native-result button {
+  min-width: 104px;
+  min-height: 44px;
+  border-radius: 8px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  background: var(--ink);
+  color: var(--surface);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
 .version-command {
   border: 1px solid var(--border);
   border-radius: 10px;

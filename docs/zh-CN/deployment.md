@@ -90,6 +90,60 @@ docker compose --env-file deploy/.env \
 
 使用 `./deploy/test-multi-instance.sh` 运行真实的双实例 PostgreSQL E2E 测试。
 
+## 原生 Release + systemd
+
+单机 Linux 且使用 systemd 时，可以选择原生 Release 安装方式。原生安装包支持 `linux/amd64` 和 `linux/arm64`，其中包含 Go 后端、独立运行的 Next.js 管理后台和匹配的 Node.js 运行时。
+
+下载安装脚本并检查内容，然后安装最新稳定版：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/astaxie/TokenHub/main/deploy/native/install.sh \
+  -o /tmp/tokenhub-install.sh
+sudo bash /tmp/tokenhub-install.sh install
+```
+
+如果服务器自动识别的第一个 IP 不是用户实际访问的地址，请设置 `TOKENHUB_PUBLIC_HOST`：
+
+```bash
+sudo env TOKENHUB_PUBLIC_HOST=tokenhub.example.com \
+  bash /tmp/tokenhub-install.sh install
+```
+
+首次安装会生成生产密钥和初始管理员密码，密码只会输出一次。运行文件分别保存在：
+
+- Release 和 `current` 软链接：`/opt/tokenhub`
+- 配置与密钥：`/etc/tokenhub/tokenhub.env`
+- SQLite 数据库与备份：`/var/lib/tokenhub`
+- systemd 单元：`/etc/systemd/system/tokenhub.service`
+
+需要修改公网地址、CORS Origin、端口、数据库或密钥时，编辑 `/etc/tokenhub/tokenhub.env`，然后重启服务：
+
+```bash
+sudo systemctl restart tokenhub
+sudo systemctl status tokenhub
+sudo journalctl -u tokenhub -f
+```
+
+安装脚本会先使用 `checksums.txt` 校验 Release 压缩包，再激活版本；升级时会保留配置和数据：
+
+```bash
+sudo bash /tmp/tokenhub-install.sh upgrade
+sudo bash /tmp/tokenhub-install.sh upgrade --version 0.3.3
+sudo bash /tmp/tokenhub-install.sh rollback --version 0.3.2
+sudo bash /tmp/tokenhub-install.sh uninstall
+```
+
+`uninstall` 会保留 `/etc/tokenhub` 和 `/var/lib/tokenhub`。只有确定要同时删除配置和应用数据时，才使用 `uninstall --purge`。
+
+使用 fork 测试时，请下载该 fork 中的安装脚本，并指定它的公开 Release 仓库：
+
+```bash
+sudo env TOKENHUB_RELEASE_REPOSITORY=your-account/TokenHub \
+  bash /tmp/tokenhub-install.sh install --version 0.3.3
+```
+
+原生 Release 安装会在版本面板中显示为「原生 Release」。管理员可以直接在页面下载并校验更新或回退版本，然后点击「立即重启」，由 systemd 激活目标版本。每个 GitHub Release 必须包含对应平台的压缩包和 `checksums.txt`；发布 Release 后，`.github/workflows/native-release.yml` 会构建并附加这些文件。
+
 ## Docker Compose
 
 创建部署环境变量文件：
@@ -138,7 +192,7 @@ GitHub Actions 为 `linux/amd64` 和 `linux/arm64` 发布 `ghcr.io/astaxie/token
 
 GHCR 首次发布产生的 Package 默认为私有。开放匿名部署前，仓库所有者需要将两个 Package 调整为 Public。在此之前，使用默认 `latest` 标签的安装会在拉取失败后自动改为从本地源码构建。如果显式配置的 `TOKENHUB_IMAGE_TAG` 无法拉取，安装脚本会直接退出，不会把当前源码标记成该版本。
 
-### 版本状态与回退
+### Docker 版本状态与回退
 
 平台管理员可以点击 TokenHub 标志下方的版本胶囊，查看当前运行版本、检查最新的 GitHub 正式 Release，并列出最多 3 个更早的稳定版本。正式镜像构建会从发布工作流获得精确版本号；本地源码构建使用项目包版本，并明确标记为源码构建。
 
@@ -150,7 +204,7 @@ GHCR 首次发布产生的 Package 默认为私有。开放匿名部署前，仓
 TOKENHUB_RELEASE_REPOSITORY=your-account/TokenHub ./start.sh
 ```
 
-TokenHub 分别部署后端和前端容器，因此应用不会挂载 Docker Socket，也不会直接修改宿主机。版本面板会生成 Compose 命令，让两个镜像使用同一个精确的 `TOKENHUB_IMAGE_TAG`。执行命令前，请先在 `deploy/.env` 中固定该标签，避免后续 Compose 操作重新切换到 `latest`。回退前必须完成数据库备份，并确认目标版本支持当前数据库结构。
+TokenHub 分别部署后端和前端容器，因此应用不会挂载 Docker Socket，也不会直接修改宿主机。对于 Docker 部署，版本面板仍然只生成 Compose 命令，让两个镜像使用同一个精确的 `TOKENHUB_IMAGE_TAG`，不会在容器内直接更新。执行命令前，请先在 `deploy/.env` 中固定该标签，避免后续 Compose 操作重新切换到 `latest`。源码部署仍会提示按照发布说明手工更新。回退前必须完成数据库备份，并确认目标版本支持当前数据库结构。
 
 ### 可选：本地构建
 
@@ -236,6 +290,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_HTTP_ADDR` | `:8080` | 后端监听地址 |
 | `TOKENHUB_PUBLIC_BASE_URL` | `http://localhost:8080` | 展示给用户的后端地址 |
 | `TOKENHUB_RELEASE_REPOSITORY` | `astaxie/TokenHub` | 版本检查使用的可信公开 GitHub 仓库，格式为 `owner/repository` |
+| `TOKENHUB_INSTALL_ROOT` | `/opt/tokenhub` | 原生 Release 在线更新与回退使用的安装根目录 |
 | `TOKENHUB_TRUSTED_PROXY_CIDRS` | 空 | 允许提供 `X-Forwarded-For` 的代理 IP 或 CIDR，逗号分隔 |
 | `TOKENHUB_CORS_ALLOWED_ORIGINS` | 公网地址 | 允许调用后端的浏览器 Origin，逗号分隔 |
 | `TOKENHUB_ADMIN_TOKEN` | `change-me-tokenhub-admin-token` | Admin API 启动访问 Token |

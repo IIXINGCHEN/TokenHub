@@ -334,6 +334,15 @@
     min-height: 44px;
   }
 
+  .version-native-result {
+    grid-template-columns: 24px minmax(0, 1fr);
+  }
+
+  .version-native-result button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
   .version-option label {
     grid-template-columns: 18px minmax(0, 1fr);
   }
@@ -545,6 +554,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .version-trigger,
+  .version-native-action,
   .version-rollback-trigger > svg,
   .version-option {
     transition: none;

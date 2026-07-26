@@ -14,8 +14,9 @@ import (
 )
 
 var (
-	buildVersion = server.DefaultAppVersion
-	buildType    = "source"
+	buildVersion   = server.DefaultAppVersion
+	buildType      = "source"
+	deploymentType = "source"
 )
 
 func main() {
@@ -25,6 +26,7 @@ func main() {
 	config := server.ConfigFromEnv()
 	config.AppVersion = buildVersion
 	config.BuildType = buildType
+	config.DeploymentType = deploymentType
 	if err := config.ValidateForStartup(); err != nil {
 		log.Fatal(err)
 	}

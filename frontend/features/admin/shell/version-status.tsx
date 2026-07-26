@@ -5,10 +5,13 @@ import {
   CheckCircle2,
   ChevronDown,
   Copy,
+  Download,
   ExternalLink,
   History,
   LoaderCircle,
+  Power,
   RefreshCw,
+  RotateCcw,
   Terminal,
   X,
 } from "lucide-react";
@@ -32,10 +35,16 @@ type SystemVersionInfo = {
   latest_version: string;
   has_update: boolean;
   build_type: "source" | "release";
+  deployment_type: "source" | "container" | "native";
+  pending_restart_version?: string;
   releases_url: string;
   release_info?: VersionReleaseInfo;
   cached: boolean;
   warning?: string;
+};
+
+type SystemVersionPayload = Omit<SystemVersionInfo, "deployment_type"> & {
+  deployment_type?: string;
 };
 
 type RollbackVersionInfo = {
@@ -49,6 +58,7 @@ const fallbackVersionInfo: SystemVersionInfo = {
   latest_version: packageMetadata.version,
   has_update: false,
   build_type: "source",
+  deployment_type: "source",
   releases_url: "https://github.com/astaxie/TokenHub/releases",
   cached: false,
 };
@@ -66,6 +76,10 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
   const [rollbackVersions, setRollbackVersions] = useState<RollbackVersionInfo[]>([]);
   const [selectedVersion, setSelectedVersion] = useState("");
   const [copiedCommand, setCopiedCommand] = useState("");
+  const [systemOperation, setSystemOperation] = useState<"" | "update" | "rollback" | "restart">("");
+  const [operationError, setOperationError] = useState("");
+  const [pendingRestartVersion, setPendingRestartVersion] = useState("");
+  const [appliedOperation, setAppliedOperation] = useState<"" | "update" | "rollback">("");
   const triggerRef = useRef<HTMLButtonElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const modalRef = useRef<HTMLElement>(null);
@@ -80,8 +94,11 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
       if (!response.ok) {
         throw new Error(await readAdminError(response, tx("检查更新失败")));
       }
-      const payload = await response.json() as SystemVersionInfo;
-      setInfo(payload);
+      const payload = await response.json() as SystemVersionPayload;
+      const normalized = normalizeVersionInfo(payload);
+      setInfo(normalized);
+      setPendingRestartVersion(normalized.pending_restart_version ?? "");
+      setAppliedOperation("");
       if (force) {
         setRollbackOpen(false);
         setRollbackLoaded(false);
@@ -178,11 +195,77 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
     }
   }
 
+  async function applyNativeUpdate() {
+    if (systemOperation || !info.latest_version) return;
+    setSystemOperation("update");
+    setOperationError("");
+    try {
+      const response = await adminFetch(api, "/api/admin/system/update", { method: "POST" });
+      if (!response.ok) {
+        throw new Error(await readAdminError(response, tx("更新失败")));
+      }
+      const payload = await response.json() as { target_version?: string };
+      setPendingRestartVersion(payload.target_version || info.latest_version);
+      setAppliedOperation("update");
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : tx("更新失败"));
+    } finally {
+      setSystemOperation("");
+    }
+  }
+
+  async function applyNativeRollback() {
+    if (systemOperation || !selectedVersion) return;
+    const confirmed = window.confirm(
+      `${tx("确认回退到")} v${selectedVersion}?\n${tx("回退前请确认数据库与目标版本兼容，并先完成备份。")}`,
+    );
+    if (!confirmed) return;
+
+    setSystemOperation("rollback");
+    setOperationError("");
+    try {
+      const response = await adminFetch(api, "/api/admin/system/rollback", {
+        method: "POST",
+        body: JSON.stringify({ version: selectedVersion }),
+      });
+      if (!response.ok) {
+        throw new Error(await readAdminError(response, tx("回退失败")));
+      }
+      const payload = await response.json() as { target_version?: string };
+      setPendingRestartVersion(payload.target_version || selectedVersion);
+      setAppliedOperation("rollback");
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : tx("回退失败"));
+    } finally {
+      setSystemOperation("");
+    }
+  }
+
+  async function restartNativeDeployment() {
+    if (systemOperation || !pendingRestartVersion) return;
+    setSystemOperation("restart");
+    setOperationError("");
+    try {
+      const response = await adminFetch(api, "/api/admin/system/restart", { method: "POST" });
+      if (!response.ok) {
+        throw new Error(await readAdminError(response, tx("重启失败")));
+      }
+      await waitForNativeVersion(api, pendingRestartVersion);
+      window.location.reload();
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : tx("重启失败"));
+      setSystemOperation("");
+    }
+  }
+
   if (!canInspectVersions) {
     return <span className="version">v{info.current_version}</span>;
   }
 
   const versionLabel = info.current_version || packageMetadata.version;
+  const nativeUpdateUnavailable = Boolean(
+    info.warning?.includes("does not include native assets"),
+  );
   return (
     <>
       <button
@@ -219,7 +302,7 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
                     <button
                       aria-label={tx("检查更新")}
                       className="icon-button"
-                      disabled={loading}
+                      disabled={loading || Boolean(systemOperation)}
                       onClick={() => void loadVersion(true)}
                       title={tx("检查更新")}
                       type="button"
@@ -252,6 +335,16 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
                     </div>
                   ) : null}
 
+                  {operationError ? (
+                    <div className="version-message warning" role="alert">
+                      <AlertCircle aria-hidden="true" size={17} />
+                      <span>{operationError}</span>
+                      <button onClick={() => setOperationError("")} type="button">
+                        {tx("关闭")}
+                      </button>
+                    </div>
+                  ) : null}
+
                   {info.has_update && info.release_info ? (
                     <section className="version-release-card">
                       <div className="version-release-icon" aria-hidden="true">
@@ -280,7 +373,47 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
                     </a>
                   )}
 
-                  {info.has_update && info.build_type === "release" ? (
+                  {pendingRestartVersion ? (
+                    <section aria-live="polite" className="version-native-result">
+                      <CheckCircle2 aria-hidden="true" size={21} />
+                      <div>
+                        <strong>
+                          {appliedOperation === "rollback"
+                            ? tx("回退已应用")
+                            : appliedOperation === "update"
+                              ? tx("更新已应用")
+                              : tx("版本切换已应用")}
+                        </strong>
+                        <span>v{pendingRestartVersion} · {tx("重启后生效")}</span>
+                      </div>
+                      <button
+                        disabled={systemOperation === "restart"}
+                        onClick={() => void restartNativeDeployment()}
+                        type="button"
+                      >
+                        {systemOperation === "restart"
+                          ? <LoaderCircle aria-hidden="true" className="spin" size={16} />
+                          : <Power aria-hidden="true" size={16} />}
+                        {systemOperation === "restart" ? tx("正在重启") : tx("立即重启")}
+                      </button>
+                    </section>
+                  ) : null}
+
+                  {info.has_update && info.deployment_type === "native" && !pendingRestartVersion ? (
+                    <button
+                      className="version-native-action"
+                      disabled={Boolean(systemOperation) || nativeUpdateUnavailable}
+                      onClick={() => void applyNativeUpdate()}
+                      type="button"
+                    >
+                      {systemOperation === "update"
+                        ? <LoaderCircle aria-hidden="true" className="spin" size={17} />
+                        : <Download aria-hidden="true" size={17} />}
+                      {systemOperation === "update" ? tx("正在更新") : tx("立即更新")}
+                    </button>
+                  ) : null}
+
+                  {info.has_update && info.deployment_type === "container" ? (
                     <VersionCommand
                       command={composeVersionCommand(info.latest_version)}
                       copied={copiedCommand === `update:${info.latest_version}`}
@@ -289,7 +422,7 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
                     />
                   ) : null}
 
-                  {info.has_update && info.build_type === "source" ? (
+                  {info.has_update && info.deployment_type === "source" ? (
                     <div className="version-message neutral">
                       <Terminal aria-hidden="true" size={17} />
                       <span>{tx("源码部署请根据发布说明手动切换版本。")}</span>
@@ -358,7 +491,7 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
                           </fieldset>
                         )}
 
-                        {selectedVersion && info.build_type === "release" ? (
+                        {selectedVersion && info.deployment_type === "container" ? (
                           <>
                             <VersionCommand
                               command={composeVersionCommand(selectedVersion)}
@@ -373,7 +506,27 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
                           </>
                         ) : null}
 
-                        {selectedVersion && info.build_type === "source" ? (
+                        {selectedVersion && info.deployment_type === "native" && !pendingRestartVersion ? (
+                          <>
+                            <button
+                              className="version-native-action rollback"
+                              disabled={Boolean(systemOperation)}
+                              onClick={() => void applyNativeRollback()}
+                              type="button"
+                            >
+                              {systemOperation === "rollback"
+                                ? <LoaderCircle aria-hidden="true" className="spin" size={17} />
+                                : <RotateCcw aria-hidden="true" size={17} />}
+                              {systemOperation === "rollback" ? tx("正在回退") : tx("回退到所选版本")}
+                            </button>
+                            <div className="version-rollback-warning">
+                              <AlertCircle aria-hidden="true" size={15} />
+                              <span>{tx("回退前请确认数据库与目标版本兼容，并先完成备份。")}</span>
+                            </div>
+                          </>
+                        ) : null}
+
+                        {selectedVersion && info.deployment_type === "source" ? (
                           <div className="version-message neutral">
                             <Terminal aria-hidden="true" size={17} />
                             <span>{tx("源码部署请根据发布说明手动切换版本。")}</span>
@@ -418,7 +571,11 @@ function VersionSummary({ info, loading }: { info: SystemVersionInfo; loading: b
               : tx("GitHub 暂无正式 Release。")}
       </p>
       <span className="version-build-type">
-        {info.build_type === "release" ? tx("容器构建") : tx("源码构建")}
+        {info.deployment_type === "native"
+          ? tx("原生 Release")
+          : info.deployment_type === "container"
+            ? tx("容器构建")
+            : tx("源码构建")}
       </span>
     </div>
   );
@@ -460,6 +617,41 @@ function composeVersionCommand(version: string) {
   ].join("\n");
 }
 
+function normalizeVersionInfo(payload: SystemVersionPayload): SystemVersionInfo {
+  const deploymentType = payload.deployment_type === "native" ||
+    payload.deployment_type === "container" ||
+    payload.deployment_type === "source"
+    ? payload.deployment_type
+    : payload.build_type === "release"
+      ? "container"
+      : "source";
+  return { ...payload, deployment_type: deploymentType };
+}
+
+async function waitForNativeVersion(api: ApiContext, targetVersion: string) {
+  const deadline = Date.now() + 90_000;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => window.setTimeout(resolve, 1_000));
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 4_000);
+    try {
+      const response = await adminFetch(api, "/api/admin/system/version", {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (response.ok) {
+        const payload = await response.json() as SystemVersionPayload;
+        if (normalizeVersionInfo(payload).current_version === targetVersion) return;
+      }
+    } catch {
+      // A temporary connection failure is expected while systemd restarts TokenHub.
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
+  throw new Error(tx("服务未在预期时间内恢复，请刷新页面重试。"));
+}
+
 function formatReleaseDate(value: string) {
   if (!value) return "";
   const date = new Date(value);
@@ -474,6 +666,9 @@ function formatReleaseDate(value: string) {
 function versionWarningText(warning: string | undefined, loadError: string) {
   if (warning?.includes("semantic release version")) {
     return tx("当前构建不是语义化发布版本，无法自动比较更新。");
+  }
+  if (warning?.includes("does not include native assets")) {
+    return tx("最新版本不包含当前平台可用的原生安装包。");
   }
   return loadError || tx("暂时无法检查 GitHub Release，请稍后重试。");
 }

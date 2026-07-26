@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -10,7 +11,9 @@ type Config struct {
 	Environment              string
 	AppVersion               string
 	BuildType                string
+	DeploymentType           string
 	ReleaseRepository        string
+	InstallRoot              string
 	AdminToken               string
 	BootstrapAdminPassword   string
 	PublicBaseURL            string
@@ -69,7 +72,9 @@ func ConfigFromEnv() Config {
 		Environment:                getenv("TOKENHUB_ENV", "dev"),
 		AppVersion:                 DefaultAppVersion,
 		BuildType:                  defaultBuildType,
+		DeploymentType:             sourceDeploymentType,
 		ReleaseRepository:          getenv("TOKENHUB_RELEASE_REPOSITORY", defaultReleaseRepository),
+		InstallRoot:                getenv("TOKENHUB_INSTALL_ROOT", defaultNativeInstallRoot),
 		AdminToken:                 getenv("TOKENHUB_ADMIN_TOKEN", "dev_admin_token"),
 		BootstrapAdminPassword:     getenv("TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD", "admin123456"),
 		PublicBaseURL:              getenv("TOKENHUB_PUBLIC_BASE_URL", ""),
@@ -108,6 +113,12 @@ func ConfigFromEnv() Config {
 func (c Config) ValidateForStartup() error {
 	if repository := strings.TrimSpace(c.ReleaseRepository); repository != "" && !validReleaseRepository(repository) {
 		return fmt.Errorf("invalid TOKENHUB_RELEASE_REPOSITORY: expected owner/repository")
+	}
+	if normalizeDeploymentType(c.DeploymentType, c.BuildType) == nativeDeploymentType {
+		root := filepath.Clean(strings.TrimSpace(c.InstallRoot))
+		if !filepath.IsAbs(root) || root == string(filepath.Separator) {
+			return fmt.Errorf("invalid TOKENHUB_INSTALL_ROOT: expected a non-root absolute path")
+		}
 	}
 	environment := strings.ToLower(strings.TrimSpace(c.Environment))
 	if environment == "" {

@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,6 +22,10 @@ const (
 
 	defaultBuildType         = "source"
 	releaseBuildType         = "release"
+	sourceDeploymentType     = "source"
+	containerDeploymentType  = "container"
+	nativeDeploymentType     = "native"
+	defaultNativeInstallRoot = "/opt/tokenhub"
 	defaultReleaseRepository = "astaxie/TokenHub"
 	githubAPIBaseURL         = "https://api.github.com"
 	versionCacheTTL          = 20 * time.Minute
@@ -43,6 +49,8 @@ type systemVersionInfo struct {
 	LatestVersion  string              `json:"latest_version"`
 	HasUpdate      bool                `json:"has_update"`
 	BuildType      string              `json:"build_type"`
+	DeploymentType string              `json:"deployment_type"`
+	PendingRestart string              `json:"pending_restart_version,omitempty"`
 	ReleasesURL    string              `json:"releases_url"`
 	ReleaseInfo    *versionReleaseInfo `json:"release_info,omitempty"`
 	Cached         bool                `json:"cached"`
@@ -56,20 +64,35 @@ type rollbackVersionInfo struct {
 }
 
 type githubRelease struct {
-	TagName     string `json:"tag_name"`
-	Name        string `json:"name"`
-	PublishedAt string `json:"published_at"`
-	Draft       bool   `json:"draft"`
-	Prerelease  bool   `json:"prerelease"`
+	TagName     string        `json:"tag_name"`
+	Name        string        `json:"name"`
+	PublishedAt string        `json:"published_at"`
+	Draft       bool          `json:"draft"`
+	Prerelease  bool          `json:"prerelease"`
+	Assets      []githubAsset `json:"assets"`
+}
+
+type githubAsset struct {
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+	Size               int64  `json:"size"`
 }
 
 type versionService struct {
-	client         *http.Client
-	apiBaseURL     string
-	repository     string
-	currentVersion string
-	buildType      string
-	now            func() time.Time
+	client           *http.Client
+	apiBaseURL       string
+	repository       string
+	currentVersion   string
+	buildType        string
+	deploymentType   string
+	installRoot      string
+	now              func() time.Time
+	downloadClient   *http.Client
+	validateAssetURL func(string) error
+	operation        chan struct{}
+	restartProcess   func() error
+	runtimeOS        string
+	runtimeArch      string
 
 	mu                  sync.Mutex
 	latestCache         *systemVersionInfo
@@ -87,24 +110,33 @@ func newVersionService(config Config) *versionService {
 	if buildType != releaseBuildType {
 		buildType = defaultBuildType
 	}
+	deploymentType := normalizeDeploymentType(config.DeploymentType, buildType)
 	repository := strings.TrimSpace(config.ReleaseRepository)
 	if !validReleaseRepository(repository) {
 		repository = defaultReleaseRepository
 	}
 	return &versionService{
-		client:         &http.Client{Timeout: releaseRequestTimeout},
-		apiBaseURL:     githubAPIBaseURL,
-		repository:     repository,
-		currentVersion: currentVersion,
-		buildType:      buildType,
-		now:            time.Now,
+		client:           &http.Client{Timeout: releaseRequestTimeout},
+		apiBaseURL:       githubAPIBaseURL,
+		repository:       repository,
+		currentVersion:   currentVersion,
+		buildType:        buildType,
+		deploymentType:   deploymentType,
+		installRoot:      filepath.Clean(strings.TrimSpace(config.InstallRoot)),
+		now:              time.Now,
+		operation:        make(chan struct{}, 1),
+		downloadClient:   newNativeDownloadClient(),
+		validateAssetURL: validateNativeAssetURL,
+		restartProcess:   signalProcessRestart,
+		runtimeOS:        runtime.GOOS,
+		runtimeArch:      runtime.GOARCH,
 	}
 }
 
 func (s *versionService) checkUpdate(ctx context.Context, force bool) systemVersionInfo {
 	if !force {
 		if cached, ok := s.cachedLatest(false); ok {
-			return cached
+			return s.withNativePendingRestart(cached)
 		}
 	}
 
@@ -117,7 +149,7 @@ func (s *versionService) checkUpdate(ctx context.Context, force bool) systemVers
 		}
 		if cached, ok := s.cachedLatest(true); ok {
 			cached.Warning = "GitHub release lookup failed; showing cached data"
-			return cached
+			return s.withNativePendingRestart(cached)
 		}
 		info := s.baseVersionInfo()
 		info.Warning = "GitHub release lookup failed"
@@ -144,6 +176,9 @@ func (s *versionService) checkUpdate(ctx context.Context, force bool) systemVers
 		info.HasUpdate = compareSemanticVersions(current, latest) < 0
 	} else {
 		info.Warning = "Current build does not use a semantic release version"
+	}
+	if info.HasUpdate && s.deploymentType == nativeDeploymentType && !s.hasNativeReleaseAssets(release, latestVersion) {
+		info.Warning = "Latest GitHub release does not include native assets for this platform"
 	}
 	s.storeLatest(info)
 	return info
@@ -186,6 +221,11 @@ func (s *versionService) listRollbackVersions(ctx context.Context) ([]rollbackVe
 		if currentOK && compareSemanticVersions(parsed, current) >= 0 {
 			continue
 		}
+		if s.deploymentType == nativeDeploymentType &&
+			!s.installedNativeReleaseValid(canonical) &&
+			!s.hasNativeReleaseAssets(release, canonical) {
+			continue
+		}
 		seen[canonical] = struct{}{}
 		candidates = append(candidates, candidate{
 			version:   parsed,
@@ -213,12 +253,13 @@ func (s *versionService) listRollbackVersions(ctx context.Context) ([]rollbackVe
 }
 
 func (s *versionService) baseVersionInfo() systemVersionInfo {
-	return systemVersionInfo{
+	return s.withNativePendingRestart(systemVersionInfo{
 		CurrentVersion: s.currentVersion,
 		LatestVersion:  s.currentVersion,
 		BuildType:      s.buildType,
+		DeploymentType: s.deploymentType,
 		ReleasesURL:    s.releasesURL(),
-	}
+	})
 }
 
 func (s *versionService) fetchLatestRelease(ctx context.Context) (githubRelease, error) {
@@ -322,6 +363,20 @@ func cloneSystemVersionInfo(info systemVersionInfo) systemVersionInfo {
 
 func normalizeDisplayVersion(raw string) string {
 	return strings.TrimPrefix(strings.TrimSpace(raw), "v")
+}
+
+func normalizeDeploymentType(raw string, buildType string) string {
+	if strings.ToLower(strings.TrimSpace(buildType)) != releaseBuildType {
+		return sourceDeploymentType
+	}
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case nativeDeploymentType:
+		return nativeDeploymentType
+	case containerDeploymentType:
+		return containerDeploymentType
+	default:
+		return containerDeploymentType
+	}
 }
 
 func validReleaseRepository(repository string) bool {

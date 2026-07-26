@@ -90,6 +90,60 @@ docker compose --env-file deploy/.env \
 
 `./deploy/test-multi-instance.sh` で実際の 2 インスタンス PostgreSQL E2E テストを実行できます。
 
+## ネイティブ Release + systemd
+
+systemd を使用する単一 Linux ホストでは、ネイティブ Release インストールを利用できます。ネイティブパッケージは `linux/amd64` と `linux/arm64` に対応し、Go バックエンド、スタンドアロン Next.js コンソール、対応する Node.js ランタイムを含みます。
+
+インストーラーをダウンロードして内容を確認し、最新の安定版 Release をインストールします。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/astaxie/TokenHub/main/deploy/native/install.sh \
+  -o /tmp/tokenhub-install.sh
+sudo bash /tmp/tokenhub-install.sh install
+```
+
+サーバーが自動検出する最初の IP が実際のアクセス先でない場合は、`TOKENHUB_PUBLIC_HOST` を設定します。
+
+```bash
+sudo env TOKENHUB_PUBLIC_HOST=tokenhub.example.com \
+  bash /tmp/tokenhub-install.sh install
+```
+
+初回インストールでは、本番用シークレットと初期管理者パスワードが生成されます。パスワードは一度だけ表示されます。実行ファイルは次の場所に分けて保存されます。
+
+- Release と `current` シンボリックリンク: `/opt/tokenhub`
+- 設定とシークレット: `/etc/tokenhub/tokenhub.env`
+- SQLite データベースとバックアップ: `/var/lib/tokenhub`
+- systemd ユニット: `/etc/systemd/system/tokenhub.service`
+
+公開 URL、CORS Origin、ポート、データベース、シークレットを変更する場合は `/etc/tokenhub/tokenhub.env` を編集して、サービスを再起動します。
+
+```bash
+sudo systemctl restart tokenhub
+sudo systemctl status tokenhub
+sudo journalctl -u tokenhub -f
+```
+
+インストーラーは、Release アーカイブを `checksums.txt` で検証してから有効化し、アップグレード時も設定とデータを保持します。
+
+```bash
+sudo bash /tmp/tokenhub-install.sh upgrade
+sudo bash /tmp/tokenhub-install.sh upgrade --version 0.3.3
+sudo bash /tmp/tokenhub-install.sh rollback --version 0.3.2
+sudo bash /tmp/tokenhub-install.sh uninstall
+```
+
+`uninstall` は `/etc/tokenhub` と `/var/lib/tokenhub` を保持します。設定とアプリケーションデータも削除する場合に限り、`uninstall --purge` を使用してください。
+
+fork をテストする場合は、その fork のインストーラーをダウンロードし、公開 Release リポジトリを指定します。
+
+```bash
+sudo env TOKENHUB_RELEASE_REPOSITORY=your-account/TokenHub \
+  bash /tmp/tokenhub-install.sh install --version 0.3.3
+```
+
+ネイティブ Release インストールは、バージョンパネルに「ネイティブ Release」と表示されます。管理者はパネルから更新またはロールバックを直接ダウンロードして検証し、「今すぐ再起動」を選択して systemd で対象バージョンを有効化できます。各 GitHub Release にはプラットフォーム用アーカイブと `checksums.txt` が必要です。Release の公開時に `.github/workflows/native-release.yml` がこれらのファイルをビルドして添付します。
+
 ## Docker Compose
 
 デプロイ用の環境変数ファイルを作成します。
@@ -138,7 +192,7 @@ GitHub Actions は `linux/amd64` と `linux/arm64` 向けに `ghcr.io/astaxie/to
 
 GHCR で初めて公開した Package はデフォルトで非公開です。匿名デプロイを有効にする前に、リポジトリ所有者が両方の Package を Public に変更する必要があります。それまでは、デフォルトの `latest` タグを使用するデプロイに限り、取得に失敗するとローカルのソースビルドへ自動的に切り替えます。明示した `TOKENHUB_IMAGE_TAG` を取得できない場合、現在のソースをそのバージョンとして扱わず、インストールスクリプトは終了します。
 
-### バージョン状態とロールバック
+### Docker のバージョン状態とロールバック
 
 プラットフォーム管理者は TokenHub ロゴの下にあるバージョンバッジを選択すると、実行中のバージョン、最新の安定版 GitHub Release、最大 3 件の過去の安定版を確認できます。正式なイメージビルドには公開ワークフローから正確なバージョンが設定され、ローカルのソースビルドにはパッケージバージョンとソースビルドの表示が使用されます。
 
@@ -150,7 +204,7 @@ GHCR で初めて公開した Package はデフォルトで非公開です。匿
 TOKENHUB_RELEASE_REPOSITORY=your-account/TokenHub ./start.sh
 ```
 
-TokenHub はバックエンドとフロントエンドを別々のコンテナとして配置するため、アプリケーションは Docker Socket をマウントせず、ホストを直接変更しません。代わりに、両方のイメージへ同じ正確な `TOKENHUB_IMAGE_TAG` を適用する Compose コマンドをパネルで生成します。後続の Compose 操作で `latest` に戻らないよう、実行前に `deploy/.env` へそのタグを固定してください。ロールバック前にはデータベースをバックアップし、対象リリースが現在のスキーマをサポートすることを確認してください。
+TokenHub はバックエンドとフロントエンドを別々のコンテナとして配置するため、アプリケーションは Docker Socket をマウントせず、ホストを直接変更しません。Docker デプロイでは、引き続きパネルに Compose コマンドだけを表示し、両方のイメージへ同じ正確な `TOKENHUB_IMAGE_TAG` を適用します。コンテナ内で直接更新は行いません。後続の Compose 操作で `latest` に戻らないよう、実行前に `deploy/.env` へそのタグを固定してください。ソースデプロイでは、リリースノートに従う手動更新ガイドを引き続き表示します。ロールバック前にはデータベースをバックアップし、対象リリースが現在のスキーマをサポートすることを確認してください。
 
 ### 任意: ローカルビルド
 
@@ -236,6 +290,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_HTTP_ADDR` | `:8080` | バックエンド待受アドレス |
 | `TOKENHUB_PUBLIC_BASE_URL` | `http://localhost:8080` | ユーザーに表示するバックエンド URL |
 | `TOKENHUB_RELEASE_REPOSITORY` | `astaxie/TokenHub` | バージョン確認に使用する信頼済み公開 GitHub リポジトリ。形式は `owner/repository` |
+| `TOKENHUB_INSTALL_ROOT` | `/opt/tokenhub` | ネイティブ Release のオンライン更新とロールバックで使用するインストールルート |
 | `TOKENHUB_TRUSTED_PROXY_CIDRS` | 空 | `X-Forwarded-For` を提供できるプロキシ IP または CIDR（カンマ区切り） |
 | `TOKENHUB_CORS_ALLOWED_ORIGINS` | 公開 URL | バックエンドを呼び出せるブラウザー Origin（カンマ区切り） |
 | `TOKENHUB_ADMIN_TOKEN` | `change-me-tokenhub-admin-token` | Admin API 用の初期 Token |
