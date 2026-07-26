@@ -232,10 +232,13 @@ func TestHTTPSinkApplyUserCreatesAndUpdates(t *testing.T) {
 		t.Fatalf("expected team resolved from TeamRef, got %q", created.TeamID)
 	}
 
-	// Second apply with a changed spec must apply the update for real.
+	// Second apply with a changed spec must apply the update for real. Reuse
+	// the same sink instance: Plan and Apply must both be safe to call on it.
 	migrationBundle.Users[0].Spec.Name = "Alice Zhang"
-	secondSink := NewHTTPSink(client, bundle.StaticResolver{})
-	result, err := secondSink.Apply(context.Background(), migrationBundle)
+	if _, err := sink.Plan(context.Background(), migrationBundle); err != nil {
+		t.Fatalf("plan before second apply: %v", err)
+	}
+	result, err := sink.Apply(context.Background(), migrationBundle)
 	if err != nil {
 		t.Fatalf("second apply: %v", err)
 	}
@@ -253,8 +256,7 @@ func TestHTTPSinkApplyUserCreatesAndUpdates(t *testing.T) {
 	}
 
 	// Re-applying the unchanged spec must converge to Skip.
-	thirdSink := NewHTTPSink(client, bundle.StaticResolver{})
-	result, err = thirdSink.Apply(context.Background(), migrationBundle)
+	result, err = sink.Apply(context.Background(), migrationBundle)
 	if err != nil {
 		t.Fatalf("third apply: %v", err)
 	}

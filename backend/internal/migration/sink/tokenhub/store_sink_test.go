@@ -304,6 +304,39 @@ func TestStoreSinkVerifyWorksWithFreshSinkInstance(t *testing.T) {
 	}
 }
 
+func TestStoreSinkPlanResolvesExistingProviderForResources(t *testing.T) {
+	store := server.NewMemoryStore()
+	applySink := NewStoreSink(store, bundle.StaticResolver{})
+
+	b := &bundle.CanonicalMigrationBundle{
+		SchemaVersion: bundle.SchemaVersion,
+		Source:        bundle.Source{Adapter: "litellm", AdapterVersion: "1.60.0"},
+		GeneratedAt:   time.Date(2026, 7, 25, 9, 0, 0, 0, time.UTC),
+		Providers: []bundle.ProviderRef{{
+			ExternalRef: bundle.ExternalRef{System: "litellm", ID: "provider/openai"},
+			Spec:        server.Provider{Name: "OpenAI", Type: server.ProviderOpenAICompatible, Status: server.StatusActive, Healthy: true},
+		}},
+		ProviderResources: []bundle.ProviderResourceRef{{
+			ExternalRef: bundle.ExternalRef{System: "litellm", ID: "resource/openai/default"},
+			ProviderRef: "provider/openai",
+			Spec:        server.ProviderResource{Name: "OpenAI Default", ResourceType: "openai", Status: server.StatusActive, Healthy: true, Weight: 100},
+		}},
+	}
+
+	if _, err := applySink.Apply(b); err != nil {
+		t.Fatalf("apply bundle: %v", err)
+	}
+	// Plan against the populated store must resolve the resource under the
+	// existing provider instead of reporting a spurious create.
+	report, err := NewStoreSink(store, bundle.StaticResolver{}).Plan(b)
+	if err != nil {
+		t.Fatalf("plan bundle: %v", err)
+	}
+	if report.Created != 0 || report.Updated != 2 {
+		t.Fatalf("expected provider and resource to plan as updates, got %+v", report)
+	}
+}
+
 func TestStoreSinkApplyRejectsQuotaPolicies(t *testing.T) {
 	store := server.NewMemoryStore()
 	sink := NewStoreSink(store, bundle.StaticResolver{})

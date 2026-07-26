@@ -78,30 +78,8 @@ type refIndex struct {
 	teams     map[string]string
 }
 
-func NewStoreSink(store server.Store, secrets bundle.SecretResolver) *StoreSink {
-	return &StoreSink{
-		store:   store,
-		secrets: secrets,
-		newKeys: map[string]string{},
-		refIndex: refIndex{
-			providers: map[string]string{},
-			resources: map[string]string{},
-			projects:  map[string]string{},
-			users:     map[string]string{},
-			apiKeys:   map[string]string{},
-			models:    map[string]string{},
-			routes:    map[string]string{},
-			teams:     map[string]string{},
-		},
-	}
-}
-
-func (s *StoreSink) Apply(b *bundle.CanonicalMigrationBundle) (*ApplyResult, error) {
-	if err := bundle.Validate(b); err != nil {
-		return nil, err
-	}
-	s.newKeys = map[string]string{}
-	s.refIndex = refIndex{
+func newRefIndex() refIndex {
+	return refIndex{
 		providers: map[string]string{},
 		resources: map[string]string{},
 		projects:  map[string]string{},
@@ -111,6 +89,23 @@ func (s *StoreSink) Apply(b *bundle.CanonicalMigrationBundle) (*ApplyResult, err
 		routes:    map[string]string{},
 		teams:     map[string]string{},
 	}
+}
+
+func NewStoreSink(store server.Store, secrets bundle.SecretResolver) *StoreSink {
+	return &StoreSink{
+		store:    store,
+		secrets:  secrets,
+		newKeys:  map[string]string{},
+		refIndex: newRefIndex(),
+	}
+}
+
+func (s *StoreSink) Apply(b *bundle.CanonicalMigrationBundle) (*ApplyResult, error) {
+	if err := bundle.Validate(b); err != nil {
+		return nil, err
+	}
+	s.newKeys = map[string]string{}
+	s.refIndex = newRefIndex()
 	if len(b.QuotaPolicies) > 0 {
 		return nil, fmt.Errorf("quota_policies are not implemented by the TokenHub sink foundation")
 	}
@@ -387,18 +382,9 @@ func (s *StoreSink) Plan(b *bundle.CanonicalMigrationBundle) (*MigrationReport, 
 	if err := bundle.Validate(b); err != nil {
 		return nil, err
 	}
-	// Build a temporary ref index so we can resolve project refs for API keys.
-	// This mirrors the ref index built during Apply.
-	planIndex := refIndex{
-		providers: map[string]string{},
-		resources: map[string]string{},
-		projects:  map[string]string{},
-		users:     map[string]string{},
-		apiKeys:   map[string]string{},
-		models:    map[string]string{},
-		routes:    map[string]string{},
-		teams:     map[string]string{},
-	}
+	// Build a temporary ref index so we can resolve provider and project refs
+	// for nested resources. This mirrors the ref index built during Apply.
+	planIndex := newRefIndex()
 	for _, item := range b.Teams {
 		planIndex.teams[item.ExternalRef.ID] = item.ID
 	}
@@ -418,8 +404,11 @@ func (s *StoreSink) Plan(b *bundle.CanonicalMigrationBundle) (*MigrationReport, 
 	}
 	providers := s.store.ListProviders()
 	for _, item := range b.Providers {
-		_, found := findProviderByBusinessKey(providers, item.Spec.Name, item.Spec.Type)
+		existing, found := findProviderByBusinessKey(providers, item.Spec.Name, item.Spec.Type)
 		if found {
+			// Record the mapping so provider resources below resolve against the
+			// existing provider instead of always planning a create.
+			planIndex.providers[item.ExternalRef.ID] = existing.ID
 			report.Updated++
 		} else {
 			report.Created++
@@ -767,6 +756,9 @@ func findRouteByBusinessKey(items []server.ModelRoute, modelName string, resourc
 	return server.ModelRoute{}, false
 }
 
+// sameProvider reports whether two providers are equivalent for idempotency
+// checks. Credentials are cleared and CreatedAt is aliased so that only the
+// remaining, migration-managed fields participate in the comparison.
 func sameProvider(left server.Provider, right server.Provider) bool {
 	left.APIKey = ""
 	right.APIKey = ""

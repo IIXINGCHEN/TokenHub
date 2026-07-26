@@ -18,6 +18,8 @@ cd backend && go build -o tokenhub-migrate ./cmd/tokenhub-migrate/
 
 `plan` / `apply` / `verify` / `rollback` はリモート TokenHub ターゲット（`--to` または `TOKENHUB_API`）が必須です。未指定の場合は終了コード 5 で拒否されます。
 
+> 注意：`apply` は Admin CSV インポートエンドポイント経由でユーザーを作成します。ターゲットの TokenHub インスタンスにパスワードリセット用メールチャネルが設定されている場合、新規インポートされた各ユーザーに apply 中にパスワードリセットメールが送信されます。
+
 ## 環境変数
 
 | 変数 | 説明 |

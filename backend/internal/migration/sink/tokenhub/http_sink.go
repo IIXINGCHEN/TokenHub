@@ -20,19 +20,10 @@ type HTTPSink struct {
 
 func NewHTTPSink(client *AdminAPIClient, secrets bundle.SecretResolver) *HTTPSink {
 	return &HTTPSink{
-		client:  client,
-		secrets: secrets,
-		newKeys: map[string]string{},
-		refIndex: refIndex{
-			providers: map[string]string{},
-			resources: map[string]string{},
-			projects:  map[string]string{},
-			users:     map[string]string{},
-			apiKeys:   map[string]string{},
-			models:    map[string]string{},
-			routes:    map[string]string{},
-			teams:     map[string]string{},
-		},
+		client:   client,
+		secrets:  secrets,
+		newKeys:  map[string]string{},
+		refIndex: newRefIndex(),
 	}
 }
 
@@ -117,7 +108,10 @@ func (s *HTTPSink) Apply(ctx context.Context, migrationBundle *bundle.CanonicalM
 		result.Changes = append(result.Changes, change)
 		result.Checkpoint.Changes = append(result.Checkpoint.Changes, change)
 	}
-	users, _ = s.client.ListUsers(ctx)
+	users, err = s.client.ListUsers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list users after import: %w", err)
+	}
 	// Backfill refIndex for newly created users so project owner refs resolve.
 	for _, item := range migrationBundle.Users {
 		if _, already := s.refIndex.users[item.ExternalRef.ID]; !already {
@@ -193,23 +187,26 @@ func (s *HTTPSink) Plan(ctx context.Context, migrationBundle *bundle.CanonicalMi
 	if err != nil {
 		return nil, err
 	}
+	// Plan must not mutate sink state: resolve refs through a local index so
+	// a later Apply on the same instance starts from a clean slate.
+	planIndex := newRefIndex()
 	var changes []Change
 	for _, team := range migrationBundle.Teams {
-		s.refIndex.teams[team.ExternalRef.ID] = team.ID
+		planIndex.teams[team.ExternalRef.ID] = team.ID
 		changes = append(changes, Change{Resource: "team", ID: team.ID, Action: ActionSkip})
 	}
 	for _, item := range migrationBundle.Providers {
 		if existing, found := findProviderByBusinessKey(providers, item.Spec.Name, item.Spec.Type); found {
-			s.refIndex.providers[item.ExternalRef.ID] = existing.ID
+			planIndex.providers[item.ExternalRef.ID] = existing.ID
 			changes = append(changes, Change{Resource: "provider", ID: existing.ID, Action: chooseActionProvider(existing, item.Spec)})
 		} else {
 			changes = append(changes, Change{Resource: "provider", ID: item.Spec.ID, Action: ActionCreate})
 		}
 	}
 	for _, item := range migrationBundle.ProviderResources {
-		providerID := s.refIndex.providers[item.ProviderRef]
+		providerID := planIndex.providers[item.ProviderRef]
 		if existing, found := findProviderResourceByBusinessKey(resources, providerID, item.Spec.Name); found {
-			s.refIndex.resources[item.ExternalRef.ID] = existing.ID
+			planIndex.resources[item.ExternalRef.ID] = existing.ID
 			changes = append(changes, Change{Resource: "provider_resource", ID: existing.ID, Action: chooseActionResource(existing, item.Spec)})
 		} else {
 			changes = append(changes, Change{Resource: "provider_resource", ID: item.Spec.ID, Action: ActionCreate})
@@ -217,7 +214,7 @@ func (s *HTTPSink) Plan(ctx context.Context, migrationBundle *bundle.CanonicalMi
 	}
 	for _, item := range migrationBundle.Models {
 		if existing, found := findModelByName(models, item.Spec.Name); found {
-			s.refIndex.models[item.ExternalRef.ID] = existing.ID
+			planIndex.models[item.ExternalRef.ID] = existing.ID
 			changes = append(changes, Change{Resource: "model", ID: existing.Name, Action: chooseActionModel(existing, item.Spec)})
 		} else {
 			changes = append(changes, Change{Resource: "model", ID: item.Spec.Name, Action: ActionCreate})
@@ -225,42 +222,42 @@ func (s *HTTPSink) Plan(ctx context.Context, migrationBundle *bundle.CanonicalMi
 	}
 	for _, item := range migrationBundle.Users {
 		spec := item.Spec
-		spec.TeamID = s.resolveTeamRef(item.TeamRef)
+		spec.TeamID = resolveTeamRef(planIndex, item.TeamRef)
 		if existing, found := findAdminUserByIdentity(users, spec); found {
-			s.refIndex.users[item.ExternalRef.ID] = existing.ID
+			planIndex.users[item.ExternalRef.ID] = existing.ID
 			changes = append(changes, Change{Resource: "user", ID: existing.ID, Action: chooseActionUser(existing, spec)})
 		} else {
 			changes = append(changes, Change{Resource: "user", ID: spec.Email, Action: ActionCreate})
 		}
 	}
 	for _, item := range migrationBundle.Projects {
-		teamID := s.refIndex.teams[item.TeamRef]
+		teamID := planIndex.teams[item.TeamRef]
 		if existing, found := findProjectByBusinessKey(projects, item.Spec.Name, teamID); found {
-			s.refIndex.projects[item.ExternalRef.ID] = existing.ID
+			planIndex.projects[item.ExternalRef.ID] = existing.ID
 			changes = append(changes, Change{Resource: "project", ID: existing.ID, Action: chooseActionProject(existing, item.Spec)})
 		} else {
 			changes = append(changes, Change{Resource: "project", ID: item.Spec.Name, Action: ActionCreate})
 		}
 	}
 	for _, item := range migrationBundle.APIKeys {
-		projectID := s.refIndex.projects[item.ProjectRef]
+		projectID := planIndex.projects[item.ProjectRef]
 		if existing, found := findAPIKeyByBusinessKey(keys, projectID, item.Spec.Name); found {
-			s.refIndex.apiKeys[item.ExternalRef.ID] = existing.ID
+			planIndex.apiKeys[item.ExternalRef.ID] = existing.ID
 			changes = append(changes, Change{Resource: "api_key", ID: existing.ID, Action: chooseActionAPIKey(existing, item.Spec)})
 		} else {
 			changes = append(changes, Change{Resource: "api_key", ID: item.Spec.Name, Action: ActionCreate})
 		}
 	}
 	for _, item := range migrationBundle.Routes {
-		resourceID := s.refIndex.resources[item.ProviderResourceRef]
+		resourceID := planIndex.resources[item.ProviderResourceRef]
 		modelName := item.Spec.ModelName
 		if strings.TrimSpace(modelName) == "" {
-			if modelID := s.refIndex.models[item.ModelRef]; modelID != "" {
+			if modelID := planIndex.models[item.ModelRef]; modelID != "" {
 				modelName = modelID
 			}
 		}
 		if existing, found := findRouteByBusinessKey(routes, modelName, resourceID, item.Spec.ProviderModel); found {
-			s.refIndex.routes[item.ExternalRef.ID] = existing.ID
+			planIndex.routes[item.ExternalRef.ID] = existing.ID
 			changes = append(changes, Change{Resource: "route", ID: existing.ID, Action: chooseActionRoute(existing, item.Spec, resourceID, modelName)})
 		} else {
 			changes = append(changes, Change{Resource: "route", ID: item.Spec.ID, Action: ActionCreate})
@@ -303,16 +300,7 @@ func (s *HTTPSink) Verify(ctx context.Context, migrationBundle *bundle.Canonical
 		return nil, err
 	}
 
-	resolved := refIndex{
-		providers: map[string]string{},
-		resources: map[string]string{},
-		projects:  map[string]string{},
-		users:     map[string]string{},
-		apiKeys:   map[string]string{},
-		models:    map[string]string{},
-		routes:    map[string]string{},
-		teams:     map[string]string{},
-	}
+	resolved := newRefIndex()
 	for _, item := range migrationBundle.Teams {
 		resolved.teams[item.ExternalRef.ID] = item.ID
 	}
@@ -624,7 +612,7 @@ func (s *HTTPSink) applyModelHTTP(ctx context.Context, existing []server.Model, 
 
 func (s *HTTPSink) applyUserHTTP(ctx context.Context, existing []server.AdminUser, item bundle.UserRef) (Change, error) {
 	spec := item.Spec
-	spec.TeamID = s.resolveTeamRef(item.TeamRef)
+	spec.TeamID = resolveTeamRef(s.refIndex, item.TeamRef)
 	if current, found := findAdminUserByIdentity(existing, spec); found {
 		s.refIndex.users[item.ExternalRef.ID] = current.ID
 		if chooseActionUser(current, spec) == ActionSkip {
@@ -659,12 +647,12 @@ func (s *HTTPSink) applyUserHTTP(ctx context.Context, existing []server.AdminUse
 
 // resolveTeamRef maps a bundle team ref onto the target team ID, falling
 // back to the literal ref for teams that already exist on the target.
-func (s *HTTPSink) resolveTeamRef(ref string) string {
+func resolveTeamRef(idx refIndex, ref string) string {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return ""
 	}
-	if mapped := s.refIndex.teams[ref]; mapped != "" {
+	if mapped := idx.teams[ref]; mapped != "" {
 		return mapped
 	}
 	return ref
