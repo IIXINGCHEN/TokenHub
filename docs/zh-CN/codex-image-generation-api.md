@@ -1,5 +1,7 @@
 # Codex 生图 API 调用与测试指南
 
+返回：[文档首页](README.md) | [普通用户指南](user-guide.md)
+
 本文说明如何通过 TokenHub 的 OpenAI 兼容 Image API 调用 `codex-gpt-image-2` 和 `gpt-image-2`。
 
 `codex-gpt-image-2` 是 TokenHub 对外暴露的 Codex 订阅虚拟模型。它不会请求普通 OpenAI API Provider，而是由服务器选择已确认支持生图的 Codex 订阅账号，直接调用 Codex 订阅 Images 接口。服务器不需要安装或启动 Codex CLI。
