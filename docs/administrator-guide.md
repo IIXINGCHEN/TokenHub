@@ -40,6 +40,20 @@ Users should only see callable models. A model is callable when it is active in 
 | Disabled model | Hidden from ordinary users |
 | Unhealthy provider route | Visible in routing diagnostics and request logs |
 
+## Provider Resource Recovery
+
+A provider resource that fails `TOKENHUB_RESOURCE_FAILURE_THRESHOLD` times in a row is parked: it stops receiving traffic and enters a cooldown. Recovery is automatic and needs no admin action.
+
+| Phase | Behaviour |
+| --- | --- |
+| Parked | The resource is excluded from routing for `TOKENHUB_RESOURCE_COOLDOWN_SECONDS` |
+| Half-open | Once the cooldown lapses, exactly one request is allowed through as a trial; every other request is still rejected |
+| Recovered | The trial reaching the upstream successfully clears the breaker, resets the failure count and raises a `provider_resource_recovered` alert |
+| Re-parked | A failed trial immediately arms the next cooldown, doubling each time up to `TOKENHUB_RESOURCE_COOLDOWN_MAX_SECONDS` |
+
+Only the trial request's own success closes the breaker. A request that was already in flight when the breaker tripped cannot close it, however it ends. A client that disconnects mid-stream, a policy refusal, or an unsupported model counts neither for nor against the resource: it adds no failure, but it also clears none, so an alternating failure/disconnect pattern still trips the breaker.
+
+Testing a resource from the console still recovers it immediately when the adapter supports probing, because that probe issues a real upstream request. Disabling a resource remains an administrative override: a disabled resource is never readmitted by recovery, whatever the upstream reports.
 ## Metrics
 
 TokenHub can expose Prometheus metrics at `GET /metrics`. Collection is off by default; set `TOKENHUB_METRICS_ENABLED=true` to enable it. While disabled, nothing is collected and the endpoint returns 404. The endpoint always authenticates: metrics disclose model names, provider and resource identifiers, and spend, so it is never anonymous. Send `Authorization: Bearer <token>` using `TOKENHUB_METRICS_TOKEN`, or the admin token when that variable is empty. A dedicated token is recommended so the scrape configuration does not carry the admin credential. A token supplied in the query string is rejected, because it would be captured in access logs.

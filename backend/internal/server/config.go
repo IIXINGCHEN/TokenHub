@@ -21,6 +21,10 @@ type Config struct {
 	SeedDemo                 bool
 	ResourceFailureThreshold int
 	ResourceCooldownSeconds  int
+	// ResourceCooldownMaxSeconds caps the exponential backoff applied to repeated
+	// half-open recovery failures, so a permanently broken resource is retried on a
+	// widening interval instead of once per base cooldown forever.
+	ResourceCooldownMaxSeconds int
 	// MetricsEnabled turns on Prometheus collection and the /metrics endpoint. Off by
 	// default: the endpoint discloses internal topology and spend, so exposing it is
 	// an explicit operator decision rather than something a deployment inherits.
@@ -54,29 +58,30 @@ type Config struct {
 
 func ConfigFromEnv() Config {
 	return Config{
-		Environment:              getenv("TOKENHUB_ENV", "dev"),
-		AdminToken:               getenv("TOKENHUB_ADMIN_TOKEN", "dev_admin_token"),
-		BootstrapAdminPassword:   getenv("TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD", "admin123456"),
-		PublicBaseURL:            getenv("TOKENHUB_PUBLIC_BASE_URL", ""),
-		DatabaseURL:              resolveDatabaseURL(),
-		SQLiteBackupDir:          getenv("TOKENHUB_SQLITE_BACKUP_DIR", defaultSQLiteBackupDir()),
-		ModelCatalogFile:         getenv("TOKENHUB_MODEL_CATALOG_FILE", defaultModelCatalogFile()),
-		ProviderCatalogFile:      getenv("TOKENHUB_PROVIDER_CATALOG_FILE", defaultProviderCatalogFile()),
-		SecretKey:                getenv("TOKENHUB_SECRET_KEY", "dev_tokenhub_secret_key"),
-		TrustedProxyCIDRs:        getenvList("TOKENHUB_TRUSTED_PROXY_CIDRS"),
-		CORSAllowedOrigins:       getenvList("TOKENHUB_CORS_ALLOWED_ORIGINS"),
-		SeedDemo:                 getenvBool("TOKENHUB_SEED_DEMO", false),
-		ResourceFailureThreshold: getenvInt("TOKENHUB_RESOURCE_FAILURE_THRESHOLD", 3),
-		ResourceCooldownSeconds:  getenvInt("TOKENHUB_RESOURCE_COOLDOWN_SECONDS", 300),
-		MetricsEnabled:           getenvBool("TOKENHUB_METRICS_ENABLED", false),
-		MetricsToken:             getenv("TOKENHUB_METRICS_TOKEN", ""),
-		MetricsProjectLabel:      getenvBool("TOKENHUB_METRICS_PROJECT_LABEL", false),
-		InFlightLeaseTTLSeconds:  getenvInt("TOKENHUB_IN_FLIGHT_LEASE_TTL_SECONDS", 300),
-		ClusterLockTTLSeconds:    getenvInt("TOKENHUB_CLUSTER_LOCK_TTL_SECONDS", 180),
-		GracefulShutdownSeconds:  getenvInt("TOKENHUB_GRACEFUL_SHUTDOWN_SECONDS", 150),
-		DBMaxOpenConns:           getenvInt("TOKENHUB_DB_MAX_OPEN_CONNS", 25),
-		DBMaxIdleConns:           getenvInt("TOKENHUB_DB_MAX_IDLE_CONNS", 5),
-		DBConnMaxLifetimeMinutes: getenvInt("TOKENHUB_DB_CONN_MAX_LIFETIME_MINUTES", 30),
+		Environment:                getenv("TOKENHUB_ENV", "dev"),
+		AdminToken:                 getenv("TOKENHUB_ADMIN_TOKEN", "dev_admin_token"),
+		BootstrapAdminPassword:     getenv("TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD", "admin123456"),
+		PublicBaseURL:              getenv("TOKENHUB_PUBLIC_BASE_URL", ""),
+		DatabaseURL:                resolveDatabaseURL(),
+		SQLiteBackupDir:            getenv("TOKENHUB_SQLITE_BACKUP_DIR", defaultSQLiteBackupDir()),
+		ModelCatalogFile:           getenv("TOKENHUB_MODEL_CATALOG_FILE", defaultModelCatalogFile()),
+		ProviderCatalogFile:        getenv("TOKENHUB_PROVIDER_CATALOG_FILE", defaultProviderCatalogFile()),
+		SecretKey:                  getenv("TOKENHUB_SECRET_KEY", "dev_tokenhub_secret_key"),
+		TrustedProxyCIDRs:          getenvList("TOKENHUB_TRUSTED_PROXY_CIDRS"),
+		CORSAllowedOrigins:         getenvList("TOKENHUB_CORS_ALLOWED_ORIGINS"),
+		SeedDemo:                   getenvBool("TOKENHUB_SEED_DEMO", false),
+		ResourceFailureThreshold:   getenvInt("TOKENHUB_RESOURCE_FAILURE_THRESHOLD", 3),
+		ResourceCooldownSeconds:    getenvInt("TOKENHUB_RESOURCE_COOLDOWN_SECONDS", 300),
+		ResourceCooldownMaxSeconds: getenvInt("TOKENHUB_RESOURCE_COOLDOWN_MAX_SECONDS", 3600),
+		MetricsEnabled:             getenvBool("TOKENHUB_METRICS_ENABLED", false),
+		MetricsToken:               getenv("TOKENHUB_METRICS_TOKEN", ""),
+		MetricsProjectLabel:        getenvBool("TOKENHUB_METRICS_PROJECT_LABEL", false),
+		InFlightLeaseTTLSeconds:    getenvInt("TOKENHUB_IN_FLIGHT_LEASE_TTL_SECONDS", 300),
+		ClusterLockTTLSeconds:      getenvInt("TOKENHUB_CLUSTER_LOCK_TTL_SECONDS", 180),
+		GracefulShutdownSeconds:    getenvInt("TOKENHUB_GRACEFUL_SHUTDOWN_SECONDS", 150),
+		DBMaxOpenConns:             getenvInt("TOKENHUB_DB_MAX_OPEN_CONNS", 25),
+		DBMaxIdleConns:             getenvInt("TOKENHUB_DB_MAX_IDLE_CONNS", 5),
+		DBConnMaxLifetimeMinutes:   getenvInt("TOKENHUB_DB_CONN_MAX_LIFETIME_MINUTES", 30),
 
 		CacheAffinityEnabled:        getenvBool("TOKENHUB_CACHE_AFFINITY_ENABLED", false),
 		CacheAffinityModels:         getenvList("TOKENHUB_CACHE_AFFINITY_MODELS"),

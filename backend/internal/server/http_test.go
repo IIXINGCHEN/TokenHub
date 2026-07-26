@@ -4045,9 +4045,9 @@ func TestProviderResourceBulkOperations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store.FinishProviderResourceAttempt(resource.ID, "", false, Usage{})
-	store.FinishProviderResourceAttempt(resource.ID, "", false, Usage{})
-	store.FinishProviderResourceAttempt(resource.ID, "", false, Usage{})
+	store.FinishProviderResourceAttempt(context.Background(), resource.ID, "", AttemptFailed, Usage{})
+	store.FinishProviderResourceAttempt(context.Background(), resource.ID, "", AttemptFailed, Usage{})
+	store.FinishProviderResourceAttempt(context.Background(), resource.ID, "", AttemptFailed, Usage{})
 	if _, _, err := store.CheckProviderResourceCapacity(context.Background(), resource.ID); AsHTTPError(err).Code != "provider_resource_cooling_down" {
 		t.Fatalf("expected cooldown before clear_error, got %v", err)
 	}
@@ -4076,7 +4076,7 @@ func TestProviderResourceBulkOperations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("capacity should be available after clear_error: %v", err)
 	}
-	store.FinishProviderResourceAttempt(resource.ID, leaseID, true, Usage{TotalTokens: 5})
+	store.FinishProviderResourceAttempt(context.Background(), resource.ID, leaseID, AttemptSucceeded, Usage{TotalTokens: 5})
 	if _, _, err := store.CheckProviderResourceCapacity(context.Background(), resource.ID); AsHTTPError(err).Code != "provider_resource_rpm_exceeded" {
 		t.Fatalf("expected rpm limit before reset, got %v", err)
 	}
@@ -4091,7 +4091,7 @@ func TestProviderResourceBulkOperations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("capacity should be available after reset_usage: %v", err)
 	}
-	store.FinishProviderResourceAttempt(resource.ID, leaseID, true, Usage{})
+	store.FinishProviderResourceAttempt(context.Background(), resource.ID, leaseID, AttemptSucceeded, Usage{})
 }
 
 func TestProviderResourceImport(t *testing.T) {

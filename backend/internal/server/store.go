@@ -219,7 +219,8 @@ type Store interface {
 	CheckProviderResourceCapacity(ctx context.Context, resourceID string) (string, context.Context, error)
 	CheckProviderResourceRetryCapacity(ctx context.Context, resourceID string, leaseID string) error
 	ReleaseProviderResourceCapacity(resourceID string, leaseID string)
-	FinishProviderResourceAttempt(resourceID string, leaseID string, success bool, usage Usage)
+	FinishProviderResourceAttempt(ctx context.Context, resourceID string, leaseID string, outcome AttemptOutcome, usage Usage)
+	RecoverProviderResource(resourceID string) (ProviderResource, error)
 	RefreshProviderResourceCredentials(ctx context.Context, resourceID string, force bool) (ProviderResourceCredentials, error)
 	GetAdapterSessionBinding(ctx context.Context, adapterType string, providerID string, affinityKeyHash string) (AdapterSessionBinding, bool, error)
 	CommitAdapterSessionBinding(ctx context.Context, binding AdapterSessionBinding, expectedGeneration int64) (AdapterSessionBinding, bool, error)
@@ -241,6 +242,7 @@ type GormStore struct {
 	metrics          *GatewayMetrics
 	failureThreshold int
 	cooldownDuration time.Duration
+	cooldownMax      time.Duration
 	sqliteDSN        string
 	backupDir        string
 	dbDriver         string // "sqlite" or "postgres"
@@ -491,7 +493,8 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 		leaseHeartbeats:  &sync.Map{},
 		secretKey:        config.SecretKey,
 		failureThreshold: defaultInt(config.ResourceFailureThreshold, 3),
-		cooldownDuration: time.Duration(defaultInt(config.ResourceCooldownSeconds, 300)) * time.Second,
+		cooldownDuration: cooldownSecondsToDuration(defaultInt(config.ResourceCooldownSeconds, 300)),
+		cooldownMax:      cooldownSecondsToDuration(defaultInt(config.ResourceCooldownMaxSeconds, 3600)),
 		sqliteDSN:        dsn,
 		backupDir:        defaultString(config.SQLiteBackupDir, "data/backups"),
 		dbDriver:         driver,
@@ -1914,6 +1917,7 @@ func (s *GormStore) CheckProviderResourceCapacity(ctx context.Context, resourceI
 
 	leaseID := NewID("lease")
 	acquiredLease := false
+	halfOpenClaimed := false
 	var leaseConfirmedFor time.Duration
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := s.lockScopeForUpdate(tx, "provider_resource", resourceID); err != nil {
@@ -1931,7 +1935,28 @@ func (s *GormStore) CheckProviderResourceCapacity(ctx context.Context, resourceI
 		if err != nil {
 			return err
 		}
-		if resource.CooldownUntil != nil && now.Before(*resource.CooldownUntil) {
+		if !resource.Healthy {
+			// Half-open admission. The resource is parked; the trial is claimed by
+			// pushing cooldown_until into the future, which both rejects every
+			// concurrent request below and pre-arms the next window if this trial
+			// fails. The UPDATE is guarded by the deadline it read, so across
+			// replicas exactly one caller can win.
+			if resource.CooldownUntil == nil || now.Before(*resource.CooldownUntil) {
+				return NewHTTPError(http.StatusTooManyRequests, "provider_resource_cooling_down", "Provider resource is cooling down")
+			}
+			nextDeadline := now.Add(s.cooldownWindow(resource.FailureCount))
+			claim := tx.Model(&ProviderResource{}).
+				Where("id = ? AND healthy = ? AND cooldown_until = ?", resourceID, false, resource.CooldownUntil).
+				Updates(map[string]any{"cooldown_until": &nextDeadline, "updated_at": now})
+			if claim.Error != nil {
+				return claim.Error
+			}
+			if claim.RowsAffected == 0 {
+				return NewHTTPError(http.StatusTooManyRequests, "provider_resource_cooling_down", "Provider resource is cooling down")
+			}
+			resource.CooldownUntil = &nextDeadline
+			halfOpenClaimed = true
+		} else if resource.CooldownUntil != nil && now.Before(*resource.CooldownUntil) {
 			return NewHTTPError(http.StatusTooManyRequests, "provider_resource_cooling_down", "Provider resource is cooling down")
 		}
 		if resource.MaxConcurrency > 0 {
@@ -1952,6 +1977,11 @@ func (s *GormStore) CheckProviderResourceCapacity(ctx context.Context, resourceI
 	})
 	if err != nil {
 		return "", ctx, err
+	}
+	// Tag the call context before deriving the lease context, so the marker reaches
+	// FinishProviderResourceAttempt on both the leased and the unleased path.
+	if halfOpenClaimed {
+		ctx = withHalfOpenClaim(ctx)
 	}
 	if acquiredLease {
 		leaseCtx := s.startInFlightLeaseHeartbeat(ctx, leaseID, leaseConfirmedFor)
@@ -2003,10 +2033,13 @@ func (s *GormStore) CheckProviderResourceRetryCapacity(ctx context.Context, reso
 	})
 }
 
-func (s *GormStore) FinishProviderResourceAttempt(resourceID string, leaseID string, success bool, usage Usage) {
+func (s *GormStore) FinishProviderResourceAttempt(ctx context.Context, resourceID string, leaseID string, outcome AttemptOutcome, usage Usage) {
 	if resourceID == "" {
 		return
 	}
+	success := outcome.CountsAsHealthy()
+	// Only the request that won the half-open trial may close the breaker.
+	closesBreaker := outcome == AttemptSucceeded && hasHalfOpenClaim(ctx)
 	_ = s.stopInFlightLeaseHeartbeat(leaseID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2045,15 +2078,51 @@ func (s *GormStore) FinishProviderResourceAttempt(resourceID string, leaseID str
 					return err
 				}
 			}
-			updates["failure_count"] = 0
-			if resource.CooldownUntil != nil && now.After(*resource.CooldownUntil) {
+			switch {
+			case outcome != AttemptSucceeded:
+				// A neutral outcome (client disconnect, policy refusal, unsupported
+				// model) is not the resource's fault, so it must not add a failure —
+				// but it is not evidence the upstream works either. Leave the failure
+				// count, health and cooldown exactly as they were: clearing the count
+				// here would let an alternating failure/disconnect pattern keep the
+				// breaker from ever tripping, and would reset the backoff of a
+				// half-open trial whose client merely hung up.
+			case resource.Healthy:
+				// Ordinary success on a live resource: reset the consecutive failure
+				// run and drop a stale deadline left behind by an earlier trip.
+				updates["failure_count"] = 0
+				if resource.CooldownUntil != nil && now.After(*resource.CooldownUntil) {
+					updates["cooldown_until"] = nil
+				}
+			case closesBreaker && resource.Status == StatusActive:
+				// The half-open claimant confirmed the upstream: close the breaker.
+				updates["failure_count"] = 0
+				updates["healthy"] = true
 				updates["cooldown_until"] = nil
+				updates["last_checked_at"] = now
+				if err := tx.Create(&AlertEvent{
+					ID:         NewID("alt"),
+					ScopeType:  "provider_resource",
+					ScopeID:    resource.ID,
+					Severity:   "info",
+					Code:       "provider_resource_recovered",
+					Message:    "Provider resource recovered after a successful half-open request",
+					ResourceID: resource.ProviderID,
+					CreatedAt:  now,
+				}).Error; err != nil {
+					return err
+				}
+			default:
+				// The breaker is open and this success came from a request that never
+				// held the trial permit — typically one already in flight when the
+				// breaker tripped. It proves nothing about the state being probed, so
+				// it must not touch the failure count, the deadline, or health.
 			}
 		} else {
-			nextFailures := resource.FailureCount + 1
+			nextFailures := s.nextFailureCount(resource.FailureCount)
 			updates["failure_count"] = nextFailures
 			if nextFailures >= s.failureThreshold {
-				cooldownUntil := now.Add(s.cooldownDuration)
+				cooldownUntil := now.Add(s.cooldownWindow(nextFailures))
 				updates["healthy"] = false
 				updates["cooldown_until"] = &cooldownUntil
 				updates["last_checked_at"] = now
@@ -2345,6 +2414,7 @@ func (s *GormStore) SelectRouteCandidates(modelName string) ([]RouteSelection, e
 		Find(&routes).Error; err != nil {
 		return nil, err
 	}
+	now := time.Now().UTC()
 	selections := make([]RouteSelection, 0, len(routes))
 	for _, route := range routes {
 		var provider Provider
@@ -2359,7 +2429,7 @@ func (s *GormStore) SelectRouteCandidates(modelName string) ([]RouteSelection, e
 			if err := s.db.First(&resource, "id = ? AND provider_id = ?", route.ProviderResourceID, provider.ID).Error; err != nil {
 				continue
 			}
-			if resource.Status != StatusActive || !resource.Healthy {
+			if resource.Status != StatusActive || !halfOpenEligible(resource, now) {
 				continue
 			}
 			selections = append(selections, s.routeSelection(provider, &resource, route))
@@ -2367,7 +2437,12 @@ func (s *GormStore) SelectRouteCandidates(modelName string) ([]RouteSelection, e
 		}
 
 		var resources []ProviderResource
-		query := s.db.Where("provider_id = ? AND status = ? AND healthy = ?", provider.ID, StatusActive, true)
+		// Unhealthy resources whose cooldown has lapsed are admitted as half-open
+		// candidates. Admission still gates them to a single trial (see
+		// CheckProviderResourceCapacity); this query only makes them reachable, which
+		// is what lets a parked resource ever be retried.
+		query := s.db.Where("provider_id = ? AND status = ? AND (healthy = ? OR cooldown_until <= ?)",
+			provider.ID, StatusActive, true, now)
 		if strings.TrimSpace(route.ResourceGroup) != "" {
 			query = query.Where("\"group\" = ?", strings.TrimSpace(route.ResourceGroup))
 		}

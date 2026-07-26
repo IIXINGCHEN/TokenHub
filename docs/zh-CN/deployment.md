@@ -233,7 +233,8 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_SEED_DEMO` | `false` | 是否写入演示数据 |
 | `TOKENHUB_LOG_LEVEL` | `info` | 日志级别 |
 | `TOKENHUB_RESOURCE_FAILURE_THRESHOLD` | `3` | Provider 资源进入冷却前的失败阈值 |
-| `TOKENHUB_RESOURCE_COOLDOWN_SECONDS` | `300` | Provider 资源冷却秒数 |
+| `TOKENHUB_RESOURCE_COOLDOWN_SECONDS` | `300` | Provider 资源进入冷却后获得半开重试前的基础等待秒数 |
+| `TOKENHUB_RESOURCE_COOLDOWN_MAX_SECONDS` | `3600` | 反复恢复失败时指数退避的上限秒数 |
 | `TOKENHUB_METRICS_ENABLED` | `false` | 采集 Prometheus 指标并提供 `GET /metrics` |
 | `TOKENHUB_METRICS_TOKEN` | 空 | `/metrics` 的 Bearer 令牌；留空时回落到管理员令牌 |
 | `TOKENHUB_METRICS_PROJECT_LABEL` | `false` | 为网关指标添加 `project_id` 标签，会按项目数放大时间序列数量 |
