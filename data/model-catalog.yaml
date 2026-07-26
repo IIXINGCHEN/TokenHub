@@ -3749,6 +3749,28 @@ models:
       tool_call: "false"
       vision: "true"
       reasoning_supported: "false"
+      execution_type: "openai_image_api"
+      provider_type: "openai"
+      upstream_model: "gpt-image-2"
+      billing_mode: "api"
+  - name: "codex-gpt-image-2"
+    title: "Codex GPT Image 2"
+    description: "Image generation and reference-image editing through a connected Codex subscription account."
+    category: "codex"
+    family: "gpt-image"
+    modality: "image"
+    context_window: 8192
+    input_modalities: ["text", "image"]
+    output_modalities: ["image"]
+    capabilities: ["image", "vision"]
+    supported_parameters: ["image_input"]
+    metadata:
+      source: "tokenhub-standard-catalog"
+      execution_type: "codex_subscription_image_generation"
+      provider_type: "openai_codex"
+      upstream_model: "gpt-image-2"
+      billing_mode: "subscription"
+      virtual_model: "true"
   - name: "slow-mock"
     description: "timeout问题测试"
     category: "custom"
