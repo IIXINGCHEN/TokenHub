@@ -2,7 +2,7 @@ import { AlertCircle, Ban, Check, Copy, KeyRound, Plus, Search, Send, Trash2, Us
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { clearPendingProviderAccountOAuthSession, consumePendingProviderAccountOAuthResult, hasPendingProviderAccountOAuthResult, parseProviderAccountOAuthResult, providerAccountOAuthCallbackURL, type ProviderAccountOAuthGenerateResponse, type ProviderAccountOAuthResult, readPendingProviderAccountOAuthSession, savePendingProviderAccountOAuthSession } from "../core/session";
 import { type ApiContext, type Model, type ModelRoute, type Provider, type ProviderCatalogEntry, type ProviderCredentialMode, type ProviderResource } from "../core/types";
-import { buildCustomProviderCatalogEntry, canonicalModelNameForUI, catalogModelCategoryOptions, modelCategory, modelCategoryForCatalog, modelCategoryLabel, providerEntryCategoryCount, providerEntrySupportsCategory } from "../domain/catalog";
+import { buildCustomProviderCatalogEntry, canonicalModelNameForUI, catalogModelCategoryOptions, modelCategory, modelCategoryForCatalog, modelCategoryLabel, providerEntryCategoryCount, providerEntrySupportsCategory, providerTypeToModelCategory } from "../domain/catalog";
 import { compactNumber, formatModelPrice, modelCapabilities } from "../domain/formatting";
 import { providerTypeLabel } from "../domain/labels";
 import { clearCustomValidity, countWithUnit, handleRequiredFieldInvalid, providerSaveMessage, tx } from "../i18n/runtime";
@@ -130,13 +130,19 @@ export function ProviderUpsertModal({
   );
   const providerCatalogID = provider?.options?.catalog_id;
   const providerModelCategory = provider?.options?.model_category;
-  const initialCategory = editingCodexSubscription ? "codex" : (providerModelCategory || availableCategories.find((item) => item.key !== "all")?.key || "custom");
+  const initialCategory = editingCodexSubscription
+    ? "codex"
+    : providerModelCategory || (mode === "edit" && provider
+      ? providerTypeToModelCategory(provider.type)
+      : availableCategories.find((item) => item.key !== "all")?.key || "custom");
   const initialEntry = editingCodexSubscription
     ? codexProviderCatalogSummary
-    : selectableProviderCatalog.find((entry) => entry.id === providerCatalogID)
-      ?? selectableProviderCatalog.find((entry) => providerEntrySupportsCategory(entry, initialCategory))
-      ?? selectableProviderCatalog.find((entry) => entry.id === "custom")
-      ?? selectableProviderCatalog[0];
+    : mode === "edit"
+      ? selectableProviderCatalog.find((entry) => entry.id === "custom") ?? selectableProviderCatalog[0]
+      : selectableProviderCatalog.find((entry) => entry.id === providerCatalogID)
+        ?? selectableProviderCatalog.find((entry) => providerEntrySupportsCategory(entry, initialCategory))
+        ?? selectableProviderCatalog.find((entry) => entry.id === "custom")
+        ?? selectableProviderCatalog[0];
   const [modelCategory, setModelCategory] = useState(initialCategory);
   const [catalogID, setCatalogID] = useState(initialEntry?.id ?? "custom");
   const [detail, setDetail] = useState<ProviderCatalogEntry | null>(null);
@@ -506,7 +512,7 @@ export function ProviderUpsertModal({
   const selectedEntry = usesCodexCatalog
     ? codexCatalog ?? codexProviderCatalogSummary
     : detail ?? (catalogID === "custom" ? customCatalogEntry : catalog.find((entry) => entry.id === catalogID));
-  const showProviderCatalog = (mode === "edit" && !usesCodexCatalog) || (mode === "create" && createStep === 1 && credentialMode !== "account_integration");
+  const showProviderCatalog = mode === "create" && createStep === 1 && credentialMode !== "account_integration";
   const providerBodyClassName = !showProviderCatalog ? "provider-modal-body provider-wizard-single" : "provider-modal-body";
   const accountRuntimeFields = useMemo(() => providerCreateAccountRuntimeFields(), []);
   const accountManualTokenFields = useMemo(() => providerCreateAccountManualTokenFields(), []);
@@ -1148,7 +1154,7 @@ export function ProviderUpsertModal({
                   ))}
                 </select>
               </div>
-            ) : mode === "edit" || createStep > 0 ? (
+            ) : mode === "create" && createStep > 0 ? (
               <div className="provider-selected-summary">
                 <strong>{modelCategoryLabel(modelCategory)}</strong>
                 {credentialMode === "account_integration" ? (
