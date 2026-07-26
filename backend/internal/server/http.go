@@ -3530,6 +3530,7 @@ func (s *Server) createProviderCatalogRoutes(providerID string, catalog Provider
 			selected[modelID] = true
 		}
 	}
+	expandModelCatalog := len(selected) > 0
 	modelNames := []string{}
 	routeIDs := []string{}
 	category := strings.TrimSpace(req.ModelCategory)
@@ -3546,8 +3547,13 @@ func (s *Server) createProviderCatalogRoutes(providerID string, catalog Provider
 			continue
 		}
 		route := ProviderCatalogModelRoute(providerID, catalogModel)
-		if !standardModelNames[normalizeModelLookupName(route.ModelName)] {
-			continue
+		normalizedModelName := normalizeModelLookupName(route.ModelName)
+		if !standardModelNames[normalizedModelName] {
+			if !expandModelCatalog {
+				continue
+			}
+			s.store.AddModel(providerCatalogModelRecord(catalogModel, route.ModelName))
+			standardModelNames[normalizedModelName] = true
 		}
 		if existingRouteIDs[route.ID] {
 			continue
@@ -3559,6 +3565,28 @@ func (s *Server) createProviderCatalogRoutes(providerID string, catalog Provider
 		modelNames = append(modelNames, route.ModelName)
 	}
 	return len(routeIDs), modelNames, routeIDs
+}
+
+func providerCatalogModelRecord(model ProviderCatalogModel, name string) Model {
+	name = firstNonEmpty(strings.TrimSpace(name), model.CanonicalName, canonicalModelName(model.ID, model.DisplayName), model.ID)
+	category := standardModelCategory(firstNonEmpty(model.Category, inferModelCategory(model.ID, model.DisplayName)))
+	return Model{
+		ID:                     name,
+		Name:                   name,
+		Category:               category,
+		Family:                 firstNonEmpty(model.Family, inferModelFamily(name)),
+		Modality:               normalizeModelModality(firstNonEmpty(model.Type, "chat")),
+		ContextWindow:          model.ContextWindow,
+		InputPriceUSDPer1M:     model.InputPriceUSDPer1M,
+		CacheReadPriceUSDPer1M: model.CacheReadPriceUSDPer1M,
+		OutputPriceUSDPer1M:    model.OutputPriceUSDPer1M,
+		InputModalities:        append([]string(nil), model.InputModalities...),
+		OutputModalities:       append([]string(nil), model.OutputModalities...),
+		Capabilities:           append([]string(nil), model.Capabilities...),
+		SupportedParameters:    append([]string(nil), model.SupportedParameters...),
+		Metadata:               cloneStringMap(model.Metadata),
+		Status:                 StatusActive,
+	}
 }
 
 func (s *Server) customProviderCatalogFromStandardModels(category string) ProviderCatalogEntry {

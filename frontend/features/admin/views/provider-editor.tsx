@@ -10,7 +10,9 @@ import { adminFetch, isAuthExpiredError, providerPayload, providerResourcePayloa
 import { assertProviderAccountResourceReady, defaultProviderResourceName, providerAccountTokenSummary, providerCreateAccountManualTokenFields, providerCreateAccountRuntimeFields, providerResourceDraftDefaults } from "../resources/provider-model-config";
 import { ReviewItem } from "../shared/modals";
 import { providerTypeOptions } from "../shared/ui";
+import { ProviderAPIQuickCatalog, ProviderAPIQuickConnect } from "./provider-api-quick-connect";
 import { ProviderInlineField, providerAccountResourceReady, providerCreateWizardSteps, providerCreateWizardStepTitle, providerCredentialModeLabel, providerCredentialOptions } from "./provider-editor-fields";
+import { ProviderAdvancedFields, ProviderConnectionFields } from "./provider-editor-sections";
 
 const openAIAccountOAuthRedirectURI = "http://localhost:1455/auth/callback";
 
@@ -60,7 +62,7 @@ type CodexSubscriptionTestResult = {
   };
 };
 
-type ProviderEditTab = "quota" | "test" | "settings" | "models";
+type ProviderEditTab = "connect" | "models" | "advanced";
 
 type ProviderAccountConfirmation = {
   action: "enable" | "disable" | "delete";
@@ -130,13 +132,19 @@ export function ProviderUpsertModal({
   );
   const providerCatalogID = provider?.options?.catalog_id;
   const providerModelCategory = provider?.options?.model_category;
-  const initialCategory = editingCodexSubscription ? "codex" : (providerModelCategory || availableCategories.find((item) => item.key !== "all")?.key || "custom");
+  const initialCategory = editingCodexSubscription
+    ? "codex"
+    : providerModelCategory || (mode === "edit" && provider
+      ? "all"
+      : availableCategories.find((item) => item.key !== "all")?.key || "custom");
   const initialEntry = editingCodexSubscription
     ? codexProviderCatalogSummary
-    : selectableProviderCatalog.find((entry) => entry.id === providerCatalogID)
-      ?? selectableProviderCatalog.find((entry) => providerEntrySupportsCategory(entry, initialCategory))
-      ?? selectableProviderCatalog.find((entry) => entry.id === "custom")
-      ?? selectableProviderCatalog[0];
+    : mode === "edit"
+      ? selectableProviderCatalog.find((entry) => entry.id === "custom") ?? selectableProviderCatalog[0]
+      : selectableProviderCatalog.find((entry) => entry.id === providerCatalogID)
+        ?? selectableProviderCatalog.find((entry) => providerEntrySupportsCategory(entry, initialCategory))
+        ?? selectableProviderCatalog.find((entry) => entry.id === "custom")
+        ?? selectableProviderCatalog[0];
   const [modelCategory, setModelCategory] = useState(initialCategory);
   const [catalogID, setCatalogID] = useState(initialEntry?.id ?? "custom");
   const [detail, setDetail] = useState<ProviderCatalogEntry | null>(null);
@@ -188,12 +196,16 @@ export function ProviderUpsertModal({
   const [codexTestBusyID, setCodexTestBusyID] = useState("");
   const [codexTestErrors, setCodexTestErrors] = useState<Record<string, string>>({});
   const [codexTestResults, setCodexTestResults] = useState<Record<string, CodexSubscriptionTestResult>>({});
-  const [editTab, setEditTab] = useState<ProviderEditTab>(editingCodexSubscription ? "quota" : "settings");
+  const [editTab, setEditTab] = useState<ProviderEditTab>("connect");
+  const [quickAPITab, setQuickAPITab] = useState<ProviderEditTab>("connect");
   const [createStep, setCreateStep] = useState(0);
-  const createSteps = useMemo(() => providerCreateWizardSteps(), []);
+  const quickAPIFlow = mode === "create" && credentialMode === "provider_api_key";
+  const quickAPIConnect = quickAPIFlow && createStep === 1;
+  const createSteps = useMemo(() => providerCreateWizardSteps(credentialMode), [credentialMode]);
   const lastCreateStep = createSteps.length - 1;
   const accountCallbackURL = useMemo(() => providerAccountOAuthCallbackURL(), []);
   const modalRef = useRef<HTMLFormElement | null>(null);
+  const preserveCatalogValuesOnReload = useRef(false);
   const existingRouteModels = useMemo(
     () => new Set(routes.filter((route) => provider && route.provider_id === provider.id).map((route) => route.model_name)),
     [provider, routes],
@@ -218,6 +230,7 @@ export function ProviderUpsertModal({
   const customCatalogEntry = useMemo(() => buildCustomProviderCatalogEntry(modelCategory, standardModels), [modelCategory, standardModels]);
 
   useEffect(() => {
+    if (quickAPIFlow) return;
     if (credentialMode === "account_integration" || catalogID === codexProviderCatalogSummary.id) return;
     if (catalogID === "custom") return;
     if (categoryCatalog.length === 0) return;
@@ -225,13 +238,15 @@ export function ProviderUpsertModal({
       selectCatalog(categoryCatalog[0]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modelCategory, categoryCatalog.length, credentialMode, catalogID]);
+  }, [modelCategory, categoryCatalog.length, credentialMode, catalogID, quickAPIFlow]);
 
   useEffect(() => {
     const entry = catalogID === "custom" ? customCatalogEntry : catalog.find((item) => item.id === catalogID);
-    setModelQuery("");
+    const preserveCatalogValues = preserveCatalogValuesOnReload.current;
+    preserveCatalogValuesOnReload.current = false;
+    if (!preserveCatalogValues) setModelQuery("");
     setModelError("");
-    if (entry && mode === "create") {
+    if (entry && mode === "create" && !preserveCatalogValues) {
       setValues((current) => ({
         ...current,
         name: catalogID === "custom" ? (current.name === initialEntry?.display_name ? "" : current.name) : entry.display_name || entry.name || current.name,
@@ -300,7 +315,7 @@ export function ProviderUpsertModal({
         if (cancelled) return;
         setDetail(payload.data);
         setModelError("");
-        if (mode === "create") {
+        if (mode === "create" && !preserveCatalogValues) {
           setValues((current) => ({
             ...current,
             name: payload.data.display_name || payload.data.name || current.name,
@@ -439,7 +454,7 @@ export function ProviderUpsertModal({
   }, [catalogID, createStep, mode]);
 
   useEffect(() => {
-    if (mode !== "edit" || editTab !== "quota") return;
+    if (mode !== "edit" || editTab !== "advanced") return;
     for (const resource of selectedAccountResources) {
       if (!accountQuotas[resource.id]) void queryAccountQuota(resource);
     }
@@ -463,25 +478,31 @@ export function ProviderUpsertModal({
     : usesCodexCatalog ? codexCatalogError : modelError;
   const models = useMemo(
     () => (effectiveDetail?.models ?? []).filter((model) => {
+      if (quickAPIFlow) return true;
       if (modelCategory !== "all" && modelCategoryForCatalog(model) !== modelCategory) return false;
       if (usesCodexCatalog) return true;
       if (catalogID === "custom") return true;
       const canonical = model.canonical_name || canonicalModelNameForUI(model.id, model.display_name);
       return standardModels.some((standard) => canonicalModelNameForUI(standard.name, standard.name) === canonicalModelNameForUI(canonical, canonical));
     }),
-    [catalogID, effectiveDetail, modelCategory, standardModels, usesCodexCatalog],
+    [catalogID, effectiveDetail, modelCategory, quickAPIFlow, standardModels, usesCodexCatalog],
   );
   useEffect(() => {
     if (mode !== "create" || !effectiveDetail || values.create_routes !== "true") return;
+    if (quickAPIFlow) return;
     const nextSelected: Record<string, boolean> = {};
     for (const model of models) {
       nextSelected[model.id] = true;
     }
     setSelectedModels(nextSelected);
-  }, [effectiveDetail, mode, models, values.create_routes]);
+  }, [effectiveDetail, mode, models, quickAPIFlow, values.create_routes]);
+  const listedCatalog = useMemo(
+    () => quickAPIFlow ? directCredentialCatalog.filter((entry) => entry.id !== "custom") : categoryCatalog,
+    [categoryCatalog, directCredentialCatalog, quickAPIFlow],
+  );
   const filteredCatalog = useMemo(() => {
     const normalized = catalogQuery.trim().toLowerCase();
-    const entries = categoryCatalog;
+    const entries = listedCatalog;
     if (!normalized) return entries;
     return entries.filter((entry) =>
       [
@@ -490,7 +511,7 @@ export function ProviderUpsertModal({
         entry.display_name,
       ].filter(Boolean).join(" ").toLowerCase().includes(normalized),
     );
-  }, [categoryCatalog, catalogQuery]);
+  }, [catalogQuery, listedCatalog]);
   const filteredModels = useMemo(() => {
     const normalized = modelQuery.trim().toLowerCase();
     if (!normalized) return models.slice(0, 80);
@@ -506,8 +527,10 @@ export function ProviderUpsertModal({
   const selectedEntry = usesCodexCatalog
     ? codexCatalog ?? codexProviderCatalogSummary
     : detail ?? (catalogID === "custom" ? customCatalogEntry : catalog.find((entry) => entry.id === catalogID));
-  const showProviderCatalog = (mode === "edit" && !usesCodexCatalog) || (mode === "create" && createStep === 1 && credentialMode !== "account_integration");
-  const providerBodyClassName = !showProviderCatalog ? "provider-modal-body provider-wizard-single" : "provider-modal-body";
+  const showProviderCatalog = mode === "create" && createStep === 1 && credentialMode !== "account_integration";
+  const providerBodyClassName = !showProviderCatalog
+    ? "provider-modal-body provider-wizard-single"
+    : quickAPIConnect ? "provider-modal-body provider-api-quick-layout" : "provider-modal-body";
   const accountRuntimeFields = useMemo(() => providerCreateAccountRuntimeFields(), []);
   const accountManualTokenFields = useMemo(() => providerCreateAccountManualTokenFields(), []);
   const accountTokenSummary = useMemo(() => providerAccountTokenSummary(accountValues), [accountValues]);
@@ -879,6 +902,8 @@ export function ProviderUpsertModal({
   }
 
   function selectCatalog(entry: ProviderCatalogEntry) {
+    if (entry.id === catalogID) return;
+    setQuickAPITab("connect");
     const nextName = entry.display_name || entry.name || values.name;
     setCatalogID(entry.id);
     setCatalogReloadKey((current) => current + 1);
@@ -888,14 +913,19 @@ export function ProviderUpsertModal({
     setModelError("");
     setValues((current) => ({
       ...current,
+      id: mode === "create" ? "" : current.id,
       name: mode === "create" ? entry.display_name || entry.name || current.name : current.name,
       type: entry.type || current.type || "openai_compatible",
       base_url: mode === "create" ? entry.base_url ?? "" : current.base_url,
+      api_key: mode === "create" ? "" : current.api_key,
+      create_routes: quickAPIFlow ? "true" : current.create_routes,
     }));
     syncAccountDefaults(nextName, entry.base_url);
   }
 
   function selectCustomCatalog() {
+    if (catalogID === "custom") return;
+    setQuickAPITab("connect");
     setCatalogID("custom");
     setCatalogReloadKey((current) => current + 1);
     setDetail(customCatalogEntry);
@@ -908,28 +938,18 @@ export function ProviderUpsertModal({
       name: mode === "create" ? "" : current.name,
       type: current.type || "openai_compatible",
       base_url: mode === "create" ? "" : current.base_url,
+      api_key: mode === "create" ? "" : current.api_key,
+      create_routes: quickAPIFlow ? "false" : current.create_routes,
     }));
     syncAccountDefaults(values.name || "Provider", "");
   }
 
   function reloadSelectedCatalog() {
-    if (catalogID === "custom") {
-      setCatalogReloadKey((current) => current + 1);
-      setModelError("");
-      return;
-    }
-    if (selectedEntry) selectCatalog(selectedEntry);
-  }
-
-  function canContinueCreateStep(targetStep = createStep) {
-    if (mode !== "create") return true;
-    if (targetStep === 0) return Boolean(credentialMode);
-    if (targetStep === 1) {
-      return Boolean(selectedEntry && values.name?.trim());
-    }
-    if (targetStep === 2 && credentialMode === "provider_api_key") return Boolean(values.api_key?.trim());
-    if (targetStep === 2 && credentialMode === "account_integration") return providerAccountResourceReady(accountValues);
-    return true;
+    preserveCatalogValuesOnReload.current = true;
+    setCatalogReloadKey((current) => current + 1);
+    setDetail(null);
+    setSelectedModels({});
+    setModelError("");
   }
 
   function validateCreateStep(targetStep = createStep) {
@@ -943,10 +963,17 @@ export function ProviderUpsertModal({
       return false;
     }
     if (targetStep === 1 && !values.name?.trim()) {
+      if (quickAPIFlow) setQuickAPITab(catalogID === "custom" ? "connect" : "advanced");
       setError(tx(credentialMode === "account_integration" ? "请填写通道名称。" : "请填写渠道名称。"));
       return false;
     }
-    if (targetStep === 2 && credentialMode === "provider_api_key" && !values.api_key?.trim()) {
+    if (targetStep === 1 && credentialMode === "provider_api_key" && catalogID === "custom" && !values.base_url?.trim()) {
+      if (quickAPIFlow) setQuickAPITab("connect");
+      setError(tx("请填写 Base URL。"));
+      return false;
+    }
+    if (targetStep === 1 && credentialMode === "provider_api_key" && !values.api_key?.trim()) {
+      if (quickAPIFlow) setQuickAPITab("connect");
       setError(tx("请填写 API Key。"));
       return false;
     }
@@ -977,6 +1004,7 @@ export function ProviderUpsertModal({
       setCreateStep((current) => Math.min(current + 1, lastCreateStep));
       return;
     }
+    if (quickAPIConnect && !validateCreateStep(createStep)) return;
     setLoading(true);
     setError("");
     setNotice("");
@@ -990,7 +1018,7 @@ export function ProviderUpsertModal({
         api_key: mode === "create" && credentialMode !== "provider_api_key" ? "" : values.api_key,
         create_routes: autoRouteEnabled && selectedModelIDs.length > 0 ? "true" : "false",
         catalog_id: catalogID,
-        model_category: modelCategory,
+        model_category: quickAPIFlow || (mode === "edit" && !providerModelCategory) ? "" : modelCategory,
         selected_models: selectedModelIDs.length > 0 ? selectedModelIDs.join(",") : "",
         custom_models: catalogID === "custom" && effectiveDetail?.models ? JSON.stringify(effectiveDetail.models) : "",
       });
@@ -1062,6 +1090,17 @@ export function ProviderUpsertModal({
         ) : null}
         <div className={providerBodyClassName}>
           {showProviderCatalog ? (
+            quickAPIConnect ? (
+              <ProviderAPIQuickCatalog
+                entries={filteredCatalog}
+                total={listedCatalog.length}
+                selectedID={catalogID}
+                query={catalogQuery}
+                onQueryChange={setCatalogQuery}
+                onSelect={selectCatalog}
+                onSelectCustom={selectCustomCatalog}
+              />
+            ) : (
             <section className="provider-catalog-pane">
             <div className="provider-catalog-head">
               <strong>{tx("模型类型")}</strong>
@@ -1121,6 +1160,7 @@ export function ProviderUpsertModal({
               ))}
             </div>
           </section>
+            )
           ) : null}
 
           <section className="provider-config-pane">
@@ -1148,7 +1188,7 @@ export function ProviderUpsertModal({
                   ))}
                 </select>
               </div>
-            ) : mode === "edit" || createStep > 0 ? (
+            ) : mode === "create" && createStep > 0 && !quickAPIConnect ? (
               <div className="provider-selected-summary">
                 <strong>{modelCategoryLabel(modelCategory)}</strong>
                 {credentialMode === "account_integration" ? (
@@ -1173,36 +1213,14 @@ export function ProviderUpsertModal({
             ) : null}
             {mode === "edit" ? (
               <div className="provider-editor-tabs" role="tablist" aria-label={tx("Provider 编辑区")}>
-                {subscriptionResources.length > 0 ? (
-                  <>
-                    <button
-                      aria-selected={editTab === "quota"}
-                      className={editTab === "quota" ? "active" : ""}
-                      onClick={() => setEditTab("quota")}
-                      role="tab"
-                      type="button"
-                    >
-                      {tx("订阅额度")}
-                    </button>
-                    <button
-                      aria-selected={editTab === "test"}
-                      className={editTab === "test" ? "active" : ""}
-                      onClick={() => setEditTab("test")}
-                      role="tab"
-                      type="button"
-                    >
-                      {tx("真实请求测试")}
-                    </button>
-                  </>
-                ) : null}
                 <button
-                  aria-selected={editTab === "settings"}
-                  className={editTab === "settings" ? "active" : ""}
-                  onClick={() => setEditTab("settings")}
+                  aria-selected={editTab === "connect"}
+                  className={editTab === "connect" ? "active" : ""}
+                  onClick={() => setEditTab("connect")}
                   role="tab"
                   type="button"
                 >
-                  {tx("基础配置")}
+                  {tx("连接")}
                 </button>
                 <button
                   aria-selected={editTab === "models"}
@@ -1211,7 +1229,16 @@ export function ProviderUpsertModal({
                   role="tab"
                   type="button"
                 >
-                  {tx("模型映射")}
+                  {tx("模型")}
+                </button>
+                <button
+                  aria-selected={editTab === "advanced"}
+                  className={editTab === "advanced" ? "active" : ""}
+                  onClick={() => setEditTab("advanced")}
+                  role="tab"
+                  type="button"
+                >
+                  {tx("高级")}
                 </button>
               </div>
             ) : null}
@@ -1219,7 +1246,7 @@ export function ProviderUpsertModal({
               <section className="provider-wizard-panel provider-access-panel">
                 <div className="wizard-panel-head">
                   <h3>{tx("选择接入方式")}</h3>
-                  <p>{tx("先告诉 TokenHub 你手里有什么：上游 API Key、OpenAI 账号资源，或者只是先占位建路由。")}</p>
+                  <p>{tx("选择使用上游 API Key，或接入 OpenAI 账号资源池。")}</p>
                 </div>
                 <div className="provider-access-options" role="radiogroup" aria-label={tx("选择接入方式")}>
                   {providerCredentialOptions().map((option) => {
@@ -1245,6 +1272,27 @@ export function ProviderUpsertModal({
               </section>
             ) : null}
             {mode === "create" && createStep === 1 ? (
+              quickAPIConnect ? (
+                <ProviderAPIQuickConnect
+                  key={catalogID}
+                  catalogID={catalogID}
+                  entry={selectedEntry}
+                  modelCount={models.length}
+                  models={filteredModels}
+                  modelsLoading={effectiveCatalogLoading}
+                  modelsError={effectiveCatalogError}
+                  modelQuery={modelQuery}
+                  selectedModelCount={selectedModelIDs.length}
+                  selectedModels={selectedModels}
+                  activeTab={quickAPITab}
+                  values={values}
+                  onModelQueryChange={setModelQuery}
+                  onModelToggle={(modelID, enabled) => setSelectedModels((current) => ({ ...current, [modelID]: enabled }))}
+                  onReloadModels={reloadSelectedCatalog}
+                  onTabChange={setQuickAPITab}
+                  onUpdate={update}
+                />
+              ) : (
               <section className="provider-wizard-panel">
                 <div className="wizard-panel-head">
                   <h3>{tx(credentialMode === "account_integration" ? "确认账号通道和基础信息" : "选择渠道和基础信息")}</h3>
@@ -1265,17 +1313,16 @@ export function ProviderUpsertModal({
                   </div>
                 ) : null}
               </section>
+              )
             ) : null}
             {mode === "create" && createStep === 2 ? (
               <section className="provider-wizard-panel">
                 <div className="wizard-panel-head">
-                  <h3>{tx(credentialMode === "account_integration" ? "账号授权" : credentialMode === "provider_api_key" ? "直接 API Key" : "稍后配置")}</h3>
+                  <h3>{tx(credentialMode === "account_integration" ? "账号授权" : "直接 API Key")}</h3>
                   <p>{tx(
                     credentialMode === "account_integration"
                       ? "先完成账号授权回填；TokenHub 会把回填的 Token 保存为账号资源。"
-                      : credentialMode === "provider_api_key"
-                        ? "把上游 Key 保存到 Provider，适合单账号或兼容 API。"
-                        : "保存后不会写入上游凭据，可稍后通过编辑 Provider 或账号集成补齐。",
+                      : "把上游 Key 保存到 Provider，适合单账号或兼容 API。",
                   )}</p>
                 </div>
               </section>
@@ -1313,7 +1360,7 @@ export function ProviderUpsertModal({
                       />
                     </label>
                   </div>
-                ) : credentialMode === "account_integration" ? (
+                ) : (
                   <div className="provider-account-inline">
                     <div className="provider-account-inline-head">
                       <strong>{tx("账号授权")}</strong>
@@ -1402,14 +1449,20 @@ export function ProviderUpsertModal({
                       </div>
                     </details>
                   </div>
-                ) : (
-                  <p className="provider-credential-note">
-                    {tx("保存后不会写入上游凭据，可稍后通过编辑 Provider 或账号集成补齐。")}
-                  </p>
                 )}
               </section>
             ) : null}
-            {mode === "edit" && editTab === "quota" && subscriptionResources.length > 0 ? (
+            {mode === "edit" && editTab === "connect" ? (
+              <ProviderConnectionFields values={values} onUpdate={update} />
+            ) : null}
+            {mode === "edit" && editTab === "advanced" ? (
+              <ProviderAdvancedFields
+                accountIntegration={credentialMode === "account_integration"}
+                values={values}
+                onUpdate={update}
+              />
+            ) : null}
+            {mode === "edit" && editTab === "advanced" && subscriptionResources.length > 0 ? (
               <section className="provider-quota-panel">
                 <div className="wizard-panel-head">
                   <h3>{tx("订阅额度")}</h3>
@@ -1515,7 +1568,7 @@ export function ProviderUpsertModal({
                 </div>
               </section>
             ) : null}
-            {mode === "edit" && editTab === "test" && subscriptionResources.length > 0 ? (
+            {mode === "edit" && editTab === "advanced" && subscriptionResources.length > 0 ? (
               <section className="provider-quota-panel provider-codex-test-panel">
                 <div className="wizard-panel-head">
                   <h3>{tx("Codex 真实请求测试")}</h3>
@@ -1631,18 +1684,11 @@ export function ProviderUpsertModal({
                 {codexTestErrors.selection ? <p className="provider-quota-error">{codexTestErrors.selection}</p> : null}
               </section>
             ) : null}
-            {(mode === "edit" && editTab === "settings") || (mode === "create" && createStep === 1) ? (
-              mode === "edit" && editingCodexSubscription && selectedAccountID === "all" ? (
-                <div className="provider-account-selection-empty">
-                  <UserRoundCheck size={28} />
-                  <strong>{tx("请选择具体账号")}</strong>
-                  <span>{tx("基础配置不能同时编辑全部账号，请先在顶部账号列表中选择一个具体账号。")}</span>
-                </div>
-              ) : (
+            {mode === "create" && createStep === 1 && !quickAPIConnect ? (
               <div className="provider-form-grid">
               <label className="field">
                 <span>Provider ID</span>
-                <input value={values.id ?? ""} onChange={(event) => update("id", event.target.value)} placeholder={catalogID === "custom" ? tx("例如 prv_company_proxy") : tx("留空自动生成")} readOnly={mode === "edit"} />
+                <input value={values.id ?? ""} onChange={(event) => update("id", event.target.value)} placeholder={catalogID === "custom" ? tx("例如 prv_company_proxy") : tx("留空自动生成")} />
               </label>
               <label className="field">
                 <span>{tx(credentialMode === "account_integration" ? "通道名称" : "渠道名称")}</span>
@@ -1658,19 +1704,11 @@ export function ProviderUpsertModal({
                 <span>Base URL</span>
                 <input value={values.base_url ?? ""} onChange={(event) => update("base_url", event.target.value)} />
               </label>
-              {mode === "edit" ? (
-                <label className="field">
-                  <span>API Key</span>
-                  <input value={values.api_key ?? ""} type="password" onChange={(event) => update("api_key", event.target.value)} />
-                  {mode === "edit" ? <small>{tx("留空表示不修改现有 Key；填写新值才会覆盖。")}</small> : null}
-                </label>
-              ) : null}
               <label className="field">
                 <span>{tx("优先级")}</span>
                 <input value={values.priority ?? "10"} type="number" onChange={(event) => update("priority", event.target.value)} />
               </label>
             </div>
-              )
             ) : null}
 
             {(mode === "edit" && editTab === "models") || (mode === "create" && createStep === 3) ? (
@@ -1769,7 +1807,7 @@ export function ProviderUpsertModal({
           <button className="button" disabled={loading} type="submit">
             {mode === "create"
               ? createStep === lastCreateStep
-                ? loading ? tx("保存中") : tx("保存 Provider")
+                ? loading ? tx("保存中") : tx(quickAPIConnect ? "新增 Provider" : "保存 Provider")
                 : tx("下一步")
               : tx("保存")}
           </button>
