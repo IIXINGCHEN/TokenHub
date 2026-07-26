@@ -13,15 +13,9 @@ import { providerTypeOptions } from "../shared/ui";
 import { ProviderAPIQuickCatalog, ProviderAPIQuickConnect } from "./provider-api-quick-connect";
 import { ProviderInlineField, providerAccountResourceReady, providerCreateWizardSteps, providerCreateWizardStepTitle, providerCredentialModeLabel, providerCredentialOptions } from "./provider-editor-fields";
 import { ProviderAdvancedFields, ProviderConnectionFields } from "./provider-editor-sections";
+import { formatImageGenerationCapability, formatImageGenerationCapabilityTag, formatProviderAccountDate, formatQuotaPercent, type OpenAIQuotaWindow, ProviderAccountDetails, ProviderOAuthCallbackModal, ProviderOAuthNoticeModal, providerResourceAccountLabel, QuotaMetric, quotaUsagePercent, quotaWindowResetLabel } from "./provider-account-ui";
 
 const openAIAccountOAuthRedirectURI = "http://localhost:1455/auth/callback";
-
-type OpenAIQuotaWindow = {
-  used_percent: number;
-  limit_window_seconds: number;
-  reset_after_seconds: number;
-  reset_at: number;
-};
 
 type OpenAIAccountQuota = {
   account_id?: string;
@@ -179,6 +173,8 @@ export function ProviderUpsertModal({
   const [accountOAuthCallback, setAccountOAuthCallback] = useState("");
   const [accountOAuthStatus, setAccountOAuthStatus] = useState("");
   const [accountOAuthBusy, setAccountOAuthBusy] = useState(false);
+  const [accountOAuthNoticeOpen, setAccountOAuthNoticeOpen] = useState(false);
+  const [accountOAuthNoticeError, setAccountOAuthNoticeError] = useState("");
   const [accountOAuthCallbackModalOpen, setAccountOAuthCallbackModalOpen] = useState(false);
   const [accountOAuthCallbackModalError, setAccountOAuthCallbackModalError] = useState("");
   const [accountQuotaBusyIDs, setAccountQuotaBusyIDs] = useState<Record<string, boolean>>({});
@@ -206,6 +202,7 @@ export function ProviderUpsertModal({
   const accountCallbackURL = useMemo(() => providerAccountOAuthCallbackURL(), []);
   const modalRef = useRef<HTMLFormElement | null>(null);
   const preserveCatalogValuesOnReload = useRef(false);
+  const accountNameInputRef = useRef<HTMLInputElement | null>(null);
   const existingRouteModels = useMemo(
     () => new Set(routes.filter((route) => provider && route.provider_id === provider.id).map((route) => route.model_name)),
     [provider, routes],
@@ -608,6 +605,10 @@ export function ProviderUpsertModal({
 
   function updateAccountValue(key: string, value: string) {
     setAccountValues((current) => ({ ...current, [key]: value }));
+    if (key === "name") {
+      setError("");
+      setAccountOAuthStatus("");
+    }
   }
 
   async function applyProviderAccountOAuthResult(result: ProviderAccountOAuthResult, message: string) {
@@ -710,9 +711,23 @@ export function ProviderUpsertModal({
     }
   }
 
+  function requestProviderAccountAuthorization() {
+    if (accountResourceNameConflict) {
+      const message = tx("当前名称已被其他账号资源占用。请先修改为新的唯一名称，再继续授权。");
+      setError(message);
+      setAccountOAuthStatus(message);
+      accountNameInputRef.current?.focus();
+      accountNameInputRef.current?.select();
+      return;
+    }
+    setAccountOAuthNoticeError("");
+    setAccountOAuthNoticeOpen(true);
+  }
+
   async function openProviderAccountAuthorization() {
     try {
       setAccountOAuthBusy(true);
+      setAccountOAuthNoticeError("");
       const resp = await adminFetch(api, "/api/admin/provider-account-oauth/openai/generate-auth-url", {
         method: "POST",
         body: JSON.stringify({ return_url: accountCallbackURL }),
@@ -720,6 +735,7 @@ export function ProviderUpsertModal({
       if (!resp.ok) throw new Error(await readAdminError(resp, tx("生成账号授权地址")));
       const generated = (await resp.json()) as ProviderAccountOAuthGenerateResponse;
       savePendingProviderAccountOAuthSession({ session_id: generated.session_id, state: generated.state });
+      setAccountOAuthNoticeOpen(false);
       window.open(generated.auth_url, "_blank", "noopener,noreferrer");
       setAccountOAuthCallback("");
       setAccountOAuthCallbackModalError("");
@@ -729,6 +745,7 @@ export function ProviderUpsertModal({
     } catch (err) {
       if (isAuthExpiredError(err)) return;
       const errorMessage = err instanceof Error ? err.message : tx("生成账号授权地址失败");
+      setAccountOAuthNoticeError(errorMessage);
       setAccountOAuthStatus(errorMessage);
       setError(errorMessage);
     } finally {
@@ -1367,23 +1384,33 @@ export function ProviderUpsertModal({
                       <span>{tx("使用 OpenAI/Codex OAuth 授权账号；TokenHub 会在后端换取并保存账号 Token。")}</span>
                     </div>
                     <div className="provider-account-auth-grid">
-                      <label className="field provider-account-auth-wide">
+                      <label className={`field provider-account-auth-wide provider-account-name-field${accountResourceNameConflict ? " conflict" : ""}`}>
                         <span>{tx("账号资源名称")}</span>
                         <input
                           aria-invalid={accountResourceNameConflict}
+                          aria-describedby={accountResourceNameConflict ? "provider-account-name-conflict" : undefined}
+                          ref={accountNameInputRef}
                           value={accountValues.name ?? ""}
                           onChange={(event) => updateAccountValue("name", event.target.value)}
                           required
                         />
-                        <small className={accountResourceNameConflict ? "provider-account-name-error" : undefined}>
-                          {tx(accountResourceNameConflict ? "账号资源名称已存在，请使用唯一名称。" : "账号资源名称需全局唯一，用于在资源池中区分账号。")}
-                        </small>
+                        {accountResourceNameConflict ? (
+                          <div className="provider-account-name-conflict" id="provider-account-name-conflict" role="alert">
+                            <AlertCircle aria-hidden="true" size={18} />
+                            <div>
+                              <strong>{tx("账号资源名称已存在，请立即修改名称")}</strong>
+                              <span>{tx("当前名称已被其他账号资源占用。请先修改为新的唯一名称，再继续授权。")}</span>
+                            </div>
+                          </div>
+                        ) : (
+                          <small>{tx("账号资源名称需全局唯一，用于在资源池中区分账号。")}</small>
+                        )}
                       </label>
                       <label className="field provider-account-auth-wide">
                         <span>{tx("OpenAI/Codex 授权")}</span>
                         <div className="field-action-row">
                           <input readOnly value={openAIAccountOAuthRedirectURI} />
-                          <button className="secondary-button" onClick={openProviderAccountAuthorization} type="button" disabled={accountOAuthBusy}>
+                          <button className="secondary-button" onClick={requestProviderAccountAuthorization} type="button" disabled={accountOAuthBusy}>
                             <Send size={14} />
                             {tx(accountOAuthBusy ? "授权中" : "打开授权")}
                           </button>
@@ -1475,6 +1502,7 @@ export function ProviderUpsertModal({
                     const secondary = quota?.rate_limit?.secondary_window;
                     const accountEmail = providerResourceAccountLabel(resource);
                     const quotaStatus = quota?.rate_limit?.limit_reached ? "已达上限" : quota?.rate_limit?.allowed ? "可用" : "不可用";
+                    const imageCapability = resource.options?.image_generation_capability;
                     const usagePercent = quotaUsagePercent(primary);
                     return (
                       <article className="provider-quota-card" key={resource.id}>
@@ -1485,6 +1513,9 @@ export function ProviderUpsertModal({
                           </div>
                           <div className="provider-quota-card-actions">
                             {quota ? <span className={`provider-quota-status ${quotaStatus === "可用" ? "available" : "limited"}`}>{tx(quotaStatus)}</span> : null}
+                            <span className={`provider-image-capability ${imageCapability || "unknown"}`}>
+                              {tx(formatImageGenerationCapabilityTag(imageCapability))}
+                            </span>
                             <button className="secondary-button" disabled={accountQuotaBusyIDs[resource.id]} onClick={() => void queryAccountQuota(resource)} type="button">
                               {tx(accountQuotaBusyIDs[resource.id] ? "查询中" : quota ? "刷新额度" : "查询额度")}
                             </button>
@@ -1538,6 +1569,7 @@ export function ProviderUpsertModal({
                               </div>
                               <div className="provider-quota-highlights">
                                 <QuotaMetric label="套餐" value={quota.plan_type || resource.credential_summary?.plan_type || "-"} />
+                                <QuotaMetric label="生图能力" value={formatImageGenerationCapability(resource.options?.image_generation_capability)} />
                                 <QuotaMetric label="重置额度" value={quota.rate_limit_reset_credits ? String(quota.rate_limit_reset_credits.available_count) : "-"} />
                                 <QuotaMetric label="主窗口重置时间" value={quotaWindowResetLabel(primary)} />
                               </div>
@@ -1891,114 +1923,27 @@ export function ProviderUpsertModal({
           </div>
         </div>
       ) : null}
-      {accountOAuthCallbackModalOpen ? (
-        <div className="modal-backdrop provider-oauth-callback-backdrop" role="presentation">
-          <div
-            aria-labelledby="provider-oauth-callback-title"
-            aria-modal="true"
-            className="confirm-modal provider-oauth-callback-modal"
-            role="dialog"
-          >
-            <div className="provider-oauth-callback-heading">
-              <div className="provider-oauth-callback-icon" aria-hidden="true">
-                <KeyRound size={18} />
-              </div>
-              <div>
-                <p className="eyebrow">{tx("OpenAI/Codex 授权")}</p>
-                <h2 id="provider-oauth-callback-title">{tx("粘贴授权回调地址")}</h2>
-              </div>
-            </div>
-            <p>{tx("完成登录和授权后，请复制浏览器地址栏中的完整 localhost 地址，并粘贴到下方。")}</p>
-            <label className="field">
-              <span>{tx("登录后的 localhost 地址")}</span>
-              <textarea
-                autoFocus
-                onChange={(event) => {
-                  setAccountOAuthCallback(event.target.value);
-                  setAccountOAuthCallbackModalError("");
-                }}
-                placeholder="http://localhost:1455/auth/callback?code=...&state=..."
-                value={accountOAuthCallback}
-              />
-              <small>{tx("localhost 页面显示无法访问是正常现象；请复制地址栏中的完整地址，不要只复制授权 code。")}</small>
-            </label>
-            {accountOAuthCallbackModalError ? (
-              <p className="provider-oauth-callback-error" role="alert">{accountOAuthCallbackModalError}</p>
-            ) : null}
-            <div className="modal-actions">
-              <button className="secondary-button" onClick={() => setAccountOAuthCallbackModalOpen(false)} type="button">
-                {tx("稍后填写")}
-              </button>
-              <button className="button" disabled={accountOAuthBusy} onClick={confirmProviderAccountOAuthCallback} type="button">
-                <Check size={15} />
-                {tx(accountOAuthBusy ? "处理中" : "确认并回填")}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <ProviderOAuthNoticeModal
+        busy={accountOAuthBusy}
+        error={accountOAuthNoticeError}
+        onClose={() => setAccountOAuthNoticeOpen(false)}
+        onConfirm={() => void openProviderAccountAuthorization()}
+        open={accountOAuthNoticeOpen}
+      />
+      <ProviderOAuthCallbackModal
+        busy={accountOAuthBusy}
+        error={accountOAuthCallbackModalError}
+        onClose={() => setAccountOAuthCallbackModalOpen(false)}
+        onConfirm={confirmProviderAccountOAuthCallback}
+        onValueChange={(value) => {
+          setAccountOAuthCallback(value);
+          setAccountOAuthCallbackModalError("");
+        }}
+        open={accountOAuthCallbackModalOpen}
+        value={accountOAuthCallback}
+      />
     </div>
   );
-}
-
-function QuotaMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="provider-quota-metric">
-      <span>{tx(label)}</span>
-      <strong>{tx(value)}</strong>
-    </div>
-  );
-}
-
-function ProviderAccountDetails({ resource }: { resource: ProviderResource }) {
-  const summary = resource.credential_summary ?? {};
-  const options = resource.options ?? {};
-  const rawItems: Array<[string, string | undefined]> = [
-    ["资源 ID", resource.id],
-    ["账号邮箱", summary.account_email],
-    ["账号 ID", summary.account_id],
-    ["用户 ID", summary.user_id],
-    ["组织 ID", summary.organization_id],
-    ["套餐", summary.plan_type],
-    ["认证方式", summary.auth_type],
-    ["Token 类型", summary.token_type || options.token_type],
-    ["Token 过期时间", formatProviderAccountDate(summary.token_expires_at || options.token_expires_at)],
-    ["授权范围", summary.scopes || options.scopes],
-    ["Refresh Token", summary.has_refresh_token === "true" ? "已配置" : "未配置"],
-    ["资源状态", resource.status],
-    ["健康状态", resource.healthy ? "健康" : "异常"],
-    ["资源组", resource.group],
-    ["Base URL", resource.base_url],
-    ["区域", resource.region],
-    ["环境", resource.environment],
-    ["优先级", String(resource.priority)],
-    ["权重", String(resource.weight)],
-    ["每分钟请求限制", resource.rate_limit_rpm ? String(resource.rate_limit_rpm) : "-"],
-    ["每分钟 Token 限制", resource.token_limit_tpm ? String(resource.token_limit_tpm) : "-"],
-    ["最大并发", resource.max_concurrency ? String(resource.max_concurrency) : "-"],
-    ["连续失败次数", String(resource.failure_count ?? 0)],
-    ["冷却截止时间", formatProviderAccountDate(resource.cooldown_until)],
-    ["最后使用时间", formatProviderAccountDate(resource.last_used_at)],
-    ["最后检查时间", formatProviderAccountDate(resource.last_checked_at)],
-    ["创建时间", formatProviderAccountDate(resource.created_at)],
-    ["更新时间", formatProviderAccountDate(resource.updated_at)],
-  ];
-  const items = rawItems.filter(([, value]) => value !== undefined && value !== "");
-  return (
-    <div className="provider-account-detail-grid">
-      {items.map(([label, value]) => <QuotaMetric key={label} label={label} value={value || "-"} />)}
-    </div>
-  );
-}
-
-function providerResourceAccountLabel(resource: ProviderResource) {
-  return resource.credential_summary?.account_email || resource.credential_summary?.account_id || resource.name;
-}
-
-function formatProviderAccountDate(value?: string) {
-  if (!value) return "-";
-  const timestamp = Date.parse(value);
-  return Number.isNaN(timestamp) ? value : new Date(timestamp).toLocaleString();
 }
 
 function intersectProviderCatalogs(catalogs: ProviderCatalogEntry[]): ProviderCatalogEntry | null {
@@ -2044,23 +1989,4 @@ function intersectProviderCatalogs(catalogs: ProviderCatalogEntry[]): ProviderCa
 function intersectStringLists(lists: string[][]) {
   if (lists.length === 0) return [];
   return lists[0].filter((value) => lists.slice(1).every((list) => list.includes(value)));
-}
-
-function formatQuotaPercent(value: number) {
-  return Number.isFinite(value) ? String(Math.round(value * 10) / 10) : "0";
-}
-
-function quotaUsagePercent(window?: OpenAIQuotaWindow) {
-  if (!window || !Number.isFinite(window.used_percent)) return 0;
-  return Math.min(100, Math.max(0, window.used_percent));
-}
-
-function quotaWindowResetLabel(window?: OpenAIQuotaWindow) {
-  if (!window) return "-";
-  if (window.reset_at > 0) return new Date(window.reset_at * 1000).toLocaleString();
-  if (window.reset_after_seconds > 0) {
-    const minutes = Math.ceil(window.reset_after_seconds / 60);
-    return minutes >= 60 ? `${Math.ceil(minutes / 60)} ${tx("小时后")}` : `${minutes} ${tx("分钟后")}`;
-  }
-  return "-";
 }
