@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -9,7 +10,6 @@ import (
 
 	"tokenhub/backend/internal/migration/bundle"
 	migrationtokenhub "tokenhub/backend/internal/migration/sink/tokenhub"
-	"tokenhub/backend/internal/server"
 
 	"github.com/spf13/cobra"
 )
@@ -24,6 +24,8 @@ func init() {
 	applyCmd.Flags().String("to", "", "TokenHub admin API base URL")
 	applyCmd.Flags().String("token", "", "Admin API token")
 	applyCmd.Flags().Bool("dry-run", false, "Perform a dry-run instead of writing")
+	applyCmd.Flags().String("checkpoint-out", "", "Write the rollback checkpoint JSON to this path (default: <bundle>.checkpoint.json)")
+	applyCmd.Flags().String("new-keys-out", "", "Write newly generated API key secrets JSON to this path (default: <bundle>.new-keys.json)")
 	_ = applyCmd.MarkFlagRequired("bundle")
 
 	planCmd.Flags().String("bundle", "", "Path to bundle JSON file")
@@ -66,8 +68,56 @@ func resolveTarget(cmd *cobra.Command) (string, string) {
 	return baseURL, token
 }
 
-func newStoreSink() *migrationtokenhub.StoreSink {
-	return migrationtokenhub.NewStoreSink(server.NewMemoryStore(), secretsResolver())
+// requireRemoteTarget guards mutating commands: applying or rolling back
+// against the implicit in-memory store would report success while writing
+// nothing durable.
+func requireRemoteTarget(action string, baseURL string) error {
+	if strings.TrimSpace(baseURL) != "" {
+		return nil
+	}
+	return errExit(ExitSinkRejected, fmt.Sprintf("%s requires a TokenHub target: pass --to or set TOKENHUB_API (refusing to %s against a transient in-memory store)", action, action))
+}
+
+// writeSecretFile persists payload with owner-only permissions, tightening
+// the mode even when the file already exists.
+func writeSecretFile(path string, payload []byte) error {
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
+}
+
+// writeApplyArtifacts persists the rollback checkpoint and any one-time API
+// key secrets returned by apply so they are not silently discarded.
+func writeApplyArtifacts(cmd *cobra.Command, bundlePath string, result *migrationtokenhub.ApplyResult) error {
+	checkpointPath, _ := cmd.Flags().GetString("checkpoint-out")
+	if strings.TrimSpace(checkpointPath) == "" {
+		checkpointPath = bundlePath + ".checkpoint.json"
+	}
+	checkpointPayload, err := json.MarshalIndent(result.Checkpoint, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal checkpoint: %w", err)
+	}
+	if err := writeSecretFile(checkpointPath, checkpointPayload); err != nil {
+		return fmt.Errorf("write checkpoint: %w", err)
+	}
+	fmt.Printf("  Checkpoint: %s\n", checkpointPath)
+	if len(result.NewKeys) == 0 {
+		return nil
+	}
+	newKeysPath, _ := cmd.Flags().GetString("new-keys-out")
+	if strings.TrimSpace(newKeysPath) == "" {
+		newKeysPath = bundlePath + ".new-keys.json"
+	}
+	newKeysPayload, err := json.MarshalIndent(map[string]any{"new_keys": result.NewKeys}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal new keys: %w", err)
+	}
+	if err := writeSecretFile(newKeysPath, newKeysPayload); err != nil {
+		return fmt.Errorf("write new keys: %w", err)
+	}
+	fmt.Printf("  New API keys (%d, plaintext visible once): %s — distribute securely, then delete the file\n", len(result.NewKeys), newKeysPath)
+	return nil
 }
 
 func newHTTPSink(baseURL string, token string) *migrationtokenhub.HTTPSink {
@@ -85,12 +135,10 @@ var planCmd = &cobra.Command{
 			return errExit(ExitSchemaMismatch, err.Error())
 		}
 		baseURL, token := resolveTarget(cmd)
-		var report *migrationtokenhub.MigrationReport
-		if strings.TrimSpace(baseURL) != "" {
-			report, err = newHTTPSink(baseURL, token).Plan(context.Background(), migrationBundle)
-		} else {
-			report, err = newStoreSink().Plan(migrationBundle)
+		if err := requireRemoteTarget("plan", baseURL); err != nil {
+			return err
 		}
+		report, err := newHTTPSink(baseURL, token).Plan(context.Background(), migrationBundle)
 		if err != nil {
 			return errExit(ExitSinkRejected, err.Error())
 		}
@@ -110,32 +158,25 @@ var applyCmd = &cobra.Command{
 			return errExit(ExitSchemaMismatch, err.Error())
 		}
 		baseURL, token := resolveTarget(cmd)
+		if err := requireRemoteTarget("apply", baseURL); err != nil {
+			return err
+		}
 		if dryRun {
-			var report *migrationtokenhub.MigrationReport
-			if strings.TrimSpace(baseURL) != "" {
-				report, err = newHTTPSink(baseURL, token).Plan(context.Background(), migrationBundle)
-			} else {
-				report, err = newStoreSink().Plan(migrationBundle)
-			}
+			report, err := newHTTPSink(baseURL, token).Plan(context.Background(), migrationBundle)
 			if err != nil {
 				return errExit(ExitSinkRejected, err.Error())
 			}
 			fmt.Printf("Dry-run plan:\n  Created: %d\n  Updated: %d\n  Skipped: %d\n", report.Created, report.Updated, report.Skipped)
 			return nil
 		}
-		if strings.TrimSpace(baseURL) != "" {
-			result, err := newHTTPSink(baseURL, token).Apply(context.Background(), migrationBundle)
-			if err != nil {
-				return errExit(ExitSinkRejected, err.Error())
-			}
-			fmt.Printf("Apply complete:\n  Created: %d\n  Updated: %d\n  Skipped: %d\n", result.Report.Created, result.Report.Updated, result.Report.Skipped)
-			return nil
-		}
-		result, err := newStoreSink().Apply(migrationBundle)
+		result, err := newHTTPSink(baseURL, token).Apply(context.Background(), migrationBundle)
 		if err != nil {
 			return errExit(ExitSinkRejected, err.Error())
 		}
 		fmt.Printf("Apply complete:\n  Created: %d\n  Updated: %d\n  Skipped: %d\n", result.Report.Created, result.Report.Updated, result.Report.Skipped)
+		if err := writeApplyArtifacts(cmd, bundlePath, result); err != nil {
+			return errExit(ExitSinkRejected, err.Error())
+		}
 		return nil
 	},
 }
@@ -150,12 +191,10 @@ var verifyCmd = &cobra.Command{
 			return errExit(ExitSchemaMismatch, err.Error())
 		}
 		baseURL, token := resolveTarget(cmd)
-		var result *migrationtokenhub.VerifyResult
-		if strings.TrimSpace(baseURL) != "" {
-			result, err = newHTTPSink(baseURL, token).Verify(context.Background(), migrationBundle)
-		} else {
-			result, err = newStoreSink().Verify(migrationBundle)
+		if err := requireRemoteTarget("verify", baseURL); err != nil {
+			return err
 		}
+		result, err := newHTTPSink(baseURL, token).Verify(context.Background(), migrationBundle)
 		if err != nil {
 			return errExit(ExitSinkRejected, err.Error())
 		}
@@ -185,15 +224,10 @@ var rollbackCmd = &cobra.Command{
 			return errExit(ExitSchemaMismatch, err.Error())
 		}
 		baseURL, token := resolveTarget(cmd)
-		if strings.TrimSpace(baseURL) != "" {
-			result, err := newHTTPSink(baseURL, token).Rollback(context.Background(), checkpoint)
-			if err != nil {
-				return errExit(ExitSinkRejected, err.Error())
-			}
-			fmt.Printf("Rollback: %d changes reverted\n", len(result.Changes))
-			return nil
+		if err := requireRemoteTarget("rollback", baseURL); err != nil {
+			return err
 		}
-		result, err := newStoreSink().Rollback(checkpoint)
+		result, err := newHTTPSink(baseURL, token).Rollback(context.Background(), checkpoint)
 		if err != nil {
 			return errExit(ExitSinkRejected, err.Error())
 		}

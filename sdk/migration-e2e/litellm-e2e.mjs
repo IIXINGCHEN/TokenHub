@@ -69,6 +69,10 @@ async function main() {
   const workDir = mkdtempSync(join(tmpdir(), "tokenhub-migration-e2e-"));
   const bundlePath = join(workDir, "bundle.json");
   const checkpointPath = join(workDir, "checkpoint.json");
+  const newKeysPath = join(workDir, "new-keys.json");
+  // Every migration command below targets the remote TokenHub instance so
+  // the apply/verify/re-apply/rollback cycle exercises the real Admin API.
+  const remoteEnv = { TOKENHUB_API, TOKENHUB_ADMIN_TOKEN: TOKENHUB_TOKEN };
 
   console.log("1. Verify LiteLLM connectivity");
   const health = await fetchJSON(`${LITELLM_API}/health`);
@@ -90,28 +94,42 @@ async function main() {
   record(extract.success, "Extract succeeds", extract.stderr || extract.stdout);
   record(existsSync(bundlePath), "Bundle file created", bundlePath);
 
-  console.log("\n4. Plan the migration");
-  const plan = run(MIGRATE_BIN, ["plan", "--bundle", bundlePath], { silent: true });
+  console.log("\n4. Plan the migration against TokenHub");
+  const plan = run(MIGRATE_BIN, ["plan", "--bundle", bundlePath], { silent: true, env: remoteEnv });
   record(plan.success, "Plan succeeds", plan.stderr || plan.stdout);
   record(plan.stdout.includes("Created"), "Plan prints created count", plan.stdout);
 
-  console.log("\n5. Apply the bundle (store-backed current implementation)");
-  const apply = run(MIGRATE_BIN, ["apply", "--bundle", bundlePath], { silent: true, env: { TOKENHUB_API, TOKENHUB_ADMIN_TOKEN: TOKENHUB_TOKEN } });
+  console.log("\n5. Apply the bundle to TokenHub");
+  const apply = run(
+    MIGRATE_BIN,
+    ["apply", "--bundle", bundlePath, "--checkpoint-out", checkpointPath, "--new-keys-out", newKeysPath],
+    { silent: true, env: remoteEnv },
+  );
   record(apply.success, "Apply succeeds", apply.stderr || apply.stdout);
   record(apply.stdout.includes("Apply complete"), "Apply reports completion", apply.stdout);
-  writeFileSync(checkpointPath, JSON.stringify({ changes: [] }, null, 2));
+  record(existsSync(checkpointPath), "Apply persists rollback checkpoint", checkpointPath);
 
-  console.log("\n6. Verify command behavior");
-  const verify = run(MIGRATE_BIN, ["verify", "--bundle", bundlePath], { silent: true });
-  record(!verify.success, "Verify fails on fresh in-memory store as expected", verify.stderr || verify.stdout);
+  console.log("\n6. Verify the applied state on TokenHub");
+  const verify = run(MIGRATE_BIN, ["verify", "--bundle", bundlePath], { silent: true, env: remoteEnv });
+  record(verify.success, "Verify passes against applied state", verify.stderr || verify.stdout);
 
-  console.log("\n7. Re-apply proves command stability");
-  const reapply = run(MIGRATE_BIN, ["apply", "--bundle", bundlePath], { silent: true });
+  console.log("\n7. Re-apply proves idempotency");
+  const reapply = run(
+    MIGRATE_BIN,
+    ["apply", "--bundle", bundlePath, "--checkpoint-out", join(workDir, "checkpoint-reapply.json")],
+    { silent: true, env: remoteEnv },
+  );
   record(reapply.success, "Re-apply succeeds", reapply.stderr || reapply.stdout);
+  record(/Created:\s*0/.test(reapply.stdout), "Re-apply creates nothing new", reapply.stdout);
 
-  console.log("\n8. Rollback command with checkpoint file");
-  const rollback = run(MIGRATE_BIN, ["rollback", "--checkpoint", checkpointPath], { silent: true });
+  console.log("\n8. Rollback from the real checkpoint");
+  const rollback = run(MIGRATE_BIN, ["rollback", "--checkpoint", checkpointPath], { silent: true, env: remoteEnv });
   record(rollback.success, "Rollback command succeeds", rollback.stderr || rollback.stdout);
+  record(/Rollback:\s*[1-9]/.test(rollback.stdout), "Rollback reverts applied changes", rollback.stdout);
+
+  console.log("\n9. Verify detects the rolled-back state");
+  const verifyAfterRollback = run(MIGRATE_BIN, ["verify", "--bundle", bundlePath], { silent: true, env: remoteEnv });
+  record(!verifyAfterRollback.success, "Verify fails after rollback as expected", verifyAfterRollback.stderr || verifyAfterRollback.stdout);
 
   console.log("\n---");
   console.log(`Results: ${passed} passed, ${failed} failed`);

@@ -224,11 +224,13 @@ func (s *HTTPSink) Plan(ctx context.Context, migrationBundle *bundle.CanonicalMi
 		}
 	}
 	for _, item := range migrationBundle.Users {
-		if existing, found := findAdminUserByIdentity(users, item.Spec); found {
+		spec := item.Spec
+		spec.TeamID = s.resolveTeamRef(item.TeamRef)
+		if existing, found := findAdminUserByIdentity(users, spec); found {
 			s.refIndex.users[item.ExternalRef.ID] = existing.ID
-			changes = append(changes, Change{Resource: "user", ID: existing.ID, Action: chooseActionUser(existing, item.Spec)})
+			changes = append(changes, Change{Resource: "user", ID: existing.ID, Action: chooseActionUser(existing, spec)})
 		} else {
-			changes = append(changes, Change{Resource: "user", ID: item.Spec.Email, Action: ActionCreate})
+			changes = append(changes, Change{Resource: "user", ID: spec.Email, Action: ActionCreate})
 		}
 	}
 	for _, item := range migrationBundle.Projects {
@@ -360,14 +362,19 @@ func (s *HTTPSink) Verify(ctx context.Context, migrationBundle *bundle.Canonical
 		}
 	}
 	for _, item := range migrationBundle.Users {
-		existing, found := findAdminUserByIdentity(users, item.Spec)
+		spec := item.Spec
+		spec.TeamID = strings.TrimSpace(item.TeamRef)
+		if mapped := resolved.teams[spec.TeamID]; mapped != "" {
+			spec.TeamID = mapped
+		}
+		existing, found := findAdminUserByIdentity(users, spec)
 		if !found {
 			result.OK = false
 			result.Issues = append(result.Issues, VerifyIssue{Resource: "user", Ref: item.ExternalRef.ID, Message: "user not found"})
 			continue
 		}
 		resolved.users[item.ExternalRef.ID] = existing.ID
-		if !sameAdminUser(existing, item.Spec) {
+		if !sameAdminUser(existing, spec) {
 			result.OK = false
 			result.Issues = append(result.Issues, VerifyIssue{Resource: "user", Ref: item.ExternalRef.ID, Message: "user differs from expected spec"})
 		}
@@ -616,20 +623,51 @@ func (s *HTTPSink) applyModelHTTP(ctx context.Context, existing []server.Model, 
 }
 
 func (s *HTTPSink) applyUserHTTP(ctx context.Context, existing []server.AdminUser, item bundle.UserRef) (Change, error) {
-	if current, found := findAdminUserByIdentity(existing, item.Spec); found {
+	spec := item.Spec
+	spec.TeamID = s.resolveTeamRef(item.TeamRef)
+	if current, found := findAdminUserByIdentity(existing, spec); found {
 		s.refIndex.users[item.ExternalRef.ID] = current.ID
-		action := chooseActionUser(current, item.Spec)
-		return Change{Resource: "user", ID: current.ID, Action: action}, nil
+		if chooseActionUser(current, spec) == ActionSkip {
+			return Change{Resource: "user", ID: current.ID, Action: ActionSkip}, nil
+		}
+		if _, err := s.client.UpdateAdminUser(ctx, current.ID, spec); err != nil {
+			return Change{}, err
+		}
+		return Change{Resource: "user", ID: current.ID, Action: ActionUpdate}, nil
 	}
 	var buf bytes.Buffer
 	w := csv.NewWriter(&buf)
 	_ = w.Write([]string{"username", "name", "email", "role", "team_id", "status"})
-	_ = w.Write([]string{item.Spec.Username, item.Spec.Name, item.Spec.Email, item.Spec.Role, item.Spec.TeamID, item.Spec.Status})
+	_ = w.Write([]string{spec.Username, spec.Name, spec.Email, spec.Role, spec.TeamID, spec.Status})
 	w.Flush()
 	if err := s.client.ImportUsersCSV(ctx, buf.String()); err != nil {
 		return Change{}, err
 	}
-	return Change{Resource: "user", ID: item.Spec.Email, Action: ActionCreate}, nil
+	// Refetch so the change carries the server-assigned user ID and later
+	// owner refs resolve through refIndex.
+	users, err := s.client.ListUsers(ctx)
+	if err != nil {
+		return Change{}, err
+	}
+	created, ok := findAdminUserByIdentity(users, spec)
+	if !ok {
+		return Change{}, fmt.Errorf("user %s not found after import", item.ExternalRef.ID)
+	}
+	s.refIndex.users[item.ExternalRef.ID] = created.ID
+	return Change{Resource: "user", ID: created.ID, Action: ActionCreate}, nil
+}
+
+// resolveTeamRef maps a bundle team ref onto the target team ID, falling
+// back to the literal ref for teams that already exist on the target.
+func (s *HTTPSink) resolveTeamRef(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ""
+	}
+	if mapped := s.refIndex.teams[ref]; mapped != "" {
+		return mapped
+	}
+	return ref
 }
 
 func (s *HTTPSink) applyProjectHTTP(ctx context.Context, existingProjects []server.Project, existingUsers []server.AdminUser, item bundle.ProjectRef) (Change, server.Project, error) {

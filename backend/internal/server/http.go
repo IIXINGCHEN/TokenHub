@@ -3866,6 +3866,10 @@ func (s *Server) handleAdminProviderResourceNested(w http.ResponseWriter, r *htt
 		parts = []string{strings.TrimSuffix(remainder, "/health"), "health"}
 	case strings.HasSuffix(remainder, "/test"):
 		parts = []string{strings.TrimSuffix(remainder, "/test"), "test"}
+	case strings.HasSuffix(remainder, "/refresh-token"):
+		parts = []string{strings.TrimSuffix(remainder, "/refresh-token"), "refresh-token"}
+	case strings.HasSuffix(remainder, "/quota"):
+		parts = []string{strings.TrimSuffix(remainder, "/quota"), "quota"}
 	default:
 		parts = []string{remainder}
 	}

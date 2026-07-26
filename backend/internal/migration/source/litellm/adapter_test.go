@@ -2,8 +2,10 @@ package litellm
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"tokenhub/backend/internal/migration/source"
@@ -148,5 +150,42 @@ func TestExtractUnsupportedVersion(t *testing.T) {
 	_, err := Adapter{}.Extract(context.Background(), source.ExtractOptions{InputPath: path})
 	if err == nil {
 		t.Fatal("expected unsupported version error")
+	}
+}
+
+func TestExtractNeverEmbedsRawTokenWithoutAlias(t *testing.T) {
+	const rawToken = "sk-super-secret-token"
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := []byte(`litellm_settings:
+  version: 1.58.2
+model_list:
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_base: https://api.openai.com/v1
+      api_key: os.environ/OPENAI_API_KEY
+key_management_settings:
+  virtual_keys:
+    - token: ` + rawToken + "\n")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	b, err := Adapter{}.Extract(context.Background(), source.ExtractOptions{InputPath: path})
+	if err != nil {
+		t.Fatalf("Extract returned error: %v", err)
+	}
+	if len(b.APIKeys) != 1 {
+		t.Fatalf("expected 1 api key, got %d", len(b.APIKeys))
+	}
+	encoded, err := json.Marshal(b)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(encoded), rawToken) {
+		t.Fatal("raw virtual-key token must not be serialized into the bundle")
+	}
+	if b.APIKeys[0].KeySecret == nil {
+		t.Fatal("expected key secret ref for token-bearing virtual key")
 	}
 }

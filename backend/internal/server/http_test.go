@@ -4792,6 +4792,27 @@ type responseBody struct {
 	Body string
 }
 
+// TestAdminProviderResourceActionSuffixRouting guards the nested
+// provider-resource action parsing: /quota and /refresh-token must keep
+// dispatching to their handlers alongside the /health and /test suffixes.
+func TestAdminProviderResourceActionSuffixRouting(t *testing.T) {
+	store := NewMemoryStore()
+	if err := BootstrapBaseData(store); err != nil {
+		t.Fatal(err)
+	}
+	app := New(store).Handler()
+
+	quota := doJSON(t, app, http.MethodGet, "/api/admin/provider-resources/res-missing/quota", nil, "")
+	if !strings.Contains(quota.Body, "provider_resource_not_found") {
+		t.Fatalf("expected quota handler to be reached, got %d: %s", quota.Code, quota.Body)
+	}
+
+	refresh := doJSON(t, app, http.MethodPost, "/api/admin/provider-resources/res-missing/refresh-token", nil, "")
+	if strings.Contains(refresh.Body, `"type":"not_found"`) {
+		t.Fatalf("refresh-token route fell through suffix parsing, got %d: %s", refresh.Code, refresh.Body)
+	}
+}
+
 func doJSON(t *testing.T, handler http.Handler, method string, path string, payload any, token string) responseBody {
 	t.Helper()
 	var body io.Reader

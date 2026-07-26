@@ -1,6 +1,8 @@
 package litellm
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -222,7 +224,7 @@ func buildProjects(config *Config, b *bundle.CanonicalMigrationBundle) []bundle.
 		if strings.TrimSpace(key.TeamID) != "" {
 			continue
 		}
-		alias := firstNonEmpty(key.KeyAlias, key.Token)
+		alias := keyIdentifier(key)
 		if strings.TrimSpace(alias) == "" {
 			warn(b, "litellm_key_project_skipped", "virtual key without alias or token was skipped", "key_management_settings.virtual_keys")
 			continue
@@ -248,7 +250,7 @@ func buildAPIKeys(config *Config, b *bundle.CanonicalMigrationBundle) []bundle.A
 	keys := make([]bundle.APIKeyRef, 0, len(config.KeyManagement.VirtualKeys))
 	seen := map[string]struct{}{}
 	for _, key := range config.KeyManagement.VirtualKeys {
-		externalID := firstNonEmpty(key.KeyAlias, key.Token)
+		externalID := keyIdentifier(key)
 		externalID = strings.TrimSpace(externalID)
 		if externalID == "" {
 			warn(b, "litellm_key_skipped", "virtual key without alias or token was skipped", "key_management_settings.virtual_keys")
@@ -596,7 +598,23 @@ func keyProjectRef(key VirtualKeyConfig) string {
 	if strings.TrimSpace(key.TeamID) != "" {
 		return teamProjectExternalRef(key.TeamID)
 	}
-	return keyProjectExternalRef(firstNonEmpty(key.KeyAlias, key.Token))
+	return keyProjectExternalRef(keyIdentifier(key))
+}
+
+// keyIdentifier returns a non-secret identifier for a virtual key. It prefers
+// the operator-provided alias; when the alias is absent it derives a synthetic
+// identifier from a hash of the token so the raw secret never appears in
+// external refs, resource IDs, names, or secret env names.
+func keyIdentifier(key VirtualKeyConfig) string {
+	if alias := strings.TrimSpace(key.KeyAlias); alias != "" {
+		return alias
+	}
+	token := strings.TrimSpace(key.Token)
+	if token == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(token))
+	return "key-" + hex.EncodeToString(sum[:6])
 }
 func secretName(prefix string, value string) string {
 	value = strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(value, ":", "_"), "-", "_"), "/", "_"))

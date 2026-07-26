@@ -1,6 +1,9 @@
 package bundle
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestIDStrategyValid(t *testing.T) {
 	if !IDStrategyStable.Valid() || !IDStrategyPrefixed.Valid() || !IDStrategySource.Valid() {
@@ -30,8 +33,32 @@ func TestMintIDPrefixed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mint prefixed id: %v", err)
 	}
-	if got != "litellm:openai" {
+	if !strings.HasPrefix(got, "litellm:openai-") {
 		t.Fatalf("prefixed id mismatch: got %q", got)
+	}
+	again, err := MintID(IDStrategyPrefixed, "litellm", "openai")
+	if err != nil {
+		t.Fatalf("mint prefixed id again: %v", err)
+	}
+	if got != again {
+		t.Fatalf("prefixed ids differ: %q vs %q", got, again)
+	}
+}
+
+func TestMintIDPrefixedIsPathSafe(t *testing.T) {
+	got, err := MintID(IDStrategyPrefixed, "litellm", "provider:openai:https://open.example.com/openapi/v1")
+	if err != nil {
+		t.Fatalf("mint prefixed id: %v", err)
+	}
+	if strings.ContainsAny(got, "/?#%\\ ") {
+		t.Fatalf("prefixed id contains path-unsafe characters: %q", got)
+	}
+	other, err := MintID(IDStrategyPrefixed, "litellm", "provider:openai:https://open.example.com/openapi/v2")
+	if err != nil {
+		t.Fatalf("mint prefixed id: %v", err)
+	}
+	if got == other {
+		t.Fatalf("distinct external ids collided: %q", got)
 	}
 }
 

@@ -103,6 +103,45 @@ type providerCreateResult struct {
 	Provider server.Provider `json:"provider"`
 }
 
+// providerWriteRequest is the Admin API request payload for creating or
+// updating a provider. server.Provider cannot be marshalled directly because
+// its APIKey field is tagged `json:"-"`, which would silently drop the
+// credential resolved by the sink. This DTO mirrors the server-side
+// ProviderCreateRequest and carries api_key explicitly.
+type providerWriteRequest struct {
+	ID           string            `json:"id,omitempty"`
+	Name         string            `json:"name"`
+	Type         string            `json:"type"`
+	BaseURL      string            `json:"base_url,omitempty"`
+	APIKey       string            `json:"api_key,omitempty"`
+	Status       string            `json:"status,omitempty"`
+	Healthy      *bool             `json:"healthy,omitempty"`
+	Priority     int               `json:"priority"`
+	Headers      map[string]string `json:"headers,omitempty"`
+	Options      map[string]string `json:"options,omitempty"`
+	CreateRoutes *bool             `json:"create_routes,omitempty"`
+}
+
+func providerWriteRequestFrom(p server.Provider) providerWriteRequest {
+	healthy := p.Healthy
+	// Routes are migrated as first-class bundle items, so the server must
+	// not auto-create catalog routes as a side effect of provider writes.
+	createRoutes := false
+	return providerWriteRequest{
+		ID:           p.ID,
+		Name:         p.Name,
+		Type:         p.Type,
+		BaseURL:      p.BaseURL,
+		APIKey:       p.APIKey,
+		Status:       p.Status,
+		Healthy:      &healthy,
+		Priority:     p.Priority,
+		Headers:      p.Headers,
+		Options:      p.Options,
+		CreateRoutes: &createRoutes,
+	}
+}
+
 type apiKeyCreateResult struct {
 	ID                   string `json:"id"`
 	APIKey               string `json:"api_key"`
@@ -121,7 +160,7 @@ func (c *AdminAPIClient) ListProviders(ctx context.Context) ([]server.Provider, 
 
 func (c *AdminAPIClient) CreateProvider(ctx context.Context, req server.Provider) (server.Provider, error) {
 	var resp providerCreateResult
-	if err := c.doJSON(ctx, http.MethodPost, c.endpoint("/api/admin/providers"), req, &resp); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, c.endpoint("/api/admin/providers"), providerWriteRequestFrom(req), &resp); err != nil {
 		return server.Provider{}, err
 	}
 	return resp.Provider, nil
@@ -129,7 +168,7 @@ func (c *AdminAPIClient) CreateProvider(ctx context.Context, req server.Provider
 
 func (c *AdminAPIClient) UpdateProvider(ctx context.Context, id string, req server.Provider) (server.Provider, error) {
 	var resp providerCreateResult
-	if err := c.doJSON(ctx, http.MethodPatch, c.endpoint("/api/admin/providers", id), req, &resp); err != nil {
+	if err := c.doJSON(ctx, http.MethodPatch, c.endpoint("/api/admin/providers", id), providerWriteRequestFrom(req), &resp); err != nil {
 		return server.Provider{}, err
 	}
 	if resp.Provider.ID != "" {
@@ -232,6 +271,33 @@ func (c *AdminAPIClient) ListUsers(ctx context.Context) ([]server.AdminUser, err
 		return nil, err
 	}
 	return resp.Data, nil
+}
+
+// adminUserWriteRequest mirrors the PATCH /api/admin/users/{id} payload.
+// Empty fields are omitted so the server keeps their current values.
+type adminUserWriteRequest struct {
+	Username string `json:"username,omitempty"`
+	Name     string `json:"name,omitempty"`
+	Email    string `json:"email,omitempty"`
+	Role     string `json:"role,omitempty"`
+	TeamID   string `json:"team_id,omitempty"`
+	Status   string `json:"status,omitempty"`
+}
+
+func (c *AdminAPIClient) UpdateAdminUser(ctx context.Context, id string, req server.AdminUser) (server.AdminUser, error) {
+	payload := adminUserWriteRequest{
+		Username: req.Username,
+		Name:     req.Name,
+		Email:    req.Email,
+		Role:     req.Role,
+		TeamID:   req.TeamID,
+		Status:   req.Status,
+	}
+	var resp server.AdminUser
+	if err := c.doJSON(ctx, http.MethodPatch, c.endpoint("/api/admin/users", id), payload, &resp); err != nil {
+		return server.AdminUser{}, err
+	}
+	return resp, nil
 }
 
 func (c *AdminAPIClient) ImportUsersCSV(ctx context.Context, content string) error {
