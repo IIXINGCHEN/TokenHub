@@ -67,9 +67,12 @@ export function ProviderAPIQuickConnect({
   modelsLoading,
   modelsError,
   modelQuery,
+  selectedModelCount,
+  selectedModels,
   activeTab,
   values,
   onModelQueryChange,
+  onModelToggle,
   onReloadModels,
   onTabChange,
   onUpdate,
@@ -81,9 +84,12 @@ export function ProviderAPIQuickConnect({
   modelsLoading: boolean;
   modelsError: string;
   modelQuery: string;
+  selectedModelCount: number;
+  selectedModels: Record<string, boolean>;
   activeTab: "connect" | "models" | "advanced";
   values: Record<string, string>;
   onModelQueryChange: (value: string) => void;
+  onModelToggle: (modelID: string, enabled: boolean) => void;
   onReloadModels: () => void;
   onTabChange: (tab: "connect" | "models" | "advanced") => void;
   onUpdate: (key: string, value: string) => void;
@@ -100,7 +106,7 @@ export function ProviderAPIQuickConnect({
           <h3>{name}</h3>
           <p>{values.base_url || tx("填写 Base URL 后连接上游")}</p>
         </div>
-        <strong>{countWithUnit(modelCount, "个可映射模型", "mappable model", "マッピング可能モデル")}</strong>
+        <strong>{countWithUnit(selectedModelCount, "个已启用模型", "enabled model", "件の有効モデル")}</strong>
       </div>
 
       <div className="provider-editor-tabs provider-quick-tabs" role="tablist" aria-label={tx("Provider 编辑区")}>
@@ -115,7 +121,7 @@ export function ProviderAPIQuickConnect({
             <span><KeyRound size={18} /></span>
             <div>
               <strong>{tx(custom ? "填写连接信息" : "只需填写 API Key")}</strong>
-              <p>{tx(custom ? "自定义渠道需要填写名称、Base URL 和 API Key。" : "使用推荐地址创建 Provider，并自动补齐可映射模型的默认路由。")}</p>
+              <p>{tx(custom ? "自定义渠道需要填写名称、Base URL 和 API Key。" : "把上游 Key 保存到 Provider，适合单账号或兼容 API。")}</p>
             </div>
           </div>
 
@@ -130,7 +136,12 @@ export function ProviderAPIQuickConnect({
                 <input value={values.base_url ?? ""} onChange={(event) => onUpdate("base_url", event.target.value)} required />
               </label>
             </div>
-          ) : null}
+          ) : (
+            <label className="field">
+              <span>Base URL</span>
+              <input value={values.base_url ?? ""} onChange={(event) => onUpdate("base_url", event.target.value)} />
+            </label>
+          )}
 
           <label className="field provider-quick-key-field">
             <span>API Key</span>
@@ -162,12 +173,9 @@ export function ProviderAPIQuickConnect({
             <p className="provider-quick-custom-note">{tx("自定义渠道创建后，可在模型映射中加载上游模型并配置路由。")}</p>
           ) : (
             <>
-              <div className="provider-import-options provider-quick-route-option">
-                <div><strong>{tx("自动路由")}</strong><span>{tx("创建后自动补齐可映射模型的默认路由。")}</span></div>
-                <div className="boolean-toggle provider-route-toggle" role="radiogroup" aria-label={tx("自动路由")}>
-                  <button aria-checked={values.create_routes === "true"} className={values.create_routes === "true" ? "active" : ""} onClick={() => onUpdate("create_routes", "true")} role="radio" type="button">{tx("开启")}</button>
-                  <button aria-checked={values.create_routes !== "true"} className={values.create_routes !== "true" ? "active" : ""} onClick={() => onUpdate("create_routes", "false")} role="radio" type="button">{tx("关闭开关")}</button>
-                </div>
+              <div className="provider-quick-model-summary">
+                <strong>{tx("模型列表")}</strong>
+                <span>{selectedModelCount}/{modelCount} {tx("启用")}</span>
               </div>
               <div className="provider-quick-model-tools">
                 <div className="provider-template-search provider-quick-model-search">
@@ -183,12 +191,25 @@ export function ProviderAPIQuickConnect({
                   <div className="empty">{modelsError}</div>
                 ) : models.length === 0 ? (
                   <div className="empty">{tx("没有匹配的模型")}</div>
-                ) : models.map((model) => (
-                  <article className="provider-quick-model-item" key={model.id}>
-                    <div><strong>{model.display_name || model.name}</strong><span>{model.canonical_name || model.id} ← {model.id}</span></div>
-                    <em>{model.family || model.category || model.type || "model"}</em>
-                  </article>
-                ))}
+                ) : models.map((model) => {
+                  const enabled = selectedModels[model.id] === true;
+                  return (
+                    <article className={enabled ? "provider-quick-model-item active" : "provider-quick-model-item"} key={model.id}>
+                      <div>
+                        <strong>{model.display_name || model.name}</strong>
+                        <span>{model.canonical_name || model.id} ← {model.id} · {model.family || model.category || model.type || "model"}</span>
+                      </div>
+                      <button
+                        aria-checked={enabled}
+                        aria-label={`${tx(enabled ? "停用" : "启用")} ${model.display_name || model.name}`}
+                        className={enabled ? "provider-quick-model-switch active" : "provider-quick-model-switch"}
+                        onClick={() => onModelToggle(model.id, !enabled)}
+                        role="switch"
+                        type="button"
+                      />
+                    </article>
+                  );
+                })}
               </div>
             </>
           )}
@@ -214,12 +235,6 @@ export function ProviderAPIQuickConnect({
                 {providerTypeOptions.map((option) => <option key={option} value={option}>{providerTypeLabel(option)}</option>)}
               </select>
             </label>
-            {!custom ? (
-              <label className="field">
-                <span>Base URL</span>
-                <input value={values.base_url ?? ""} onChange={(event) => onUpdate("base_url", event.target.value)} />
-              </label>
-            ) : null}
             <label className="field">
               <span>{tx("优先级")}</span>
               <input value={values.priority ?? "10"} type="number" onChange={(event) => onUpdate("priority", event.target.value)} />

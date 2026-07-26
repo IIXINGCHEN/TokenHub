@@ -478,7 +478,8 @@ export function ProviderUpsertModal({
     : usesCodexCatalog ? codexCatalogError : modelError;
   const models = useMemo(
     () => (effectiveDetail?.models ?? []).filter((model) => {
-      if (!quickAPIFlow && modelCategory !== "all" && modelCategoryForCatalog(model) !== modelCategory) return false;
+      if (quickAPIFlow) return true;
+      if (modelCategory !== "all" && modelCategoryForCatalog(model) !== modelCategory) return false;
       if (usesCodexCatalog) return true;
       if (catalogID === "custom") return true;
       const canonical = model.canonical_name || canonicalModelNameForUI(model.id, model.display_name);
@@ -488,12 +489,13 @@ export function ProviderUpsertModal({
   );
   useEffect(() => {
     if (mode !== "create" || !effectiveDetail || values.create_routes !== "true") return;
+    if (quickAPIFlow) return;
     const nextSelected: Record<string, boolean> = {};
     for (const model of models) {
       nextSelected[model.id] = true;
     }
     setSelectedModels(nextSelected);
-  }, [effectiveDetail, mode, models, values.create_routes]);
+  }, [effectiveDetail, mode, models, quickAPIFlow, values.create_routes]);
   const listedCatalog = useMemo(
     () => quickAPIFlow ? directCredentialCatalog.filter((entry) => entry.id !== "custom") : categoryCatalog,
     [categoryCatalog, directCredentialCatalog, quickAPIFlow],
@@ -1011,14 +1013,13 @@ export function ProviderUpsertModal({
         if (accountResourceNameConflict) throw new Error(tx("账号资源名称已存在，请使用唯一名称。"));
         assertProviderAccountResourceReady(accountValues);
       }
-      const createAllCatalogRoutes = quickAPIFlow && catalogID !== "custom";
       const payload = (mode === "edit" ? providerUpdatePayload : providerPayload)({
         ...values,
         api_key: mode === "create" && credentialMode !== "provider_api_key" ? "" : values.api_key,
-        create_routes: autoRouteEnabled && (selectedModelIDs.length > 0 || createAllCatalogRoutes) ? "true" : "false",
+        create_routes: autoRouteEnabled && selectedModelIDs.length > 0 ? "true" : "false",
         catalog_id: catalogID,
         model_category: quickAPIFlow || (mode === "edit" && !providerModelCategory) ? "" : modelCategory,
-        selected_models: quickAPIFlow ? "" : selectedModelIDs.length > 0 ? selectedModelIDs.join(",") : "",
+        selected_models: selectedModelIDs.length > 0 ? selectedModelIDs.join(",") : "",
         custom_models: catalogID === "custom" && effectiveDetail?.models ? JSON.stringify(effectiveDetail.models) : "",
       });
       const resp = await adminFetch(api, mode === "edit" && provider ? `/api/admin/providers/${provider.id}` : "/api/admin/providers", {
@@ -1276,14 +1277,17 @@ export function ProviderUpsertModal({
                   key={catalogID}
                   catalogID={catalogID}
                   entry={selectedEntry}
-                  modelCount={effectiveDetail?.models_count ?? selectedEntry?.models_count ?? 0}
+                  modelCount={models.length}
                   models={filteredModels}
                   modelsLoading={effectiveCatalogLoading}
                   modelsError={effectiveCatalogError}
                   modelQuery={modelQuery}
+                  selectedModelCount={selectedModelIDs.length}
+                  selectedModels={selectedModels}
                   activeTab={quickAPITab}
                   values={values}
                   onModelQueryChange={setModelQuery}
+                  onModelToggle={(modelID, enabled) => setSelectedModels((current) => ({ ...current, [modelID]: enabled }))}
                   onReloadModels={reloadSelectedCatalog}
                   onTabChange={setQuickAPITab}
                   onUpdate={update}
