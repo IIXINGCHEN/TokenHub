@@ -324,7 +324,6 @@ export function ProviderChannelTable({
         <div>
           <p className="eyebrow">Provider Availability</p>
           <h2>{tx("Provider 渠道与可用性")}</h2>
-          <span>{tx("配置、路由、账号资源与监控指标已合并到同一列表。")}</span>
         </div>
         <div className="provider-monitor-summary" aria-label={tx("Provider 健康摘要")}>
           <span><strong>{summary.healthy}</strong>{tx("正常")}</span>
@@ -441,7 +440,6 @@ export function ProviderChannelTable({
         <span><i className="success" />{tx("正常")}</span>
         <span><i className="warning" />{tx("降级/慢响应")}</span>
         <span><i className="failure" />{tx("故障")}</span>
-        <em>{tx("综合状态由后端区分配置、主动测试、真实请求与套餐来源。")}</em>
       </div>
     </section>
   );

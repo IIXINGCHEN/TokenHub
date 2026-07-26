@@ -671,12 +671,6 @@
   color: #e11d48;
 }
 
-.provider-monitor-legend em {
-  margin-left: auto;
-  color: var(--muted);
-  font-style: normal;
-}
-
 .settings-view {
   display: grid;
   gap: 12px;
