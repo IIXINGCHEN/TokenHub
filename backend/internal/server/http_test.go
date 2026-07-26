@@ -533,6 +533,12 @@ func TestBootstrapSeedsStandardModelCatalog(t *testing.T) {
 	if byName["gpt-image-2"].Modality != "image" {
 		t.Fatalf("expected gpt-image-2 image modality, got %s", byName["gpt-image-2"].Modality)
 	}
+	if byName[codexImageModelName].Modality != "image" ||
+		byName[codexImageModelName].Metadata["execution_type"] != "codex_subscription_image_generation" ||
+		byName[codexImageModelName].InputPriceUSDPer1M != 0 ||
+		byName[codexImageModelName].OutputPriceUSDPer1M != 0 {
+		t.Fatalf("expected subscription-backed Codex image model, got %+v", byName[codexImageModelName])
+	}
 	if byName["gemini-3-pro-image"].Modality != "image" {
 		t.Fatalf("expected gemini-3-pro-image image modality, got %s", byName["gemini-3-pro-image"].Modality)
 	}
