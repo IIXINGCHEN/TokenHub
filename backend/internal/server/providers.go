@@ -821,9 +821,14 @@ func anthropicUsage(body map[string]any) Usage {
 	cacheCreationInputTokens := int64FromAny(usageMap["cache_creation_input_tokens"])
 	cachedInputTokens := int64FromAny(usageMap["cache_read_input_tokens"])
 	usage := Usage{
-		PromptTokens:      uncachedInputTokens + cacheCreationInputTokens + cachedInputTokens,
-		CachedInputTokens: cachedInputTokens,
-		CompletionTokens:  int64FromAny(usageMap["output_tokens"]),
+		// Anthropic reports the three input classes disjointly, so prompt tokens are
+		// their sum. Cache-creation tokens are also surfaced on their own field: they
+		// bill at a premium over base input, and without this they were folded into
+		// the total and lost, leaving CacheWriteInputTokens dead on this path.
+		PromptTokens:          uncachedInputTokens + cacheCreationInputTokens + cachedInputTokens,
+		CachedInputTokens:     cachedInputTokens,
+		CacheWriteInputTokens: cacheCreationInputTokens,
+		CompletionTokens:      int64FromAny(usageMap["output_tokens"]),
 	}
 	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	return usage

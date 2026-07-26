@@ -40,6 +40,28 @@ TokenHub は、最後に正常に読み込んだ Provider カタログをデー�
 | 無効モデル | 利用者には非表示 |
 | Provider ルートが不健全 | ルーティング診断と Request Logs に表示 |
 
+## メトリクス
+
+TokenHub は `GET /metrics` で Prometheus メトリクスを公開できます。既定では無効で、有効にするには `TOKENHUB_METRICS_ENABLED=true` を設定してください。無効の間は何も収集されず、エンドポイントは 404 を返します。このエンドポイントは常に認証を要求します。メトリクスにはモデル名、Provider とリソースの識別子、コストが含まれるため、匿名アクセスは許可されません。`Authorization: Bearer <token>` を送信してください。トークンは `TOKENHUB_METRICS_TOKEN` を使用し、未設定の場合は管理者トークンにフォールバックします。Prometheus のスクレイプ設定に管理者資格情報を置かずに済むよう、専用トークンの設定を推奨します。クエリ文字列でのトークン指定はアクセスログに残るため拒否されます。
+
+| メトリクス | 種別 | 意味 |
+| --- | --- | --- |
+| `tokenhub_gateway_requests_total` | counter | 論理的なモデル API リクエスト数。複数候補へのフェイルオーバーが発生しても 1 回として数えます。 |
+| `tokenhub_gateway_request_duration_seconds` | histogram | フェイルオーバーを含むエンドツーエンドのレイテンシ。バケットは 300 秒まで。 |
+| `tokenhub_gateway_requests_in_flight` | gauge | 処理中のモデル API リクエスト数。管理トラフィックとスクレイプは含みません。 |
+| `tokenhub_gateway_tokens_total` | counter | 種別ごとの Token：`prompt`、`completion`、`cached`、`cache_write`、`reasoning`。 |
+| `tokenhub_gateway_cost_usd_total` | counter | 推定コスト。使用量レコードと同じ価格を使用します。 |
+
+あわせて Go ランタイムとプロセスのメトリクスも公開されます。
+
+**Token の種別は排他的な分割ではないため、合計してはいけません。** `prompt` はすでに `cached` と `cache_write` を含み、`reasoning` は `completion` の一部です。合計すると二重計上になります。
+
+ルーティング前に拒否されたリクエスト（無効な API Key、クォータ超過、未知のモデル）はリクエスト数のみを増やします。Provider に到達していないため、Token・コスト・所要時間は記録しません。カタログに存在しないモデル名はそのまま記録せず `unknown` として扱うため、任意のモデル名を大量に送っても系列数を増やすことはできません。
+
+ラベルは `model`、`provider_type`、`provider_id`、`resource_id`、`status_code`、`error_code`、`stream` です。`TOKENHUB_METRICS_PROJECT_LABEL=true` を設定すると `project_id` が追加され、各ゲートウェイメトリクスの系列数がアクティブなプロジェクト数だけ増加します。プロジェクト単位のダッシュボードが必要な場合を除き無効のままにし、Key 単位の集計には使用量レポートを利用してください。
+
+スクレイプではなく push が必要な場合は、OpenTelemetry Collector の `prometheus` receiver でこのエンドポイントを収集して転送してください。ゲートウェイ自体は Prometheus exposition 形式のみを提供します。
+
 ## Prompt Cache の料金
 
 モデルカタログでは、100 万 Token あたりのキャッシュ読み取り単価を任意で設定できます。設定した場合、キャッシュにヒットした入力 Token の推定コストにはその単価を使用します。空欄の場合、DeepSeek V4 Pro は標準入力単価の約 0.83%、その他の DeepSeek モデルは 2%、残りの Embedding 以外のモデルは 10% で推定します。モデル料金表では推定値を示し、ホバー時に適用した比率を説明します。

@@ -746,7 +746,7 @@ func seedMockUsage(store Store) {
 		modelName := "gpt-4.1-mini"
 		call, err := store.StartCall(context.Background(), project, key, modelName)
 		if err != nil {
-			store.RecordRejectedRequest(project, key, modelName, http.StatusTooManyRequests, "quota_exceeded", mockIP(i), "mock-seed/1.0")
+			store.RecordRejectedRequest(project, key, modelName, false, http.StatusTooManyRequests, "quota_exceeded", mockIP(i), "mock-seed/1.0")
 			continue
 		}
 		route, err := store.SelectRoute(modelName)
@@ -771,7 +771,7 @@ func seedMockUsage(store Store) {
 		if err != nil {
 			continue
 		}
-		store.RecordRejectedRequest(project, key, fmt.Sprintf("blocked-model-%02d", i), http.StatusForbidden, "model_not_allowed", mockIP(300+i), "mock-seed/1.0")
+		store.RecordRejectedRequest(project, key, fmt.Sprintf("blocked-model-%02d", i), false, http.StatusForbidden, "model_not_allowed", mockIP(300+i), "mock-seed/1.0")
 	}
 }
 

@@ -835,11 +835,14 @@ type RoutedCall struct {
 }
 
 type CallContext struct {
-	RequestID      string
-	Project        Project
-	Key            APIKey
-	Model          Model
-	StartedAt      time.Time
+	RequestID string
+	Project   Project
+	Key       APIKey
+	Model     Model
+	StartedAt time.Time
+	// Stream records whether the client asked for a streamed response. It only
+	// labels observability output and never influences routing.
+	Stream         bool
 	Affinity       *RequestAffinity
 	requestContext context.Context
 }

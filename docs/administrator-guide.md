@@ -40,6 +40,28 @@ Users should only see callable models. A model is callable when it is active in 
 | Disabled model | Hidden from ordinary users |
 | Unhealthy provider route | Visible in routing diagnostics and request logs |
 
+## Metrics
+
+TokenHub can expose Prometheus metrics at `GET /metrics`. Collection is off by default; set `TOKENHUB_METRICS_ENABLED=true` to enable it. While disabled, nothing is collected and the endpoint returns 404. The endpoint always authenticates: metrics disclose model names, provider and resource identifiers, and spend, so it is never anonymous. Send `Authorization: Bearer <token>` using `TOKENHUB_METRICS_TOKEN`, or the admin token when that variable is empty. A dedicated token is recommended so the scrape configuration does not carry the admin credential. A token supplied in the query string is rejected, because it would be captured in access logs.
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `tokenhub_gateway_requests_total` | counter | Logical model API requests. A request that failed over across several candidates counts once. |
+| `tokenhub_gateway_request_duration_seconds` | histogram | End-to-end latency including failover attempts. Buckets run to 300s. |
+| `tokenhub_gateway_requests_in_flight` | gauge | Model API requests currently being served. Admin traffic and scrapes are excluded. |
+| `tokenhub_gateway_tokens_total` | counter | Tokens by kind: `prompt`, `completion`, `cached`, `cache_write`, `reasoning`. |
+| `tokenhub_gateway_cost_usd_total` | counter | Estimated cost, using the same prices as the usage records. |
+
+Go runtime and process metrics are exposed alongside them.
+
+**Token kinds are not a partition and must not be summed.** `prompt` already contains the `cached` and `cache_write` tokens, and `reasoning` is a subset of `completion`. Summing the kinds double-counts.
+
+Requests refused before routing — a bad API key, an exhausted quota, an unknown model — increment the request counter only. They never reached a provider, so they contribute no tokens, cost or duration. A model name that the catalog does not know is reported as `unknown` rather than verbatim, so a client looping over invented model names cannot inflate the series count.
+
+Labels are `model`, `provider_type`, `provider_id`, `resource_id`, `status_code`, `error_code` and `stream`. Setting `TOKENHUB_METRICS_PROJECT_LABEL=true` adds `project_id`, which multiplies the series count of every gateway metric by the number of active projects; leave it off unless you need per-project dashboards, and use the usage reports for per-key attribution instead.
+
+To push instead of scrape, point an OpenTelemetry Collector's `prometheus` receiver at this endpoint and forward from there; the gateway itself speaks only the Prometheus exposition format.
+
 ## Prompt Cache Pricing
 
 The model catalog accepts an optional cache read price in USD per 1 million tokens. When it is configured, cached input tokens use that price in estimated costs. When it is left blank, TokenHub estimates the cache read price at about 0.83% of the standard input price for DeepSeek V4 Pro, 2% for other DeepSeek models, and 10% for other non-embedding models. The model pricing table marks estimated values and explains the applied ratio on hover.
