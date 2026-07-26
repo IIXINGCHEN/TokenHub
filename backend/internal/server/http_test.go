@@ -484,6 +484,7 @@ func TestBootstrapSeedsStandardModelCatalog(t *testing.T) {
 	}
 	for name, category := range map[string]string{
 		"gpt-5.5":                            "openai",
+		"kimi-k3":                            "kimi",
 		"zai-org/glm-5.2":                    "glm",
 		"moonshotai/kimi-k2.7-code":          "kimi",
 		"minimax/minimax-m3":                 "minimax",
@@ -507,6 +508,27 @@ func TestBootstrapSeedsStandardModelCatalog(t *testing.T) {
 	}
 	if !slices.Contains(byName["gpt-5.5"].InputModalities, "image") {
 		t.Fatalf("expected gpt-5.5 image input modality, got %+v", byName["gpt-5.5"].InputModalities)
+	}
+	if k3 := byName["kimi-k3"]; k3.ContextWindow != 1048576 || k3.InputPriceUSDPer1M != 3 || k3.CacheReadPriceUSDPer1M != 0.3 || k3.OutputPriceUSDPer1M != 15 {
+		t.Fatalf("unexpected Kimi K3 limits or pricing: %+v", k3)
+	}
+	if k3 := byName["kimi-k3"]; !slices.Contains(k3.InputModalities, "image") || !slices.Contains(k3.InputModalities, "video") {
+		t.Fatalf("expected Kimi K3 visual input modalities, got %+v", k3.InputModalities)
+	}
+	if k3 := byName["kimi-k3"]; slices.Contains(k3.SupportedParameters, "temperature") || !slices.Contains(k3.SupportedParameters, "reasoning") {
+		t.Fatalf("unexpected Kimi K3 parameters: %+v", k3.SupportedParameters)
+	}
+	for name, expected := range map[string]struct {
+		input, cacheRead, output float64
+	}{
+		"moonshotai/kimi-k2.7-code": {0.95, 0.19, 4},
+		"moonshotai/kimi-k2.6":      {0.95, 0.16, 4},
+		"moonshotai/kimi-k2.5":      {0.6, 0.1, 3},
+	} {
+		model := byName[name]
+		if model.InputPriceUSDPer1M != expected.input || model.CacheReadPriceUSDPer1M != expected.cacheRead || model.OutputPriceUSDPer1M != expected.output {
+			t.Fatalf("unexpected %s pricing: %+v", name, model)
+		}
 	}
 	if byName["gpt-image-2"].Modality != "image" {
 		t.Fatalf("expected gpt-image-2 image modality, got %s", byName["gpt-image-2"].Modality)
