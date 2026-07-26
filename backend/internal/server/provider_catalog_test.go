@@ -11,6 +11,25 @@ import (
 	"time"
 )
 
+func TestNormalizeProviderCatalogModelUsesExplicitCanonicalName(t *testing.T) {
+	explicit := normalizeProviderCatalogModel(map[string]any{
+		"id":             "k3",
+		"display_name":   "Kimi K3",
+		"canonical_name": "KIMI_K3",
+	})
+	if explicit.CanonicalName != "kimi-k3" {
+		t.Fatalf("expected explicit canonical name kimi-k3, got %q", explicit.CanonicalName)
+	}
+
+	fallback := normalizeProviderCatalogModel(map[string]any{
+		"id":           "k3",
+		"display_name": "Kimi K3",
+	})
+	if fallback.CanonicalName != "k3" {
+		t.Fatalf("expected ID-derived canonical name k3, got %q", fallback.CanonicalName)
+	}
+}
+
 func TestProviderCatalogServiceReloadsTrackedLocalFile(t *testing.T) {
 	store := NewMemoryStore()
 	catalogFile := filepath.Join(t.TempDir(), "provider-catalog.json")

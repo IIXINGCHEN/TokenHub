@@ -150,6 +150,7 @@ export function ProviderUpsertModal({
   const [modelLoading, setModelLoading] = useState(false);
   const [modelError, setModelError] = useState("");
   const [catalogReloadKey, setCatalogReloadKey] = useState(0);
+  const catalogRefreshRequested = useRef(false);
   const [selectedModels, setSelectedModels] = useState<Record<string, boolean>>({});
   const [values, setValues] = useState<Record<string, string>>(() => ({
     id: mode === "edit" ? provider?.id ?? "" : "",
@@ -303,7 +304,10 @@ export function ProviderUpsertModal({
       };
     }
     setModelLoading(true);
-    adminFetch(api, `/api/admin/provider-catalog/${encodeURIComponent(catalogID)}`)
+    const refresh = catalogRefreshRequested.current;
+    catalogRefreshRequested.current = false;
+    const refreshQuery = refresh ? "?refresh=true" : "";
+    adminFetch(api, `/api/admin/provider-catalog/${encodeURIComponent(catalogID)}${refreshQuery}`)
       .then(async (resp) => {
         if (!resp.ok) throw new Error(`provider catalog ${resp.status}`);
         return (await resp.json()) as { data: ProviderCatalogEntry };
@@ -963,10 +967,22 @@ export function ProviderUpsertModal({
 
   function reloadSelectedCatalog() {
     preserveCatalogValuesOnReload.current = true;
+    catalogRefreshRequested.current = catalogID !== "custom" && !usesCodexCatalog;
     setCatalogReloadKey((current) => current + 1);
     setDetail(null);
     setSelectedModels({});
     setModelError("");
+  }
+
+  function canContinueCreateStep(targetStep = createStep) {
+    if (mode !== "create") return true;
+    if (targetStep === 0) return Boolean(credentialMode);
+    if (targetStep === 1) {
+      return Boolean(selectedEntry && values.name?.trim());
+    }
+    if (targetStep === 2 && credentialMode === "provider_api_key") return Boolean(values.api_key?.trim());
+    if (targetStep === 2 && credentialMode === "account_integration") return providerAccountResourceReady(accountValues);
+    return true;
   }
 
   function validateCreateStep(targetStep = createStep) {
