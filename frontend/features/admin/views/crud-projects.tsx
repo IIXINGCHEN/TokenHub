@@ -559,7 +559,7 @@ function providerMonitorRowFromSnapshot(data: AppData, snapshot: ProviderMonitor
     basicSecondaryDetail: `${snapshot.healthy_resource_count}/${snapshot.active_resource_count} ${tx("资源健康")}`,
     realTone: monitoringProbeTone(observedSignal.state),
     realDetail: observed
-      ? `${providerPercent(observedSignal.success_rate ?? 0)} · ${formatNumber(observedSignal.samples)} ${tx(observedSignal.source === "active_probe" ? "次测试" : "次请求")}`
+      ? `${providerPercent(observedSignal.success_rate ?? 0)} · ${providerObservationCount(observedSignal.samples, observedSignal.source === "active_probe")}`
       : tx("等待真实测试或网关请求"),
     latencyMS: observedSignal.latency_ms ?? 0,
     availability24h: observedSignal.success_rate ?? 0,
@@ -642,7 +642,7 @@ export function providerMonitorRow(data: AppData, provider: Provider): ProviderM
       : tx("未配置账号资源"),
     realTone: providerRealProbeTone(observed24h, availability24h, warning24h.length, failed24h),
     realDetail: observed24h
-      ? `${providerPercent(availability24h)} · ${formatNumber(recent24h.length)} ${tx(sampleSource === "codex_test" ? "次测试" : "次请求")}`
+      ? `${providerPercent(availability24h)} · ${providerObservationCount(recent24h.length, sampleSource === "codex_test")}`
       : tx(sampleSource === "codex_test" ? "无 Codex 测试" : "无真实请求"),
     latencyMS,
     availability24h,
@@ -652,6 +652,12 @@ export function providerMonitorRow(data: AppData, provider: Provider): ProviderM
     qualityScore: providerQualityScore(availability24h, latencyMS, resourceScore, observed24h, healthyProvider),
     trend: providerTrend(samples),
   };
+}
+
+function providerObservationCount(count: number, test: boolean) {
+  return test
+    ? countWithUnit(count, "次测试", "test", "回のテスト")
+    : countWithUnit(count, "次请求", "request", "件のリクエスト");
 }
 
 export function providerMonitorSamples(data: AppData, provider: Provider, resources: ProviderResource[]): { source: ProviderMonitorSampleSource; samples: ProviderMonitorSample[] } {

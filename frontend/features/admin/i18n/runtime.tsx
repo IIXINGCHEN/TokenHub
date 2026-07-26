@@ -110,11 +110,36 @@ export function languageLocale() {
   return "zh-CN";
 }
 
-export function countWithUnit(count: number, zhUnit: string, enUnit: string, jaUnit: string) {
+export function countWithUnit(count: number, zhUnit: string, enUnit: string, jaUnit: string, enPluralUnit = `${enUnit}s`) {
   const formatted = formatNumber(count);
-  if (activeLanguage === "en") return `${formatted} ${enUnit}${count === 1 ? "" : "s"}`;
+  if (activeLanguage === "en") return `${formatted} ${count === 1 ? enUnit : enPluralUnit}`;
   if (activeLanguage === "ja") return `${formatted} ${jaUnit}`;
   return `${formatted} ${zhUnit}`;
+}
+
+export function providerSaveMessage(updated: boolean, accountResourceCreated: boolean, routed: number, categoryLabel: string) {
+  const routeCount = routed > 0
+    ? countWithUnit(routed, `条${categoryLabel}路由`, `${categoryLabel} route`, `${categoryLabel} ルート`)
+    : "";
+  if (activeLanguage === "en") {
+    return [
+      `Provider ${updated ? "updated" : "created"}`,
+      accountResourceCreated ? "account resource created" : "",
+      routeCount ? `${routeCount} created` : "",
+    ].filter(Boolean).join(", ");
+  }
+  if (activeLanguage === "ja") {
+    return [
+      `Provider を${updated ? "更新" : "作成"}しました`,
+      accountResourceCreated ? "アカウントリソースを作成しました" : "",
+      routeCount ? `${routeCount}を作成しました` : "",
+    ].filter(Boolean).join("、");
+  }
+  return [
+    `Provider 已${updated ? "更新" : "新增"}`,
+    accountResourceCreated ? "已创建账号资源" : "",
+    routeCount ? `创建 ${routeCount}` : "",
+  ].filter(Boolean).join("，");
 }
 
 export function countWithLabel(count: number, label: string) {
