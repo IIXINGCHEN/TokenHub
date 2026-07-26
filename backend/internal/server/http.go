@@ -3852,27 +3852,37 @@ func mergeProviderPatchRequest(req *ProviderCreateRequest, current Provider) {
 	}
 }
 
+// providerResourceActions and routingRuleActions list the recognized nested
+// action suffixes per admin route. Resource IDs may contain slashes (e.g.
+// IDs imported from external systems), so nested paths cannot be split
+// naively on "/": the trailing segment is treated as an action only when it
+// appears in the route's table. Actions must not contain "/" themselves.
+var (
+	providerResourceActions = []string{"health", "test", "refresh-token", "quota"}
+	routingRuleActions      = []string{"explain"}
+)
+
+// splitNestedAdminPath splits remainder into {id, action} when it ends with a
+// known "/<action>" suffix, otherwise the whole remainder is the resource ID.
+func splitNestedAdminPath(remainder string, actions []string) []string {
+	if remainder == "" {
+		return nil
+	}
+	for _, action := range actions {
+		if id, ok := strings.CutSuffix(remainder, "/"+action); ok {
+			return []string{id, action}
+		}
+	}
+	return []string{remainder}
+}
+
 func (s *Server) handleAdminProviderResourceNested(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAdmin(w, r, "provider", r.Method)
 	if !ok {
 		return
 	}
 	remainder := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/admin/provider-resources/"), "/")
-	parts := []string{}
-	switch {
-	case remainder == "":
-		parts = []string{}
-	case strings.HasSuffix(remainder, "/health"):
-		parts = []string{strings.TrimSuffix(remainder, "/health"), "health"}
-	case strings.HasSuffix(remainder, "/test"):
-		parts = []string{strings.TrimSuffix(remainder, "/test"), "test"}
-	case strings.HasSuffix(remainder, "/refresh-token"):
-		parts = []string{strings.TrimSuffix(remainder, "/refresh-token"), "refresh-token"}
-	case strings.HasSuffix(remainder, "/quota"):
-		parts = []string{strings.TrimSuffix(remainder, "/quota"), "quota"}
-	default:
-		parts = []string{remainder}
-	}
+	parts := splitNestedAdminPath(remainder, providerResourceActions)
 	if len(parts) == 1 && parts[0] == "bulk" {
 		s.handleAdminProviderResourceBulk(w, r, user)
 		return
@@ -3908,7 +3918,8 @@ func (s *Server) handleAdminProviderResourceNested(w http.ResponseWriter, r *htt
 		}
 		return
 	}
-	if len(parts) != 2 || (parts[1] != "health" && parts[1] != "test" && parts[1] != "refresh-token" && parts[1] != "quota") {
+	// splitNestedAdminPath guarantees parts[1] is a known action here.
+	if len(parts) != 2 {
 		writeError(w, r, NewHTTPError(404, "not_found", "Not found"))
 		return
 	}
@@ -4211,15 +4222,7 @@ func (s *Server) handleAdminRouteItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	remainder := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/admin/routing-rules/"), "/")
-	parts := []string{}
-	switch {
-	case remainder == "":
-		parts = []string{}
-	case strings.HasSuffix(remainder, "/explain"):
-		parts = []string{strings.TrimSuffix(remainder, "/explain"), "explain"}
-	default:
-		parts = []string{remainder}
-	}
+	parts := splitNestedAdminPath(remainder, routingRuleActions)
 	routeID := ""
 	if len(parts) > 0 {
 		routeID = parts[0]
@@ -4229,10 +4232,7 @@ func (s *Server) handleAdminRouteItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) == 2 {
-		if parts[1] != "explain" {
-			writeError(w, r, NewHTTPError(404, "not_found", "Not found"))
-			return
-		}
+		// splitNestedAdminPath guarantees parts[1] == "explain" here.
 		if r.Method != http.MethodGet {
 			writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
 			return

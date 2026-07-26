@@ -4813,6 +4813,34 @@ func TestAdminProviderResourceActionSuffixRouting(t *testing.T) {
 	}
 }
 
+// TestSplitNestedAdminPath covers the table-driven suffix parsing shared by
+// the nested admin routes: IDs containing slashes must survive intact and
+// only known action suffixes may be split off.
+func TestSplitNestedAdminPath(t *testing.T) {
+	actions := []string{"health", "test", "refresh-token", "quota"}
+	cases := []struct {
+		name      string
+		remainder string
+		want      []string
+	}{
+		{"empty", "", nil},
+		{"plain id", "res-1", []string{"res-1"}},
+		{"id with action", "res-1/health", []string{"res-1", "health"}},
+		{"slashed id with action", "litellm/key/abc/quota", []string{"litellm/key/abc", "quota"}},
+		{"slashed id without action", "litellm/key/abc", []string{"litellm/key/abc"}},
+		{"segment ending in action name", "res-refresh-token", []string{"res-refresh-token"}},
+		{"unknown action stays in id", "res-1/unknown", []string{"res-1/unknown"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := splitNestedAdminPath(tc.remainder, actions)
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("splitNestedAdminPath(%q) = %v, want %v", tc.remainder, got, tc.want)
+			}
+		})
+	}
+}
+
 func doJSON(t *testing.T, handler http.Handler, method string, path string, payload any, token string) responseBody {
 	t.Helper()
 	var body io.Reader
