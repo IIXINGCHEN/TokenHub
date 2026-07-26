@@ -12,6 +12,7 @@ import { ReviewItem } from "../shared/modals";
 import { providerTypeOptions } from "../shared/ui";
 import { ProviderAPIQuickCatalog, ProviderAPIQuickConnect } from "./provider-api-quick-connect";
 import { ProviderInlineField, providerAccountResourceReady, providerCreateWizardSteps, providerCreateWizardStepTitle, providerCredentialModeLabel, providerCredentialOptions } from "./provider-editor-fields";
+import { ProviderAdvancedFields, ProviderConnectionFields } from "./provider-editor-sections";
 
 const openAIAccountOAuthRedirectURI = "http://localhost:1455/auth/callback";
 
@@ -61,7 +62,7 @@ type CodexSubscriptionTestResult = {
   };
 };
 
-type ProviderEditTab = "quota" | "test" | "settings" | "models";
+type ProviderEditTab = "connect" | "models" | "advanced";
 
 type ProviderAccountConfirmation = {
   action: "enable" | "disable" | "delete";
@@ -195,7 +196,7 @@ export function ProviderUpsertModal({
   const [codexTestBusyID, setCodexTestBusyID] = useState("");
   const [codexTestErrors, setCodexTestErrors] = useState<Record<string, string>>({});
   const [codexTestResults, setCodexTestResults] = useState<Record<string, CodexSubscriptionTestResult>>({});
-  const [editTab, setEditTab] = useState<ProviderEditTab>(editingCodexSubscription ? "quota" : "settings");
+  const [editTab, setEditTab] = useState<ProviderEditTab>("connect");
   const [createStep, setCreateStep] = useState(0);
   const quickAPIFlow = mode === "create" && credentialMode === "provider_api_key";
   const quickAPIConnect = quickAPIFlow && createStep === 1;
@@ -448,7 +449,7 @@ export function ProviderUpsertModal({
   }, [catalogID, createStep, mode]);
 
   useEffect(() => {
-    if (mode !== "edit" || editTab !== "quota") return;
+    if (mode !== "edit" || editTab !== "advanced") return;
     for (const resource of selectedAccountResources) {
       if (!accountQuotas[resource.id]) void queryAccountQuota(resource);
     }
@@ -1196,36 +1197,14 @@ export function ProviderUpsertModal({
             ) : null}
             {mode === "edit" ? (
               <div className="provider-editor-tabs" role="tablist" aria-label={tx("Provider 编辑区")}>
-                {subscriptionResources.length > 0 ? (
-                  <>
-                    <button
-                      aria-selected={editTab === "quota"}
-                      className={editTab === "quota" ? "active" : ""}
-                      onClick={() => setEditTab("quota")}
-                      role="tab"
-                      type="button"
-                    >
-                      {tx("订阅额度")}
-                    </button>
-                    <button
-                      aria-selected={editTab === "test"}
-                      className={editTab === "test" ? "active" : ""}
-                      onClick={() => setEditTab("test")}
-                      role="tab"
-                      type="button"
-                    >
-                      {tx("真实请求测试")}
-                    </button>
-                  </>
-                ) : null}
                 <button
-                  aria-selected={editTab === "settings"}
-                  className={editTab === "settings" ? "active" : ""}
-                  onClick={() => setEditTab("settings")}
+                  aria-selected={editTab === "connect"}
+                  className={editTab === "connect" ? "active" : ""}
+                  onClick={() => setEditTab("connect")}
                   role="tab"
                   type="button"
                 >
-                  {tx("基础配置")}
+                  {tx("连接")}
                 </button>
                 <button
                   aria-selected={editTab === "models"}
@@ -1234,7 +1213,16 @@ export function ProviderUpsertModal({
                   role="tab"
                   type="button"
                 >
-                  {tx("模型映射")}
+                  {tx("模型")}
+                </button>
+                <button
+                  aria-selected={editTab === "advanced"}
+                  className={editTab === "advanced" ? "active" : ""}
+                  onClick={() => setEditTab("advanced")}
+                  role="tab"
+                  type="button"
+                >
+                  {tx("高级")}
                 </button>
               </div>
             ) : null}
@@ -1436,7 +1424,17 @@ export function ProviderUpsertModal({
                 )}
               </section>
             ) : null}
-            {mode === "edit" && editTab === "quota" && subscriptionResources.length > 0 ? (
+            {mode === "edit" && editTab === "connect" ? (
+              <ProviderConnectionFields values={values} onUpdate={update} />
+            ) : null}
+            {mode === "edit" && editTab === "advanced" ? (
+              <ProviderAdvancedFields
+                accountIntegration={credentialMode === "account_integration"}
+                values={values}
+                onUpdate={update}
+              />
+            ) : null}
+            {mode === "edit" && editTab === "advanced" && subscriptionResources.length > 0 ? (
               <section className="provider-quota-panel">
                 <div className="wizard-panel-head">
                   <h3>{tx("订阅额度")}</h3>
@@ -1542,7 +1540,7 @@ export function ProviderUpsertModal({
                 </div>
               </section>
             ) : null}
-            {mode === "edit" && editTab === "test" && subscriptionResources.length > 0 ? (
+            {mode === "edit" && editTab === "advanced" && subscriptionResources.length > 0 ? (
               <section className="provider-quota-panel provider-codex-test-panel">
                 <div className="wizard-panel-head">
                   <h3>{tx("Codex 真实请求测试")}</h3>
@@ -1658,18 +1656,11 @@ export function ProviderUpsertModal({
                 {codexTestErrors.selection ? <p className="provider-quota-error">{codexTestErrors.selection}</p> : null}
               </section>
             ) : null}
-            {(mode === "edit" && editTab === "settings") || (mode === "create" && createStep === 1 && !quickAPIConnect) ? (
-              mode === "edit" && editingCodexSubscription && selectedAccountID === "all" ? (
-                <div className="provider-account-selection-empty">
-                  <UserRoundCheck size={28} />
-                  <strong>{tx("请选择具体账号")}</strong>
-                  <span>{tx("基础配置不能同时编辑全部账号，请先在顶部账号列表中选择一个具体账号。")}</span>
-                </div>
-              ) : (
+            {mode === "create" && createStep === 1 && !quickAPIConnect ? (
               <div className="provider-form-grid">
               <label className="field">
                 <span>Provider ID</span>
-                <input value={values.id ?? ""} onChange={(event) => update("id", event.target.value)} placeholder={catalogID === "custom" ? tx("例如 prv_company_proxy") : tx("留空自动生成")} readOnly={mode === "edit"} />
+                <input value={values.id ?? ""} onChange={(event) => update("id", event.target.value)} placeholder={catalogID === "custom" ? tx("例如 prv_company_proxy") : tx("留空自动生成")} />
               </label>
               <label className="field">
                 <span>{tx(credentialMode === "account_integration" ? "通道名称" : "渠道名称")}</span>
@@ -1685,19 +1676,11 @@ export function ProviderUpsertModal({
                 <span>Base URL</span>
                 <input value={values.base_url ?? ""} onChange={(event) => update("base_url", event.target.value)} />
               </label>
-              {mode === "edit" ? (
-                <label className="field">
-                  <span>API Key</span>
-                  <input value={values.api_key ?? ""} type="password" onChange={(event) => update("api_key", event.target.value)} />
-                  {mode === "edit" ? <small>{tx("留空表示不修改现有 Key；填写新值才会覆盖。")}</small> : null}
-                </label>
-              ) : null}
               <label className="field">
                 <span>{tx("优先级")}</span>
                 <input value={values.priority ?? "10"} type="number" onChange={(event) => update("priority", event.target.value)} />
               </label>
             </div>
-              )
             ) : null}
 
             {(mode === "edit" && editTab === "models") || (mode === "create" && createStep === 3) ? (

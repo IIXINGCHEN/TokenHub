@@ -29,6 +29,8 @@ export const jaTranslations: Record<string, string> = {
     "AI 接入": "AI 接続",
     "Provider 渠道": "Provider チャネル",
     "Provider 编辑区": "Provider 編集セクション",
+    "连接": "接続",
+    "高级": "詳細",
     "真实请求测试": "実リクエストテスト",
     "基础配置": "基本設定",
     "模型映射": "モデルマッピング",

@@ -29,6 +29,8 @@ export const enTranslations: Record<string, string> = {
     "AI 接入": "AI Access",
     "Provider 渠道": "Provider Channels",
     "Provider 编辑区": "Provider editor sections",
+    "连接": "Connect",
+    "高级": "Advanced",
     "真实请求测试": "Live Request Test",
     "基础配置": "Basic Settings",
     "模型映射": "Model Mapping",
