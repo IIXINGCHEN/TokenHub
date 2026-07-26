@@ -104,6 +104,16 @@
   gap: 14px;
 }
 
+.provider-quick-tabs {
+  margin: 0;
+}
+
+.provider-quick-tab-panel {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
 .provider-api-quick-hero {
   min-height: 90px;
   border: 1px solid var(--border);
@@ -231,37 +241,6 @@
   text-decoration: none;
 }
 
-.provider-quick-advanced {
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 11px 12px;
-  background: var(--surface-soft);
-}
-
-.provider-quick-advanced summary {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  color: var(--muted-strong);
-  cursor: pointer;
-  list-style: none;
-}
-
-.provider-quick-advanced summary::-webkit-details-marker {
-  display: none;
-}
-
-.provider-quick-advanced summary > span {
-  display: grid;
-  gap: 2px;
-}
-
-.provider-quick-advanced summary strong {
-  color: var(--text);
-  font-size: 12px;
-}
-
-.provider-quick-advanced summary em,
 .provider-quick-custom-note {
   color: var(--muted);
   font-size: 10px;
@@ -269,14 +248,79 @@
 }
 
 .provider-quick-advanced-grid {
-  margin-top: 12px;
+  margin-top: 0;
 }
 
 .provider-quick-route-option {
   margin-bottom: 0;
 }
 
+.provider-quick-model-tools {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.provider-quick-model-search {
+  margin: 0;
+}
+
+.provider-quick-model-tools .secondary-button {
+  height: 38px;
+}
+
+.provider-quick-model-list {
+  max-height: 320px;
+  overflow: auto;
+  display: grid;
+  gap: 6px;
+}
+
+.provider-quick-model-item {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 9px 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface);
+}
+
+.provider-quick-model-item > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.provider-quick-model-item strong,
+.provider-quick-model-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-quick-model-item strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.provider-quick-model-item span,
+.provider-quick-model-item em {
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.provider-quick-model-item em {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .provider-quick-custom-note {
-  margin: 10px 0 0;
+  margin: 0;
   line-height: 1.5;
 }

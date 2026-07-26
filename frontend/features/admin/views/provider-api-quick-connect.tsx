@@ -1,6 +1,6 @@
-import { Check, Eye, EyeOff, KeyRound, Plus, Search, SlidersHorizontal } from "lucide-react";
+import { Check, Eye, EyeOff, KeyRound, Plus, RefreshCw, Search } from "lucide-react";
 import { useState } from "react";
-import { type ProviderCatalogEntry } from "../core/types";
+import { type ProviderCatalogEntry, type ProviderCatalogModel } from "../core/types";
 import { providerTypeLabel } from "../domain/labels";
 import { clearCustomValidity, countWithUnit, handleRequiredFieldInvalid, tx } from "../i18n/runtime";
 import { providerTypeOptions } from "../shared/ui";
@@ -63,13 +63,29 @@ export function ProviderAPIQuickConnect({
   catalogID,
   entry,
   modelCount,
+  models,
+  modelsLoading,
+  modelsError,
+  modelQuery,
+  activeTab,
   values,
+  onModelQueryChange,
+  onReloadModels,
+  onTabChange,
   onUpdate,
 }: {
   catalogID: string;
   entry?: ProviderCatalogEntry;
   modelCount: number;
+  models: ProviderCatalogModel[];
+  modelsLoading: boolean;
+  modelsError: string;
+  modelQuery: string;
+  activeTab: "connect" | "models" | "advanced";
   values: Record<string, string>;
+  onModelQueryChange: (value: string) => void;
+  onReloadModels: () => void;
+  onTabChange: (tab: "connect" | "models" | "advanced") => void;
   onUpdate: (key: string, value: string) => void;
 }) {
   const [showKey, setShowKey] = useState(false);
@@ -87,94 +103,130 @@ export function ProviderAPIQuickConnect({
         <strong>{countWithUnit(modelCount, "个可映射模型", "mappable model", "マッピング可能モデル")}</strong>
       </div>
 
-      <div className="provider-api-quick-intro">
-        <span><KeyRound size={18} /></span>
-        <div>
-          <strong>{tx(custom ? "填写连接信息" : "只需填写 API Key")}</strong>
-          <p>{tx(custom ? "自定义渠道需要填写名称、Base URL 和 API Key。" : "使用推荐地址创建 Provider，并自动补齐可映射模型的默认路由。")}</p>
-        </div>
+      <div className="provider-editor-tabs provider-quick-tabs" role="tablist" aria-label={tx("Provider 编辑区")}>
+        <button aria-selected={activeTab === "connect"} className={activeTab === "connect" ? "active" : ""} onClick={() => onTabChange("connect")} role="tab" type="button">{tx("连接")}</button>
+        <button aria-selected={activeTab === "models"} className={activeTab === "models" ? "active" : ""} onClick={() => onTabChange("models")} role="tab" type="button">{tx("模型")}</button>
+        <button aria-selected={activeTab === "advanced"} className={activeTab === "advanced" ? "active" : ""} onClick={() => onTabChange("advanced")} role="tab" type="button">{tx("高级")}</button>
       </div>
 
-      {custom ? (
-        <div className="provider-quick-required-grid">
-          <label className="field">
-            <span>{tx("渠道名称")}</span>
-            <input value={values.name ?? ""} onChange={(event) => onUpdate("name", event.target.value)} required />
-          </label>
-          <label className="field">
-            <span>Base URL</span>
-            <input value={values.base_url ?? ""} onChange={(event) => onUpdate("base_url", event.target.value)} required />
+      {activeTab === "connect" ? (
+        <div className="provider-quick-tab-panel">
+          <div className="provider-api-quick-intro">
+            <span><KeyRound size={18} /></span>
+            <div>
+              <strong>{tx(custom ? "填写连接信息" : "只需填写 API Key")}</strong>
+              <p>{tx(custom ? "自定义渠道需要填写名称、Base URL 和 API Key。" : "使用推荐地址创建 Provider，并自动补齐可映射模型的默认路由。")}</p>
+            </div>
+          </div>
+
+          {custom ? (
+            <div className="provider-quick-required-grid">
+              <label className="field">
+                <span>{tx("渠道名称")}</span>
+                <input value={values.name ?? ""} onChange={(event) => onUpdate("name", event.target.value)} required />
+              </label>
+              <label className="field">
+                <span>Base URL</span>
+                <input value={values.base_url ?? ""} onChange={(event) => onUpdate("base_url", event.target.value)} required />
+              </label>
+            </div>
+          ) : null}
+
+          <label className="field provider-quick-key-field">
+            <span>API Key</span>
+            <div className="provider-quick-key-input">
+              <input
+                autoComplete="new-password"
+                autoFocus
+                value={values.api_key ?? ""}
+                type={showKey ? "text" : "password"}
+                onChange={(event) => {
+                  clearCustomValidity(event);
+                  onUpdate("api_key", event.target.value);
+                }}
+                onInvalid={handleRequiredFieldInvalid}
+                required
+              />
+              <button aria-label={tx(showKey ? "隐藏 API Key" : "显示 API Key")} onClick={() => setShowKey((current) => !current)} type="button">
+                {showKey ? <EyeOff size={17} /> : <Eye size={17} />}
+              </button>
+            </div>
+            {entry?.doc_url ? <a href={entry.doc_url} rel="noreferrer" target="_blank">{tx("获取 API Key")}</a> : null}
           </label>
         </div>
       ) : null}
 
-      <label className="field provider-quick-key-field">
-        <span>API Key</span>
-        <div className="provider-quick-key-input">
-          <input
-            autoComplete="new-password"
-            autoFocus
-            value={values.api_key ?? ""}
-            type={showKey ? "text" : "password"}
-            onChange={(event) => {
-              clearCustomValidity(event);
-              onUpdate("api_key", event.target.value);
-            }}
-            onInvalid={handleRequiredFieldInvalid}
-            required
-          />
-          <button aria-label={tx(showKey ? "隐藏 API Key" : "显示 API Key")} onClick={() => setShowKey((current) => !current)} type="button">
-            {showKey ? <EyeOff size={17} /> : <Eye size={17} />}
-          </button>
+      {activeTab === "models" ? (
+        <div className="provider-quick-tab-panel">
+          {custom ? (
+            <p className="provider-quick-custom-note">{tx("自定义渠道创建后，可在模型映射中加载上游模型并配置路由。")}</p>
+          ) : (
+            <>
+              <div className="provider-import-options provider-quick-route-option">
+                <div><strong>{tx("自动路由")}</strong><span>{tx("创建后自动补齐可映射模型的默认路由。")}</span></div>
+                <div className="boolean-toggle provider-route-toggle" role="radiogroup" aria-label={tx("自动路由")}>
+                  <button aria-checked={values.create_routes === "true"} className={values.create_routes === "true" ? "active" : ""} onClick={() => onUpdate("create_routes", "true")} role="radio" type="button">{tx("开启")}</button>
+                  <button aria-checked={values.create_routes !== "true"} className={values.create_routes !== "true" ? "active" : ""} onClick={() => onUpdate("create_routes", "false")} role="radio" type="button">{tx("关闭开关")}</button>
+                </div>
+              </div>
+              <div className="provider-quick-model-tools">
+                <div className="provider-template-search provider-quick-model-search">
+                  <Search size={14} />
+                  <input value={modelQuery} onChange={(event) => onModelQueryChange(event.target.value)} placeholder={tx("搜索模型、能力、参数")} />
+                </div>
+                <button className="secondary-button" onClick={onReloadModels} type="button"><RefreshCw size={14} />{tx("重新加载")}</button>
+              </div>
+              <div className="provider-quick-model-list">
+                {modelsLoading ? (
+                  <div className="empty">{tx("正在加载模型列表...")}</div>
+                ) : modelsError ? (
+                  <div className="empty">{modelsError}</div>
+                ) : models.length === 0 ? (
+                  <div className="empty">{tx("没有匹配的模型")}</div>
+                ) : models.map((model) => (
+                  <article className="provider-quick-model-item" key={model.id}>
+                    <div><strong>{model.display_name || model.name}</strong><span>{model.canonical_name || model.id} ← {model.id}</span></div>
+                    <em>{model.family || model.category || model.type || "model"}</em>
+                  </article>
+                ))}
+              </div>
+            </>
+          )}
         </div>
-        {entry?.doc_url ? <a href={entry.doc_url} rel="noreferrer" target="_blank">{tx("获取 API Key")}</a> : null}
-      </label>
+      ) : null}
 
-      <details className="provider-quick-advanced">
-        <summary>
-          <SlidersHorizontal size={15} />
-          <span><strong>{tx("高级配置")}</strong><em>{tx("名称、类型、Base URL 与默认路由")}</em></span>
-        </summary>
-        <div className="provider-form-grid provider-quick-advanced-grid">
-          <label className="field">
-            <span>Provider ID</span>
-            <input value={values.id ?? ""} onChange={(event) => onUpdate("id", event.target.value)} placeholder={custom ? tx("例如 prv_company_proxy") : tx("留空自动生成")} />
-          </label>
-          {!custom ? (
+      {activeTab === "advanced" ? (
+        <div className="provider-quick-tab-panel">
+          <div className="provider-form-grid provider-quick-advanced-grid">
             <label className="field">
-              <span>{tx("渠道名称")}</span>
-              <input value={values.name ?? ""} onChange={(event) => onUpdate("name", event.target.value)} required />
+              <span>Provider ID</span>
+              <input value={values.id ?? ""} onChange={(event) => onUpdate("id", event.target.value)} placeholder={custom ? tx("例如 prv_company_proxy") : tx("留空自动生成")} />
             </label>
-          ) : null}
-          <label className="field">
-            <span>{tx("渠道商类型")}</span>
-            <select value={values.type ?? ""} onChange={(event) => onUpdate("type", event.target.value)} required>
-              {providerTypeOptions.map((option) => <option key={option} value={option}>{providerTypeLabel(option)}</option>)}
-            </select>
-          </label>
-          {!custom ? (
+            {!custom ? (
+              <label className="field">
+                <span>{tx("渠道名称")}</span>
+                <input value={values.name ?? ""} onChange={(event) => onUpdate("name", event.target.value)} />
+              </label>
+            ) : null}
             <label className="field">
-              <span>Base URL</span>
-              <input value={values.base_url ?? ""} onChange={(event) => onUpdate("base_url", event.target.value)} />
+              <span>{tx("渠道商类型")}</span>
+              <select value={values.type ?? ""} onChange={(event) => onUpdate("type", event.target.value)} required>
+                {providerTypeOptions.map((option) => <option key={option} value={option}>{providerTypeLabel(option)}</option>)}
+              </select>
             </label>
-          ) : null}
-          <label className="field">
-            <span>{tx("优先级")}</span>
-            <input value={values.priority ?? "10"} type="number" onChange={(event) => onUpdate("priority", event.target.value)} />
-          </label>
-        </div>
-        {custom ? (
-          <p className="provider-quick-custom-note">{tx("自定义渠道创建后，可在模型映射中加载上游模型并配置路由。")}</p>
-        ) : (
-          <div className="provider-import-options provider-quick-route-option">
-            <div><strong>{tx("自动路由")}</strong><span>{tx("创建后自动补齐可映射模型的默认路由。")}</span></div>
-            <div className="boolean-toggle provider-route-toggle" role="radiogroup" aria-label={tx("自动路由")}>
-              <button aria-checked={values.create_routes === "true"} className={values.create_routes === "true" ? "active" : ""} onClick={() => onUpdate("create_routes", "true")} role="radio" type="button">{tx("开启")}</button>
-              <button aria-checked={values.create_routes !== "true"} className={values.create_routes !== "true" ? "active" : ""} onClick={() => onUpdate("create_routes", "false")} role="radio" type="button">{tx("关闭开关")}</button>
-            </div>
+            {!custom ? (
+              <label className="field">
+                <span>Base URL</span>
+                <input value={values.base_url ?? ""} onChange={(event) => onUpdate("base_url", event.target.value)} />
+              </label>
+            ) : null}
+            <label className="field">
+              <span>{tx("优先级")}</span>
+              <input value={values.priority ?? "10"} type="number" onChange={(event) => onUpdate("priority", event.target.value)} />
+            </label>
           </div>
-        )}
-      </details>
+        </div>
+      ) : null}
     </section>
   );
 }

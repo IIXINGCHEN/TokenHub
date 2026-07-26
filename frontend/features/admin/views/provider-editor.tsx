@@ -197,6 +197,7 @@ export function ProviderUpsertModal({
   const [codexTestErrors, setCodexTestErrors] = useState<Record<string, string>>({});
   const [codexTestResults, setCodexTestResults] = useState<Record<string, CodexSubscriptionTestResult>>({});
   const [editTab, setEditTab] = useState<ProviderEditTab>("connect");
+  const [quickAPITab, setQuickAPITab] = useState<ProviderEditTab>("connect");
   const [createStep, setCreateStep] = useState(0);
   const quickAPIFlow = mode === "create" && credentialMode === "provider_api_key";
   const quickAPIConnect = quickAPIFlow && createStep === 1;
@@ -204,6 +205,7 @@ export function ProviderUpsertModal({
   const lastCreateStep = createSteps.length - 1;
   const accountCallbackURL = useMemo(() => providerAccountOAuthCallbackURL(), []);
   const modalRef = useRef<HTMLFormElement | null>(null);
+  const preserveCatalogValuesOnReload = useRef(false);
   const existingRouteModels = useMemo(
     () => new Set(routes.filter((route) => provider && route.provider_id === provider.id).map((route) => route.model_name)),
     [provider, routes],
@@ -228,6 +230,7 @@ export function ProviderUpsertModal({
   const customCatalogEntry = useMemo(() => buildCustomProviderCatalogEntry(modelCategory, standardModels), [modelCategory, standardModels]);
 
   useEffect(() => {
+    if (quickAPIFlow) return;
     if (credentialMode === "account_integration" || catalogID === codexProviderCatalogSummary.id) return;
     if (catalogID === "custom") return;
     if (categoryCatalog.length === 0) return;
@@ -235,13 +238,15 @@ export function ProviderUpsertModal({
       selectCatalog(categoryCatalog[0]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modelCategory, categoryCatalog.length, credentialMode, catalogID]);
+  }, [modelCategory, categoryCatalog.length, credentialMode, catalogID, quickAPIFlow]);
 
   useEffect(() => {
     const entry = catalogID === "custom" ? customCatalogEntry : catalog.find((item) => item.id === catalogID);
-    setModelQuery("");
+    const preserveCatalogValues = preserveCatalogValuesOnReload.current;
+    preserveCatalogValuesOnReload.current = false;
+    if (!preserveCatalogValues) setModelQuery("");
     setModelError("");
-    if (entry && mode === "create") {
+    if (entry && mode === "create" && !preserveCatalogValues) {
       setValues((current) => ({
         ...current,
         name: catalogID === "custom" ? (current.name === initialEntry?.display_name ? "" : current.name) : entry.display_name || entry.name || current.name,
@@ -310,7 +315,7 @@ export function ProviderUpsertModal({
         if (cancelled) return;
         setDetail(payload.data);
         setModelError("");
-        if (mode === "create") {
+        if (mode === "create" && !preserveCatalogValues) {
           setValues((current) => ({
             ...current,
             name: payload.data.display_name || payload.data.name || current.name,
@@ -473,13 +478,13 @@ export function ProviderUpsertModal({
     : usesCodexCatalog ? codexCatalogError : modelError;
   const models = useMemo(
     () => (effectiveDetail?.models ?? []).filter((model) => {
-      if (modelCategory !== "all" && modelCategoryForCatalog(model) !== modelCategory) return false;
+      if (!quickAPIFlow && modelCategory !== "all" && modelCategoryForCatalog(model) !== modelCategory) return false;
       if (usesCodexCatalog) return true;
       if (catalogID === "custom") return true;
       const canonical = model.canonical_name || canonicalModelNameForUI(model.id, model.display_name);
       return standardModels.some((standard) => canonicalModelNameForUI(standard.name, standard.name) === canonicalModelNameForUI(canonical, canonical));
     }),
-    [catalogID, effectiveDetail, modelCategory, standardModels, usesCodexCatalog],
+    [catalogID, effectiveDetail, modelCategory, quickAPIFlow, standardModels, usesCodexCatalog],
   );
   useEffect(() => {
     if (mode !== "create" || !effectiveDetail || values.create_routes !== "true") return;
@@ -895,6 +900,8 @@ export function ProviderUpsertModal({
   }
 
   function selectCatalog(entry: ProviderCatalogEntry) {
+    if (entry.id === catalogID) return;
+    setQuickAPITab("connect");
     const nextName = entry.display_name || entry.name || values.name;
     setCatalogID(entry.id);
     setCatalogReloadKey((current) => current + 1);
@@ -904,15 +911,19 @@ export function ProviderUpsertModal({
     setModelError("");
     setValues((current) => ({
       ...current,
+      id: mode === "create" ? "" : current.id,
       name: mode === "create" ? entry.display_name || entry.name || current.name : current.name,
       type: entry.type || current.type || "openai_compatible",
       base_url: mode === "create" ? entry.base_url ?? "" : current.base_url,
+      api_key: mode === "create" ? "" : current.api_key,
       create_routes: quickAPIFlow ? "true" : current.create_routes,
     }));
     syncAccountDefaults(nextName, entry.base_url);
   }
 
   function selectCustomCatalog() {
+    if (catalogID === "custom") return;
+    setQuickAPITab("connect");
     setCatalogID("custom");
     setCatalogReloadKey((current) => current + 1);
     setDetail(customCatalogEntry);
@@ -925,18 +936,18 @@ export function ProviderUpsertModal({
       name: mode === "create" ? "" : current.name,
       type: current.type || "openai_compatible",
       base_url: mode === "create" ? "" : current.base_url,
+      api_key: mode === "create" ? "" : current.api_key,
       create_routes: quickAPIFlow ? "false" : current.create_routes,
     }));
     syncAccountDefaults(values.name || "Provider", "");
   }
 
   function reloadSelectedCatalog() {
-    if (catalogID === "custom") {
-      setCatalogReloadKey((current) => current + 1);
-      setModelError("");
-      return;
-    }
-    if (selectedEntry) selectCatalog(selectedEntry);
+    preserveCatalogValuesOnReload.current = true;
+    setCatalogReloadKey((current) => current + 1);
+    setDetail(null);
+    setSelectedModels({});
+    setModelError("");
   }
 
   function validateCreateStep(targetStep = createStep) {
@@ -950,14 +961,17 @@ export function ProviderUpsertModal({
       return false;
     }
     if (targetStep === 1 && !values.name?.trim()) {
+      if (quickAPIFlow) setQuickAPITab(catalogID === "custom" ? "connect" : "advanced");
       setError(tx(credentialMode === "account_integration" ? "请填写通道名称。" : "请填写渠道名称。"));
       return false;
     }
     if (targetStep === 1 && credentialMode === "provider_api_key" && catalogID === "custom" && !values.base_url?.trim()) {
+      if (quickAPIFlow) setQuickAPITab("connect");
       setError(tx("请填写 Base URL。"));
       return false;
     }
     if (targetStep === 1 && credentialMode === "provider_api_key" && !values.api_key?.trim()) {
+      if (quickAPIFlow) setQuickAPITab("connect");
       setError(tx("请填写 API Key。"));
       return false;
     }
@@ -988,6 +1002,7 @@ export function ProviderUpsertModal({
       setCreateStep((current) => Math.min(current + 1, lastCreateStep));
       return;
     }
+    if (quickAPIConnect && !validateCreateStep(createStep)) return;
     setLoading(true);
     setError("");
     setNotice("");
@@ -1258,10 +1273,19 @@ export function ProviderUpsertModal({
             {mode === "create" && createStep === 1 ? (
               quickAPIConnect ? (
                 <ProviderAPIQuickConnect
+                  key={catalogID}
                   catalogID={catalogID}
                   entry={selectedEntry}
                   modelCount={effectiveDetail?.models_count ?? selectedEntry?.models_count ?? 0}
+                  models={filteredModels}
+                  modelsLoading={effectiveCatalogLoading}
+                  modelsError={effectiveCatalogError}
+                  modelQuery={modelQuery}
+                  activeTab={quickAPITab}
                   values={values}
+                  onModelQueryChange={setModelQuery}
+                  onReloadModels={reloadSelectedCatalog}
+                  onTabChange={setQuickAPITab}
                   onUpdate={update}
                 />
               ) : (

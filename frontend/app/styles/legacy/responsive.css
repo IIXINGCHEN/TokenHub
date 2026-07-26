@@ -190,6 +190,10 @@
     grid-template-columns: 1fr;
   }
 
+  .provider-quick-model-tools {
+    grid-template-columns: 1fr;
+  }
+
   .provider-model-head {
     align-items: stretch;
     flex-direction: column;
