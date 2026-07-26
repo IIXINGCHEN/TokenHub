@@ -244,6 +244,34 @@ func TestValidateNativeAssetURL(t *testing.T) {
 	}
 }
 
+func TestNativeArchiveNameSupportsLinuxAndMacOS(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		os   string
+		arch string
+		want string
+	}{
+		{os: "linux", arch: "amd64", want: "tokenhub_0.3.5_linux_amd64.tar.gz"},
+		{os: "linux", arch: "arm64", want: "tokenhub_0.3.5_linux_arm64.tar.gz"},
+		{os: "darwin", arch: "amd64", want: "tokenhub_0.3.5_darwin_amd64.tar.gz"},
+		{os: "darwin", arch: "arm64", want: "tokenhub_0.3.5_darwin_arm64.tar.gz"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.os+"/"+test.arch, func(t *testing.T) {
+			t.Parallel()
+			service := &versionService{runtimeOS: test.os, runtimeArch: test.arch}
+			got, err := service.nativeArchiveName("0.3.5")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("nativeArchiveName = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 type nativeTestArchiveEntry struct {
 	content string
 	mode    int64

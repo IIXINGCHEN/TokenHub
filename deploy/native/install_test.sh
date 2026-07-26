@@ -29,6 +29,7 @@ create_bundle() {
   : >"$root/frontend/server.js"
   : >"$root/catalog/model-catalog.yaml"
   cp "$script_dir/tokenhub.service" "$root/deploy/tokenhub.service"
+  cp "$script_dir/tokenhub.plist" "$root/deploy/tokenhub.plist"
   printf '%s\n' "$version" >"$root/VERSION"
 }
 
@@ -36,6 +37,7 @@ create_bundle() {
 assert_fails normalize_version "0.3"
 validate_port "08" "test port"
 assert_fails validate_port "0" "test port"
+assert_fails validate_safe_path "/opt/../etc" "test path"
 
 SERVICE_USER="tokenhub"
 SERVICE_NAME="tokenhub"
@@ -65,6 +67,7 @@ mkdir -p "$runner_root/bin" "$runner_root/frontend"
 cp "$script_dir/tokenhub-run" "$runner_root/bin/tokenhub-run"
 cat >"$runner_root/bin/tokenhub" <<'EOF'
 #!/usr/bin/env bash
+[ "${TOKENHUB_RUNNER_MARKER:-}" = "loaded" ] || exit 12
 sleep 0.2
 exit 7
 EOF
@@ -74,10 +77,11 @@ trap 'exit 0' TERM
 while :; do sleep 1; done
 EOF
 : >"$runner_root/frontend/server.js"
+printf 'TOKENHUB_RUNNER_MARKER=loaded\n' >"$runner_root/tokenhub.env"
 chmod 0755 "$runner_root/bin/tokenhub-run" "$runner_root/bin/tokenhub" "$runner_root/bin/node"
 
 set +e
-"$runner_root/bin/tokenhub-run"
+TOKENHUB_CONFIG_FILE="$runner_root/tokenhub.env" "$runner_root/bin/tokenhub-run"
 runner_status=$?
 set -e
 [ "$runner_status" -eq 7 ] || fail_test "runner returned $runner_status instead of backend status 7"
@@ -207,8 +211,117 @@ EOF
     fail_test "purge attempted to delete a pre-existing service user"
 }
 
+run_macos_integration() {
+  [ "$(uname -s)" = "Darwin" ] || fail_test "macOS integration requires Darwin"
+
+  local fixtures="$test_root/macos-fixtures"
+  local fake_bin="$test_root/macos-fake-bin"
+  local install_root="$test_root/macos/opt/tokenhub"
+  local config_dir="$test_root/macos/etc/tokenhub"
+  local state_dir="$test_root/macos/var/lib/tokenhub"
+  local launchd_dir="$test_root/macos/Library/LaunchDaemons"
+  local integration_bundle="$test_root/macos-integration-bundle"
+  local service_user
+  local service_group
+  local asset
+
+  service_user="$(id -un)"
+  service_group="$(id -gn)"
+  asset="tokenhub_0.3.3_darwin_$(platform_arch).tar.gz"
+  mkdir -p "$fixtures" "$fake_bin" "$launchd_dir"
+  create_bundle "$integration_bundle" "0.3.3"
+  chmod 0755 "$integration_bundle/bin/tokenhub" "$integration_bundle/bin/node" "$integration_bundle/bin/tokenhub-run"
+  tar -czf "$fixtures/$asset" -C "$integration_bundle" .
+  (
+    cd "$fixtures"
+    shasum -a 256 "$asset" >checksums.txt
+  )
+
+  cat >"$fake_bin/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+destination=""
+url=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o)
+      destination="$2"
+      shift 2
+      ;;
+    *)
+      url="$1"
+      shift
+      ;;
+  esac
+done
+[ -n "$destination" ] && [ -n "$url" ]
+cp "$TOKENHUB_TEST_FIXTURES/${url##*/}" "$destination"
+EOF
+  cat >"$fake_bin/launchctl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$TOKENHUB_TEST_LAUNCHCTL_LOG"
+EOF
+  chmod 0755 "$fake_bin/curl" "$fake_bin/launchctl"
+
+  env \
+    PATH="$fake_bin:$PATH" \
+    TOKENHUB_INSTALLER_ALLOW_NON_ROOT=1 \
+    TOKENHUB_TEST_FIXTURES="$fixtures" \
+    TOKENHUB_TEST_LAUNCHCTL_LOG="$test_root/launchctl.log" \
+    TOKENHUB_INSTALL_ROOT="$install_root" \
+    TOKENHUB_CONFIG_DIR="$config_dir" \
+    TOKENHUB_STATE_DIR="$state_dir" \
+    TOKENHUB_LAUNCHD_DIR="$launchd_dir" \
+    TOKENHUB_SERVICE_USER="$service_user" \
+    TOKENHUB_SERVICE_GROUP="$service_group" \
+    TOKENHUB_SERVICE_NAME=tokenhub-test \
+    TOKENHUB_LAUNCHD_LABEL=org.tokenhub.test \
+    TOKENHUB_PUBLIC_HOST=127.0.0.1 \
+    bash "$script_dir/install.sh" install --version 0.3.3
+
+  [ "$(tr -d '[:space:]' <"$install_root/current/VERSION")" = "0.3.3" ] ||
+    fail_test "macOS install did not activate v0.3.3"
+  [ -s "$config_dir/tokenhub.env" ] || fail_test "macOS install did not create configuration"
+  [ "$(stat -f '%Lp' "$config_dir/tokenhub.env")" = "600" ] ||
+    fail_test "macOS configuration permissions are not 0600"
+  [ "$(stat -f '%Lp' "$state_dir")" = "700" ] ||
+    fail_test "macOS state directory permissions are not 0700"
+  grep -q "$install_root/current/bin/tokenhub-run" "$launchd_dir/org.tokenhub.test.plist" ||
+    fail_test "launchd plist was not rendered with the install root"
+  grep -q "$config_dir/tokenhub.env" "$launchd_dir/org.tokenhub.test.plist" ||
+    fail_test "launchd plist was not rendered with the configuration path"
+  if grep -q '@[A-Z_]*@' "$launchd_dir/org.tokenhub.test.plist"; then
+    fail_test "launchd plist still contains template placeholders"
+  fi
+  grep -q '^bootstrap system ' "$test_root/launchctl.log" ||
+    fail_test "macOS install did not bootstrap the launchd service"
+  grep -q '^kickstart -k system/org.tokenhub.test$' "$test_root/launchctl.log" ||
+    fail_test "macOS install did not restart the launchd service"
+
+  env \
+    PATH="$fake_bin:$PATH" \
+    TOKENHUB_INSTALLER_ALLOW_NON_ROOT=1 \
+    TOKENHUB_TEST_LAUNCHCTL_LOG="$test_root/launchctl.log" \
+    TOKENHUB_INSTALL_ROOT="$install_root" \
+    TOKENHUB_CONFIG_DIR="$config_dir" \
+    TOKENHUB_STATE_DIR="$state_dir" \
+    TOKENHUB_LAUNCHD_DIR="$launchd_dir" \
+    TOKENHUB_SERVICE_USER="$service_user" \
+    TOKENHUB_SERVICE_GROUP="$service_group" \
+    TOKENHUB_SERVICE_NAME=tokenhub-test \
+    TOKENHUB_LAUNCHD_LABEL=org.tokenhub.test \
+    bash "$script_dir/install.sh" uninstall --purge
+  [ ! -e "$install_root" ] && [ ! -e "$config_dir" ] && [ ! -e "$state_dir" ] ||
+    fail_test "macOS purge kept application, configuration, or state"
+  [ ! -e "$launchd_dir/org.tokenhub.test.plist" ] ||
+    fail_test "macOS purge kept the launchd plist"
+}
+
 if [ "${TOKENHUB_NATIVE_INTEGRATION:-}" = "1" ]; then
   run_linux_integration
+fi
+if [ "${TOKENHUB_NATIVE_MACOS_INTEGRATION:-}" = "1" ]; then
+  run_macos_integration
 fi
 
 printf 'native installer tests passed\n'

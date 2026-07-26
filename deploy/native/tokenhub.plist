@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>@SERVICE_LABEL@</string>
+  <key>UserName</key>
+  <string>@SERVICE_USER@</string>
+  <key>GroupName</key>
+  <string>@SERVICE_GROUP@</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@INSTALL_ROOT@/current/bin/tokenhub-run</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>@INSTALL_ROOT@/current</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>TOKENHUB_CONFIG_FILE</key>
+    <string>@CONFIG_DIR@/tokenhub.env</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>Umask</key>
+  <integer>63</integer>
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key>
+    <integer>65535</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>@STATE_DIR@/tokenhub.log</string>
+  <key>StandardErrorPath</key>
+  <string>@STATE_DIR@/tokenhub-error.log</string>
+</dict>
+</plist>

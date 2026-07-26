@@ -7,7 +7,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=@SERVICE_USER@
-Group=@SERVICE_USER@
+Group=@SERVICE_GROUP@
 EnvironmentFile=@CONFIG_DIR@/tokenhub.env
 WorkingDirectory=@INSTALL_ROOT@/current
 ExecStart=@INSTALL_ROOT@/current/bin/tokenhub-run

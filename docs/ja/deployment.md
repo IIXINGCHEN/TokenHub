@@ -90,9 +90,9 @@ docker compose --env-file deploy/.env \
 
 `./deploy/test-multi-instance.sh` で実際の 2 インスタンス PostgreSQL E2E テストを実行できます。
 
-## ネイティブ Release + systemd
+## ネイティブ Release + systemd/launchd
 
-systemd を使用する単一 Linux ホストでは、ネイティブ Release インストールを利用できます。ネイティブパッケージは `linux/amd64` と `linux/arm64` に対応し、Go バックエンド、スタンドアロン Next.js コンソール、対応する Node.js ランタイムを含みます。
+systemd を使用する単一 Linux ホスト、または launchd を使用する macOS ホストでは、ネイティブ Release インストールを利用できます。ネイティブパッケージは `linux/amd64`、`linux/arm64`、`darwin/amd64`、`darwin/arm64` に対応し、Go バックエンド、スタンドアロン Next.js コンソール、対応する Node.js ランタイムを含みます。
 
 インストーラーをダウンロードして内容を確認し、最新の安定版 Release をインストールします。
 
@@ -114,14 +114,25 @@ sudo env TOKENHUB_PUBLIC_HOST=tokenhub.example.com \
 - Release と `current` シンボリックリンク: `/opt/tokenhub`
 - 設定とシークレット: `/etc/tokenhub/tokenhub.env`
 - SQLite データベースとバックアップ: `/var/lib/tokenhub`
-- systemd ユニット: `/etc/systemd/system/tokenhub.service`
+- Linux systemd ユニット: `/etc/systemd/system/tokenhub.service`
+- macOS LaunchDaemon: `/Library/LaunchDaemons/org.tokenhub.tokenhub.plist`
 
-公開 URL、CORS Origin、ポート、データベース、シークレットを変更する場合は `/etc/tokenhub/tokenhub.env` を編集して、サービスを再起動します。
+macOS では `sudo` でインストーラーを実行してください。launchd は、デフォルトで `sudo` を実行したログインユーザーとして TokenHub を起動します。別の既存ローカルアカウントを使用する場合のみ `TOKENHUB_SERVICE_USER` を設定します。
+
+公開 URL、CORS Origin、ポート、データベース、シークレットを変更する場合は `/etc/tokenhub/tokenhub.env` を編集して、サービスを再起動します。Linux では次を使用します。
 
 ```bash
 sudo systemctl restart tokenhub
 sudo systemctl status tokenhub
 sudo journalctl -u tokenhub -f
+```
+
+macOS では次を使用します。
+
+```bash
+sudo launchctl kickstart -k system/org.tokenhub.tokenhub
+sudo launchctl print system/org.tokenhub.tokenhub
+tail -f /var/lib/tokenhub/tokenhub.log /var/lib/tokenhub/tokenhub-error.log
 ```
 
 インストーラーは、Release アーカイブを `checksums.txt` で検証してから有効化し、アップグレード時も設定とデータを保持します。
@@ -142,7 +153,7 @@ sudo env TOKENHUB_RELEASE_REPOSITORY=your-account/TokenHub \
   bash /tmp/tokenhub-install.sh install --version 0.3.3
 ```
 
-ネイティブ Release インストールは、バージョンパネルに「ネイティブ Release」と表示されます。管理者はパネルから更新またはロールバックを直接ダウンロードして検証し、「今すぐ再起動」を選択して systemd で対象バージョンを有効化できます。各 GitHub Release にはプラットフォーム用アーカイブと `checksums.txt` が必要です。Release の公開時に `.github/workflows/native-release.yml` がこれらのファイルをビルドして添付します。
+ネイティブ Release インストールは、バージョンパネルに「ネイティブ Release」と表示されます。管理者はパネルから更新またはロールバックを直接ダウンロードして検証し、「今すぐ再起動」を選択して systemd または launchd で対象バージョンを有効化できます。各 GitHub Release にはプラットフォーム用アーカイブと `checksums.txt` が必要です。Release の公開時に `.github/workflows/native-release.yml` がこれらのファイルをビルドして添付します。
 
 ## Docker Compose
 

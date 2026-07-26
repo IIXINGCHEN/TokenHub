@@ -6,8 +6,16 @@ INSTALL_ROOT="${TOKENHUB_INSTALL_ROOT:-/opt/tokenhub}"
 CONFIG_DIR="${TOKENHUB_CONFIG_DIR:-/etc/tokenhub}"
 STATE_DIR="${TOKENHUB_STATE_DIR:-/var/lib/tokenhub}"
 SYSTEMD_DIR="${TOKENHUB_SYSTEMD_DIR:-/etc/systemd/system}"
-SERVICE_USER="${TOKENHUB_SERVICE_USER:-tokenhub}"
+LAUNCHD_DIR="${TOKENHUB_LAUNCHD_DIR:-/Library/LaunchDaemons}"
+HOST_OS="$(uname -s)"
+if [ "$HOST_OS" = "Darwin" ]; then
+  SERVICE_USER="${TOKENHUB_SERVICE_USER:-${SUDO_USER:-$(id -un)}}"
+else
+  SERVICE_USER="${TOKENHUB_SERVICE_USER:-tokenhub}"
+fi
+SERVICE_GROUP="${TOKENHUB_SERVICE_GROUP:-}"
 SERVICE_NAME="${TOKENHUB_SERVICE_NAME:-tokenhub}"
+SERVICE_LABEL="${TOKENHUB_LAUNCHD_LABEL:-org.tokenhub.${SERVICE_NAME}}"
 BACKEND_PORT="${TOKENHUB_BACKEND_PORT:-8080}"
 FRONTEND_PORT="${TOKENHUB_FRONTEND_PORT:-3000}"
 VERSION=""
@@ -37,6 +45,8 @@ Environment:
   TOKENHUB_CORS_ALLOWED_ORIGINS
   TOKENHUB_BACKEND_PORT        Backend port (default: 8080)
   TOKENHUB_FRONTEND_PORT       Admin console port (default: 3000)
+  TOKENHUB_SERVICE_USER        Existing macOS user or Linux service user
+  TOKENHUB_LAUNCHD_LABEL       macOS launchd label (default: org.tokenhub.tokenhub)
 EOF
 }
 
@@ -61,6 +71,8 @@ validate_safe_path() {
   [[ "$value" == /* ]] || fail "$label must be an absolute path"
   [[ "$value" != "/" ]] || fail "$label must not be /"
   [[ "$value" =~ ^/[A-Za-z0-9._/-]+$ ]] || fail "$label contains unsupported characters"
+  [[ "${value}/" != *"/../"* && "${value}/" != *"/./"* ]] ||
+    fail "$label must not contain . or .. path segments"
 }
 
 validate_port() {
@@ -75,6 +87,10 @@ validate_identifiers() {
     fail "TOKENHUB_SERVICE_USER contains unsupported characters"
   [[ "$SERVICE_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9_.@-]*$ ]] ||
     fail "TOKENHUB_SERVICE_NAME contains unsupported characters"
+  if [ "$HOST_OS" = "Darwin" ]; then
+    [[ "$SERVICE_LABEL" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] ||
+      fail "TOKENHUB_LAUNCHD_LABEL contains unsupported characters"
+  fi
 }
 
 normalize_version() {
@@ -118,9 +134,22 @@ require_root() {
 }
 
 require_platform() {
-  [ "$(uname -s)" = "Linux" ] || fail "native installation supports Linux only"
-  command -v systemctl >/dev/null 2>&1 || fail "systemd is required"
-  for command in curl tar sha256sum sed awk find grep install; do
+  case "$HOST_OS" in
+    Linux)
+      command -v systemctl >/dev/null 2>&1 || fail "systemd is required on Linux"
+      command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is required on Linux"
+      validate_safe_path "$SYSTEMD_DIR" "TOKENHUB_SYSTEMD_DIR"
+      ;;
+    Darwin)
+      command -v launchctl >/dev/null 2>&1 || fail "launchd is required on macOS"
+      command -v shasum >/dev/null 2>&1 || fail "shasum is required on macOS"
+      validate_safe_path "$LAUNCHD_DIR" "TOKENHUB_LAUNCHD_DIR"
+      ;;
+    *)
+      fail "native installation supports Linux and macOS only"
+      ;;
+  esac
+  for command in curl tar sed awk find grep install od tr; do
     command -v "$command" >/dev/null 2>&1 || fail "missing required command: $command"
   done
   [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ ]] ||
@@ -128,10 +157,17 @@ require_platform() {
   validate_safe_path "$INSTALL_ROOT" "TOKENHUB_INSTALL_ROOT"
   validate_safe_path "$CONFIG_DIR" "TOKENHUB_CONFIG_DIR"
   validate_safe_path "$STATE_DIR" "TOKENHUB_STATE_DIR"
-  validate_safe_path "$SYSTEMD_DIR" "TOKENHUB_SYSTEMD_DIR"
   validate_identifiers
   validate_port "$BACKEND_PORT" "TOKENHUB_BACKEND_PORT"
   validate_port "$FRONTEND_PORT" "TOKENHUB_FRONTEND_PORT"
+}
+
+platform_os() {
+  case "$HOST_OS" in
+    Linux) printf 'linux\n' ;;
+    Darwin) printf 'darwin\n' ;;
+    *) fail "unsupported operating system: $HOST_OS" ;;
+  esac
 }
 
 platform_arch() {
@@ -157,10 +193,19 @@ latest_version() {
 
 ensure_service_user() {
   if id "$SERVICE_USER" >/dev/null 2>&1; then
+    SERVICE_GROUP="${SERVICE_GROUP:-$(id -gn "$SERVICE_USER")}"
+    [[ "$SERVICE_GROUP" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]] ||
+      fail "TOKENHUB_SERVICE_GROUP contains unsupported characters"
     return
+  fi
+  if [ "$HOST_OS" = "Darwin" ]; then
+    fail "macOS service user $SERVICE_USER does not exist; run with sudo from a login account or set TOKENHUB_SERVICE_USER"
   fi
   command -v useradd >/dev/null 2>&1 || fail "useradd is required to create $SERVICE_USER"
   useradd --system --user-group --home-dir "$STATE_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
+  SERVICE_GROUP="${SERVICE_GROUP:-$(id -gn "$SERVICE_USER")}"
+  [[ "$SERVICE_GROUP" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]] ||
+    fail "TOKENHUB_SERVICE_GROUP contains unsupported characters"
   CREATED_SERVICE_USER=true
 }
 
@@ -181,7 +226,9 @@ random_hex() {
 default_public_host() {
   local host
   host="${TOKENHUB_PUBLIC_HOST:-}"
-  if [ -z "$host" ] && command -v hostname >/dev/null 2>&1; then
+  if [ -z "$host" ] && [ "$HOST_OS" = "Darwin" ]; then
+    host="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)"
+  elif [ -z "$host" ] && command -v hostname >/dev/null 2>&1; then
     host="$(hostname -I 2>/dev/null | awk '{print $1}')"
   fi
   printf '%s\n' "${host:-127.0.0.1}"
@@ -189,9 +236,17 @@ default_public_host() {
 
 write_initial_config() {
   local env_file="$CONFIG_DIR/tokenhub.env"
+  local config_owner="root"
+  local config_mode="0640"
+  local directory_mode="0750"
   if [ -f "$env_file" ]; then
     info "Keeping existing configuration at $env_file"
     return
+  fi
+  if [ "$HOST_OS" = "Darwin" ] || [ "${EUID:-$(id -u)}" -ne 0 ]; then
+    config_owner="$SERVICE_USER"
+    config_mode="0600"
+    directory_mode="0700"
   fi
 
   local public_host
@@ -210,7 +265,7 @@ write_initial_config() {
   secret_key="$(random_hex 32)"
   GENERATED_ADMIN_PASSWORD="$(random_hex 12)"
 
-  install -d -m 0750 -o root -g "$SERVICE_USER" "$CONFIG_DIR"
+  install -d -m "$directory_mode" -o "$config_owner" -g "$SERVICE_GROUP" "$CONFIG_DIR"
   cat >"$env_file" <<EOF
 TOKENHUB_ENV=prod
 TOKENHUB_HTTP_ADDR=:${BACKEND_PORT}
@@ -229,20 +284,34 @@ TOKENHUB_FRONTEND_HOST=0.0.0.0
 TOKENHUB_FRONTEND_PORT=${FRONTEND_PORT}
 TOKENHUB_API_BASE_URL=${api_base_url}
 EOF
-  chown root:"$SERVICE_USER" "$env_file"
-  chmod 0640 "$env_file"
+  chown "$config_owner:$SERVICE_GROUP" "$env_file"
+  chmod "$config_mode" "$env_file"
   info "Created configuration at $env_file"
 }
 
 prepare_directories() {
-  install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_USER" "$INSTALL_ROOT"
-  install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_USER" "$INSTALL_ROOT/releases"
-  install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_USER" "$STATE_DIR"
-  install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_USER" "$STATE_DIR/backups"
+  local directory_mode="0750"
+  if [ "$HOST_OS" = "Darwin" ]; then
+    directory_mode="0700"
+  fi
+  install -d -m "$directory_mode" -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$INSTALL_ROOT"
+  install -d -m "$directory_mode" -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$INSTALL_ROOT/releases"
+  install -d -m "$directory_mode" -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$STATE_DIR"
+  install -d -m "$directory_mode" -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$STATE_DIR/backups"
+}
+
+sha256_file() {
+  local path="$1"
+  if [ "$HOST_OS" = "Darwin" ]; then
+    shasum -a 256 "$path" | awk '{print $1}'
+  else
+    sha256sum "$path" | awk '{print $1}'
+  fi
 }
 
 download_release() {
   local version="$1"
+  local os
   local arch
   local asset
   local base_url
@@ -250,14 +319,15 @@ download_release() {
   local checksums
   local expected
   local actual
+  os="$(platform_os)"
   arch="$(platform_arch)"
-  asset="tokenhub_${version}_linux_${arch}.tar.gz"
+  asset="tokenhub_${version}_${os}_${arch}.tar.gz"
   base_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${version}"
   TEMP_DIR="$(mktemp -d)"
   archive="$TEMP_DIR/$asset"
   checksums="$TEMP_DIR/checksums.txt"
 
-  info "Downloading TokenHub v${version} for linux/${arch}"
+  info "Downloading TokenHub v${version} for ${os}/${arch}"
   curl -fL --retry 3 --connect-timeout 15 -o "$archive" "$base_url/$asset" ||
     fail "unable to download $asset"
   curl -fL --retry 3 --connect-timeout 15 -o "$checksums" "$base_url/checksums.txt" ||
@@ -265,8 +335,9 @@ download_release() {
 
   expected="$(awk -v file="$asset" '$2 == file || $2 == "*" file { print $1; exit }' "$checksums")"
   [[ "$expected" =~ ^[0-9a-fA-F]{64}$ ]] || fail "checksums.txt has no valid entry for $asset"
-  actual="$(sha256sum "$archive" | awk '{print $1}')"
-  [ "${actual,,}" = "${expected,,}" ] || fail "SHA-256 verification failed for $asset"
+  actual="$(sha256_file "$archive" | tr '[:upper:]' '[:lower:]')"
+  expected="$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]')"
+  [ "$actual" = "$expected" ] || fail "SHA-256 verification failed for $asset"
   DOWNLOADED_ARCHIVE="$archive"
 }
 
@@ -312,6 +383,10 @@ validate_staged_release() {
     VERSION; do
     [ -f "$staging/$path" ] || fail "release archive is missing regular file $path"
   done
+  if [ "$HOST_OS" = "Darwin" ]; then
+    [ -f "$staging/deploy/tokenhub.plist" ] ||
+      fail "release archive is missing regular file deploy/tokenhub.plist"
+  fi
   [ "$(tr -d '[:space:]' <"$staging/VERSION")" = "$version" ] ||
     fail "release archive VERSION does not match v$version"
 }
@@ -323,9 +398,13 @@ activate_release() {
   local staging="$releases_dir/.${version}.install.$$"
   local target="$releases_dir/$version"
   local next_link="$INSTALL_ROOT/.current.$$"
+  local directory_mode="0750"
 
   rm -rf -- "$staging"
-  install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_USER" "$staging"
+  if [ "$HOST_OS" = "Darwin" ]; then
+    directory_mode="0700"
+  fi
+  install -d -m "$directory_mode" -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$staging"
   validate_release_archive "$archive"
   tar --no-same-owner --no-same-permissions -xzf "$archive" -C "$staging"
   validate_staged_release "$staging" "$version"
@@ -333,29 +412,93 @@ activate_release() {
   chmod 0755 "$staging/bin/tokenhub" "$staging/bin/node" "$staging/bin/tokenhub-run"
   "$staging/bin/node" --version >/dev/null 2>&1 ||
     fail "bundled Node.js runtime cannot run on this host"
-  chown -R "$SERVICE_USER:$SERVICE_USER" "$staging"
+  chown -R "$SERVICE_USER:$SERVICE_GROUP" "$staging"
   if [ -e "$target" ]; then
     rm -rf -- "$target"
   fi
   mv "$staging" "$target"
   ln -s "$target" "$next_link"
-  mv -Tf "$next_link" "$INSTALL_ROOT/current"
-  chown -h "$SERVICE_USER:$SERVICE_USER" "$INSTALL_ROOT/current"
+  if [ -e "$INSTALL_ROOT/current" ] && [ ! -L "$INSTALL_ROOT/current" ]; then
+    rm -f -- "$next_link"
+    fail "native current path is not a symbolic link"
+  fi
+  if [ "$HOST_OS" = "Darwin" ]; then
+    mv -fh "$next_link" "$INSTALL_ROOT/current"
+  else
+    mv -Tf "$next_link" "$INSTALL_ROOT/current"
+  fi
+  chown -h "$SERVICE_USER:$SERVICE_GROUP" "$INSTALL_ROOT/current"
   info "Activated TokenHub v$version"
 }
 
 install_service() {
-  local template="$INSTALL_ROOT/current/deploy/tokenhub.service"
-  local unit="$SYSTEMD_DIR/${SERVICE_NAME}.service"
-  sed \
-    -e "s|@SERVICE_USER@|$SERVICE_USER|g" \
-    -e "s|@CONFIG_DIR@|$CONFIG_DIR|g" \
-    -e "s|@INSTALL_ROOT@|$INSTALL_ROOT|g" \
-    -e "s|@STATE_DIR@|$STATE_DIR|g" \
-    "$template" >"$unit"
-  chmod 0644 "$unit"
-  systemctl daemon-reload
-  systemctl enable "$SERVICE_NAME"
+  local template
+  local unit
+  if [ "$HOST_OS" = "Darwin" ]; then
+    template="$INSTALL_ROOT/current/deploy/tokenhub.plist"
+    unit="$LAUNCHD_DIR/${SERVICE_LABEL}.plist"
+    sed \
+      -e "s|@SERVICE_LABEL@|$SERVICE_LABEL|g" \
+      -e "s|@SERVICE_USER@|$SERVICE_USER|g" \
+      -e "s|@SERVICE_GROUP@|$SERVICE_GROUP|g" \
+      -e "s|@CONFIG_DIR@|$CONFIG_DIR|g" \
+      -e "s|@INSTALL_ROOT@|$INSTALL_ROOT|g" \
+      -e "s|@STATE_DIR@|$STATE_DIR|g" \
+      "$template" >"$unit"
+    if [ "${EUID:-$(id -u)}" -eq 0 ]; then
+      chown root:wheel "$unit"
+    fi
+    chmod 0644 "$unit"
+    launchctl bootout "system/${SERVICE_LABEL}" >/dev/null 2>&1 || true
+    launchctl bootstrap system "$unit"
+    launchctl enable "system/${SERVICE_LABEL}"
+  else
+    template="$INSTALL_ROOT/current/deploy/tokenhub.service"
+    unit="$SYSTEMD_DIR/${SERVICE_NAME}.service"
+    sed \
+      -e "s|@SERVICE_USER@|$SERVICE_USER|g" \
+      -e "s|@SERVICE_GROUP@|$SERVICE_GROUP|g" \
+      -e "s|@CONFIG_DIR@|$CONFIG_DIR|g" \
+      -e "s|@INSTALL_ROOT@|$INSTALL_ROOT|g" \
+      -e "s|@STATE_DIR@|$STATE_DIR|g" \
+      "$template" >"$unit"
+    chmod 0644 "$unit"
+    systemctl daemon-reload
+    systemctl enable "$SERVICE_NAME"
+  fi
+}
+
+restart_service() {
+  case "$HOST_OS" in
+    Darwin) launchctl kickstart -k "system/${SERVICE_LABEL}" ;;
+    Linux) systemctl restart "$SERVICE_NAME" ;;
+    *) fail "native installation supports Linux and macOS only" ;;
+  esac
+}
+
+service_status() {
+  case "$HOST_OS" in
+    Darwin) launchctl print "system/${SERVICE_LABEL}" ;;
+    Linux) systemctl status "$SERVICE_NAME" ;;
+    *) fail "native installation supports Linux and macOS only" ;;
+  esac
+}
+
+remove_service() {
+  case "$HOST_OS" in
+    Darwin)
+      launchctl bootout "system/${SERVICE_LABEL}" >/dev/null 2>&1 || true
+      rm -f -- "$LAUNCHD_DIR/${SERVICE_LABEL}.plist"
+      ;;
+    Linux)
+      systemctl disable --now "$SERVICE_NAME" 2>/dev/null || true
+      rm -f -- "$SYSTEMD_DIR/${SERVICE_NAME}.service"
+      systemctl daemon-reload
+      ;;
+    *)
+      fail "native installation supports Linux and macOS only"
+      ;;
+  esac
 }
 
 install_or_upgrade() {
@@ -371,14 +514,14 @@ install_or_upgrade() {
     [ "$(tr -d '[:space:]' <"$INSTALL_ROOT/current/VERSION")" = "$target_version" ]; then
     info "TokenHub v$target_version is already installed"
     install_service
-    systemctl restart "$SERVICE_NAME"
+    restart_service
     return
   fi
   download_release "$target_version"
   archive="$DOWNLOADED_ARCHIVE"
   activate_release "$target_version" "$archive"
   install_service
-  systemctl restart "$SERVICE_NAME"
+  restart_service
 
   info "TokenHub v$target_version is running"
   info "Admin console: http://$(default_public_host):${FRONTEND_PORT}"
@@ -387,7 +530,11 @@ install_or_upgrade() {
     info "Initial admin password: $GENERATED_ADMIN_PASSWORD"
   fi
   info "Configuration: $CONFIG_DIR/tokenhub.env"
-  info "Logs: journalctl -u ${SERVICE_NAME} -f"
+  if [ "$HOST_OS" = "Darwin" ]; then
+    info "Logs: tail -f ${STATE_DIR}/tokenhub.log ${STATE_DIR}/tokenhub-error.log"
+  else
+    info "Logs: journalctl -u ${SERVICE_NAME} -f"
+  fi
 }
 
 uninstall_tokenhub() {
@@ -404,13 +551,11 @@ uninstall_tokenhub() {
     fi
   fi
 
-  systemctl disable --now "$SERVICE_NAME" 2>/dev/null || true
-  rm -f -- "$SYSTEMD_DIR/${SERVICE_NAME}.service"
-  systemctl daemon-reload
+  remove_service
   rm -rf -- "$INSTALL_ROOT"
   if [ "$PURGE" = true ]; then
     rm -rf -- "$CONFIG_DIR" "$STATE_DIR"
-    if [ "$remove_service_user" = true ]; then
+    if [ "$HOST_OS" = "Linux" ] && [ "$remove_service_user" = true ]; then
       userdel "$SERVICE_USER" 2>/dev/null || true
     fi
     info "Removed application, configuration, and data"
@@ -426,7 +571,6 @@ main() {
   validate_safe_path "$INSTALL_ROOT" "TOKENHUB_INSTALL_ROOT"
   validate_safe_path "$CONFIG_DIR" "TOKENHUB_CONFIG_DIR"
   validate_safe_path "$STATE_DIR" "TOKENHUB_STATE_DIR"
-  validate_safe_path "$SYSTEMD_DIR" "TOKENHUB_SYSTEMD_DIR"
   validate_identifiers
 
   case "$COMMAND" in
@@ -443,8 +587,8 @@ main() {
       uninstall_tokenhub
       ;;
     status)
-      command -v systemctl >/dev/null 2>&1 || fail "systemd is required"
-      systemctl status "$SERVICE_NAME"
+      require_platform
+      service_status
       ;;
     help)
       usage
