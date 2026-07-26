@@ -831,13 +831,21 @@ func sameRoute(left server.ModelRoute, right server.ModelRoute) bool {
 	return reflect.DeepEqual(left, right)
 }
 
-func sameAdminUser(left server.AdminUser, right server.AdminUser) bool {
-	return strings.TrimSpace(left.Username) == strings.TrimSpace(right.Username) &&
-		strings.TrimSpace(left.Name) == strings.TrimSpace(right.Name) &&
-		strings.TrimSpace(left.Email) == strings.TrimSpace(right.Email) &&
-		strings.TrimSpace(left.Role) == strings.TrimSpace(right.Role) &&
-		strings.TrimSpace(left.TeamID) == strings.TrimSpace(right.TeamID) &&
-		strings.TrimSpace(left.Status) == strings.TrimSpace(right.Status)
+// sameAdminUser reports whether applying desired onto existing would be a
+// no-op. Empty desired fields mean "keep the current value", mirroring the
+// server-side update semantics — except TeamID, which the server overwrites
+// unconditionally and therefore must match exactly.
+func sameAdminUser(existing server.AdminUser, desired server.AdminUser) bool {
+	keeps := func(current, want string) bool {
+		want = strings.TrimSpace(want)
+		return want == "" || strings.TrimSpace(current) == want
+	}
+	return keeps(existing.Username, desired.Username) &&
+		keeps(existing.Name, desired.Name) &&
+		keeps(existing.Email, desired.Email) &&
+		keeps(existing.Role, desired.Role) &&
+		strings.TrimSpace(existing.TeamID) == strings.TrimSpace(desired.TeamID) &&
+		keeps(existing.Status, desired.Status)
 }
 
 func sameProject(left server.Project, right server.Project) bool {

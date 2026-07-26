@@ -78,17 +78,29 @@ func requireRemoteTarget(action string, baseURL string) error {
 	return errExit(ExitSinkRejected, fmt.Sprintf("%s requires a TokenHub target: pass --to or set TOKENHUB_API (refusing to %s against a transient in-memory store)", action, action))
 }
 
-// writeSecretFile persists payload with owner-only permissions, tightening
-// the mode even when the file already exists.
+// writeSecretFile persists payload with owner-only permissions. The
+// destination is recreated so a pre-existing wide-permission file or symlink
+// can never expose the secret, even briefly.
 func writeSecretFile(path string, payload []byte) error {
-	if err := os.WriteFile(path, payload, 0o600); err != nil {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	return os.Chmod(path, 0o600)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(payload); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // writeApplyArtifacts persists the rollback checkpoint and any one-time API
-// key secrets returned by apply so they are not silently discarded.
+// key secrets returned by apply so they are not silently discarded. The
+// remote apply has already succeeded by the time this runs, so on write
+// failure the payloads are dumped to stdout as a last resort: the checkpoint
+// and key plaintext cannot be retrieved again.
 func writeApplyArtifacts(cmd *cobra.Command, bundlePath string, result *migrationtokenhub.ApplyResult) error {
 	checkpointPath, _ := cmd.Flags().GetString("checkpoint-out")
 	if strings.TrimSpace(checkpointPath) == "" {
@@ -98,25 +110,34 @@ func writeApplyArtifacts(cmd *cobra.Command, bundlePath string, result *migratio
 	if err != nil {
 		return fmt.Errorf("marshal checkpoint: %w", err)
 	}
+	var failures []string
 	if err := writeSecretFile(checkpointPath, checkpointPayload); err != nil {
-		return fmt.Errorf("write checkpoint: %w", err)
+		fmt.Fprintf(os.Stderr, "WARNING: apply succeeded on the remote, but writing the checkpoint failed (%v); dumping it below so rollback stays possible:\n", err)
+		fmt.Printf("--- checkpoint ---\n%s\n", checkpointPayload)
+		failures = append(failures, fmt.Sprintf("write checkpoint: %v", err))
+	} else {
+		fmt.Printf("  Checkpoint: %s\n", checkpointPath)
 	}
-	fmt.Printf("  Checkpoint: %s\n", checkpointPath)
-	if len(result.NewKeys) == 0 {
-		return nil
+	if len(result.NewKeys) > 0 {
+		newKeysPath, _ := cmd.Flags().GetString("new-keys-out")
+		if strings.TrimSpace(newKeysPath) == "" {
+			newKeysPath = bundlePath + ".new-keys.json"
+		}
+		newKeysPayload, err := json.MarshalIndent(map[string]any{"new_keys": result.NewKeys}, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal new keys: %w", err)
+		}
+		if err := writeSecretFile(newKeysPath, newKeysPayload); err != nil {
+			fmt.Fprintf(os.Stderr, "WARNING: apply succeeded on the remote, but writing the new API keys failed (%v); dumping the one-time plaintext below — it cannot be retrieved again:\n", err)
+			fmt.Printf("--- new API keys ---\n%s\n", newKeysPayload)
+			failures = append(failures, fmt.Sprintf("write new keys: %v", err))
+		} else {
+			fmt.Printf("  New API keys (%d, plaintext visible once): %s — distribute securely, then delete the file\n", len(result.NewKeys), newKeysPath)
+		}
 	}
-	newKeysPath, _ := cmd.Flags().GetString("new-keys-out")
-	if strings.TrimSpace(newKeysPath) == "" {
-		newKeysPath = bundlePath + ".new-keys.json"
+	if len(failures) > 0 {
+		return fmt.Errorf("apply succeeded on the remote, but persisting artifacts failed (%s); do not re-run apply — capture the dumped output above", strings.Join(failures, "; "))
 	}
-	newKeysPayload, err := json.MarshalIndent(map[string]any{"new_keys": result.NewKeys}, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal new keys: %w", err)
-	}
-	if err := writeSecretFile(newKeysPath, newKeysPayload); err != nil {
-		return fmt.Errorf("write new keys: %w", err)
-	}
-	fmt.Printf("  New API keys (%d, plaintext visible once): %s — distribute securely, then delete the file\n", len(result.NewKeys), newKeysPath)
 	return nil
 }
 

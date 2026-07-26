@@ -274,7 +274,9 @@ func (c *AdminAPIClient) ListUsers(ctx context.Context) ([]server.AdminUser, err
 }
 
 // adminUserWriteRequest mirrors the PATCH /api/admin/users/{id} payload.
-// Empty fields are omitted so the server keeps their current values.
+// The server keeps current values for empty username/name/email/role/status,
+// but team_id is applied unconditionally: omitting it clears the user's team,
+// so callers must always send the full desired team assignment.
 type adminUserWriteRequest struct {
 	Username string `json:"username,omitempty"`
 	Name     string `json:"name,omitempty"`

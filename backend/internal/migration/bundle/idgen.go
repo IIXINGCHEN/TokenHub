@@ -27,9 +27,9 @@ func (s IDStrategy) Valid() bool {
 }
 
 // MintID produces a canonical ID for a resource according to the
-// requested strategy. Generated IDs never contain characters that are
-// unsafe inside a URL path segment, so they can be used verbatim in
-// Admin API item paths.
+// requested strategy. The stable and prefixed strategies never emit
+// characters that are unsafe inside a URL path segment; the source
+// strategy returns the external ID verbatim and offers no such guarantee.
 func MintID(strategy IDStrategy, system, externalID string) (string, error) {
 	system = strings.TrimSpace(system)
 	externalID = strings.TrimSpace(externalID)

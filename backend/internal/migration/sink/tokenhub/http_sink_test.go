@@ -251,4 +251,38 @@ func TestHTTPSinkApplyUserCreatesAndUpdates(t *testing.T) {
 			t.Fatalf("expected user name updated on server, got %q", user.Name)
 		}
 	}
+
+	// Re-applying the unchanged spec must converge to Skip.
+	thirdSink := NewHTTPSink(client, bundle.StaticResolver{})
+	result, err = thirdSink.Apply(context.Background(), migrationBundle)
+	if err != nil {
+		t.Fatalf("third apply: %v", err)
+	}
+	if result.Report.Created != 0 || result.Report.Updated != 0 {
+		t.Fatalf("expected unchanged re-apply to skip, got %+v", result.Report)
+	}
+}
+
+func TestSameAdminUserEmptyDesiredFieldsMeanKeep(t *testing.T) {
+	existing := server.AdminUser{Username: "alice", Name: "Alice", Email: "alice@example.com", Role: "user", TeamID: "team-eng", Status: server.StatusActive}
+
+	// Empty desired fields keep current values on the server (PATCH
+	// semantics), so diffing must treat them as equal or apply would report
+	// an update forever without ever converging.
+	desired := server.AdminUser{Username: "alice", TeamID: "team-eng"}
+	if !sameAdminUser(existing, desired) {
+		t.Fatal("expected empty desired fields to be treated as keep-current")
+	}
+
+	// TeamID is overwritten unconditionally by the server, so an empty
+	// desired TeamID means "clear the team" and must not compare equal.
+	desired.TeamID = ""
+	if sameAdminUser(existing, desired) {
+		t.Fatal("expected empty desired TeamID to require an update")
+	}
+
+	desired = server.AdminUser{Username: "alice", Name: "Alice Zhang", TeamID: "team-eng"}
+	if sameAdminUser(existing, desired) {
+		t.Fatal("expected changed non-empty field to require an update")
+	}
 }
