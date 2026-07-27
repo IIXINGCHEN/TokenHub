@@ -271,7 +271,7 @@ func TestValidateNativeAssetURL(t *testing.T) {
 	}
 }
 
-func TestNativeArchiveNameSupportsLinuxAndMacOS(t *testing.T) {
+func TestNativeArchiveNameSupportsLinux(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		os   string
@@ -280,8 +280,6 @@ func TestNativeArchiveNameSupportsLinuxAndMacOS(t *testing.T) {
 	}{
 		{os: "linux", arch: "amd64", want: "tokenhub_0.3.5_linux_amd64.tar.gz"},
 		{os: "linux", arch: "arm64", want: "tokenhub_0.3.5_linux_arm64.tar.gz"},
-		{os: "darwin", arch: "amd64", want: "tokenhub_0.3.5_darwin_amd64.tar.gz"},
-		{os: "darwin", arch: "arm64", want: "tokenhub_0.3.5_darwin_arm64.tar.gz"},
 	}
 	for _, test := range tests {
 		test := test
@@ -296,6 +294,14 @@ func TestNativeArchiveNameSupportsLinuxAndMacOS(t *testing.T) {
 				t.Fatalf("nativeArchiveName = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestNativeArchiveNameRejectsMacOS(t *testing.T) {
+	t.Parallel()
+	service := &versionService{runtimeOS: "darwin", runtimeArch: "arm64"}
+	if _, err := service.nativeArchiveName("0.3.5"); err == nil {
+		t.Fatal("expected macOS native update to be rejected")
 	}
 }
 

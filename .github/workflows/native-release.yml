@@ -212,7 +212,6 @@ jobs:
           cp downloads/node/node "$stage/bin/node"
           cp deploy/native/tokenhub-run "$stage/bin/tokenhub-run"
           cp deploy/native/tokenhub.service "$stage/deploy/tokenhub.service"
-          cp deploy/native/tokenhub.plist "$stage/deploy/tokenhub.plist"
           cp data/model-catalog.yaml "$stage/catalog/model-catalog.yaml"
           cp LICENSE README.md "$stage/"
           printf '%s\n' "$VERSION" >"$stage/VERSION"
@@ -224,7 +223,6 @@ jobs:
             frontend/server.js \
             catalog/model-catalog.yaml \
             deploy/tokenhub.service \
-            deploy/tokenhub.plist \
             VERSION; do
             test -f "$stage/$required"
           done
@@ -251,145 +249,11 @@ jobs:
           compression-level: 0
           if-no-files-found: error
 
-  macos:
-    name: Package native release (darwin/${{ matrix.arch }})
-    needs: prepare
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: arm64
-            node_arch: arm64
-            runner: macos-15
-          - arch: amd64
-            node_arch: x64
-            runner: macos-15-intel
-    steps:
-      - name: Check out release
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          ref: ${{ needs.prepare.outputs.tag }}
-
-      - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version-file: backend/go.mod
-          cache-dependency-path: backend/go.sum
-
-      - name: Set up Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-          package-manager-cache: false
-
-      - name: Build standalone frontend
-        working-directory: frontend
-        run: |
-          set -euo pipefail
-          npm ci
-          npm run build
-
-          server_path=""
-          while IFS= read -r candidate; do
-            candidate_root="$(dirname "$candidate")"
-            if [[ -d "$candidate_root/.next" && -f "$candidate_root/package.json" ]]; then
-              server_path="$candidate"
-              break
-            fi
-          done < <(find .next/standalone -type f -name server.js -print)
-          test -n "$server_path"
-          standalone_root="$(dirname "$server_path")"
-          mkdir -p ../native-macos/frontend/.next
-          cp -a "$standalone_root/." ../native-macos/frontend/
-          cp -a .next/static ../native-macos/frontend/.next/static
-          cp -a public ../native-macos/frontend/public
-          test -f ../native-macos/frontend/server.js
-
-      - name: Build native backend
-        env:
-          ARCH: ${{ matrix.arch }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-        working-directory: backend
-        run: |
-          set -euo pipefail
-          mkdir -p ../native-macos/bin
-          CGO_ENABLED=1 GOOS=darwin GOARCH="$ARCH" go build \
-            -trimpath \
-            -ldflags="-s -w -X main.buildVersion=${VERSION} -X main.buildType=release -X main.deploymentType=native" \
-            -o ../native-macos/bin/tokenhub \
-            ./cmd/tokenhub
-          test -x ../native-macos/bin/tokenhub
-          file ../native-macos/bin/tokenhub | grep -q "Mach-O 64-bit"
-
-      - name: Download and verify Node.js runtime
-        env:
-          NODE_ARCH: ${{ matrix.node_arch }}
-        run: |
-          set -euo pipefail
-          node_asset="node-v${NODE_VERSION}-darwin-${NODE_ARCH}.tar.gz"
-          node_base="https://nodejs.org/dist/v${NODE_VERSION}"
-          curl -fsSLO "${node_base}/${node_asset}"
-          curl -fsSLO "${node_base}/SHASUMS256.txt"
-          grep "  ${node_asset}$" SHASUMS256.txt >node-checksum.txt
-          shasum -a 256 -c node-checksum.txt
-          tar -xzf "$node_asset"
-          cp "node-v${NODE_VERSION}-darwin-${NODE_ARCH}/bin/node" native-macos/bin/node
-
-      - name: Assemble native archive
-        env:
-          ARCH: ${{ matrix.arch }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          set -euo pipefail
-          stage="stage-${ARCH}"
-          archive="tokenhub_${VERSION}_darwin_${ARCH}.tar.gz"
-          mkdir -p "$stage/bin" "$stage/catalog" "$stage/deploy"
-          cp -a native-macos/frontend "$stage/frontend"
-          cp native-macos/bin/tokenhub "$stage/bin/tokenhub"
-          cp native-macos/bin/node "$stage/bin/node"
-          cp deploy/native/tokenhub-run "$stage/bin/tokenhub-run"
-          cp deploy/native/tokenhub.service "$stage/deploy/tokenhub.service"
-          cp deploy/native/tokenhub.plist "$stage/deploy/tokenhub.plist"
-          cp data/model-catalog.yaml "$stage/catalog/model-catalog.yaml"
-          cp LICENSE README.md "$stage/"
-          printf '%s\n' "$VERSION" >"$stage/VERSION"
-          chmod 0755 "$stage/bin/tokenhub" "$stage/bin/node" "$stage/bin/tokenhub-run"
-          for required in \
-            bin/tokenhub \
-            bin/node \
-            bin/tokenhub-run \
-            frontend/server.js \
-            catalog/model-catalog.yaml \
-            deploy/tokenhub.service \
-            deploy/tokenhub.plist \
-            VERSION; do
-            test -f "$stage/$required"
-          done
-          link_path="$(find "$stage" -type l -print -quit)"
-          test -z "$link_path"
-          metadata_path="$(find "$stage" -name '._*' -print -quit)"
-          test -z "$metadata_path"
-
-          COPYFILE_DISABLE=1 tar -czf "$archive" -C "$stage" .
-          tar -tzf "$archive" >/dev/null
-
-      - name: Upload native archive
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: tokenhub-native-archive-darwin-${{ matrix.arch }}
-          path: tokenhub_${{ needs.prepare.outputs.version }}_darwin_${{ matrix.arch }}.tar.gz
-          compression-level: 0
-          if-no-files-found: error
-
   publish:
     name: Publish native release assets
     needs:
       - prepare
       - package
-      - macos
     runs-on: ubuntu-latest
     permissions:
       contents: write

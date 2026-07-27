@@ -90,9 +90,9 @@ All replicas must use the same `TOKENHUB_SECRET_KEY`. Size `TOKENHUB_DB_MAX_OPEN
 
 Run the real two-instance PostgreSQL E2E suite with `./deploy/test-multi-instance.sh`.
 
-## Native Release with systemd or launchd
+## Native Release with systemd
 
-Use the native Release installer for a single Linux host with systemd or a macOS host with launchd. Native packages support `linux/amd64`, `linux/arm64`, `darwin/amd64`, and `darwin/arm64`, and bundle the Go backend, the standalone Next.js console, and a matching Node.js runtime.
+Use the native Release installer for a single Linux host with systemd. Native packages support `linux/amd64` and `linux/arm64`, and bundle the Go backend, the standalone Next.js console, and a matching Node.js runtime.
 
 Download and inspect the installer, then install the latest stable Release:
 
@@ -115,24 +115,13 @@ The first installation generates production secrets and an initial admin passwor
 - Configuration and secrets: `/etc/tokenhub/tokenhub.env`
 - SQLite database and backups: `/var/lib/tokenhub`
 - Linux systemd unit: `/etc/systemd/system/tokenhub.service`
-- macOS LaunchDaemon: `/Library/LaunchDaemons/org.tokenhub.tokenhub.plist`
 
-On macOS, run the installer with `sudo`; launchd runs TokenHub as the login user that invoked `sudo`. Set `TOKENHUB_SERVICE_USER` only when another existing local account should own the service.
-
-Edit `/etc/tokenhub/tokenhub.env` when changing public URLs, CORS origins, ports, database settings, or secrets, then restart the service. Linux uses:
+Edit `/etc/tokenhub/tokenhub.env` when changing public URLs, CORS origins, ports, database settings, or secrets, then restart the service:
 
 ```bash
 sudo systemctl restart tokenhub
 sudo systemctl status tokenhub
 sudo journalctl -u tokenhub -f
-```
-
-macOS uses:
-
-```bash
-sudo launchctl kickstart -k system/org.tokenhub.tokenhub
-sudo launchctl print system/org.tokenhub.tokenhub
-tail -f /var/lib/tokenhub/tokenhub.log /var/lib/tokenhub/tokenhub-error.log
 ```
 
 The installer verifies the Release archive against `checksums.txt` before activation and preserves configuration and data during upgrades:
@@ -153,7 +142,7 @@ sudo env TOKENHUB_RELEASE_REPOSITORY=your-account/TokenHub \
   bash /tmp/tokenhub-install.sh install --version 0.3.3
 ```
 
-Native Release installations are labeled `Native Release` in the version panel. Administrators can download and verify an update or rollback directly from the panel, then select **Restart now** to activate it through systemd or launchd. Each GitHub Release must contain the platform archive and `checksums.txt`; `.github/workflows/native-release.yml` builds and attaches those assets when a Release is published.
+Native Release installations are labeled `Native Release` in the version panel. Administrators can download and verify an update or rollback directly from the panel, then select **Restart now** to activate it through systemd. Each GitHub Release must contain the Linux archive and `checksums.txt`; `.github/workflows/native-release.yml` builds and attaches the `linux/amd64` and `linux/arm64` assets when a Release is published.
 
 ## Docker Compose
 

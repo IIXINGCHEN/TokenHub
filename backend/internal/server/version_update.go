@@ -184,14 +184,12 @@ func (s *versionService) hasNativeReleaseAssets(release githubRelease, version s
 }
 
 func (s *versionService) nativeArchiveName(version string) (string, error) {
-	switch s.runtimeOS {
-	case "linux", "darwin":
-	default:
+	if s.runtimeOS != "linux" {
 		return "", fmt.Errorf("native release updates are not available for %s", s.runtimeOS)
 	}
 	switch s.runtimeArch {
 	case "amd64", "arm64":
-		return fmt.Sprintf("tokenhub_%s_%s_%s.tar.gz", version, s.runtimeOS, s.runtimeArch), nil
+		return fmt.Sprintf("tokenhub_%s_linux_%s.tar.gz", version, s.runtimeArch), nil
 	default:
 		return "", fmt.Errorf("native release updates are not available for %s/%s", s.runtimeOS, s.runtimeArch)
 	}

@@ -55,14 +55,14 @@ TokenHub separates everyday model usage, team governance, and platform administr
 - Usage analytics and request logs attributed to user, project, team, model, and cost center.
 - Identity source configuration for OAuth/OIDC enterprise sign-in, plus RBAC and audit trails.
 - Clean console with compact role-aware navigation, global search, light/dark mode, and split-view API documentation.
-- SQLite-first private deployment with native systemd/launchd and Docker Compose options.
+- SQLite-first private deployment with native systemd and Docker Compose options.
 - PostgreSQL supports multi-instance deployments: share state through remote PostgreSQL, scale frontend and backend replicas horizontally, and configure connection pools. See the [deployment guide](docs/deployment.md) and [PostgreSQL setup guide](docs/postgresql-setup.md).
 - Console language switching for English, Chinese, and Japanese.
 - TokenHub can also connect OpenAI Codex subscription resources and route selected local Codex CLI or desktop sessions through an isolated, recoverable Codex profile. See the [Codex integration guides](docs/codex-tokenhub-profile-quick-start.md).
 
 ## Quick Start
 
-Native Release on a Linux systemd host or macOS launchd host:
+Native Release on a Linux systemd host:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/wangle201210/TokenHub/main/deploy/native/install.sh \
@@ -90,7 +90,7 @@ Initial admin login:
 - Native install password: printed once by the installer
 - Docker password: the value of `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD`
 
-The native installer verifies Release checksums, installs a systemd or launchd service, and enables direct update, rollback, and restart controls in the version panel. The default Docker deployment runs the backend and console in one managed container and provides the same direct controls without mounting the Docker socket. Release bundles are stored in the `tokenhub-releases` volume so ordinary container restarts and recreations preserve a panel-applied update. Multi-instance Docker deployments keep operator-managed Compose updates so every replica changes version together. See the [deployment guide](docs/deployment.md) for both modes.
+The native installer verifies Release checksums, installs a systemd service, and enables direct update, rollback, and restart controls in the version panel. The default Docker deployment runs the backend and console in one managed container and provides the same direct controls without mounting the Docker socket. Release bundles are stored in the `tokenhub-releases` volume so ordinary container restarts and recreations preserve a panel-applied update. Multi-instance Docker deployments keep operator-managed Compose updates so every replica changes version together. See the [deployment guide](docs/deployment.md) for both modes.
 
 ## Documentation
 

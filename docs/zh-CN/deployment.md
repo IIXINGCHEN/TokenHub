@@ -90,9 +90,9 @@ docker compose --env-file deploy/.env \
 
 使用 `./deploy/test-multi-instance.sh` 运行真实的双实例 PostgreSQL E2E 测试。
 
-## 原生 Release + systemd/launchd
+## 原生 Release + systemd
 
-单机 Linux 使用 systemd，或 macOS 使用 launchd 时，可以选择原生 Release 安装方式。原生安装包支持 `linux/amd64`、`linux/arm64`、`darwin/amd64` 和 `darwin/arm64`，其中包含 Go 后端、独立运行的 Next.js 管理后台和匹配的 Node.js 运行时。
+单机 Linux 使用 systemd 时，可以选择原生 Release 安装方式。原生安装包支持 `linux/amd64` 和 `linux/arm64`，其中包含 Go 后端、独立运行的 Next.js 管理后台和匹配的 Node.js 运行时。
 
 下载安装脚本并检查内容，然后安装最新稳定版：
 
@@ -115,24 +115,13 @@ sudo env TOKENHUB_PUBLIC_HOST=tokenhub.example.com \
 - 配置与密钥：`/etc/tokenhub/tokenhub.env`
 - SQLite 数据库与备份：`/var/lib/tokenhub`
 - Linux systemd 单元：`/etc/systemd/system/tokenhub.service`
-- macOS LaunchDaemon：`/Library/LaunchDaemons/org.tokenhub.tokenhub.plist`
 
-在 macOS 上请通过 `sudo` 执行安装器；launchd 默认使用执行 `sudo` 的登录用户运行 TokenHub。只有需要使用另一个已存在的本地账号时，才设置 `TOKENHUB_SERVICE_USER`。
-
-需要修改公网地址、CORS Origin、端口、数据库或密钥时，编辑 `/etc/tokenhub/tokenhub.env`，然后重启服务。Linux 使用：
+需要修改公网地址、CORS Origin、端口、数据库或密钥时，编辑 `/etc/tokenhub/tokenhub.env`，然后重启服务：
 
 ```bash
 sudo systemctl restart tokenhub
 sudo systemctl status tokenhub
 sudo journalctl -u tokenhub -f
-```
-
-macOS 使用：
-
-```bash
-sudo launchctl kickstart -k system/org.tokenhub.tokenhub
-sudo launchctl print system/org.tokenhub.tokenhub
-tail -f /var/lib/tokenhub/tokenhub.log /var/lib/tokenhub/tokenhub-error.log
 ```
 
 安装脚本会先使用 `checksums.txt` 校验 Release 压缩包，再激活版本；升级时会保留配置和数据：
@@ -153,7 +142,7 @@ sudo env TOKENHUB_RELEASE_REPOSITORY=your-account/TokenHub \
   bash /tmp/tokenhub-install.sh install --version 0.3.3
 ```
 
-原生 Release 安装会在版本面板中显示为「原生 Release」。管理员可以直接在页面下载并校验更新或回退版本，然后点击「立即重启」，由 systemd 或 launchd 激活目标版本。每个 GitHub Release 必须包含对应平台的压缩包和 `checksums.txt`；发布 Release 后，`.github/workflows/native-release.yml` 会构建并附加这些文件。
+原生 Release 安装会在版本面板中显示为「原生 Release」。管理员可以直接在页面下载并校验更新或回退版本，然后点击「立即重启」，由 systemd 激活目标版本。每个 GitHub Release 必须包含 Linux 压缩包和 `checksums.txt`；发布 Release 后，`.github/workflows/native-release.yml` 会构建并附加 `linux/amd64` 和 `linux/arm64` 文件。
 
 ## Docker Compose
 

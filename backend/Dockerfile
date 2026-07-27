@@ -61,7 +61,6 @@ COPY --from=frontend-builder --chown=node:node /usr/local/bin/node /usr/local/li
 COPY --from=frontend-builder --chown=node:node /out/frontend /usr/local/lib/tokenhub-image/frontend
 COPY --chown=node:node deploy/native/tokenhub-run /usr/local/lib/tokenhub-image/bin/tokenhub-run
 COPY --chown=node:node deploy/native/tokenhub.service /usr/local/lib/tokenhub-image/deploy/tokenhub.service
-COPY --chown=node:node deploy/native/tokenhub.plist /usr/local/lib/tokenhub-image/deploy/tokenhub.plist
 COPY --chown=node:node data/model-catalog.yaml /usr/local/lib/tokenhub-image/catalog/model-catalog.yaml
 COPY --chown=node:node data/provider-catalog.json /usr/local/lib/tokenhub-image/catalog/provider-catalog.json
 COPY deploy/container/tokenhub-entrypoint /usr/local/bin/tokenhub-entrypoint

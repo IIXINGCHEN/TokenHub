@@ -55,14 +55,14 @@ TokenHub は、日常的なモデル利用、チームガバナンス、プラ�
 - ユーザー、プロジェクト、チーム、モデル、コストセンターに紐づく利用分析とリクエストログ。
 - OAuth/OIDC によるエンタープライズサインイン、RBAC、監査証跡に対応する ID ソース設定。
 - クリーンなコンソール: ロール別ナビゲーション、グローバル検索、ライト/ダーク切り替え、左ナビ + 右詳細の API ドキュメント。
-- SQLite-first のプライベートデプロイ向けに、ネイティブ systemd/launchd と Docker Compose の両方をサポート。
+- SQLite-first のプライベートデプロイ向けに、ネイティブ systemd と Docker Compose の両方をサポート。
 - PostgreSQL はマルチインスタンス構成に対応します。リモート PostgreSQL で状態を共有し、フロントエンドとバックエンドのレプリカを水平スケールできるほか、コネクションプールも設定できます。[デプロイガイド](docs/ja/deployment.md)を参照してください。
 - 管理コンソールは英語、中国語、日本語の切り替えに対応。
 - TokenHub は OpenAI Codex のサブスクリプションアカウントリソースにも接続できます。分離および復旧が可能な Codex Profile を使用し、指定したローカル Codex CLI またはデスクトップセッションを TokenHub 経由で実行できます。[Codex 接続ガイド](docs/ja/codex-tokenhub-profile-quick-start.md)を参照してください。
 
 ## クイックスタート
 
-Linux systemd または macOS launchd ホストでネイティブ Release を使用する場合:
+Linux systemd ホストでネイティブ Release を使用する場合:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/wangle201210/TokenHub/main/deploy/native/install.sh \
@@ -90,7 +90,7 @@ cp deploy/.env.example deploy/.env
 - ネイティブインストールのパスワード: インストーラーが一度だけ表示
 - Docker のパスワード: `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD` の設定値
 
-ネイティブインストーラーは Release のチェックサムを検証し、systemd または launchd サービスをインストールして、バージョンパネルから直接更新、ロールバック、再起動できるようにします。デフォルトの Docker デプロイは、バックエンドと管理コンソールを 1 つの管理対象コンテナで実行し、Docker Socket をマウントせずに同じ直接操作を提供します。Release バンドルは `tokenhub-releases` ボリュームへ保存されるため、通常のコンテナ再起動や再作成でも画面から適用した更新は保持されます。マルチインスタンス Docker では、全レプリカを同時に切り替えるため Compose による運用更新を維持します。詳細は[デプロイガイド](docs/ja/deployment.md)を参照してください。
+ネイティブインストーラーは Release のチェックサムを検証し、systemd サービスをインストールして、バージョンパネルから直接更新、ロールバック、再起動できるようにします。デフォルトの Docker デプロイは、バックエンドと管理コンソールを 1 つの管理対象コンテナで実行し、Docker Socket をマウントせずに同じ直接操作を提供します。Release バンドルは `tokenhub-releases` ボリュームへ保存されるため、通常のコンテナ再起動や再作成でも画面から適用した更新は保持されます。マルチインスタンス Docker では、全レプリカを同時に切り替えるため Compose による運用更新を維持します。詳細は[デプロイガイド](docs/ja/deployment.md)を参照してください。
 
 ## ドキュメント
 
