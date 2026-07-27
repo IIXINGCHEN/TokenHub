@@ -136,7 +136,20 @@ export function providerResourceToForm(item: ProviderResource) {
 }
 
 export function modelPayload(values: Record<string, string>) {
-  const payload = numberPayload(values, ["context_window", "input_price_usd_per_1m", "cache_read_price_usd_per_1m", "output_price_usd_per_1m", "embedding_price_usd_per_1m"]);
+  const payload = numberPayload(
+    {
+      name: values.name,
+      family: values.family,
+      modality: values.modality,
+      context_window: values.context_window,
+      input_price_usd_per_1m: values.input_price_usd_per_1m,
+      cache_read_price_usd_per_1m: values.cache_read_price_usd_per_1m,
+      output_price_usd_per_1m: values.output_price_usd_per_1m,
+      embedding_price_usd_per_1m: values.embedding_price_usd_per_1m,
+      status: values.status,
+    },
+    ["context_window", "input_price_usd_per_1m", "cache_read_price_usd_per_1m", "output_price_usd_per_1m", "embedding_price_usd_per_1m"],
+  );
   if (values.modality === "embedding") {
     payload.cache_read_price_usd_per_1m = 0;
   }
