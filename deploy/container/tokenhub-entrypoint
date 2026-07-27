@@ -46,9 +46,14 @@ validate_bundle() {
 
 install_image_bundle() {
   version="$1"
+  build_id="$2"
   target="$releases_dir/$version"
   if validate_bundle "$target" "$version"; then
-    return
+    target_build_id=""
+    [ ! -f "$target/BUILD_ID" ] || target_build_id="$(tr -d '[:space:]' <"$target/BUILD_ID")"
+    if [ "$target_build_id" = "$build_id" ]; then
+      return
+    fi
   fi
 
   stage="$releases_dir/.image-$version-$$"
@@ -83,9 +88,13 @@ case "$run_mode" in
 esac
 
 [ -f "$image_root/VERSION" ] || fail "image release VERSION is missing"
+[ -f "$image_root/BUILD_ID" ] || fail "image BUILD_ID is missing"
 image_version="$(tr -d '[:space:]' <"$image_root/VERSION")"
+image_build_id="$(tr -d '[:space:]' <"$image_root/BUILD_ID")"
 printf '%s\n' "$image_version" | grep -Eq '^[0-9A-Za-z][0-9A-Za-z._-]{0,120}$' ||
   fail "image release VERSION contains unsupported characters"
+printf '%s\n' "$image_build_id" | grep -Eq '^[0-9a-f]{64}$' ||
+  fail "image BUILD_ID is invalid"
 
 if [ "$(id -u)" -eq 0 ]; then
   mkdir -p "$releases_dir" /app/data
@@ -95,18 +104,24 @@ fi
 
 mkdir -p "$releases_dir"
 last_image_version=""
-[ ! -f "$state_file" ] || last_image_version="$(tr -d '[:space:]' <"$state_file")"
+last_image_build_id=""
+if [ -f "$state_file" ]; then
+  last_image_version="$(sed -n '1p' "$state_file" | tr -d '[:space:]')"
+  last_image_build_id="$(sed -n '2p' "$state_file" | tr -d '[:space:]')"
+fi
 current_valid=false
 if [ -L "$current_link" ] && readlink -f "$current_link" >/dev/null 2>&1; then
   current_valid=true
 elif [ -e "$current_link" ]; then
   fail "current release path exists but is not a symbolic link"
 fi
-if [ "$current_valid" != true ] || [ "$last_image_version" != "$image_version" ]; then
-  install_image_bundle "$image_version"
+if [ "$current_valid" != true ] ||
+  [ "$last_image_version" != "$image_version" ] ||
+  [ "$last_image_build_id" != "$image_build_id" ]; then
+  install_image_bundle "$image_version" "$image_build_id"
   activate_release "$image_version"
   state_tmp="$install_root/.container-image-version-$$"
-  printf '%s\n' "$image_version" >"$state_tmp"
+  printf '%s\n%s\n' "$image_version" "$image_build_id" >"$state_tmp"
   mv -f "$state_tmp" "$state_file"
 fi
 

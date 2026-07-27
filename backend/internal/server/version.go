@@ -159,7 +159,7 @@ func (s *versionService) checkUpdate(ctx context.Context, force bool) systemVers
 		return info
 	}
 
-	latestVersion, latest, ok := parseSemanticVersion(release.TagName)
+	latestVersion, latest, ok := parseReleaseTag(release.TagName)
 	if !ok {
 		info := s.baseVersionInfo()
 		info.Warning = "Latest GitHub release does not use a semantic version"
@@ -214,7 +214,7 @@ func (s *versionService) listRollbackVersions(ctx context.Context) ([]rollbackVe
 		if release.Draft || release.Prerelease {
 			continue
 		}
-		canonical, parsed, ok := parseSemanticVersion(release.TagName)
+		canonical, parsed, ok := parseReleaseTag(release.TagName)
 		if !ok {
 			continue
 		}
@@ -473,6 +473,14 @@ func parseSemanticVersion(raw string) (string, semanticVersion, bool) {
 		canonical += "-" + strings.Join(identifiers, ".")
 	}
 	return canonical, parsed, true
+}
+
+func parseReleaseTag(raw string) (string, semanticVersion, bool) {
+	value := strings.TrimSpace(raw)
+	if !strings.HasPrefix(value, "v") {
+		return "", semanticVersion{}, false
+	}
+	return parseSemanticVersion(value)
 }
 
 func validPrereleaseIdentifier(value string) bool {

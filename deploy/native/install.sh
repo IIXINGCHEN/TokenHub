@@ -83,7 +83,10 @@ validate_identifiers() {
 
 normalize_version() {
   local value="${1#v}"
-  [[ "$value" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] ||
+  local numeric_identifier='(0|[1-9][0-9]*)'
+  local prerelease_identifier='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+  local semver_pattern="^${numeric_identifier}\.${numeric_identifier}\.${numeric_identifier}(-${prerelease_identifier}(\.${prerelease_identifier})*)?$"
+  [[ "$value" =~ $semver_pattern ]] ||
     fail "invalid semantic version: $1"
   printf '%s\n' "$value"
 }
@@ -157,6 +160,7 @@ latest_version() {
     fail "unable to query the latest GitHub Release"
   tag="$(printf '%s\n' "$response" | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p')"
   [ -n "$tag" ] || fail "latest GitHub Release has no tag_name"
+  [[ "$tag" == v* ]] || fail "latest GitHub Release tag must start with v"
   normalize_version "$tag"
 }
 
@@ -198,6 +202,16 @@ default_public_host() {
   printf '%s\n' "${host:-127.0.0.1}"
 }
 
+url_host() {
+  local host="${1#[}"
+  host="${host%]}"
+  if [[ "$host" == *:* ]]; then
+    printf '[%s]\n' "$host"
+    return
+  fi
+  printf '%s\n' "$host"
+}
+
 write_initial_config() {
   local env_file="$CONFIG_DIR/tokenhub.env"
   local config_owner="root"
@@ -218,11 +232,13 @@ write_initial_config() {
   local frontend_url
   local api_base_url
   local allowed_origins
+  local public_url_host
   local admin_token
   local secret_key
   public_host="$(default_public_host)"
-  public_base_url="${TOKENHUB_PUBLIC_BASE_URL:-http://${public_host}:${BACKEND_PORT}}"
-  frontend_url="http://${public_host}:${FRONTEND_PORT}"
+  public_url_host="$(url_host "$public_host")"
+  public_base_url="${TOKENHUB_PUBLIC_BASE_URL:-http://${public_url_host}:${BACKEND_PORT}}"
+  frontend_url="http://${public_url_host}:${FRONTEND_PORT}"
   api_base_url="${TOKENHUB_API_BASE_URL:-$public_base_url}"
   allowed_origins="${TOKENHUB_CORS_ALLOWED_ORIGINS:-$frontend_url}"
   admin_token="$(random_hex 32)"
@@ -431,7 +447,7 @@ install_or_upgrade() {
   restart_service
 
   info "TokenHub v$target_version is running"
-  info "Admin console: http://$(default_public_host):${FRONTEND_PORT}"
+  info "Admin console: http://$(url_host "$(default_public_host)"):${FRONTEND_PORT}"
   if [ -n "$GENERATED_ADMIN_PASSWORD" ]; then
     info "Initial admin username: admin"
     info "Initial admin password: $GENERATED_ADMIN_PASSWORD"

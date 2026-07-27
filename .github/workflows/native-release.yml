@@ -29,6 +29,9 @@ jobs:
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
     steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
       - name: Validate release tag
         id: release
         env:
@@ -42,14 +45,7 @@ jobs:
             raw_tag="$RELEASE_TAG"
           fi
 
-          numeric='(0|[1-9][0-9]*)'
-          prerelease='[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*'
-          if [[ ! "$raw_tag" =~ ^v(${numeric}\.${numeric}\.${numeric}(-${prerelease})?)$ ]]; then
-            echo "Release tag must be semantic, for example v0.3.3" >&2
-            exit 1
-          fi
-
-          version="${BASH_REMATCH[1]}"
+          version="$(.github/release/normalize-release-tag.sh "$raw_tag")"
           echo "tag=v${version}" >>"$GITHUB_OUTPUT"
           echo "version=${version}" >>"$GITHUB_OUTPUT"
 

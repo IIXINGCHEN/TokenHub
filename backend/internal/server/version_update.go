@@ -82,7 +82,7 @@ func (s *versionService) performNativeUpdate(ctx context.Context) (string, error
 	if err != nil {
 		return "", err
 	}
-	targetVersion, target, ok := parseSemanticVersion(release.TagName)
+	targetVersion, target, ok := parseReleaseTag(release.TagName)
 	if !ok {
 		return "", errors.New("latest GitHub Release does not use a semantic version")
 	}
@@ -128,7 +128,7 @@ func (s *versionService) rollbackNativeRelease(ctx context.Context, requestedVer
 		if release.Draft || release.Prerelease {
 			continue
 		}
-		canonical, _, valid := parseSemanticVersion(release.TagName)
+		canonical, _, valid := parseReleaseTag(release.TagName)
 		if valid && canonical == targetVersion {
 			selected = release
 			break
@@ -631,6 +631,32 @@ func nativeOperationHTTPError(err error, action string) error {
 	}
 }
 
+func (s *Server) recordSystemVersionAudit(
+	r *http.Request,
+	actor AdminUser,
+	action string,
+	targetVersion string,
+	status string,
+	message string,
+) {
+	targetVersion = normalizeDisplayVersion(targetVersion)
+	after := map[string]any{}
+	if targetVersion != "" {
+		after["target_version"] = targetVersion
+	}
+	s.recordAdminAuditWithStatus(
+		r,
+		actor,
+		action,
+		"system_version",
+		targetVersion,
+		status,
+		message,
+		map[string]any{"current_version": s.versions.currentVersion},
+		after,
+	)
+}
+
 func (s *Server) handleAdminSystemUpdate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
@@ -645,9 +671,11 @@ func (s *Server) handleAdminSystemUpdate(w http.ResponseWriter, r *http.Request)
 	defer cancel()
 	version, err := s.versions.performNativeUpdate(ctx)
 	if err != nil {
+		s.recordSystemVersionAudit(r, actor, "update", "", "failed", err.Error())
 		writeError(w, r, nativeOperationHTTPError(err, "update"))
 		return
 	}
+	s.recordSystemVersionAudit(r, actor, "update", version, "success", "")
 	log.Printf("[tokenhub] managed update to v%s applied by admin %s", version, actor.ID)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"message":        "Update applied. Restart TokenHub to use the new version.",
@@ -669,7 +697,9 @@ func (s *Server) handleAdminSystemRollback(w http.ResponseWriter, r *http.Reques
 		Version string `json:"version"`
 	}
 	if err := decodeJSON(r, &request); err != nil {
-		writeError(w, r, NewHTTPError(http.StatusBadRequest, "invalid_request", "A rollback version is required"))
+		requestErr := NewHTTPError(http.StatusBadRequest, "invalid_request", "A rollback version is required")
+		s.recordSystemVersionAudit(r, actor, "rollback", "", "failed", requestErr.Message)
+		writeError(w, r, requestErr)
 		return
 	}
 
@@ -677,9 +707,11 @@ func (s *Server) handleAdminSystemRollback(w http.ResponseWriter, r *http.Reques
 	defer cancel()
 	version, err := s.versions.rollbackNativeRelease(ctx, request.Version)
 	if err != nil {
+		s.recordSystemVersionAudit(r, actor, "rollback", request.Version, "failed", err.Error())
 		writeError(w, r, nativeOperationHTTPError(err, "rollback"))
 		return
 	}
+	s.recordSystemVersionAudit(r, actor, "rollback", version, "success", "")
 	log.Printf("[tokenhub] managed rollback to v%s applied by admin %s", version, actor.ID)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"message":        "Rollback applied. Restart TokenHub to use the selected version.",
@@ -698,16 +730,23 @@ func (s *Server) handleAdminSystemRestart(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if !s.versions.supportsManagedUpdates() {
+		s.recordSystemVersionAudit(r, actor, "restart", s.versions.currentVersion, "failed", errNativeOperationUnsupported.Error())
 		writeError(w, r, nativeOperationHTTPError(errNativeOperationUnsupported, "restart"))
 		return
 	}
 	select {
 	case s.versions.operation <- struct{}{}:
 	default:
+		s.recordSystemVersionAudit(r, actor, "restart", s.versions.currentVersion, "failed", errNativeOperationInProgress.Error())
 		writeError(w, r, nativeOperationHTTPError(errNativeOperationInProgress, "restart"))
 		return
 	}
 
+	targetVersion := s.versions.pendingNativeRestartVersion()
+	if targetVersion == "" {
+		targetVersion = s.versions.currentVersion
+	}
+	s.recordSystemVersionAudit(r, actor, "restart", targetVersion, "success", "")
 	log.Printf("[tokenhub] managed restart requested by admin %s", actor.ID)
 	writeJSON(w, http.StatusOK, map[string]any{"message": "TokenHub restart initiated"})
 	time.AfterFunc(500*time.Millisecond, func() {

@@ -28,6 +28,9 @@ jobs:
       final_tags: ${{ steps.tags.outputs.final_tags }}
       staging_tag: ${{ steps.tags.outputs.staging_tag }}
     steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
       - name: Validate tags
         id: tags
         env:
@@ -43,19 +46,13 @@ jobs:
           final_tags=()
 
           if [[ "$EVENT_NAME" == "release" ]]; then
-            numeric_identifier='(0|[1-9][0-9]*)'
-            prerelease_identifier='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
-            semver_pattern="^v?${numeric_identifier}\.${numeric_identifier}\.${numeric_identifier}(-${prerelease_identifier}(\.${prerelease_identifier})*)?$"
-            if [[ ! "$RELEASE_TAG" =~ $semver_pattern ]]; then
-              echo "Release tag must be semantic, for example v0.3.1 or v0.3.1-rc.1" >&2
-              exit 1
-            fi
-
-            version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}${BASH_REMATCH[4]}"
+            version="$(.github/release/normalize-release-tag.sh "$RELEASE_TAG")"
+            stable_version="${version%%-*}"
+            IFS=. read -r major minor _patch <<<"$stable_version"
             build_version="$version"
             final_tags+=("$version")
-            if [[ "$RELEASE_PRERELEASE" != "true" && -z "${BASH_REMATCH[4]}" ]]; then
-              final_tags+=("${BASH_REMATCH[1]}.${BASH_REMATCH[2]}" "latest")
+            if [[ "$RELEASE_PRERELEASE" != "true" && "$version" != *-* ]]; then
+              final_tags+=("${major}.${minor}" "latest")
             fi
           else
             if [[ "$MANUAL_TAG" != "edge" && ! "$MANUAL_TAG" =~ ^manual-[A-Za-z0-9_][A-Za-z0-9_.-]{0,120}$ ]]; then
@@ -123,6 +120,7 @@ jobs:
             org.opencontainers.image.version=${{ needs.prepare.outputs.build_version }}
           build-args: |
             TOKENHUB_VERSION=${{ needs.prepare.outputs.build_version }}
+            TOKENHUB_BUILD_TYPE=release
           cache-from: type=gha,scope=managed-tokenhub
           cache-to: type=gha,mode=max,scope=managed-tokenhub,ignore-error=true
 

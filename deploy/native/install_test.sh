@@ -35,6 +35,10 @@ create_bundle() {
 
 [ "$(normalize_version v0.3.3)" = "0.3.3" ] || fail_test "version normalization failed"
 assert_fails normalize_version "0.3"
+assert_fails normalize_version "v0.3.3-01"
+[ "$(url_host "127.0.0.1")" = "127.0.0.1" ] || fail_test "IPv4 URL host normalization failed"
+[ "$(url_host "2001:db8::1")" = "[2001:db8::1]" ] || fail_test "IPv6 URL host normalization failed"
+[ "$(url_host "[2001:db8::1]")" = "[2001:db8::1]" ] || fail_test "bracketed IPv6 URL host normalization failed"
 validate_port "08" "test port"
 assert_fails validate_port "0" "test port"
 assert_fails validate_safe_path "/opt/../etc" "test path"
@@ -77,11 +81,10 @@ trap 'exit 0' TERM
 while :; do sleep 1; done
 EOF
 : >"$runner_root/frontend/server.js"
-printf 'TOKENHUB_RUNNER_MARKER=loaded\n' >"$runner_root/tokenhub.env"
 chmod 0755 "$runner_root/bin/tokenhub-run" "$runner_root/bin/tokenhub" "$runner_root/bin/node"
 
 set +e
-TOKENHUB_CONFIG_FILE="$runner_root/tokenhub.env" "$runner_root/bin/tokenhub-run"
+TOKENHUB_RUNNER_MARKER=loaded "$runner_root/bin/tokenhub-run"
 runner_status=$?
 set -e
 [ "$runner_status" -eq 7 ] || fail_test "runner returned $runner_status instead of backend status 7"

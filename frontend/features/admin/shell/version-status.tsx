@@ -732,10 +732,10 @@ function VersionCommand({
 }
 
 function composeVersionCommand(version: string) {
-  const compose = "docker compose --env-file deploy/.env -f deploy/docker-compose.yml";
+  const compose = "docker compose --env-file deploy/.env -f deploy/docker-compose.remote-postgres.yml";
   return [
     `TOKENHUB_IMAGE_TAG=${version} ${compose} pull`,
-    `TOKENHUB_IMAGE_TAG=${version} ${compose} up -d`,
+    `TOKENHUB_IMAGE_TAG=${version} ${compose} up -d --remove-orphans`,
   ].join("\n");
 }
 

@@ -77,13 +77,11 @@ In multi-instance mode:
 - The backend persists a local Provider-catalog snapshot in PostgreSQL, so replicas serve the same catalog and a missing local file falls back to the seeded built-in templates.
 - Coordination failures release provider capacity without incorrectly marking a healthy model provider as failed.
 
-Set the remote `TOKENHUB_DATABASE_URL`, public gateway URL, production secrets, and trusted proxy CIDR, then run:
+Set the remote `TOKENHUB_DATABASE_URL`, public gateway URL, production secrets, trusted proxy CIDR, and the desired `TOKENHUB_BACKEND_REPLICAS` and `TOKENHUB_FRONTEND_REPLICAS` values in `deploy/.env`, then run:
 
 ```bash
 docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.remote-postgres.yml up -d \
-  --scale tokenhub-backend=3 \
-  --scale tokenhub-frontend=2
+  -f deploy/docker-compose.remote-postgres.yml up -d
 ```
 
 All replicas must use the same `TOKENHUB_SECRET_KEY`. Size `TOKENHUB_DB_MAX_OPEN_CONNS` per replica so the combined pool remains below the PostgreSQL connection limit. Never share a SQLite file between backend replicas.
@@ -102,7 +100,7 @@ curl -fsSL https://raw.githubusercontent.com/astaxie/TokenHub/main/deploy/native
 sudo bash /tmp/tokenhub-install.sh install
 ```
 
-Set `TOKENHUB_PUBLIC_HOST` when the server's first detected IP is not the address users will open:
+Set `TOKENHUB_PUBLIC_HOST` when the server's first detected IP is not the address users will open. IPv6 literals are automatically bracketed when URLs are generated:
 
 ```bash
 sudo env TOKENHUB_PUBLIC_HOST=tokenhub.example.com \
@@ -142,7 +140,7 @@ sudo env TOKENHUB_RELEASE_REPOSITORY=your-account/TokenHub \
   bash /tmp/tokenhub-install.sh install --version 0.3.3
 ```
 
-Native Release installations are labeled `Native Release` in the version panel. Administrators can download and verify an update or rollback directly from the panel, then select **Restart now** to activate it through systemd. Each GitHub Release must contain the Linux archive and `checksums.txt`; `.github/workflows/native-release.yml` builds and attaches the `linux/amd64` and `linux/arm64` assets when a Release is published.
+Native Release installations are labeled `Native Release` in the version panel. Administrators can download and verify an update or rollback directly from the panel, then select **Restart now** to activate it through systemd. Each GitHub Release tag must be a strict `v`-prefixed semantic version and contain the Linux archive and `checksums.txt`; `.github/workflows/native-release.yml` builds and attaches the `linux/amd64` and `linux/arm64` assets when a Release is published.
 
 ## Docker Compose
 
@@ -162,6 +160,8 @@ Edit `deploy/.env` before starting:
 - `TOKENHUB_API_BASE_URL`: Backend URL used by the browser admin console. The frontend server reads it at runtime. The deprecated `NEXT_PUBLIC_API_BASE_URL` remains a fallback for one compatibility cycle.
 - `TOKENHUB_BACKEND_PORT`: Host port for the backend. Default: `8080`.
 - `TOKENHUB_FRONTEND_PORT`: Host port for the admin console. Default: `3000`.
+- `TOKENHUB_BACKEND_REPLICAS`: Backend replica count for remote PostgreSQL Compose. Default: `2`.
+- `TOKENHUB_FRONTEND_REPLICAS`: Frontend replica count for remote PostgreSQL Compose. Default: `2`.
 
 Start the stack from the repository root:
 
@@ -183,7 +183,7 @@ Use a different environment file with `./deploy/install.sh --env-file /path/to/d
 
 GitHub Actions publishes the complete `ghcr.io/astaxie/tokenhub-backend` image for `linux/amd64` and `linux/arm64`. Despite the compatibility-preserving image name, it contains the backend, standalone Next.js console, Node.js runtime, and the container supervisor.
 
-- Publishing a GitHub Release builds the exact semantic-version tag. A non-prerelease also updates the major-minor tag and `latest`.
+- Publishing a GitHub Release with a strict `v`-prefixed semantic tag builds the exact numeric image tag. A non-prerelease also updates the major-minor tag and `latest`.
 - `workflow_dispatch` can publish `edge` or an isolated `manual-*` tag. It cannot overwrite release or `latest` tags.
 - Pull requests do not build or push container images.
 - Merges to `main` do not publish images.
@@ -194,7 +194,7 @@ The first GHCR publication creates a private package. The repository owner must 
 
 ### Docker version status and rollback
 
-Platform administrators can select the version badge below the TokenHub logo to inspect the running version, check the latest stable GitHub Release, and list up to three older stable releases. Release builds receive their exact version from the publication workflow; local source builds use the package version and are labeled as source builds.
+Platform administrators can select the version badge below the TokenHub logo to inspect the running version, check the latest stable GitHub Release, and list up to three older stable releases. Release builds receive their exact version from the publication workflow; local source builds use the package version and are labeled as source builds. Managed update, rollback, and restart requests are recorded in the administrator audit log.
 
 The check makes a time-limited outbound HTTPS request to the public GitHub Releases API and caches successful results for 20 minutes. It checks `astaxie/TokenHub` by default. Maintainers can set `TOKENHUB_RELEASE_REPOSITORY` to another trusted public `owner/repository` when validating releases from a fork. A GitHub outage or a repository without releases does not affect gateway traffic. The panel reports the unavailable state and keeps the current version visible.
 
@@ -206,7 +206,7 @@ TOKENHUB_RELEASE_REPOSITORY=your-account/TokenHub ./start.sh
 
 The default SQLite and local PostgreSQL Compose files run a single managed application container. An administrator can select **Update now**, wait for the checksummed platform Release bundle to be installed under the `tokenhub-releases` volume, and then select **Restart now**. The process exits after responding; Docker's `restart: unless-stopped` policy starts the selected backend and frontend together. The container never mounts the Docker socket or controls the host daemon.
 
-The image version is the baseline when a newly pulled image first uses the volume. Panel-applied updates survive ordinary restarts and container recreation with the same image because `current` and all installed Release bundles are stored in `tokenhub-releases`. Pulling a different image tag intentionally makes that image version the new baseline. The remote PostgreSQL multi-instance Compose file disables in-place updates because changing only the replica that receives an admin request would split the cluster; its panel continues to provide operator-run Compose commands. Source deployments continue to show manual guidance. Before rollback, create a database backup and confirm that the target release supports the current schema.
+The image version and content fingerprint form the baseline when a newly pulled image first uses the volume. Panel-applied updates survive ordinary restarts and container recreation with the same image because `current` and all installed Release bundles are stored in `tokenhub-releases`. Pulling a different image or rebuilding changed source under the same version activates the new image content. The remote PostgreSQL multi-instance Compose file disables in-place updates because changing only the replica that receives an admin request would split the cluster; its panel provides commands for `docker-compose.remote-postgres.yml`, which preserves the replica counts configured in `deploy/.env`. Source deployments continue to show manual guidance. Before rollback, create a database backup and confirm that the target release supports the current schema.
 
 ### Optional local build
 

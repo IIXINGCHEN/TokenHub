@@ -169,7 +169,8 @@ func TestNativeVersionInfoReportsPendingRestartAfterActivation(t *testing.T) {
 }
 
 func TestContainerDeploymentRejectsOnlineUpdateEndpoint(t *testing.T) {
-	app := NewWithConfig(NewMemoryStore(), Config{
+	store := NewMemoryStore()
+	app := NewWithConfig(store, Config{
 		AdminToken:     "native-test-admin-token",
 		AppVersion:     "0.3.1",
 		BuildType:      releaseBuildType,
@@ -193,6 +194,7 @@ func TestContainerDeploymentRejectsOnlineUpdateEndpoint(t *testing.T) {
 	if payload.Error.Code != "managed_update_unavailable" {
 		t.Fatalf("container update error code = %q", payload.Error.Code)
 	}
+	assertSystemVersionAudit(t, store, "update", "failed", "")
 }
 
 func TestManagedContainerReportsUpdateSupportAndPendingRestart(t *testing.T) {
@@ -223,7 +225,8 @@ func TestManagedContainerReportsUpdateSupportAndPendingRestart(t *testing.T) {
 }
 
 func TestNativeRestartEndpointSignalsProcessAfterResponse(t *testing.T) {
-	app := NewWithConfig(NewMemoryStore(), Config{
+	store := NewMemoryStore()
+	app := NewWithConfig(store, Config{
 		AdminToken:     "native-test-admin-token",
 		AppVersion:     "0.3.2",
 		BuildType:      releaseBuildType,
@@ -248,6 +251,21 @@ func TestNativeRestartEndpointSignalsProcessAfterResponse(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("native restart callback was not invoked")
 	}
+	assertSystemVersionAudit(t, store, "restart", "success", "0.3.2")
+}
+
+func assertSystemVersionAudit(t *testing.T, store *MemoryStore, action, status, resourceID string) {
+	t.Helper()
+	for _, event := range store.ListAuditEvents() {
+		if event.Action != action || event.ResourceType != "system_version" {
+			continue
+		}
+		if event.Status != status || event.ResourceID != resourceID {
+			t.Fatalf("system version audit = %+v, want action=%s status=%s resource=%s", event, action, status, resourceID)
+		}
+		return
+	}
+	t.Fatalf("missing %s system version audit event: %+v", action, store.ListAuditEvents())
 }
 
 func TestValidateNativeAssetURL(t *testing.T) {

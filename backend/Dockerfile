@@ -26,6 +26,7 @@ FROM golang:1.26-alpine AS backend-builder
 WORKDIR /src
 ARG GOPROXY=https://proxy.golang.org,direct
 ARG TOKENHUB_VERSION=0.3.0
+ARG TOKENHUB_BUILD_TYPE=source
 ENV GOPROXY=$GOPROXY
 RUN apk add --no-cache gcc musl-dev
 COPY backend/go.mod ./backend/go.mod
@@ -33,10 +34,11 @@ COPY backend/go.sum ./backend/go.sum
 COPY backend/cmd ./backend/cmd
 COPY backend/internal ./backend/internal
 RUN cd backend && \
+    case "$TOKENHUB_BUILD_TYPE" in source|release) ;; *) exit 1 ;; esac && \
     CGO_ENABLED=1 go build \
       -tags "netgo osusergo" \
       -trimpath \
-      -ldflags="-s -w -linkmode external -extldflags '-static' -X main.buildVersion=${TOKENHUB_VERSION} -X main.buildType=release -X main.deploymentType=container" \
+      -ldflags="-s -w -linkmode external -extldflags '-static' -X main.buildVersion=${TOKENHUB_VERSION} -X main.buildType=${TOKENHUB_BUILD_TYPE} -X main.deploymentType=container" \
       -o /out/tokenhub ./cmd/tokenhub
 
 FROM debian:bookworm-slim
@@ -74,6 +76,11 @@ RUN ln -s /usr/local/lib/tokenhub-image/bin/node /usr/local/bin/node && \
       /usr/local/lib/tokenhub-image/bin/node \
       /usr/local/lib/tokenhub-image/bin/tokenhub \
       /usr/local/lib/tokenhub-image/bin/tokenhub-run && \
+    find /usr/local/lib/tokenhub-image -type f -print0 | \
+      sort -z | \
+      xargs -0 sha256sum | \
+      sha256sum | \
+      cut -d ' ' -f 1 >/usr/local/lib/tokenhub-image/BUILD_ID && \
     chown -R node:node /usr/local/lib/tokenhub-image && \
     mkdir -p /app/data /opt/tokenhub && \
     chown node:node /app/data /opt/tokenhub

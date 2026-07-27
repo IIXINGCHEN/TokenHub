@@ -77,13 +77,11 @@ flowchart TB
 - バックエンドはローカル Provider カタログのスナップショットを PostgreSQL に永続化するため、全レプリカで同じカタログを使用できます。ローカルファイルがない場合は、データベースへ保存された組み込みテンプレートにフォールバックします。
 - データベースの調整障害では Provider の容量だけを解放し、正常なモデル Provider を誤って失敗扱いにしません。
 
-リモート `TOKENHUB_DATABASE_URL`、公開ゲートウェイ URL、本番用シークレット、信頼するプロキシ CIDR を設定して実行します。
+`deploy/.env` にリモート `TOKENHUB_DATABASE_URL`、公開ゲートウェイ URL、本番用シークレット、信頼するプロキシ CIDR、および必要な `TOKENHUB_BACKEND_REPLICAS` と `TOKENHUB_FRONTEND_REPLICAS` を設定して実行します。
 
 ```bash
 docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.remote-postgres.yml up -d \
-  --scale tokenhub-backend=3 \
-  --scale tokenhub-frontend=2
+  -f deploy/docker-compose.remote-postgres.yml up -d
 ```
 
 すべてのレプリカで同じ `TOKENHUB_SECRET_KEY` を使用してください。`TOKENHUB_DB_MAX_OPEN_CONNS` はレプリカ単位なので、合計接続数が PostgreSQL の上限を下回るように設定します。SQLite ファイルを複数のバックエンドで共有してはいけません。
@@ -102,7 +100,7 @@ curl -fsSL https://raw.githubusercontent.com/astaxie/TokenHub/main/deploy/native
 sudo bash /tmp/tokenhub-install.sh install
 ```
 
-サーバーが自動検出する最初の IP が実際のアクセス先でない場合は、`TOKENHUB_PUBLIC_HOST` を設定します。
+サーバーが自動検出する最初の IP が実際のアクセス先でない場合は、`TOKENHUB_PUBLIC_HOST` を設定します。IPv6 リテラルを使用すると、URL の生成時に角括弧が自動的に追加されます。
 
 ```bash
 sudo env TOKENHUB_PUBLIC_HOST=tokenhub.example.com \
@@ -142,7 +140,7 @@ sudo env TOKENHUB_RELEASE_REPOSITORY=your-account/TokenHub \
   bash /tmp/tokenhub-install.sh install --version 0.3.3
 ```
 
-ネイティブ Release インストールは、バージョンパネルに「ネイティブ Release」と表示されます。管理者はパネルから更新またはロールバックを直接ダウンロードして検証し、「今すぐ再起動」を選択して systemd で対象バージョンを有効化できます。各 GitHub Release には Linux アーカイブと `checksums.txt` が必要です。Release の公開時に `.github/workflows/native-release.yml` が `linux/amd64` と `linux/arm64` のファイルをビルドして添付します。
+ネイティブ Release インストールは、バージョンパネルに「ネイティブ Release」と表示されます。管理者はパネルから更新またはロールバックを直接ダウンロードして検証し、「今すぐ再起動」を選択して systemd で対象バージョンを有効化できます。各 GitHub Release タグは `v` で始まる厳密なセマンティックバージョンで、Linux アーカイブと `checksums.txt` を含む必要があります。Release の公開時に `.github/workflows/native-release.yml` が `linux/amd64` と `linux/arm64` のファイルをビルドして添付します。
 
 ## Docker Compose
 
@@ -162,6 +160,8 @@ cp deploy/.env.example deploy/.env
 - `TOKENHUB_API_BASE_URL`: ブラウザの管理コンソールが使用するバックエンド URL。フロントエンドサーバーが実行時に読み取ります。非推奨の `NEXT_PUBLIC_API_BASE_URL` は、1 回の互換期間に限りフォールバックとして残します。
 - `TOKENHUB_BACKEND_PORT`: バックエンドのホスト側ポート。デフォルトは `8080`。
 - `TOKENHUB_FRONTEND_PORT`: 管理コンソールのホスト側ポート。デフォルトは `3000`。
+- `TOKENHUB_BACKEND_REPLICAS`: リモート PostgreSQL Compose のバックエンドレプリカ数。デフォルトは `2`。
+- `TOKENHUB_FRONTEND_REPLICAS`: リモート PostgreSQL Compose のフロントエンドレプリカ数。デフォルトは `2`。
 
 リポジトリルートから起動します。
 
@@ -183,7 +183,7 @@ cp deploy/.env.example deploy/.env
 
 GitHub Actions は `linux/amd64` と `linux/arm64` 向けに完全な `ghcr.io/astaxie/tokenhub-backend` イメージを公開します。互換性のためイメージ名は維持しますが、バックエンド、スタンドアロン Next.js コンソール、Node.js ランタイム、コンテナスーパーバイザーを含みます。
 
-- GitHub Release を公開すると、完全なセマンティックバージョンのタグを自動生成します。プレリリースでない場合は、メジャー・マイナータグと `latest` も更新します。
+- 厳密な `v` プレフィックス付きセマンティックタグで GitHub Release を公開すると、対応する数値イメージタグを自動生成します。プレリリースでない場合は、メジャー・マイナータグと `latest` も更新します。
 - `workflow_dispatch` では `edge` または分離された `manual-*` タグのみを公開でき、正式なリリースタグや `latest` は上書きできません。
 - PR ではコンテナイメージをビルドまたは push しません。
 - `main` へのマージではイメージを公開しません。
@@ -194,7 +194,7 @@ GHCR で初めて公開した Package はデフォルトで非公開です。匿
 
 ### Docker のバージョン状態とロールバック
 
-プラットフォーム管理者は TokenHub ロゴの下にあるバージョンバッジを選択すると、実行中のバージョン、最新の安定版 GitHub Release、最大 3 件の過去の安定版を確認できます。正式なイメージビルドには公開ワークフローから正確なバージョンが設定され、ローカルのソースビルドにはパッケージバージョンとソースビルドの表示が使用されます。
+プラットフォーム管理者は TokenHub ロゴの下にあるバージョンバッジを選択すると、実行中のバージョン、最新の安定版 GitHub Release、最大 3 件の過去の安定版を確認できます。正式なイメージビルドには公開ワークフローから正確なバージョンが設定され、ローカルのソースビルドにはパッケージバージョンとソースビルドの表示が使用されます。管理対象の更新、ロールバック、再起動リクエストは管理者監査ログに記録されます。
 
 バージョン確認は、タイムアウト付きの送信 HTTPS リクエストで公開 GitHub Releases API にアクセスし、成功結果を 20 分間キャッシュします。デフォルトでは `astaxie/TokenHub` を確認します。fork の Release を検証する場合、管理者は `TOKENHUB_RELEASE_REPOSITORY` に信頼できる公開 `owner/repository` を設定できます。GitHub の障害や Release がまだない状態でもゲートウェイトラフィックには影響せず、パネルは現在のバージョンを保ったまま利用不可の状態を表示します。
 
@@ -206,7 +206,7 @@ TOKENHUB_RELEASE_REPOSITORY=your-account/TokenHub ./start.sh
 
 デフォルトの SQLite およびローカル PostgreSQL Compose は、1 つの管理対象アプリケーションコンテナを使用します。管理者は「今すぐ更新」を選択し、チェックサム検証済みのプラットフォーム Release バンドルが `tokenhub-releases` ボリュームへインストールされた後に「今すぐ再起動」を選択できます。応答後にプロセスが終了し、Docker の `restart: unless-stopped` が対象バージョンのバックエンドとフロントエンドを同時に起動します。Docker Socket のマウントやホスト daemon の操作は行いません。
 
-新しく取得したイメージがこのボリュームを初めて使用すると、そのイメージバージョンが基準になります。画面から適用したバージョン、`current` リンク、履歴 Release は `tokenhub-releases` に保存されるため、同じイメージでの通常の再起動やコンテナ再作成でも更新結果は保持されます。異なるイメージタグを取得した場合は、そのイメージバージョンが新しい基準になります。リモート PostgreSQL のマルチインスタンス Compose では、管理リクエストを受けた 1 レプリカだけが変わることによるバージョン分裂を防ぐため、インプレース更新を無効化し、運用者向け Compose コマンドを表示します。ソースデプロイでは手動更新の案内を維持します。ロールバック前にはデータベースをバックアップし、対象リリースが現在のスキーマをサポートすることを確認してください。
+新しく取得したイメージがこのボリュームを初めて使用すると、そのイメージバージョンとコンテンツフィンガープリントが基準になります。画面から適用したバージョン、`current` リンク、履歴 Release は `tokenhub-releases` に保存されるため、同じイメージでの通常の再起動やコンテナ再作成でも更新結果は保持されます。別のイメージを取得した場合や、同じバージョンで異なるソースを再ビルドした場合は、新しいイメージ内容が有効化されます。リモート PostgreSQL のマルチインスタンス Compose では、管理リクエストを受けた 1 レプリカだけが変わることによるバージョン分裂を防ぐため、インプレース更新を無効化します。パネルには `docker-compose.remote-postgres.yml` 用の運用コマンドが表示され、`deploy/.env` で設定したレプリカ数が保持されます。ソースデプロイでは手動更新の案内を維持します。ロールバック前にはデータベースをバックアップし、対象リリースが現在のスキーマをサポートすることを確認してください。
 
 ### 任意: ローカルビルド
 

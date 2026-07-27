@@ -77,13 +77,11 @@ flowchart TB
 - 后端会将本地 Provider 目录快照持久化到 PostgreSQL，使各副本使用同一目录；本地文件缺失时则回退至已写入数据库的内置模板。
 - 数据库协调故障只释放 Provider 容量，不会把健康的模型 Provider 错误计为失败。
 
-配置远端 `TOKENHUB_DATABASE_URL`、公网网关地址、生产密钥和可信代理 CIDR 后运行：
+在 `deploy/.env` 中配置远端 `TOKENHUB_DATABASE_URL`、公网网关地址、生产密钥、可信代理 CIDR，以及所需的 `TOKENHUB_BACKEND_REPLICAS` 和 `TOKENHUB_FRONTEND_REPLICAS` 后运行：
 
 ```bash
 docker compose --env-file deploy/.env \
-  -f deploy/docker-compose.remote-postgres.yml up -d \
-  --scale tokenhub-backend=3 \
-  --scale tokenhub-frontend=2
+  -f deploy/docker-compose.remote-postgres.yml up -d
 ```
 
 所有实例必须使用相同的 `TOKENHUB_SECRET_KEY`。`TOKENHUB_DB_MAX_OPEN_CONNS` 是单实例连接数，需要确保所有实例的连接池总和低于 PostgreSQL 限制。不得让多个后端实例共享 SQLite 文件。
@@ -102,7 +100,7 @@ curl -fsSL https://raw.githubusercontent.com/astaxie/TokenHub/main/deploy/native
 sudo bash /tmp/tokenhub-install.sh install
 ```
 
-如果服务器自动识别的第一个 IP 不是用户实际访问的地址，请设置 `TOKENHUB_PUBLIC_HOST`：
+如果服务器自动识别的第一个 IP 不是用户实际访问的地址，请设置 `TOKENHUB_PUBLIC_HOST`。使用 IPv6 字面地址时，安装脚本会在生成 URL 时自动添加方括号：
 
 ```bash
 sudo env TOKENHUB_PUBLIC_HOST=tokenhub.example.com \
@@ -142,7 +140,7 @@ sudo env TOKENHUB_RELEASE_REPOSITORY=your-account/TokenHub \
   bash /tmp/tokenhub-install.sh install --version 0.3.3
 ```
 
-原生 Release 安装会在版本面板中显示为「原生 Release」。管理员可以直接在页面下载并校验更新或回退版本，然后点击「立即重启」，由 systemd 激活目标版本。每个 GitHub Release 必须包含 Linux 压缩包和 `checksums.txt`；发布 Release 后，`.github/workflows/native-release.yml` 会构建并附加 `linux/amd64` 和 `linux/arm64` 文件。
+原生 Release 安装会在版本面板中显示为「原生 Release」。管理员可以直接在页面下载并校验更新或回退版本，然后点击「立即重启」，由 systemd 激活目标版本。每个 GitHub Release 标签必须是以 `v` 开头的严格语义化版本，并包含 Linux 压缩包和 `checksums.txt`；发布 Release 后，`.github/workflows/native-release.yml` 会构建并附加 `linux/amd64` 和 `linux/arm64` 文件。
 
 ## Docker Compose
 
@@ -162,6 +160,8 @@ cp deploy/.env.example deploy/.env
 - `TOKENHUB_API_BASE_URL`：浏览器管理后台访问后端的地址，由前端服务在运行时读取。旧变量 `NEXT_PUBLIC_API_BASE_URL` 保留一个兼容周期，作为回退配置。
 - `TOKENHUB_BACKEND_PORT`：后端宿主机端口，默认 `8080`。
 - `TOKENHUB_FRONTEND_PORT`：管理后台宿主机端口，默认 `3000`。
+- `TOKENHUB_BACKEND_REPLICAS`：远端 PostgreSQL Compose 的后端副本数，默认 `2`。
+- `TOKENHUB_FRONTEND_REPLICAS`：远端 PostgreSQL Compose 的前端副本数，默认 `2`。
 
 在仓库根目录启动：
 
@@ -183,7 +183,7 @@ cp deploy/.env.example deploy/.env
 
 GitHub Actions 为 `linux/amd64` 和 `linux/arm64` 发布完整的 `ghcr.io/astaxie/tokenhub-backend` 镜像。镜像名称为兼容旧部署而保留，其中实际包含后端、独立 Next.js 管理后台、Node.js 运行时和容器监督进程。
 
-- GitHub Release 发布后，自动构建完整的语义化版本标签；非预发布版本同时更新主次版本标签和 `latest`。
+- 发布带有严格 `v` 前缀语义化标签的 GitHub Release 后，自动构建对应的纯数字镜像标签；非预发布版本同时更新主次版本标签和 `latest`。
 - `workflow_dispatch` 仅允许发布 `edge` 或独立的 `manual-*` 标签，不能覆盖正式版本标签或 `latest`。
 - PR 不构建或推送容器镜像。
 - 合并到 `main` 不发布镜像。
@@ -194,7 +194,7 @@ GHCR 首次发布产生的 Package 默认为私有。开放匿名部署前，仓
 
 ### Docker 版本状态与回退
 
-平台管理员可以点击 TokenHub 标志下方的版本胶囊，查看当前运行版本、检查最新的 GitHub 正式 Release，并列出最多 3 个更早的稳定版本。正式镜像构建会从发布工作流获得精确版本号；本地源码构建使用项目包版本，并明确标记为源码构建。
+平台管理员可以点击 TokenHub 标志下方的版本胶囊，查看当前运行版本、检查最新的 GitHub 正式 Release，并列出最多 3 个更早的稳定版本。正式镜像构建会从发布工作流获得精确版本号；本地源码构建使用项目包版本，并明确标记为源码构建。托管更新、回退和重启请求都会写入管理员审计日志。
 
 版本检查会通过限时的出站 HTTPS 请求访问公开的 GitHub Releases API，并将成功结果缓存 20 分钟。默认检查 `astaxie/TokenHub`；维护者可以将 `TOKENHUB_RELEASE_REPOSITORY` 设置为其他可信的公开 `owner/repository`，用于 fork 发布验证。GitHub 故障或仓库尚无 Release 不会影响网关流量；面板会展示不可用状态，同时保留当前版本信息。
 
@@ -206,7 +206,7 @@ TOKENHUB_RELEASE_REPOSITORY=your-account/TokenHub ./start.sh
 
 默认 SQLite 和本地 PostgreSQL Compose 使用一个托管应用容器。管理员可以点击「立即更新」，等待系统下载、校验并将当前平台的完整 Release 包安装到 `tokenhub-releases` 卷，然后点击「立即重启」。接口返回成功后进程主动退出，Docker 的 `restart: unless-stopped` 会同时以目标版本重新启动后端和前端。容器不会挂载 Docker Socket，也不会控制宿主机 Docker daemon。
 
-新拉取的镜像首次使用该卷时，镜像版本会成为基线。页面安装的版本、`current` 链接和历史 Release 都保存在 `tokenhub-releases`，因此使用同一镜像进行普通重启或重建容器不会丢失更新结果；主动拉取不同镜像标签时，则以该镜像版本作为新基线。远端 PostgreSQL 多实例 Compose 禁用原地更新，因为只更新收到管理员请求的单个副本会造成集群版本分裂；该模式继续显示由运维人员统一执行的 Compose 命令。源码部署仍提示手工更新。回退前必须完成数据库备份，并确认目标版本支持当前数据库结构。
+新拉取的镜像首次使用该卷时，镜像版本和内容指纹共同构成基线。页面安装的版本、`current` 链接和历史 Release 都保存在 `tokenhub-releases`，因此使用同一镜像进行普通重启或重建容器不会丢失更新结果；拉取其他镜像，或者在相同版本下重新构建了不同源码时，会激活新的镜像内容。远端 PostgreSQL 多实例 Compose 禁用原地更新，因为只更新收到管理员请求的单个副本会造成集群版本分裂；该模式显示针对 `docker-compose.remote-postgres.yml` 的运维命令，并保留 `deploy/.env` 中配置的副本数。源码部署仍提示手工更新。回退前必须完成数据库备份，并确认目标版本支持当前数据库结构。
 
 ### 可选：本地构建
 

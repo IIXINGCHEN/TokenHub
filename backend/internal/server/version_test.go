@@ -49,6 +49,18 @@ func TestParseSemanticVersionRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+func TestParseReleaseTagRequiresVPrefix(t *testing.T) {
+	t.Parallel()
+	if version, _, ok := parseReleaseTag("v1.2.3-rc.1"); !ok || version != "1.2.3-rc.1" {
+		t.Fatalf("parseReleaseTag returned version=%q ok=%v", version, ok)
+	}
+	for _, value := range []string{"1.2.3", "v1.2.3-01", "latest"} {
+		if _, _, ok := parseReleaseTag(value); ok {
+			t.Fatalf("parseReleaseTag(%q) unexpectedly succeeded", value)
+		}
+	}
+}
+
 func TestVersionServiceUsesConfiguredReleaseRepository(t *testing.T) {
 	releases := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/repos/astaxie/TokenHub/releases/latest" {
