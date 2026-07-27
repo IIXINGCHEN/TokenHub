@@ -65,7 +65,7 @@ TokenHub 将日常模型使用、团队治理和平台运维拆成清晰的角�
 Linux systemd 主机使用原生 Release：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wangle201210/TokenHub/main/deploy/native/install.sh \
+curl -fsSL https://raw.githubusercontent.com/astaxie/TokenHub/main/deploy/native/install.sh \
   -o /tmp/tokenhub-install.sh
 sudo bash /tmp/tokenhub-install.sh install
 ```

@@ -253,7 +253,7 @@ func TestNativeRestartEndpointSignalsProcessAfterResponse(t *testing.T) {
 func TestValidateNativeAssetURL(t *testing.T) {
 	t.Parallel()
 	for _, rawURL := range []string{
-		"https://github.com/wangle201210/TokenHub/releases/download/v0.3.2/archive.tar.gz",
+		"https://github.com/astaxie/TokenHub/releases/download/v0.3.2/archive.tar.gz",
 		"https://release-assets.githubusercontent.com/github-production-release-asset/file",
 	} {
 		if err := validateNativeAssetURL(rawURL); err != nil {
@@ -261,7 +261,7 @@ func TestValidateNativeAssetURL(t *testing.T) {
 		}
 	}
 	for _, rawURL := range []string{
-		"http://github.com/wangle201210/TokenHub/releases/download/v0.3.2/archive.tar.gz",
+		"http://github.com/astaxie/TokenHub/releases/download/v0.3.2/archive.tar.gz",
 		"https://github.com:8443/archive.tar.gz",
 		"https://example.com/archive.tar.gz",
 	} {
@@ -318,8 +318,12 @@ func nativeTestArchive(t *testing.T, version string, extra map[string]nativeTest
 		"bin/tokenhub-run":           {content: "run-" + version, mode: 0755},
 		"frontend/server.js":         {content: "server-" + version, mode: 0644},
 		"catalog/model-catalog.yaml": {content: "models: []", mode: 0644},
-		"deploy/tokenhub.service":    {content: "[Service]", mode: 0644},
-		"VERSION":                    {content: version + "\n", mode: 0644},
+		"catalog/provider-catalog.json": {
+			content: `{"providers":[]}`,
+			mode:    0644,
+		},
+		"deploy/tokenhub.service": {content: "[Service]", mode: 0644},
+		"VERSION":                 {content: version + "\n", mode: 0644},
 	}
 	for name, entry := range extra {
 		entries[name] = entry
@@ -377,8 +381,12 @@ func createNativeTestBundle(t *testing.T, root string, version string) {
 		"bin/tokenhub-run":           {content: "run-" + version, mode: 0755},
 		"frontend/server.js":         {content: "server-" + version, mode: 0644},
 		"catalog/model-catalog.yaml": {content: "models: []", mode: 0644},
-		"deploy/tokenhub.service":    {content: "[Service]", mode: 0644},
-		"VERSION":                    {content: version + "\n", mode: 0644},
+		"catalog/provider-catalog.json": {
+			content: `{"providers":[]}`,
+			mode:    0644,
+		},
+		"deploy/tokenhub.service": {content: "[Service]", mode: 0644},
+		"VERSION":                 {content: version + "\n", mode: 0644},
 	}
 	for name, file := range files {
 		path := filepath.Join(root, name)

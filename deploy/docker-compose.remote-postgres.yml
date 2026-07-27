@@ -1,6 +1,6 @@
 services:
   tokenhub-backend:
-    image: ghcr.io/wangle201210/tokenhub-backend:${TOKENHUB_IMAGE_TAG:-latest}
+    image: ghcr.io/astaxie/tokenhub-backend:${TOKENHUB_IMAGE_TAG:-latest}
     build:
       context: ..
       dockerfile: backend/Dockerfile
@@ -50,7 +50,7 @@ services:
       - tokenhub
 
   tokenhub-frontend:
-    image: ghcr.io/wangle201210/tokenhub-backend:${TOKENHUB_IMAGE_TAG:-latest}
+    image: ghcr.io/astaxie/tokenhub-backend:${TOKENHUB_IMAGE_TAG:-latest}
     build:
       context: ..
       dockerfile: backend/Dockerfile

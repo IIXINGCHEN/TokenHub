@@ -65,7 +65,7 @@ TokenHub は、日常的なモデル利用、チームガバナンス、プラ�
 Linux systemd ホストでネイティブ Release を使用する場合:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wangle201210/TokenHub/main/deploy/native/install.sh \
+curl -fsSL https://raw.githubusercontent.com/astaxie/TokenHub/main/deploy/native/install.sh \
   -o /tmp/tokenhub-install.sh
 sudo bash /tmp/tokenhub-install.sh install
 ```

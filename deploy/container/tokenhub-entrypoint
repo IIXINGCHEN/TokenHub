@@ -33,6 +33,7 @@ validate_bundle() {
     bin/tokenhub-run \
     frontend/server.js \
     catalog/model-catalog.yaml \
+    catalog/provider-catalog.json \
     deploy/tokenhub.service \
     VERSION; do
     [ -f "$bundle/$required" ] || return 1

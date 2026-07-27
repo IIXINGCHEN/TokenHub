@@ -53,6 +53,8 @@ RUN apt-get update && \
 ENV NODE_ENV=production \
     TOKENHUB_DEPLOYMENT_TYPE=container \
     TOKENHUB_INSTALL_ROOT=/opt/tokenhub \
+    TOKENHUB_MODEL_CATALOG_FILE=/opt/tokenhub/current/catalog/model-catalog.yaml \
+    TOKENHUB_PROVIDER_CATALOG_FILE=/opt/tokenhub/current/catalog/provider-catalog.json \
     TOKENHUB_RUN_MODE=all
 
 WORKDIR /app

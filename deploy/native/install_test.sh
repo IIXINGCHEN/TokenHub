@@ -28,6 +28,7 @@ create_bundle() {
   cp "$script_dir/tokenhub-run" "$root/bin/tokenhub-run"
   : >"$root/frontend/server.js"
   : >"$root/catalog/model-catalog.yaml"
+  printf '{"providers":[]}\n' >"$root/catalog/provider-catalog.json"
   cp "$script_dir/tokenhub.service" "$root/deploy/tokenhub.service"
   printf '%s\n' "$version" >"$root/VERSION"
 }

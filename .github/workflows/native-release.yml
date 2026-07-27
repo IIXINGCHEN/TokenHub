@@ -213,6 +213,7 @@ jobs:
           cp deploy/native/tokenhub-run "$stage/bin/tokenhub-run"
           cp deploy/native/tokenhub.service "$stage/deploy/tokenhub.service"
           cp data/model-catalog.yaml "$stage/catalog/model-catalog.yaml"
+          cp data/provider-catalog.json "$stage/catalog/provider-catalog.json"
           cp LICENSE README.md "$stage/"
           printf '%s\n' "$VERSION" >"$stage/VERSION"
           chmod 0755 "$stage/bin/tokenhub" "$stage/bin/node" "$stage/bin/tokenhub-run"
@@ -222,6 +223,7 @@ jobs:
             bin/tokenhub-run \
             frontend/server.js \
             catalog/model-catalog.yaml \
+            catalog/provider-catalog.json \
             deploy/tokenhub.service \
             VERSION; do
             test -f "$stage/$required"

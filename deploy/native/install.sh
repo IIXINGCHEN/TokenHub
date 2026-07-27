@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-GITHUB_REPOSITORY="${TOKENHUB_RELEASE_REPOSITORY:-wangle201210/TokenHub}"
+GITHUB_REPOSITORY="${TOKENHUB_RELEASE_REPOSITORY:-astaxie/TokenHub}"
 INSTALL_ROOT="${TOKENHUB_INSTALL_ROOT:-/opt/tokenhub}"
 CONFIG_DIR="${TOKENHUB_CONFIG_DIR:-/etc/tokenhub}"
 STATE_DIR="${TOKENHUB_STATE_DIR:-/var/lib/tokenhub}"
@@ -31,7 +31,7 @@ Usage:
   install.sh status
 
 Environment:
-  TOKENHUB_RELEASE_REPOSITORY  GitHub owner/repository (default: wangle201210/TokenHub)
+  TOKENHUB_RELEASE_REPOSITORY  GitHub owner/repository (default: astaxie/TokenHub)
   TOKENHUB_PUBLIC_HOST         Public hostname or IP used in generated URLs
   TOKENHUB_PUBLIC_BASE_URL     Public backend URL override
   TOKENHUB_API_BASE_URL        Browser-facing backend URL override
@@ -242,6 +242,7 @@ TOKENHUB_SECRET_KEY=${secret_key}
 TOKENHUB_DATABASE_URL=sqlite://${STATE_DIR}/tokenhub.db
 TOKENHUB_SQLITE_BACKUP_DIR=${STATE_DIR}/backups
 TOKENHUB_MODEL_CATALOG_FILE=${INSTALL_ROOT}/current/catalog/model-catalog.yaml
+TOKENHUB_PROVIDER_CATALOG_FILE=${INSTALL_ROOT}/current/catalog/provider-catalog.json
 TOKENHUB_INSTALL_ROOT=${INSTALL_ROOT}
 TOKENHUB_SEED_DEMO=false
 TOKENHUB_FRONTEND_HOST=0.0.0.0
@@ -334,6 +335,7 @@ validate_staged_release() {
     bin/tokenhub-run \
     frontend/server.js \
     catalog/model-catalog.yaml \
+    catalog/provider-catalog.json \
     deploy/tokenhub.service \
     VERSION; do
     [ -f "$staging/$path" ] || fail "release archive is missing regular file $path"

@@ -65,7 +65,7 @@ TokenHub separates everyday model usage, team governance, and platform administr
 Native Release on a Linux systemd host:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wangle201210/TokenHub/main/deploy/native/install.sh \
+curl -fsSL https://raw.githubusercontent.com/astaxie/TokenHub/main/deploy/native/install.sh \
   -o /tmp/tokenhub-install.sh
 sudo bash /tmp/tokenhub-install.sh install
 ```

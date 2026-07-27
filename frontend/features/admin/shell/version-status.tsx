@@ -173,7 +173,7 @@ const fallbackVersionInfo: SystemVersionInfo = {
   build_type: "source",
   deployment_type: "source",
   update_supported: false,
-  releases_url: "https://github.com/wangle201210/TokenHub/releases",
+  releases_url: "https://github.com/astaxie/TokenHub/releases",
   cached: false,
 };
 

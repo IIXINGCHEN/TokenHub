@@ -26,7 +26,7 @@ const (
 	containerDeploymentType  = "container"
 	nativeDeploymentType     = "native"
 	defaultNativeInstallRoot = "/opt/tokenhub"
-	defaultReleaseRepository = "wangle201210/TokenHub"
+	defaultReleaseRepository = "astaxie/TokenHub"
 	githubAPIBaseURL         = "https://api.github.com"
 	versionCacheTTL          = 20 * time.Minute
 	releaseRequestTimeout    = 8 * time.Second

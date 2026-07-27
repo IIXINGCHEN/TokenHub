@@ -470,6 +470,7 @@ func validateNativeBundle(bundleRoot string, version string) error {
 		{path: "bin/tokenhub-run", executable: true},
 		{path: "frontend/server.js"},
 		{path: "catalog/model-catalog.yaml"},
+		{path: "catalog/provider-catalog.json"},
 		{path: "deploy/tokenhub.service"},
 		{path: "VERSION"},
 	}
