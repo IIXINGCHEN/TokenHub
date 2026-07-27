@@ -21,7 +21,8 @@ with code 5.
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--secret-source` | Secret resolution: env, file, prompt | `env` |
+| `--secret-source` | Secret resolution: env, file | `env` |
+| `--secret-file` | `key=value` file used with `--secret-source=file` | — |
 | `--id-strategy` | ID generation: stable, prefixed, source | `prefixed` |
 | `--to` | TokenHub admin API base URL (or `TOKENHUB_API`) | — |
 | `--token` | Admin API token (or `TOKENHUB_ADMIN_TOKEN`) | — |
@@ -39,6 +40,10 @@ with code 5.
 > requires an active email notification channel on the target instance.
 > Applying a bundle that creates new users fails without one, and each newly
 > imported user receives a password-reset email during apply.
+>
+> Remote apply is not transactional. If a later resource fails after earlier
+> resources were changed, the command still writes the partial rollback
+> checkpoint and any one-time API keys before returning exit code 5.
 
 ## Exit Codes
 
@@ -59,6 +64,9 @@ tokenhub-migrate inspect litellm --from proxy_config.yaml
 # Extract a bundle
 tokenhub-migrate extract litellm --from proxy_config.yaml --out bundle.json
 
+# Optional: preserve source IDs instead of the default prefixed IDs
+tokenhub-migrate extract litellm --from proxy_config.yaml --out bundle.json --id-strategy source
+
 # Target TokenHub instance for the remaining commands
 export TOKENHUB_API=http://localhost:8080
 export TOKENHUB_ADMIN_TOKEN=<admin-token>
@@ -72,6 +80,9 @@ tokenhub-migrate apply --bundle bundle.json --dry-run
 # Apply for real; persists bundle.json.checkpoint.json and, when API keys
 # were generated, bundle.json.new-keys.json (both mode 0600)
 tokenhub-migrate apply --bundle bundle.json
+
+# Resolve bundle secret references from a key=value file
+tokenhub-migrate apply --bundle bundle.json --secret-source file --secret-file migration.secrets
 
 # Verify command behavior
 tokenhub-migrate verify --bundle bundle.json

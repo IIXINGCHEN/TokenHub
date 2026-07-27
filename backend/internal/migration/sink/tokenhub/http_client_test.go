@@ -3,9 +3,11 @@ package tokenhub
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"tokenhub/backend/internal/server"
@@ -57,5 +59,27 @@ func TestProviderRequestsCarryAPIKey(t *testing.T) {
 		if createRoutes, ok := payload["create_routes"].(bool); !ok || createRoutes {
 			t.Fatalf("request %d expected create_routes=false, payload=%v", i, payload)
 		}
+	}
+}
+
+func TestAdminAPIClientSurfacesApprovalRequired(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"approval_required":true,"approval":{"id":"apr-1"}}`))
+	}))
+	defer ts.Close()
+
+	client := NewAdminAPIClient(ts.URL, "test-admin-token", http.DefaultClient)
+	_, err := client.CreateProjectKey(context.Background(), "project-1", map[string]any{"name": "pending-key"})
+	var approvalErr *ApprovalRequiredError
+	if !errors.As(err, &approvalErr) {
+		t.Fatalf("expected ApprovalRequiredError, got %v", err)
+	}
+	if approvalErr.Method != http.MethodPost || !strings.Contains(approvalErr.Endpoint, "/projects/project-1/keys") {
+		t.Fatalf("unexpected approval error: %+v", approvalErr)
+	}
+	if !strings.Contains(string(approvalErr.Approval), `"id":"apr-1"`) {
+		t.Fatalf("expected approval payload to be preserved, got %s", approvalErr.Approval)
 	}
 }

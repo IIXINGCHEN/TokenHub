@@ -1,5 +1,7 @@
 litellm_settings:
   version: 1.58.2
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
 model_list:
   - model_name: gpt-4o-mini
     litellm_params:

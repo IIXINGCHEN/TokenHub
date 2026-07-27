@@ -17,9 +17,10 @@ type Info struct {
 
 // ExtractOptions configures a source extraction run.
 type ExtractOptions struct {
-	InputPath string
-	OriginURL string
-	Metadata  map[string]string
+	InputPath  string
+	OriginURL  string
+	Metadata   map[string]string
+	IDStrategy bundle.IDStrategy
 }
 
 // Extractor produces a CanonicalMigrationBundle from a competitor

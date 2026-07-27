@@ -19,6 +19,16 @@ cd backend && go build -o tokenhub-migrate ./cmd/tokenhub-migrate/
 `plan` / `apply` / `verify` / `rollback` はリモート TokenHub ターゲット（`--to` または `TOKENHUB_API`）が必須です。未指定の場合は終了コード 5 で拒否されます。
 
 > 注意：`apply` は Admin CSV インポートエンドポイント経由でユーザーを作成します。このエンドポイントはターゲットインスタンスにアクティブなメール通知チャネルが設定されていることを要求します。未設定の場合、新規ユーザーを含む bundle の apply は失敗します。また、新規インポートされた各ユーザーには apply 中にパスワードリセットメールが送信されます。
+>
+> リモート apply はトランザクションではありません。前半のリソース変更後に後続処理が失敗した場合も、コマンドは部分ロールバック用 checkpoint と発行済みの一回限りの API key を保存してから終了コード 5 を返します。
+
+## 共通フラグ
+
+| フラグ | 説明 | デフォルト |
+|--------|------|------------|
+| `--secret-source` | シークレット解決元：`env` または `file` | `env` |
+| `--secret-file` | `--secret-source=file` で使用する `key=value` ファイル | — |
+| `--id-strategy` | ID 生成方式：`stable`、`prefixed`、`source` | `prefixed` |
 
 ## 環境変数
 

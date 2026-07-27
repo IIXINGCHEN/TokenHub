@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	migrationbundle "tokenhub/backend/internal/migration/bundle"
 	"tokenhub/backend/internal/migration/source"
 )
 
@@ -67,6 +68,28 @@ func TestExtractBasicConfig(t *testing.T) {
 	}
 	if len(bundle.Warnings) < 2 {
 		t.Fatalf("expected warnings for partial support, got %d", len(bundle.Warnings))
+	}
+}
+
+func TestExtractHonorsIDStrategy(t *testing.T) {
+	b, err := Adapter{}.Extract(context.Background(), source.ExtractOptions{
+		InputPath:  filepath.Join("testdata", "config-basic.yaml"),
+		IDStrategy: migrationbundle.IDStrategySource,
+	})
+	if err != nil {
+		t.Fatalf("Extract returned error: %v", err)
+	}
+	if len(b.Users) == 0 {
+		t.Fatal("expected extracted users")
+	}
+	if b.Users[0].Spec.ID != b.Users[0].ExternalRef.ID {
+		t.Fatalf("source strategy should preserve external ID: got %q, want %q", b.Users[0].Spec.ID, b.Users[0].ExternalRef.ID)
+	}
+	if len(b.Providers) == 0 {
+		t.Fatal("expected extracted providers")
+	}
+	if b.Providers[0].Spec.ID != b.Providers[0].ExternalRef.ID {
+		t.Fatalf("source strategy should preserve provider external ID: got %q, want %q", b.Providers[0].Spec.ID, b.Providers[0].ExternalRef.ID)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"tokenhub/backend/internal/migration/bundle"
 	"tokenhub/backend/internal/migration/source"
@@ -31,8 +32,16 @@ var extractCmd = &cobra.Command{
 
 		fromPath, _ := cmd.Flags().GetString("from")
 		outPath, _ := cmd.Flags().GetString("out")
+		idStrategyName, _ := cmd.Flags().GetString("id-strategy")
+		idStrategy := bundle.IDStrategy(strings.ToLower(strings.TrimSpace(idStrategyName)))
+		if !idStrategy.Valid() {
+			return errExit(ExitSourceUnreadable, fmt.Sprintf("invalid --id-strategy %q: expected stable, prefixed, or source", idStrategyName))
+		}
 
-		migrationBundle, err := extractor.Extract(context.Background(), source.ExtractOptions{InputPath: fromPath})
+		migrationBundle, err := extractor.Extract(context.Background(), source.ExtractOptions{
+			InputPath:  fromPath,
+			IDStrategy: idStrategy,
+		})
 		if err != nil {
 			return errExit(ExitSourceUnreadable, err.Error())
 		}

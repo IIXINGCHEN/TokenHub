@@ -11,8 +11,8 @@ import (
 	"tokenhub/backend/internal/server"
 )
 
-func mustMintID(externalRef string) string {
-	id, err := bundle.MintID(bundle.IDStrategyPrefixed, AdapterName, externalRef)
+func mustMintID(strategy bundle.IDStrategy, externalRef string) string {
+	id, err := bundle.MintID(strategy, AdapterName, externalRef)
 	if err != nil {
 		panic(err)
 	}
@@ -20,8 +20,9 @@ func mustMintID(externalRef string) string {
 }
 
 type BuildOptions struct {
-	OriginURL string
-	Metadata  map[string]string
+	OriginURL  string
+	Metadata   map[string]string
+	IDStrategy bundle.IDStrategy
 }
 
 func BuildBundle(config *Config, opts BuildOptions) (*bundle.CanonicalMigrationBundle, error) {
@@ -30,6 +31,13 @@ func BuildBundle(config *Config, opts BuildOptions) (*bundle.CanonicalMigrationB
 	}
 	if err := ValidateSupportedVersion(config.LitellmSettings.Version); err != nil {
 		return nil, err
+	}
+	idStrategy := opts.IDStrategy
+	if idStrategy == "" {
+		idStrategy = bundle.IDStrategyPrefixed
+	}
+	if !idStrategy.Valid() {
+		return nil, fmt.Errorf("litellm: invalid ID strategy %q", idStrategy)
 	}
 
 	b := &bundle.CanonicalMigrationBundle{
@@ -44,10 +52,10 @@ func BuildBundle(config *Config, opts BuildOptions) (*bundle.CanonicalMigrationB
 	}
 
 	b.Teams = buildTeams(config)
-	b.Users = buildUsers(config, b)
-	b.Projects = buildProjects(config, b)
-	b.APIKeys = buildAPIKeys(config, b)
-	providers, resources, models, routes := buildModelArtifacts(config, b)
+	b.Users = buildUsers(config, b, idStrategy)
+	b.Projects = buildProjects(config, b, idStrategy)
+	b.APIKeys = buildAPIKeys(config, b, idStrategy)
+	providers, resources, models, routes := buildModelArtifacts(config, b, idStrategy)
 	b.Providers = providers
 	b.ProviderResources = resources
 	b.Models = models
@@ -120,7 +128,7 @@ func buildTeams(config *Config) []bundle.TeamRef {
 	return teams
 }
 
-func buildUsers(config *Config, b *bundle.CanonicalMigrationBundle) []bundle.UserRef {
+func buildUsers(config *Config, b *bundle.CanonicalMigrationBundle, idStrategy bundle.IDStrategy) []bundle.UserRef {
 	users := make([]bundle.UserRef, 0, len(config.KeyManagement.Users))
 	seen := map[string]struct{}{}
 	for _, user := range config.KeyManagement.Users {
@@ -138,7 +146,7 @@ func buildUsers(config *Config, b *bundle.CanonicalMigrationBundle) []bundle.Use
 			ExternalRef: bundle.ExternalRef{System: AdapterName, ID: userExternalRef(userID)},
 			TeamRef:     optionalTeamRef(user.TeamID),
 			Spec: server.AdminUser{
-				ID:       mustMintID(userExternalRef(userID)),
+				ID:       mustMintID(idStrategy, userExternalRef(userID)),
 				Username: username,
 				Name:     firstNonEmpty(user.UserAlias, username),
 				Email:    strings.TrimSpace(user.UserEmail),
@@ -150,7 +158,7 @@ func buildUsers(config *Config, b *bundle.CanonicalMigrationBundle) []bundle.Use
 	return users
 }
 
-func buildProjects(config *Config, b *bundle.CanonicalMigrationBundle) []bundle.ProjectRef {
+func buildProjects(config *Config, b *bundle.CanonicalMigrationBundle, idStrategy bundle.IDStrategy) []bundle.ProjectRef {
 	projects := make([]bundle.ProjectRef, 0, len(config.KeyManagement.Teams))
 	seen := map[string]struct{}{}
 	teamAliases := map[string]string{}
@@ -174,7 +182,7 @@ func buildProjects(config *Config, b *bundle.CanonicalMigrationBundle) []bundle.
 			ExternalRef: bundle.ExternalRef{System: AdapterName, ID: projectID},
 			TeamRef:     teamExternalRef(teamID),
 			Spec: server.Project{
-				ID:     mustMintID(projectID),
+				ID:     mustMintID(idStrategy, projectID),
 				Name:   firstNonEmpty(team.TeamAlias, teamID),
 				Status: "active",
 			},
@@ -194,7 +202,7 @@ func buildProjects(config *Config, b *bundle.CanonicalMigrationBundle) []bundle.
 			ExternalRef: bundle.ExternalRef{System: AdapterName, ID: projectID},
 			TeamRef:     teamExternalRef(teamID),
 			Spec: server.Project{
-				ID:     mustMintID(projectID),
+				ID:     mustMintID(idStrategy, projectID),
 				Name:   firstNonEmpty(teamAliases[teamID], teamID),
 				Status: "active",
 			},
@@ -214,7 +222,7 @@ func buildProjects(config *Config, b *bundle.CanonicalMigrationBundle) []bundle.
 			ExternalRef: bundle.ExternalRef{System: AdapterName, ID: projectID},
 			TeamRef:     teamExternalRef(teamID),
 			Spec: server.Project{
-				ID:     mustMintID(projectID),
+				ID:     mustMintID(idStrategy, projectID),
 				Name:   firstNonEmpty(teamAliases[teamID], teamID),
 				Status: "active",
 			},
@@ -237,7 +245,7 @@ func buildProjects(config *Config, b *bundle.CanonicalMigrationBundle) []bundle.
 		projects = append(projects, bundle.ProjectRef{
 			ExternalRef: bundle.ExternalRef{System: AdapterName, ID: projectID},
 			Spec: server.Project{
-				ID:     mustMintID(projectID),
+				ID:     mustMintID(idStrategy, projectID),
 				Name:   alias,
 				Status: "active",
 			},
@@ -246,7 +254,7 @@ func buildProjects(config *Config, b *bundle.CanonicalMigrationBundle) []bundle.
 	return projects
 }
 
-func buildAPIKeys(config *Config, b *bundle.CanonicalMigrationBundle) []bundle.APIKeyRef {
+func buildAPIKeys(config *Config, b *bundle.CanonicalMigrationBundle, idStrategy bundle.IDStrategy) []bundle.APIKeyRef {
 	keys := make([]bundle.APIKeyRef, 0, len(config.KeyManagement.VirtualKeys))
 	seen := map[string]struct{}{}
 	for _, key := range config.KeyManagement.VirtualKeys {
@@ -276,7 +284,7 @@ func buildAPIKeys(config *Config, b *bundle.CanonicalMigrationBundle) []bundle.A
 			ExternalRef: bundle.ExternalRef{System: AdapterName, ID: apiKeyExternalRef(externalID)},
 			ProjectRef:  projectRef,
 			Spec: server.APIKey{
-				ID:        mustMintID(apiKeyExternalRef(externalID)),
+				ID:        mustMintID(idStrategy, apiKeyExternalRef(externalID)),
 				Name:      externalID,
 				Allowed:   cloneStrings(key.Models),
 				Status:    "active",
@@ -293,7 +301,7 @@ func buildAPIKeys(config *Config, b *bundle.CanonicalMigrationBundle) []bundle.A
 	return keys
 }
 
-func buildModelArtifacts(config *Config, b *bundle.CanonicalMigrationBundle) ([]bundle.ProviderRef, []bundle.ProviderResourceRef, []bundle.ModelRef, []bundle.RouteRef) {
+func buildModelArtifacts(config *Config, b *bundle.CanonicalMigrationBundle, idStrategy bundle.IDStrategy) ([]bundle.ProviderRef, []bundle.ProviderResourceRef, []bundle.ModelRef, []bundle.RouteRef) {
 	providerIndex := map[string]int{}
 	resourceIndex := map[string]int{}
 	modelIndex := map[string]int{}
@@ -319,7 +327,7 @@ func buildModelArtifacts(config *Config, b *bundle.CanonicalMigrationBundle) ([]
 			provider := bundle.ProviderRef{
 				ExternalRef: bundle.ExternalRef{System: AdapterName, ID: providerRefID},
 				Spec: server.Provider{
-					ID:       mustMintID(providerRefID),
+					ID:       mustMintID(idStrategy, providerRefID),
 					Name:     providerType,
 					Type:     providerType,
 					BaseURL:  strings.TrimSpace(item.LitellmParams.APIBase),
@@ -349,7 +357,7 @@ func buildModelArtifacts(config *Config, b *bundle.CanonicalMigrationBundle) ([]
 					ExternalRef: bundle.ExternalRef{System: AdapterName, ID: resourceRefID},
 					ProviderRef: providerRefID,
 					Spec: server.ProviderResource{
-						ID:            mustMintID(resourceRefID),
+						ID:            mustMintID(idStrategy, resourceRefID),
 						Name:          providerName,
 						ResourceType:  "model-endpoint",
 						BaseURL:       strings.TrimSpace(item.LitellmParams.APIBase),
@@ -381,7 +389,7 @@ func buildModelArtifacts(config *Config, b *bundle.CanonicalMigrationBundle) ([]
 			models = append(models, bundle.ModelRef{
 				ExternalRef: bundle.ExternalRef{System: AdapterName, ID: modelRefID},
 				Spec: server.Model{
-					ID:       mustMintID(modelRefID),
+					ID:       mustMintID(idStrategy, modelRefID),
 					Name:     modelName,
 					Family:   providerType,
 					Modality: inferModality(modelName),
@@ -398,7 +406,7 @@ func buildModelArtifacts(config *Config, b *bundle.CanonicalMigrationBundle) ([]
 			ModelRef:    modelRefID,
 			ProviderRef: providerRefID,
 			Spec: server.ModelRoute{
-				ID:            mustMintID(routeExternalRef(modelName, providerModel, resourceRefID)),
+				ID:            mustMintID(idStrategy, routeExternalRef(modelName, providerModel, resourceRefID)),
 				ModelName:     modelName,
 				ProviderModel: upstreamModel,
 				Priority:      100,

@@ -64,7 +64,8 @@ func (Adapter) Extract(ctx context.Context, opts source.ExtractOptions) (*bundle
 		return nil, err
 	}
 	return BuildBundle(config, BuildOptions{
-		OriginURL: opts.OriginURL,
-		Metadata:  opts.Metadata,
+		OriginURL:  opts.OriginURL,
+		Metadata:   opts.Metadata,
+		IDStrategy: opts.IDStrategy,
 	})
 }

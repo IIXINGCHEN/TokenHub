@@ -19,6 +19,16 @@ cd backend && go build -o tokenhub-migrate ./cmd/tokenhub-migrate/
 `plan` / `apply` / `verify` / `rollback` 必须指定远端 TokenHub 目标（`--to` 或 `TOKENHUB_API`），否则以退出码 5 拒绝执行。
 
 > 注意：`apply` 通过 Admin CSV 导入接口创建用户，该接口要求目标实例已配置活跃的邮件通知通道。若未配置，包含新建用户的 bundle 会在 apply 时失败；每个新导入的用户会在 apply 过程中收到一封密码重置邮件。
+>
+> 远端 apply 不是事务操作。如果前面的资源已经变更、后续资源处理失败，命令会先保存部分回滚 checkpoint 和已生成的一次性 API key，再以退出码 5 结束。
+
+## 通用参数
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--secret-source` | 密钥解析来源：`env` 或 `file` | `env` |
+| `--secret-file` | 配合 `--secret-source=file` 使用的 `key=value` 文件 | — |
+| `--id-strategy` | ID 生成策略：`stable`、`prefixed` 或 `source` | `prefixed` |
 
 ## 环境变量
 

@@ -52,7 +52,8 @@ var rootCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.PersistentFlags().String("secret-source", "env", "Secret resolution source: env|file|prompt")
+	rootCmd.PersistentFlags().String("secret-source", "env", "Secret resolution source: env|file")
+	rootCmd.PersistentFlags().String("secret-file", "", "Path to key=value secrets file (required with --secret-source=file)")
 	rootCmd.PersistentFlags().String("id-strategy", "prefixed", "ID generation strategy: stable|prefixed|source")
 	rootCmd.PersistentFlags().String("report", "", "Write structured report to JSON file")
 	rootCmd.PersistentFlags().String("log-level", "info", "Log level: debug|info|warn|error")

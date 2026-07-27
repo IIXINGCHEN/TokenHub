@@ -2,7 +2,9 @@
 
 ## Overview
 
-The current E2E harness validates the migration fixture flow around the current store-backed CLI implementation, the LiteLLM fixture, and the Docker Compose stack assets.
+The E2E harness starts real LiteLLM and TokenHub services and validates a
+remote Admin API migration cycle against a mocked OpenAI-compatible upstream.
+Mailpit provides local SMTP delivery for the user-import password-reset flow.
 
 ## Prerequisites
 
@@ -34,10 +36,11 @@ docker compose -f ../../deploy/docker-compose.migration-e2e.yml down -v
 The harness currently proves:
 1. LiteLLM stack boots from the checked-in fixture
 2. LiteLLM can answer a mocked chat-completion request
-3. `extract`, `plan`, `apply`, `verify`, and `rollback` commands execute against the current CLI implementation
-4. Compose and CI wiring remain consistent with the fixture layout
-
-It does not yet prove a remote TokenHub Admin API apply/verify/rollback cycle.
+3. TokenHub accepts the extracted bundle through the real Admin API
+4. `verify` passes after apply and re-apply creates and updates zero resources
+5. Checkpoint and one-time API key files are persisted
+6. Rollback removes created resources, including the imported user, and a
+   subsequent verify detects the rolled-back state
 
 ## CI
 
@@ -46,5 +49,5 @@ The workflow runs migration unit checks on relevant backend, docs, SDK, deploy, 
 ## Troubleshooting
 
 - Ensure Docker daemon is running
-- Check that ports 4000, 8080, 8081, and 5432 are available
+- Check that ports 4000, 8080, and 8081 are available
 - Review `docker compose logs` for service-level errors

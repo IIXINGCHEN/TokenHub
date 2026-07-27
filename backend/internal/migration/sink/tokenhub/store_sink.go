@@ -794,21 +794,49 @@ func sameProviderResource(left server.ProviderResource, right server.ProviderRes
 }
 
 func sameModel(left server.Model, right server.Model) bool {
-	if right.ID == "" {
-		right.ID = right.Name
+	keepsString := func(current, desired string) bool {
+		desired = strings.TrimSpace(desired)
+		return desired == "" || strings.TrimSpace(current) == desired
 	}
-	left.CreatedAt = right.CreatedAt
-	left.InputModalities = normalizeStringSlice(left.InputModalities)
-	right.InputModalities = normalizeStringSlice(right.InputModalities)
-	left.OutputModalities = normalizeStringSlice(left.OutputModalities)
-	right.OutputModalities = normalizeStringSlice(right.OutputModalities)
-	left.Capabilities = normalizeStringSlice(left.Capabilities)
-	right.Capabilities = normalizeStringSlice(right.Capabilities)
-	left.SupportedParameters = normalizeStringSlice(left.SupportedParameters)
-	right.SupportedParameters = normalizeStringSlice(right.SupportedParameters)
-	left.Metadata = normalizeStringMap(left.Metadata)
-	right.Metadata = normalizeStringMap(right.Metadata)
-	return reflect.DeepEqual(left, right)
+	if !keepsString(left.Name, right.Name) ||
+		!keepsString(left.Family, right.Family) ||
+		!keepsString(left.Modality, right.Modality) ||
+		(right.ContextWindow != 0 && left.ContextWindow != right.ContextWindow) ||
+		left.InputPriceUSDPer1M != right.InputPriceUSDPer1M ||
+		left.OutputPriceUSDPer1M != right.OutputPriceUSDPer1M ||
+		left.EmbeddingPriceUSDPer1M != right.EmbeddingPriceUSDPer1M ||
+		!keepsString(left.Status, right.Status) {
+		return false
+	}
+	expectedCacheReadPrice := right.CacheReadPriceUSDPer1M
+	effectiveModality := strings.TrimSpace(right.Modality)
+	if effectiveModality == "" {
+		effectiveModality = strings.TrimSpace(left.Modality)
+	}
+	if effectiveModality == "embedding" {
+		expectedCacheReadPrice = 0
+	}
+	if left.CacheReadPriceUSDPer1M != expectedCacheReadPrice {
+		return false
+	}
+	if right.InputModalities != nil && !reflect.DeepEqual(normalizeStringSlice(left.InputModalities), normalizeStringSlice(right.InputModalities)) {
+		return false
+	}
+	if right.OutputModalities != nil && !reflect.DeepEqual(normalizeStringSlice(left.OutputModalities), normalizeStringSlice(right.OutputModalities)) {
+		return false
+	}
+	if right.Capabilities != nil && !reflect.DeepEqual(normalizeStringSlice(left.Capabilities), normalizeStringSlice(right.Capabilities)) {
+		return false
+	}
+	if right.SupportedParameters != nil && !reflect.DeepEqual(normalizeStringSlice(left.SupportedParameters), normalizeStringSlice(right.SupportedParameters)) {
+		return false
+	}
+	if right.Metadata != nil && !reflect.DeepEqual(normalizeStringMap(left.Metadata), normalizeStringMap(right.Metadata)) {
+		return false
+	}
+	// ID, Category and CreatedAt are not mutable through PATCH /api/admin/models
+	// and therefore cannot participate in convergence checks.
+	return true
 }
 
 func sameRoute(left server.ModelRoute, right server.ModelRoute) bool {
@@ -835,9 +863,23 @@ func sameAdminUser(existing server.AdminUser, desired server.AdminUser) bool {
 	return keeps(existing.Username, desired.Username) &&
 		keeps(existing.Name, desired.Name) &&
 		keeps(existing.Email, desired.Email) &&
-		keeps(existing.Role, desired.Role) &&
+		(normalizeMigrationAdminRole(desired.Role) == "" || normalizeMigrationAdminRole(existing.Role) == normalizeMigrationAdminRole(desired.Role)) &&
 		strings.TrimSpace(existing.TeamID) == strings.TrimSpace(desired.TeamID) &&
 		keeps(existing.Status, desired.Status)
+}
+
+func normalizeMigrationAdminRole(role string) string {
+	role = strings.ToLower(strings.TrimSpace(role))
+	switch role {
+	case "security":
+		return "security_admin"
+	case "project_admin", "teamlead":
+		return "team_leader"
+	case "viewer", "readonly", "read_only", "member":
+		return "user"
+	default:
+		return role
+	}
 }
 
 func sameProject(left server.Project, right server.Project) bool {
@@ -856,15 +898,27 @@ func sameAPIKey(left server.APIKey, right server.APIKey) bool {
 	if right.Status == "" {
 		right.Status = server.StatusActive
 	}
-	return strings.TrimSpace(left.ProjectID) == strings.TrimSpace(right.ProjectID) &&
-		strings.TrimSpace(left.Name) == strings.TrimSpace(right.Name) &&
-		strings.TrimSpace(left.Group) == strings.TrimSpace(right.Group) &&
-		reflect.DeepEqual(normalizeStringSlice(left.Allowed), normalizeStringSlice(right.Allowed)) &&
-		reflect.DeepEqual(normalizeStringSlice(left.IPAllowlist), normalizeStringSlice(right.IPAllowlist)) &&
-		reflect.DeepEqual(left.Limits, right.Limits) &&
-		strings.TrimSpace(left.Status) == strings.TrimSpace(right.Status) &&
-		reflect.DeepEqual(left.ExpiresAt, right.ExpiresAt) &&
-		reflect.DeepEqual(normalizeStringMap(left.Metadata), normalizeStringMap(right.Metadata))
+	if strings.TrimSpace(left.ProjectID) != strings.TrimSpace(right.ProjectID) ||
+		strings.TrimSpace(left.Name) != strings.TrimSpace(right.Name) ||
+		strings.TrimSpace(left.Group) != strings.TrimSpace(right.Group) ||
+		strings.TrimSpace(left.Status) != strings.TrimSpace(right.Status) {
+		return false
+	}
+	if right.Allowed != nil && !reflect.DeepEqual(normalizeStringSlice(left.Allowed), normalizeStringSlice(right.Allowed)) {
+		return false
+	}
+	if right.IPAllowlist != nil && !reflect.DeepEqual(normalizeStringSlice(left.IPAllowlist), normalizeStringSlice(right.IPAllowlist)) {
+		return false
+	}
+	if right.Limits != (server.QuotaLimits{}) && !reflect.DeepEqual(left.Limits, right.Limits) {
+		return false
+	}
+	if right.ExpiresAt != nil && !reflect.DeepEqual(left.ExpiresAt, right.ExpiresAt) {
+		return false
+	}
+	// Metadata is server-owned for Admin API key writes (created_by,
+	// created_by_role) and UpdateAPIKey does not accept metadata changes.
+	return true
 }
 
 func normalizeStringMap(input map[string]string) map[string]string {

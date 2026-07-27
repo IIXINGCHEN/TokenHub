@@ -52,8 +52,24 @@ func loadBundle(path string) (*bundle.CanonicalMigrationBundle, error) {
 	return bundle.Unmarshal(payload)
 }
 
-func secretsResolver() bundle.SecretResolver {
-	return bundle.EnvResolver{}
+func buildSecretResolver(sourceName string, filePath string) (bundle.SecretResolver, error) {
+	switch strings.ToLower(strings.TrimSpace(sourceName)) {
+	case "", "env":
+		return bundle.EnvResolver{}, nil
+	case "file":
+		if strings.TrimSpace(filePath) == "" {
+			return nil, fmt.Errorf("--secret-file is required when --secret-source=file")
+		}
+		return bundle.NewFileResolver(filePath)
+	default:
+		return nil, fmt.Errorf("invalid --secret-source %q: expected env or file", sourceName)
+	}
+}
+
+func secretsResolver(cmd *cobra.Command) (bundle.SecretResolver, error) {
+	sourceName, _ := cmd.Flags().GetString("secret-source")
+	filePath, _ := cmd.Flags().GetString("secret-file")
+	return buildSecretResolver(sourceName, filePath)
 }
 
 func resolveTarget(cmd *cobra.Command) (string, string) {
@@ -98,7 +114,7 @@ func writeSecretFile(path string, payload []byte) error {
 
 // writeApplyArtifacts persists the rollback checkpoint and any one-time API
 // key secrets returned by apply so they are not silently discarded. The
-// remote apply has already succeeded by the time this runs, so on write
+// remote apply has already changed state by the time this runs, so on write
 // failure the payloads are dumped to stdout as a last resort: the checkpoint
 // and key plaintext cannot be retrieved again.
 func writeApplyArtifacts(cmd *cobra.Command, bundlePath string, result *migrationtokenhub.ApplyResult) error {
@@ -112,7 +128,7 @@ func writeApplyArtifacts(cmd *cobra.Command, bundlePath string, result *migratio
 	}
 	var failures []string
 	if err := writeSecretFile(checkpointPath, checkpointPayload); err != nil {
-		fmt.Fprintf(os.Stderr, "WARNING: apply succeeded on the remote, but writing the checkpoint failed (%v); dumping it below so rollback stays possible:\n", err)
+		fmt.Fprintf(os.Stderr, "WARNING: remote apply changed state, but writing the checkpoint failed (%v); dumping it below so rollback stays possible:\n", err)
 		fmt.Printf("--- checkpoint ---\n%s\n", checkpointPayload)
 		failures = append(failures, fmt.Sprintf("write checkpoint: %v", err))
 	} else {
@@ -128,7 +144,7 @@ func writeApplyArtifacts(cmd *cobra.Command, bundlePath string, result *migratio
 			return fmt.Errorf("marshal new keys: %w", err)
 		}
 		if err := writeSecretFile(newKeysPath, newKeysPayload); err != nil {
-			fmt.Fprintf(os.Stderr, "WARNING: apply succeeded on the remote, but writing the new API keys failed (%v); dumping the one-time plaintext below — it cannot be retrieved again:\n", err)
+			fmt.Fprintf(os.Stderr, "WARNING: remote apply changed state, but writing the new API keys failed (%v); dumping the one-time plaintext below — it cannot be retrieved again:\n", err)
 			fmt.Printf("--- new API keys ---\n%s\n", newKeysPayload)
 			failures = append(failures, fmt.Sprintf("write new keys: %v", err))
 		} else {
@@ -136,14 +152,33 @@ func writeApplyArtifacts(cmd *cobra.Command, bundlePath string, result *migratio
 		}
 	}
 	if len(failures) > 0 {
-		return fmt.Errorf("apply succeeded on the remote, but persisting artifacts failed (%s); do not re-run apply — capture the dumped output above", strings.Join(failures, "; "))
+		return fmt.Errorf("remote apply changed state, but persisting artifacts failed (%s); do not re-run apply — capture the dumped output above", strings.Join(failures, "; "))
 	}
 	return nil
 }
 
-func newHTTPSink(baseURL string, token string) *migrationtokenhub.HTTPSink {
+func newHTTPSink(baseURL string, token string, resolver bundle.SecretResolver) *migrationtokenhub.HTTPSink {
 	client := migrationtokenhub.NewAdminAPIClient(baseURL, token, http.DefaultClient)
-	return migrationtokenhub.NewHTTPSink(client, secretsResolver())
+	return migrationtokenhub.NewHTTPSink(client, resolver)
+}
+
+func handleApplyResult(cmd *cobra.Command, bundlePath string, result *migrationtokenhub.ApplyResult, applyErr error) error {
+	var artifactErr error
+	if result != nil {
+		label := "Apply complete"
+		if applyErr != nil {
+			label = "Apply partially complete"
+		}
+		fmt.Printf("%s:\n  Created: %d\n  Updated: %d\n  Skipped: %d\n", label, result.Report.Created, result.Report.Updated, result.Report.Skipped)
+		artifactErr = writeApplyArtifacts(cmd, bundlePath, result)
+	}
+	if applyErr != nil {
+		if artifactErr != nil {
+			return fmt.Errorf("%w; %v", applyErr, artifactErr)
+		}
+		return applyErr
+	}
+	return artifactErr
 }
 
 var planCmd = &cobra.Command{
@@ -159,7 +194,11 @@ var planCmd = &cobra.Command{
 		if err := requireRemoteTarget("plan", baseURL); err != nil {
 			return err
 		}
-		report, err := newHTTPSink(baseURL, token).Plan(context.Background(), migrationBundle)
+		resolver, err := secretsResolver(cmd)
+		if err != nil {
+			return errExit(ExitSourceUnreadable, err.Error())
+		}
+		report, err := newHTTPSink(baseURL, token, resolver).Plan(context.Background(), migrationBundle)
 		if err != nil {
 			return errExit(ExitSinkRejected, err.Error())
 		}
@@ -182,20 +221,20 @@ var applyCmd = &cobra.Command{
 		if err := requireRemoteTarget("apply", baseURL); err != nil {
 			return err
 		}
+		resolver, err := secretsResolver(cmd)
+		if err != nil {
+			return errExit(ExitSourceUnreadable, err.Error())
+		}
 		if dryRun {
-			report, err := newHTTPSink(baseURL, token).Plan(context.Background(), migrationBundle)
+			report, err := newHTTPSink(baseURL, token, resolver).Plan(context.Background(), migrationBundle)
 			if err != nil {
 				return errExit(ExitSinkRejected, err.Error())
 			}
 			fmt.Printf("Dry-run plan:\n  Created: %d\n  Updated: %d\n  Skipped: %d\n", report.Created, report.Updated, report.Skipped)
 			return nil
 		}
-		result, err := newHTTPSink(baseURL, token).Apply(context.Background(), migrationBundle)
-		if err != nil {
-			return errExit(ExitSinkRejected, err.Error())
-		}
-		fmt.Printf("Apply complete:\n  Created: %d\n  Updated: %d\n  Skipped: %d\n", result.Report.Created, result.Report.Updated, result.Report.Skipped)
-		if err := writeApplyArtifacts(cmd, bundlePath, result); err != nil {
+		result, applyErr := newHTTPSink(baseURL, token, resolver).Apply(context.Background(), migrationBundle)
+		if err := handleApplyResult(cmd, bundlePath, result, applyErr); err != nil {
 			return errExit(ExitSinkRejected, err.Error())
 		}
 		return nil
@@ -215,7 +254,11 @@ var verifyCmd = &cobra.Command{
 		if err := requireRemoteTarget("verify", baseURL); err != nil {
 			return err
 		}
-		result, err := newHTTPSink(baseURL, token).Verify(context.Background(), migrationBundle)
+		resolver, err := secretsResolver(cmd)
+		if err != nil {
+			return errExit(ExitSourceUnreadable, err.Error())
+		}
+		result, err := newHTTPSink(baseURL, token, resolver).Verify(context.Background(), migrationBundle)
 		if err != nil {
 			return errExit(ExitSinkRejected, err.Error())
 		}
@@ -248,7 +291,7 @@ var rollbackCmd = &cobra.Command{
 		if err := requireRemoteTarget("rollback", baseURL); err != nil {
 			return err
 		}
-		result, err := newHTTPSink(baseURL, token).Rollback(context.Background(), checkpoint)
+		result, err := newHTTPSink(baseURL, token, bundle.EnvResolver{}).Rollback(context.Background(), checkpoint)
 		if err != nil {
 			return errExit(ExitSinkRejected, err.Error())
 		}

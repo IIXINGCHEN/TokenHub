@@ -19,6 +19,18 @@ type AdminAPIClient struct {
 	httpClient *http.Client
 }
 
+// ApprovalRequiredError reports that an Admin API write created a pending
+// approval request instead of applying the requested mutation.
+type ApprovalRequiredError struct {
+	Method   string
+	Endpoint string
+	Approval json.RawMessage
+}
+
+func (e *ApprovalRequiredError) Error() string {
+	return fmt.Sprintf("admin api %s %s requires approval", e.Method, e.Endpoint)
+}
+
 func NewAdminAPIClient(baseURL string, token string, httpClient *http.Client) *AdminAPIClient {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
@@ -88,6 +100,19 @@ func (c *AdminAPIClient) doJSON(ctx context.Context, method string, endpoint str
 	}
 	if response.StatusCode >= 400 {
 		return fmt.Errorf("admin api %s %s failed: status=%d body=%s", method, endpoint, response.StatusCode, strings.TrimSpace(string(responseBody)))
+	}
+	if response.StatusCode == http.StatusAccepted {
+		var pending struct {
+			ApprovalRequired bool            `json:"approval_required"`
+			Approval         json.RawMessage `json:"approval"`
+		}
+		if err := json.Unmarshal(responseBody, &pending); err == nil && pending.ApprovalRequired {
+			return &ApprovalRequiredError{
+				Method:   method,
+				Endpoint: endpoint,
+				Approval: pending.Approval,
+			}
+		}
 	}
 	if out == nil || len(responseBody) == 0 {
 		return nil
@@ -300,6 +325,10 @@ func (c *AdminAPIClient) UpdateAdminUser(ctx context.Context, id string, req ser
 		return server.AdminUser{}, err
 	}
 	return resp, nil
+}
+
+func (c *AdminAPIClient) DeleteAdminUser(ctx context.Context, id string) error {
+	return c.doJSON(ctx, http.MethodDelete, c.endpoint("/api/admin/users", id), nil, nil)
 }
 
 func (c *AdminAPIClient) ImportUsersCSV(ctx context.Context, content string) error {

@@ -31,6 +31,8 @@ func (s *HTTPSink) Apply(ctx context.Context, migrationBundle *bundle.CanonicalM
 	if err := bundle.Validate(migrationBundle); err != nil {
 		return nil, err
 	}
+	s.newKeys = map[string]string{}
+	s.refIndex = newRefIndex()
 	providers, err := s.client.ListProviders(ctx)
 	if err != nil {
 		return nil, err
@@ -70,7 +72,7 @@ func (s *HTTPSink) Apply(ctx context.Context, migrationBundle *bundle.CanonicalM
 	for _, item := range migrationBundle.Providers {
 		change, created, err := s.applyProviderHTTP(ctx, providers, item)
 		if err != nil {
-			return nil, err
+			return partialApplyFailure(result, s.newKeys, err)
 		}
 		if created.ID != "" {
 			providers = append(providers, created)
@@ -81,7 +83,7 @@ func (s *HTTPSink) Apply(ctx context.Context, migrationBundle *bundle.CanonicalM
 	for _, item := range migrationBundle.ProviderResources {
 		change, created, err := s.applyProviderResourceHTTP(ctx, resources, item)
 		if err != nil {
-			return nil, err
+			return partialApplyFailure(result, s.newKeys, err)
 		}
 		if created.ID != "" {
 			resources = append(resources, created)
@@ -92,7 +94,7 @@ func (s *HTTPSink) Apply(ctx context.Context, migrationBundle *bundle.CanonicalM
 	for _, item := range migrationBundle.Models {
 		change, created, err := s.applyModelHTTP(ctx, models, item)
 		if err != nil {
-			return nil, err
+			return partialApplyFailure(result, s.newKeys, err)
 		}
 		if created.Name != "" {
 			models = append(models, created)
@@ -103,14 +105,14 @@ func (s *HTTPSink) Apply(ctx context.Context, migrationBundle *bundle.CanonicalM
 	for _, item := range migrationBundle.Users {
 		change, err := s.applyUserHTTP(ctx, users, item)
 		if err != nil {
-			return nil, err
+			return partialApplyFailure(result, s.newKeys, err)
 		}
 		result.Changes = append(result.Changes, change)
 		result.Checkpoint.Changes = append(result.Checkpoint.Changes, change)
 	}
 	users, err = s.client.ListUsers(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list users after import: %w", err)
+		return partialApplyFailure(result, s.newKeys, fmt.Errorf("list users after import: %w", err))
 	}
 	// Backfill refIndex for newly created users so project owner refs resolve.
 	for _, item := range migrationBundle.Users {
@@ -123,7 +125,7 @@ func (s *HTTPSink) Apply(ctx context.Context, migrationBundle *bundle.CanonicalM
 	for _, item := range migrationBundle.Projects {
 		change, created, err := s.applyProjectHTTP(ctx, projects, users, item)
 		if err != nil {
-			return nil, err
+			return partialApplyFailure(result, s.newKeys, err)
 		}
 		if created.ID != "" {
 			projects = append(projects, created)
@@ -134,7 +136,7 @@ func (s *HTTPSink) Apply(ctx context.Context, migrationBundle *bundle.CanonicalM
 	for _, item := range migrationBundle.APIKeys {
 		change, err := s.applyAPIKeyHTTP(ctx, keys, item)
 		if err != nil {
-			return nil, err
+			return partialApplyFailure(result, s.newKeys, err)
 		}
 		result.Changes = append(result.Changes, change)
 		result.Checkpoint.Changes = append(result.Checkpoint.Changes, change)
@@ -142,7 +144,7 @@ func (s *HTTPSink) Apply(ctx context.Context, migrationBundle *bundle.CanonicalM
 	for _, item := range migrationBundle.Routes {
 		change, created, err := s.applyRouteHTTP(ctx, routes, item)
 		if err != nil {
-			return nil, err
+			return partialApplyFailure(result, s.newKeys, err)
 		}
 		if created.ID != "" {
 			routes = append(routes, created)
@@ -150,9 +152,34 @@ func (s *HTTPSink) Apply(ctx context.Context, migrationBundle *bundle.CanonicalM
 		result.Changes = append(result.Changes, change)
 		result.Checkpoint.Changes = append(result.Checkpoint.Changes, change)
 	}
-	result.NewKeys = s.newKeys
+	return finalizeApplyResult(result, s.newKeys), nil
+}
+
+func finalizeApplyResult(result *ApplyResult, newKeys map[string]string) *ApplyResult {
+	if result == nil {
+		return nil
+	}
+	result.NewKeys = make(map[string]string, len(newKeys))
+	for ref, secret := range newKeys {
+		result.NewKeys[ref] = secret
+	}
 	result.Report = buildReportFromChanges(result.Changes, result.NewKeys)
-	return result, nil
+	return result
+}
+
+// partialApplyFailure preserves rollback and one-time-secret artifacts after
+// a non-transactional remote apply has already mutated at least one resource.
+func partialApplyFailure(result *ApplyResult, newKeys map[string]string, applyErr error) (*ApplyResult, error) {
+	result = finalizeApplyResult(result, newKeys)
+	for _, change := range result.Changes {
+		if change.Action == ActionCreate || change.Action == ActionUpdate {
+			return result, applyErr
+		}
+	}
+	if len(result.NewKeys) > 0 {
+		return result, applyErr
+	}
+	return nil, applyErr
 }
 
 func (s *HTTPSink) Plan(ctx context.Context, migrationBundle *bundle.CanonicalMigrationBundle) (*MigrationReport, error) {
@@ -241,9 +268,11 @@ func (s *HTTPSink) Plan(ctx context.Context, migrationBundle *bundle.CanonicalMi
 	}
 	for _, item := range migrationBundle.APIKeys {
 		projectID := planIndex.projects[item.ProjectRef]
+		spec := item.Spec
+		spec.ProjectID = projectID
 		if existing, found := findAPIKeyByBusinessKey(keys, projectID, item.Spec.Name); found {
 			planIndex.apiKeys[item.ExternalRef.ID] = existing.ID
-			changes = append(changes, Change{Resource: "api_key", ID: existing.ID, Action: chooseActionAPIKey(existing, item.Spec)})
+			changes = append(changes, Change{Resource: "api_key", ID: existing.ID, Action: chooseActionAPIKey(existing, spec)})
 		} else {
 			changes = append(changes, Change{Resource: "api_key", ID: item.Spec.Name, Action: ActionCreate})
 		}
@@ -455,6 +484,8 @@ func (s *HTTPSink) Rollback(ctx context.Context, checkpoint Checkpoint) (*Rollba
 			err = s.client.DeleteProject(ctx, change.ID)
 		case "api_key":
 			err = s.client.DeleteAPIKey(ctx, change.ID)
+		case "user":
+			err = s.client.DeleteAdminUser(ctx, change.ID)
 		default:
 			continue
 		}
@@ -695,22 +726,24 @@ func (s *HTTPSink) applyAPIKeyHTTP(ctx context.Context, existingKeys []server.AP
 	if projectID == "" {
 		return Change{}, fmt.Errorf("missing project ref for %s", item.ExternalRef.ID)
 	}
+	spec := item.Spec
+	spec.ProjectID = projectID
 	if current, found := findAPIKeyByBusinessKey(existingKeys, projectID, item.Spec.Name); found {
 		s.refIndex.apiKeys[item.ExternalRef.ID] = current.ID
-		action := chooseActionAPIKey(current, item.Spec)
+		action := chooseActionAPIKey(current, spec)
 		if action == ActionSkip {
 			return Change{Resource: "api_key", ID: current.ID, Action: ActionSkip}, nil
 		}
-		_, err := s.client.UpdateAPIKey(ctx, current.ID, item.Spec)
+		_, err := s.client.UpdateAPIKey(ctx, current.ID, spec)
 		return Change{Resource: "api_key", ID: current.ID, Action: ActionUpdate}, err
 	}
 	payload := map[string]any{
-		"name":           item.Spec.Name,
-		"group":          item.Spec.Group,
-		"allowed_models": item.Spec.Allowed,
-		"ip_allowlist":   item.Spec.IPAllowlist,
-		"limits":         item.Spec.Limits,
-		"expires_at":     item.Spec.ExpiresAt,
+		"name":           spec.Name,
+		"group":          spec.Group,
+		"allowed_models": spec.Allowed,
+		"ip_allowlist":   spec.IPAllowlist,
+		"limits":         spec.Limits,
+		"expires_at":     spec.ExpiresAt,
 	}
 	created, err := s.client.CreateProjectKey(ctx, projectID, payload)
 	if err != nil {

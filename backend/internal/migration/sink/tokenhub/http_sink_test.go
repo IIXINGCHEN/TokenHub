@@ -43,6 +43,20 @@ func newHTTPMigrationTestServer(t *testing.T) *httptest.Server {
 	return httptest.NewServer(server.NewWithConfig(store, config).Handler())
 }
 
+func newHTTPMigrationTestServerWithoutSMTP(t *testing.T) *httptest.Server {
+	t.Helper()
+	config := server.Config{
+		AdminToken:             "test-admin-token",
+		BootstrapAdminPassword: "admin123456",
+		ModelCatalogFile:       writeTestCatalog(t),
+	}
+	store := server.NewMemoryStoreWithConfig(config)
+	if err := server.SeedDemoDataWithConfig(store, config); err != nil {
+		t.Fatalf("seed demo data: %v", err)
+	}
+	return httptest.NewServer(server.NewWithConfig(store, config).Handler())
+}
+
 // configureMigrationTestSMTP registers an in-process fake SMTP channel so
 // that the user import endpoint, which mails password resets, is usable.
 func configureMigrationTestSMTP(t *testing.T, store *server.GormStore) {
@@ -208,11 +222,12 @@ func TestHTTPSinkApplyUserCreatesAndUpdates(t *testing.T) {
 		Users: []bundle.UserRef{{
 			ExternalRef: bundle.ExternalRef{System: "litellm", ID: "user/alice"},
 			TeamRef:     "team/eng",
-			Spec:        server.AdminUser{Username: "alice", Name: "Alice", Email: "alice@example.com", Role: "user", Status: server.StatusActive},
+			Spec:        server.AdminUser{Username: "alice", Name: "Alice", Email: "alice@example.com", Role: "viewer", Status: server.StatusActive},
 		}},
 	}
 
-	if _, err := sink.Apply(context.Background(), migrationBundle); err != nil {
+	firstResult, err := sink.Apply(context.Background(), migrationBundle)
+	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	users, err := client.ListUsers(context.Background())
@@ -230,6 +245,35 @@ func TestHTTPSinkApplyUserCreatesAndUpdates(t *testing.T) {
 	}
 	if created.TeamID != "team-eng" {
 		t.Fatalf("expected team resolved from TeamRef, got %q", created.TeamID)
+	}
+	verifyResult, err := sink.Verify(context.Background(), migrationBundle)
+	if err != nil {
+		t.Fatalf("verify imported user: %v", err)
+	}
+	if !verifyResult.OK {
+		t.Fatalf("expected imported user role normalization to verify, got %+v", verifyResult.Issues)
+	}
+
+	rollbackResult, err := sink.Rollback(context.Background(), firstResult.Checkpoint)
+	if err != nil {
+		t.Fatalf("rollback imported user: %v", err)
+	}
+	if len(rollbackResult.Changes) != 1 || rollbackResult.Changes[0].Resource != "user" {
+		t.Fatalf("expected rollback to delete the imported user, got %+v", rollbackResult.Changes)
+	}
+	users, err = client.ListUsers(context.Background())
+	if err != nil {
+		t.Fatalf("list users after rollback: %v", err)
+	}
+	for _, user := range users {
+		if user.Email == "alice@example.com" {
+			t.Fatalf("expected imported user to be removed by rollback, got %+v", user)
+		}
+	}
+
+	// Recreate the user for update and idempotency coverage below.
+	if _, err := sink.Apply(context.Background(), migrationBundle); err != nil {
+		t.Fatalf("recreate after rollback: %v", err)
 	}
 
 	// Second apply with a changed spec must apply the update for real. Reuse
@@ -275,6 +319,100 @@ func TestHTTPSinkApplyUserCreatesAndUpdates(t *testing.T) {
 	}
 }
 
+func TestHTTPSinkReturnsCheckpointAfterPartialApplyFailure(t *testing.T) {
+	ts := newHTTPMigrationTestServerWithoutSMTP(t)
+	defer ts.Close()
+
+	client := NewAdminAPIClient(ts.URL, "test-admin-token", http.DefaultClient)
+	sink := NewHTTPSink(client, bundle.StaticResolver{})
+	migrationBundle := &bundle.CanonicalMigrationBundle{
+		SchemaVersion: bundle.SchemaVersion,
+		Source:        bundle.Source{Adapter: "litellm", AdapterVersion: "1.60.0"},
+		GeneratedAt:   time.Date(2026, 7, 27, 9, 0, 0, 0, time.UTC),
+		Providers: []bundle.ProviderRef{{
+			ExternalRef: bundle.ExternalRef{System: "litellm", ID: "provider/partial"},
+			Spec:        server.Provider{ID: "provider-partial", Name: "Partial Provider", Type: server.ProviderOpenAICompatible, Status: server.StatusActive, Healthy: true},
+		}},
+		Users: []bundle.UserRef{{
+			ExternalRef: bundle.ExternalRef{System: "litellm", ID: "user/partial"},
+			Spec:        server.AdminUser{Username: "partial", Name: "Partial User", Email: "partial@example.com", Role: "viewer", Status: server.StatusActive},
+		}},
+	}
+
+	result, err := sink.Apply(context.Background(), migrationBundle)
+	if err == nil || !strings.Contains(err.Error(), "email_notification_required") {
+		t.Fatalf("expected email prerequisite failure, got result=%+v err=%v", result, err)
+	}
+	if result == nil {
+		t.Fatal("expected a partial apply result with a rollback checkpoint")
+	}
+	if result.Report.Created != 1 || len(result.Checkpoint.Changes) != 1 {
+		t.Fatalf("unexpected partial result: %+v", result)
+	}
+	if result.Checkpoint.Changes[0].Resource != "provider" || result.Checkpoint.Changes[0].Action != ActionCreate {
+		t.Fatalf("expected provider create in partial checkpoint, got %+v", result.Checkpoint.Changes)
+	}
+
+	if _, err := sink.Rollback(context.Background(), result.Checkpoint); err != nil {
+		t.Fatalf("rollback partial apply: %v", err)
+	}
+	providers, err := client.ListProviders(context.Background())
+	if err != nil {
+		t.Fatalf("list providers after rollback: %v", err)
+	}
+	for _, provider := range providers {
+		if provider.Name == "Partial Provider" {
+			t.Fatalf("expected partial provider to be rolled back, got %+v", provider)
+		}
+	}
+}
+
+func TestHTTPSinkSeededModelConvergesAfterOneUpdate(t *testing.T) {
+	ts := newHTTPMigrationTestServer(t)
+	defer ts.Close()
+
+	client := NewAdminAPIClient(ts.URL, "test-admin-token", http.DefaultClient)
+	migrationBundle := &bundle.CanonicalMigrationBundle{
+		SchemaVersion: bundle.SchemaVersion,
+		Source:        bundle.Source{Adapter: "litellm", AdapterVersion: "1.60.0"},
+		GeneratedAt:   time.Date(2026, 7, 27, 9, 30, 0, 0, time.UTC),
+		Models: []bundle.ModelRef{{
+			ExternalRef: bundle.ExternalRef{System: "litellm", ID: "model/seeded"},
+			Spec: server.Model{
+				ID:       "source-specific-model-id",
+				Name:     "seeded-test-model",
+				Category: "llm",
+				Family:   "openai",
+				Modality: "text",
+				Metadata: map[string]string{"mode": "chat"},
+				Status:   server.StatusActive,
+			},
+		}},
+	}
+
+	first, err := NewHTTPSink(client, bundle.StaticResolver{}).Apply(context.Background(), migrationBundle)
+	if err != nil {
+		t.Fatalf("first apply: %v", err)
+	}
+	if first.Report.Updated != 1 {
+		t.Fatalf("expected one update for the seeded model, got %+v", first.Report)
+	}
+	verify, err := NewHTTPSink(client, bundle.StaticResolver{}).Verify(context.Background(), migrationBundle)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if !verify.OK {
+		t.Fatalf("expected seeded model to verify after update, got %+v", verify.Issues)
+	}
+	second, err := NewHTTPSink(client, bundle.StaticResolver{}).Apply(context.Background(), migrationBundle)
+	if err != nil {
+		t.Fatalf("second apply: %v", err)
+	}
+	if second.Report.Created != 0 || second.Report.Updated != 0 {
+		t.Fatalf("expected seeded model re-apply to skip, got %+v", second.Report)
+	}
+}
+
 func TestSameAdminUserEmptyDesiredFieldsMeanKeep(t *testing.T) {
 	existing := server.AdminUser{Username: "alice", Name: "Alice", Email: "alice@example.com", Role: "user", TeamID: "team-eng", Status: server.StatusActive}
 
@@ -296,5 +434,31 @@ func TestSameAdminUserEmptyDesiredFieldsMeanKeep(t *testing.T) {
 	desired = server.AdminUser{Username: "alice", Name: "Alice Zhang", TeamID: "team-eng"}
 	if sameAdminUser(existing, desired) {
 		t.Fatal("expected changed non-empty field to require an update")
+	}
+}
+
+func TestSameAPIKeyUsesResolvedProjectAndIgnoresServerMetadata(t *testing.T) {
+	existing := server.APIKey{
+		ID:        "key-1",
+		ProjectID: "project-1",
+		Name:      "migrated-key",
+		Group:     "default",
+		Allowed:   []string{"gpt-4o-mini"},
+		Status:    server.StatusActive,
+		Metadata:  map[string]string{"created_by": "usr_admin"},
+	}
+	desired := server.APIKey{
+		ProjectID: "project-1",
+		Name:      "migrated-key",
+		Allowed:   []string{"gpt-4o-mini"},
+		Status:    server.StatusActive,
+		Metadata:  map[string]string{"litellm_team_id": "team-red"},
+	}
+	if !sameAPIKey(existing, desired) {
+		t.Fatal("expected resolved project and server-owned metadata to converge")
+	}
+	desired.ProjectID = ""
+	if sameAPIKey(existing, desired) {
+		t.Fatal("expected an unresolved project ID to differ")
 	}
 }
