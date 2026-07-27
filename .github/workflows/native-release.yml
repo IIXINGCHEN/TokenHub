@@ -84,15 +84,21 @@ jobs:
           npm ci
           npm run build
 
-          server_path=""
+          server_paths=()
           while IFS= read -r candidate; do
             candidate_root="$(dirname "$candidate")"
             if [[ -d "$candidate_root/.next" && -f "$candidate_root/package.json" ]]; then
-              server_path="$candidate"
-              break
+              server_paths+=("$candidate")
             fi
           done < <(find .next/standalone -type f -name server.js -print)
-          test -n "$server_path"
+          if [[ "${#server_paths[@]}" -ne 1 ]]; then
+            printf 'expected exactly one standalone server root, found %s\n' "${#server_paths[@]}" >&2
+            for candidate in "${server_paths[@]}"; do
+              printf 'candidate: %s\n' "$candidate" >&2
+            done
+            exit 1
+          fi
+          server_path="${server_paths[0]}"
           standalone_root="$(dirname "$server_path")"
           bundle="../native-frontend-${ARCH}"
           mkdir -p "$bundle/frontend/.next"
