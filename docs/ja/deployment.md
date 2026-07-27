@@ -23,7 +23,7 @@ TokenHub は 2 種類のデータベースバックエンドをサポートし�
 **デプロイ：**
 
 ```bash
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --remove-orphans
 ```
 
 ### PostgreSQL（本番環境推奨）
@@ -41,7 +41,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
 **デプロイ：**
 
 ```bash
-docker compose --env-file deploy/.env -f deploy/docker-compose.postgres.yml up -d
+docker compose --env-file deploy/.env -f deploy/docker-compose.postgres.yml up -d --remove-orphans
 ```
 
 PostgreSQL の詳細な設定については、[PostgreSQL セットアップガイド](../postgresql-setup.md)を参照してください。
@@ -97,7 +97,7 @@ systemd を使用する単一 Linux ホスト、または launchd を使用す�
 インストーラーをダウンロードして内容を確認し、最新の安定版 Release をインストールします。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/astaxie/TokenHub/main/deploy/native/install.sh \
+curl -fsSL https://raw.githubusercontent.com/wangle201210/TokenHub/main/deploy/native/install.sh \
   -o /tmp/tokenhub-install.sh
 sudo bash /tmp/tokenhub-install.sh install
 ```
@@ -168,7 +168,7 @@ cp deploy/.env.example deploy/.env
 - `TOKENHUB_ADMIN_TOKEN`: Admin API の初期 Token。32 バイト以上のランダム値を使用してください。
 - `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD`: 初期 `admin` ユーザーの作成時にのみ使用するパスワード。12 バイト以上にしてください。
 - `TOKENHUB_SECRET_KEY`: バックエンド秘密鍵。32 バイト以上のランダム値を使用し、安定して保持してください。
-- `TOKENHUB_IMAGE_TAG`: バックエンドとフロントエンドで共通のイメージタグ。デフォルトは `latest`。
+- `TOKENHUB_IMAGE_TAG`: 管理対象 TokenHub イメージのタグ。デフォルトは `latest`。
 - `TOKENHUB_PUBLIC_BASE_URL`: ユーザーに表示するバックエンド URL。
 - `TOKENHUB_API_BASE_URL`: ブラウザの管理コンソールが使用するバックエンド URL。フロントエンドサーバーが実行時に読み取ります。非推奨の `NEXT_PUBLIC_API_BASE_URL` は、1 回の互換期間に限りフォールバックとして残します。
 - `TOKENHUB_BACKEND_PORT`: バックエンドのホスト側ポート。デフォルトは `8080`。
@@ -180,7 +180,7 @@ cp deploy/.env.example deploy/.env
 ./deploy/install.sh
 ```
 
-スクリプトは Compose の環境変数を検証し、公開済みイメージを取得して、ローカルではビルドせずにコンテナを起動します。GHCR イメージの初回公開中に取得できない場合は、現在のチェックアウトからのビルドへ自動的に切り替えます。秘密値を表示せずに安全でない変数を個別に報告します。Compose が失敗し、その試行で作成または再起動したバックエンドコンテナが exited、restarting、dead、unhealthy のいずれかである場合、その試行のバックエンドログを最大 100 行表示します。バックエンド以外の障害では、無関係なバックエンドログを出力しません。
+スクリプトは Compose の環境変数を検証し、公開済みイメージを取得して、ローカルではビルドせずに管理対象アプリケーションコンテナを起動します。以前の 2 コンテナ構成から更新する場合、廃止された個別フロントエンドコンテナを削除しますが、`tokenhub-data` ボリュームは保持します。GHCR イメージの初回公開中に取得できない場合は、現在のチェックアウトからのビルドへ自動的に切り替えます。秘密値を表示せずに安全でない変数を個別に報告します。Compose が失敗し、その試行で作成または再起動したアプリケーションコンテナが exited、restarting、dead、unhealthy のいずれかである場合、その試行のログを最大 100 行表示します。
 
 イメージを取得したりコンテナを起動したりせず、設定だけを検証するには次を実行します。
 
@@ -192,22 +192,22 @@ cp deploy/.env.example deploy/.env
 
 ### 公開イメージのバージョンルール
 
-GitHub Actions は `linux/amd64` と `linux/arm64` 向けに `ghcr.io/astaxie/tokenhub-backend` と `ghcr.io/astaxie/tokenhub-frontend` を公開します。
+GitHub Actions は `linux/amd64` と `linux/arm64` 向けに完全な `ghcr.io/wangle201210/tokenhub-backend` イメージを公開します。互換性のためイメージ名は維持しますが、バックエンド、スタンドアロン Next.js コンソール、Node.js ランタイム、コンテナスーパーバイザーを含みます。
 
 - GitHub Release を公開すると、完全なセマンティックバージョンのタグを自動生成します。プレリリースでない場合は、メジャー・マイナータグと `latest` も更新します。
 - `workflow_dispatch` では `edge` または分離された `manual-*` タグのみを公開でき、正式なリリースタグや `latest` は上書きできません。
 - PR ではコンテナイメージをビルドまたは push しません。
 - `main` へのマージではイメージを公開しません。
 
-ワークフローは、まず実行ごとのステージングタグで各イメージを push し、両方のマルチプラットフォームイメージが存在することを確認してから最終タグを公開します。バックエンドとフロントエンドには同じ `TOKENHUB_IMAGE_TAG` を使用してください。本番環境では `latest` ではなく、完全なリリースタグを固定することを推奨します。
+ワークフローは、まず実行ごとのステージングタグでマルチプラットフォームイメージを push して検証し、その後に最終タグを公開します。本番環境では `latest` ではなく、完全なリリースタグを固定することを推奨します。
 
-GHCR で初めて公開した Package はデフォルトで非公開です。匿名デプロイを有効にする前に、リポジトリ所有者が両方の Package を Public に変更する必要があります。それまでは、デフォルトの `latest` タグを使用するデプロイに限り、取得に失敗するとローカルのソースビルドへ自動的に切り替えます。明示した `TOKENHUB_IMAGE_TAG` を取得できない場合、現在のソースをそのバージョンとして扱わず、インストールスクリプトは終了します。
+GHCR で初めて公開した Package はデフォルトで非公開です。匿名デプロイを有効にする前に、リポジトリ所有者がその Package を Public に変更する必要があります。それまでは、デフォルトの `latest` タグを使用するデプロイに限り、取得に失敗するとローカルのソースビルドへ自動的に切り替えます。明示した `TOKENHUB_IMAGE_TAG` を取得できない場合、現在のソースをそのバージョンとして扱わず、インストールスクリプトは終了します。
 
 ### Docker のバージョン状態とロールバック
 
 プラットフォーム管理者は TokenHub ロゴの下にあるバージョンバッジを選択すると、実行中のバージョン、最新の安定版 GitHub Release、最大 3 件の過去の安定版を確認できます。正式なイメージビルドには公開ワークフローから正確なバージョンが設定され、ローカルのソースビルドにはパッケージバージョンとソースビルドの表示が使用されます。
 
-バージョン確認は、タイムアウト付きの送信 HTTPS リクエストで公開 GitHub Releases API にアクセスし、成功結果を 20 分間キャッシュします。デフォルトでは `astaxie/TokenHub` を確認します。fork の Release を検証する場合、管理者は `TOKENHUB_RELEASE_REPOSITORY` に信頼できる公開 `owner/repository` を設定できます。GitHub の障害や Release がまだない状態でもゲートウェイトラフィックには影響せず、パネルは現在のバージョンを保ったまま利用不可の状態を表示します。
+バージョン確認は、タイムアウト付きの送信 HTTPS リクエストで公開 GitHub Releases API にアクセスし、成功結果を 20 分間キャッシュします。デフォルトでは `wangle201210/TokenHub` を確認します。fork の Release を検証する場合、管理者は `TOKENHUB_RELEASE_REPOSITORY` に信頼できる公開 `owner/repository` を設定できます。GitHub の障害や Release がまだない状態でもゲートウェイトラフィックには影響せず、パネルは現在のバージョンを保ったまま利用不可の状態を表示します。
 
 たとえば、ソース実行中に fork の Release を確認するには次を実行します。
 
@@ -215,7 +215,9 @@ GHCR で初めて公開した Package はデフォルトで非公開です。匿
 TOKENHUB_RELEASE_REPOSITORY=your-account/TokenHub ./start.sh
 ```
 
-TokenHub はバックエンドとフロントエンドを別々のコンテナとして配置するため、アプリケーションは Docker Socket をマウントせず、ホストを直接変更しません。Docker デプロイでは、引き続きパネルに Compose コマンドだけを表示し、両方のイメージへ同じ正確な `TOKENHUB_IMAGE_TAG` を適用します。コンテナ内で直接更新は行いません。後続の Compose 操作で `latest` に戻らないよう、実行前に `deploy/.env` へそのタグを固定してください。ソースデプロイでは、リリースノートに従う手動更新ガイドを引き続き表示します。ロールバック前にはデータベースをバックアップし、対象リリースが現在のスキーマをサポートすることを確認してください。
+デフォルトの SQLite およびローカル PostgreSQL Compose は、1 つの管理対象アプリケーションコンテナを使用します。管理者は「今すぐ更新」を選択し、チェックサム検証済みのプラットフォーム Release バンドルが `tokenhub-releases` ボリュームへインストールされた後に「今すぐ再起動」を選択できます。応答後にプロセスが終了し、Docker の `restart: unless-stopped` が対象バージョンのバックエンドとフロントエンドを同時に起動します。Docker Socket のマウントやホスト daemon の操作は行いません。
+
+新しく取得したイメージがこのボリュームを初めて使用すると、そのイメージバージョンが基準になります。画面から適用したバージョン、`current` リンク、履歴 Release は `tokenhub-releases` に保存されるため、同じイメージでの通常の再起動やコンテナ再作成でも更新結果は保持されます。異なるイメージタグを取得した場合は、そのイメージバージョンが新しい基準になります。リモート PostgreSQL のマルチインスタンス Compose では、管理リクエストを受けた 1 レプリカだけが変わることによるバージョン分裂を防ぐため、インプレース更新を無効化し、運用者向け Compose コマンドを表示します。ソースデプロイでは手動更新の案内を維持します。ロールバック前にはデータベースをバックアップし、対象リリースが現在のスキーマをサポートすることを確認してください。
 
 ### 任意: ローカルビルド
 
@@ -300,8 +302,8 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_ENV` | `prod` | ランタイム環境名 |
 | `TOKENHUB_HTTP_ADDR` | `:8080` | バックエンド待受アドレス |
 | `TOKENHUB_PUBLIC_BASE_URL` | `http://localhost:8080` | ユーザーに表示するバックエンド URL |
-| `TOKENHUB_RELEASE_REPOSITORY` | `astaxie/TokenHub` | バージョン確認に使用する信頼済み公開 GitHub リポジトリ。形式は `owner/repository` |
-| `TOKENHUB_INSTALL_ROOT` | `/opt/tokenhub` | ネイティブ Release のオンライン更新とロールバックで使用するインストールルート |
+| `TOKENHUB_RELEASE_REPOSITORY` | `wangle201210/TokenHub` | バージョン確認に使用する信頼済み公開 GitHub リポジトリ。形式は `owner/repository` |
+| `TOKENHUB_INSTALL_ROOT` | `/opt/tokenhub` | 管理対象 Release のオンライン更新とロールバックで使用するインストールルート |
 | `TOKENHUB_TRUSTED_PROXY_CIDRS` | 空 | `X-Forwarded-For` を提供できるプロキシ IP または CIDR（カンマ区切り） |
 | `TOKENHUB_CORS_ALLOWED_ORIGINS` | 公開 URL | バックエンドを呼び出せるブラウザー Origin（カンマ区切り） |
 | `TOKENHUB_ADMIN_TOKEN` | `change-me-tokenhub-admin-token` | Admin API 用の初期 Token |

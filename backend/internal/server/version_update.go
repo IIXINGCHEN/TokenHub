@@ -29,7 +29,7 @@ const (
 )
 
 var (
-	errNativeOperationUnsupported = errors.New("online updates require a native release deployment")
+	errNativeOperationUnsupported = errors.New("online updates require a managed release deployment")
 	errNativeOperationInProgress  = errors.New("another system update operation is already running")
 	errNativeAlreadyUpToDate      = errors.New("the current version is already up to date")
 	errNativeRollbackNotAllowed   = errors.New("the requested rollback version is not available")
@@ -154,7 +154,7 @@ func (s *versionService) rollbackNativeRelease(ctx context.Context, requestedVer
 }
 
 func (s *versionService) acquireNativeOperation() (func(), error) {
-	if s.deploymentType != nativeDeploymentType {
+	if !s.supportsManagedUpdates() {
 		return nil, errNativeOperationUnsupported
 	}
 	select {
@@ -575,7 +575,7 @@ func (s *versionService) withNativePendingRestart(info systemVersionInfo) system
 }
 
 func (s *versionService) pendingNativeRestartVersion() string {
-	if s.deploymentType != nativeDeploymentType {
+	if !s.supportsManagedUpdates() {
 		return ""
 	}
 	root, err := s.nativeInstallRoot()
@@ -619,7 +619,7 @@ func nativeOperationContext(ctx context.Context) (context.Context, context.Cance
 func nativeOperationHTTPError(err error, action string) error {
 	switch {
 	case errors.Is(err, errNativeOperationUnsupported):
-		return NewHTTPError(http.StatusConflict, "native_update_unavailable", "Online updates are available only for native Release installations")
+		return NewHTTPError(http.StatusConflict, "managed_update_unavailable", "Online updates are not enabled for this deployment")
 	case errors.Is(err, errNativeOperationInProgress):
 		return NewHTTPError(http.StatusConflict, "system_operation_in_progress", "Another update, rollback, or restart operation is already running")
 	case errors.Is(err, errNativeAlreadyUpToDate):
@@ -627,8 +627,8 @@ func nativeOperationHTTPError(err error, action string) error {
 	case errors.Is(err, errNativeRollbackNotAllowed):
 		return NewHTTPError(http.StatusBadRequest, "rollback_version_not_available", "The selected rollback version is not available for this installation")
 	default:
-		log.Printf("[tokenhub] native %s failed: %v", action, err)
-		return NewHTTPError(http.StatusBadGateway, "native_"+action+"_failed", "Unable to "+action+" the native TokenHub installation")
+		log.Printf("[tokenhub] managed %s failed: %v", action, err)
+		return NewHTTPError(http.StatusBadGateway, "managed_"+action+"_failed", "Unable to "+action+" the managed TokenHub installation")
 	}
 }
 
@@ -649,7 +649,7 @@ func (s *Server) handleAdminSystemUpdate(w http.ResponseWriter, r *http.Request)
 		writeError(w, r, nativeOperationHTTPError(err, "update"))
 		return
 	}
-	log.Printf("[tokenhub] native update to v%s applied by admin %s", version, actor.ID)
+	log.Printf("[tokenhub] managed update to v%s applied by admin %s", version, actor.ID)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"message":        "Update applied. Restart TokenHub to use the new version.",
 		"need_restart":   true,
@@ -681,7 +681,7 @@ func (s *Server) handleAdminSystemRollback(w http.ResponseWriter, r *http.Reques
 		writeError(w, r, nativeOperationHTTPError(err, "rollback"))
 		return
 	}
-	log.Printf("[tokenhub] native rollback to v%s applied by admin %s", version, actor.ID)
+	log.Printf("[tokenhub] managed rollback to v%s applied by admin %s", version, actor.ID)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"message":        "Rollback applied. Restart TokenHub to use the selected version.",
 		"need_restart":   true,
@@ -698,7 +698,7 @@ func (s *Server) handleAdminSystemRestart(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	if s.versions.deploymentType != nativeDeploymentType {
+	if !s.versions.supportsManagedUpdates() {
 		writeError(w, r, nativeOperationHTTPError(errNativeOperationUnsupported, "restart"))
 		return
 	}
@@ -709,12 +709,12 @@ func (s *Server) handleAdminSystemRestart(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	log.Printf("[tokenhub] native restart requested by admin %s", actor.ID)
+	log.Printf("[tokenhub] managed restart requested by admin %s", actor.ID)
 	writeJSON(w, http.StatusOK, map[string]any{"message": "TokenHub restart initiated"})
 	time.AfterFunc(500*time.Millisecond, func() {
 		if err := s.versions.restartProcess(); err != nil {
 			<-s.versions.operation
-			log.Printf("[tokenhub] native restart signal failed: %v", err)
+			log.Printf("[tokenhub] managed restart signal failed: %v", err)
 		}
 	})
 }

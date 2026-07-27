@@ -23,7 +23,7 @@ TokenHub supports two database backends:
 **Deployment:**
 
 ```bash
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --remove-orphans
 ```
 
 ### PostgreSQL (Production Recommended)
@@ -41,7 +41,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
 **Deployment:**
 
 ```bash
-docker compose --env-file deploy/.env -f deploy/docker-compose.postgres.yml up -d
+docker compose --env-file deploy/.env -f deploy/docker-compose.postgres.yml up -d --remove-orphans
 ```
 
 For detailed PostgreSQL configuration, see the [PostgreSQL Setup Guide](postgresql-setup.md).
@@ -97,7 +97,7 @@ Use the native Release installer for a single Linux host with systemd or a macOS
 Download and inspect the installer, then install the latest stable Release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/astaxie/TokenHub/main/deploy/native/install.sh \
+curl -fsSL https://raw.githubusercontent.com/wangle201210/TokenHub/main/deploy/native/install.sh \
   -o /tmp/tokenhub-install.sh
 sudo bash /tmp/tokenhub-install.sh install
 ```
@@ -168,7 +168,7 @@ Edit `deploy/.env` before starting:
 - `TOKENHUB_ADMIN_TOKEN`: Admin API bootstrap token. Use a random value of at least 32 bytes.
 - `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD`: Password used only when creating the initial `admin` user. Use at least 12 bytes.
 - `TOKENHUB_SECRET_KEY`: Backend secret key. Use a random value of at least 32 bytes and keep it stable.
-- `TOKENHUB_IMAGE_TAG`: Shared backend and frontend image tag. Default: `latest`.
+- `TOKENHUB_IMAGE_TAG`: Managed TokenHub image tag. Default: `latest`.
 - `TOKENHUB_PUBLIC_BASE_URL`: Public backend URL shown to users.
 - `TOKENHUB_API_BASE_URL`: Backend URL used by the browser admin console. The frontend server reads it at runtime. The deprecated `NEXT_PUBLIC_API_BASE_URL` remains a fallback for one compatibility cycle.
 - `TOKENHUB_BACKEND_PORT`: Host port for the backend. Default: `8080`.
@@ -180,7 +180,7 @@ Start the stack from the repository root:
 ./deploy/install.sh
 ```
 
-The script validates the Compose environment, pulls the published images, and starts the containers without building locally. If the images cannot be pulled during the initial GHCR rollout, it falls back to building from the local checkout. Validation errors name every unsafe variable without printing their values. If Compose fails and a backend container created or restarted by that attempt is exited, restarting, dead, or unhealthy, the script prints up to 100 backend log lines from that attempt. Failures outside the backend do not export unrelated backend logs.
+The script validates the Compose environment, pulls the published image, and starts the managed application container without building locally. It also removes the obsolete standalone frontend container when upgrading from the former two-container layout; the `tokenhub-data` volume is preserved. If the image cannot be pulled during the initial GHCR rollout, it falls back to building from the local checkout. Validation errors name every unsafe variable without printing their values. If Compose fails and the application container created or restarted by that attempt is exited, restarting, dead, or unhealthy, the script prints up to 100 log lines from that attempt.
 
 Validate without pulling or starting containers:
 
@@ -192,22 +192,22 @@ Use a different environment file with `./deploy/install.sh --env-file /path/to/d
 
 ### Published image lifecycle
 
-GitHub Actions publishes `ghcr.io/astaxie/tokenhub-backend` and `ghcr.io/astaxie/tokenhub-frontend` for `linux/amd64` and `linux/arm64`.
+GitHub Actions publishes the complete `ghcr.io/wangle201210/tokenhub-backend` image for `linux/amd64` and `linux/arm64`. Despite the compatibility-preserving image name, it contains the backend, standalone Next.js console, Node.js runtime, and the container supervisor.
 
 - Publishing a GitHub Release builds the exact semantic-version tag. A non-prerelease also updates the major-minor tag and `latest`.
 - `workflow_dispatch` can publish `edge` or an isolated `manual-*` tag. It cannot overwrite release or `latest` tags.
 - Pull requests do not build or push container images.
 - Merges to `main` do not publish images.
 
-Each image is first pushed under a run-specific staging tag. The workflow verifies that both multi-platform images exist before promoting either one to the requested release tags. Both images must use the same `TOKENHUB_IMAGE_TAG`. For reproducible production deployments, pin an exact release tag instead of relying on `latest`.
+The image is first pushed under a run-specific staging tag and verified before the workflow promotes it to the requested release tags. For reproducible production deployments, pin an exact release tag instead of relying on `latest`.
 
-The first GHCR publication creates private packages. The repository owner must make both packages public before anonymous deployments can pull them. Until then, a deployment using the default `latest` tag remains usable by automatically falling back to a local source build. If an explicit `TOKENHUB_IMAGE_TAG` cannot be pulled, the installer exits instead of labeling current source as that version.
+The first GHCR publication creates a private package. The repository owner must make it public before anonymous deployments can pull it. Until then, a deployment using the default `latest` tag remains usable by automatically falling back to a local source build. If an explicit `TOKENHUB_IMAGE_TAG` cannot be pulled, the installer exits instead of labeling current source as that version.
 
 ### Docker version status and rollback
 
 Platform administrators can select the version badge below the TokenHub logo to inspect the running version, check the latest stable GitHub Release, and list up to three older stable releases. Release builds receive their exact version from the publication workflow; local source builds use the package version and are labeled as source builds.
 
-The check makes a time-limited outbound HTTPS request to the public GitHub Releases API and caches successful results for 20 minutes. It checks `astaxie/TokenHub` by default. Maintainers can set `TOKENHUB_RELEASE_REPOSITORY` to another trusted public `owner/repository` when validating releases from a fork. A GitHub outage or a repository without releases does not affect gateway traffic. The panel reports the unavailable state and keeps the current version visible.
+The check makes a time-limited outbound HTTPS request to the public GitHub Releases API and caches successful results for 20 minutes. It checks `wangle201210/TokenHub` by default. Maintainers can set `TOKENHUB_RELEASE_REPOSITORY` to another trusted public `owner/repository` when validating releases from a fork. A GitHub outage or a repository without releases does not affect gateway traffic. The panel reports the unavailable state and keeps the current version visible.
 
 For example, check a fork while running from source:
 
@@ -215,7 +215,9 @@ For example, check a fork while running from source:
 TOKENHUB_RELEASE_REPOSITORY=your-account/TokenHub ./start.sh
 ```
 
-TokenHub deploys separate backend and frontend containers, so the application does not mount the Docker socket or mutate its host. For Docker deployments, the panel continues to generate Compose commands that apply the same exact `TOKENHUB_IMAGE_TAG` to both images; it does not perform an in-container update. Pin that tag in `deploy/.env` before running the commands so a later Compose operation does not move the deployment back to `latest`. Source deployments continue to show manual update guidance. Before rollback, create a database backup and confirm that the target release supports the current schema.
+The default SQLite and local PostgreSQL Compose files run a single managed application container. An administrator can select **Update now**, wait for the checksummed platform Release bundle to be installed under the `tokenhub-releases` volume, and then select **Restart now**. The process exits after responding; Docker's `restart: unless-stopped` policy starts the selected backend and frontend together. The container never mounts the Docker socket or controls the host daemon.
+
+The image version is the baseline when a newly pulled image first uses the volume. Panel-applied updates survive ordinary restarts and container recreation with the same image because `current` and all installed Release bundles are stored in `tokenhub-releases`. Pulling a different image tag intentionally makes that image version the new baseline. The remote PostgreSQL multi-instance Compose file disables in-place updates because changing only the replica that receives an admin request would split the cluster; its panel continues to provide operator-run Compose commands. Source deployments continue to show manual guidance. Before rollback, create a database backup and confirm that the target release supports the current schema.
 
 ### Optional local build
 
@@ -300,8 +302,8 @@ Only use `down -v` when you intentionally want to delete local data.
 | `TOKENHUB_ENV` | `prod` | Runtime environment label |
 | `TOKENHUB_HTTP_ADDR` | `:8080` | Backend listen address |
 | `TOKENHUB_PUBLIC_BASE_URL` | `http://localhost:8080` | Public backend URL shown to users |
-| `TOKENHUB_RELEASE_REPOSITORY` | `astaxie/TokenHub` | Trusted public GitHub repository used for version checks, in `owner/repository` form |
-| `TOKENHUB_INSTALL_ROOT` | `/opt/tokenhub` | Native Release installation root used for online update and rollback |
+| `TOKENHUB_RELEASE_REPOSITORY` | `wangle201210/TokenHub` | Trusted public GitHub repository used for version checks, in `owner/repository` form |
+| `TOKENHUB_INSTALL_ROOT` | `/opt/tokenhub` | Managed Release installation root used for online update and rollback |
 | `TOKENHUB_TRUSTED_PROXY_CIDRS` | empty | Comma-separated proxy IPs or CIDRs allowed to supply `X-Forwarded-For` |
 | `TOKENHUB_CORS_ALLOWED_ORIGINS` | public URL | Comma-separated browser origins allowed to call the backend |
 | `TOKENHUB_ADMIN_TOKEN` | `change-me-tokenhub-admin-token` | Bootstrap admin token for Admin API access |

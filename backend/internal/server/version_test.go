@@ -95,11 +95,24 @@ func TestValidateForStartupRejectsInvalidNativeInstallRoot(t *testing.T) {
 	}
 }
 
+func TestValidateForStartupRejectsInvalidManagedContainerInstallRoot(t *testing.T) {
+	config := Config{
+		Environment:    "dev",
+		BuildType:      releaseBuildType,
+		DeploymentType: containerDeploymentType,
+		ManagedUpdates: true,
+		InstallRoot:    "relative/path",
+	}
+	if err := config.ValidateForStartup(); err == nil {
+		t.Fatal("ValidateForStartup accepted a relative managed container install root")
+	}
+}
+
 func TestVersionServiceChecksLatestReleaseAndCachesResult(t *testing.T) {
 	var calls atomic.Int32
 	releases := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		if r.URL.Path != "/repos/astaxie/TokenHub/releases/latest" {
+		if r.URL.Path != "/repos/wangle201210/TokenHub/releases/latest" {
 			http.Error(w, "unexpected release path: "+r.URL.String(), http.StatusBadRequest)
 			return
 		}
@@ -123,7 +136,7 @@ func TestVersionServiceChecksLatestReleaseAndCachesResult(t *testing.T) {
 	if info.BuildType != releaseBuildType || info.DeploymentType != containerDeploymentType || info.ReleaseInfo == nil {
 		t.Fatalf("missing release metadata: %+v", info)
 	}
-	if info.ReleaseInfo.HTMLURL != "https://github.com/astaxie/TokenHub/releases/tag/v0.4.0" {
+	if info.ReleaseInfo.HTMLURL != "https://github.com/wangle201210/TokenHub/releases/tag/v0.4.0" {
 		t.Fatalf("unexpected release URL: %q", info.ReleaseInfo.HTMLURL)
 	}
 
@@ -181,7 +194,7 @@ func TestVersionServiceCachesEmptyRollbackHistory(t *testing.T) {
 
 func TestVersionServiceListsThreeNewestOlderStableReleases(t *testing.T) {
 	releases := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/repos/astaxie/TokenHub/releases" || r.URL.Query().Get("per_page") != "15" {
+		if r.URL.Path != "/repos/wangle201210/TokenHub/releases" || r.URL.Query().Get("per_page") != "15" {
 			http.Error(w, "unexpected release history path: "+r.URL.String(), http.StatusBadRequest)
 			return
 		}
@@ -215,7 +228,7 @@ func TestVersionServiceListsThreeNewestOlderStableReleases(t *testing.T) {
 
 func TestAdminVersionEndpointsRequireAuthenticationAndReturnReleaseData(t *testing.T) {
 	releases := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/repos/astaxie/TokenHub/releases/latest" {
+		if r.URL.Path == "/repos/wangle201210/TokenHub/releases/latest" {
 			writeTestJSON(w, map[string]any{"tag_name": "v0.3.1", "name": "TokenHub 0.3.1"})
 			return
 		}

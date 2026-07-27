@@ -36,6 +36,7 @@ type SystemVersionInfo = {
   has_update: boolean;
   build_type: "source" | "release";
   deployment_type: "source" | "container" | "native";
+  update_supported: boolean;
   pending_restart_version?: string;
   releases_url: string;
   release_info?: VersionReleaseInfo;
@@ -43,8 +44,9 @@ type SystemVersionInfo = {
   warning?: string;
 };
 
-type SystemVersionPayload = Omit<SystemVersionInfo, "deployment_type"> & {
+type SystemVersionPayload = Omit<SystemVersionInfo, "deployment_type" | "update_supported"> & {
   deployment_type?: string;
+  update_supported?: boolean;
 };
 
 type RollbackVersionInfo = {
@@ -59,7 +61,8 @@ const fallbackVersionInfo: SystemVersionInfo = {
   has_update: false,
   build_type: "source",
   deployment_type: "source",
-  releases_url: "https://github.com/astaxie/TokenHub/releases",
+  update_supported: false,
+  releases_url: "https://github.com/wangle201210/TokenHub/releases",
   cached: false,
 };
 
@@ -195,7 +198,7 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
     }
   }
 
-  async function applyNativeUpdate() {
+  async function applyManagedUpdate() {
     if (systemOperation || !info.latest_version) return;
     setSystemOperation("update");
     setOperationError("");
@@ -214,7 +217,7 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
     }
   }
 
-  async function applyNativeRollback() {
+  async function applyManagedRollback() {
     if (systemOperation || !selectedVersion) return;
     const confirmed = window.confirm(
       `${tx("确认回退到")} v${selectedVersion}?\n${tx("回退前请确认数据库与目标版本兼容，并先完成备份。")}`,
@@ -241,7 +244,7 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
     }
   }
 
-  async function restartNativeDeployment() {
+  async function restartManagedDeployment() {
     if (systemOperation || !pendingRestartVersion) return;
     setSystemOperation("restart");
     setOperationError("");
@@ -250,7 +253,7 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
       if (!response.ok) {
         throw new Error(await readAdminError(response, tx("重启失败")));
       }
-      await waitForNativeVersion(api, pendingRestartVersion);
+      await waitForManagedVersion(api, pendingRestartVersion);
       window.location.reload();
     } catch (error) {
       setOperationError(error instanceof Error ? error.message : tx("重启失败"));
@@ -263,8 +266,9 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
   }
 
   const versionLabel = info.current_version || packageMetadata.version;
-  const nativeUpdateUnavailable = Boolean(
-    info.warning?.includes("does not include native assets"),
+  const managedUpdateUnavailable = Boolean(
+    info.warning?.includes("does not include managed release assets") ||
+      info.warning?.includes("does not include native assets"),
   );
   return (
     <>
@@ -388,7 +392,7 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
                       </div>
                       <button
                         disabled={systemOperation === "restart"}
-                        onClick={() => void restartNativeDeployment()}
+                        onClick={() => void restartManagedDeployment()}
                         type="button"
                       >
                         {systemOperation === "restart"
@@ -399,11 +403,11 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
                     </section>
                   ) : null}
 
-                  {info.has_update && info.deployment_type === "native" && !pendingRestartVersion ? (
+                  {info.has_update && info.update_supported && !pendingRestartVersion ? (
                     <button
                       className="version-native-action"
-                      disabled={Boolean(systemOperation) || nativeUpdateUnavailable}
-                      onClick={() => void applyNativeUpdate()}
+                      disabled={Boolean(systemOperation) || managedUpdateUnavailable}
+                      onClick={() => void applyManagedUpdate()}
                       type="button"
                     >
                       {systemOperation === "update"
@@ -413,7 +417,7 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
                     </button>
                   ) : null}
 
-                  {info.has_update && info.deployment_type === "container" ? (
+                  {info.has_update && info.deployment_type === "container" && !info.update_supported ? (
                     <VersionCommand
                       command={composeVersionCommand(info.latest_version)}
                       copied={copiedCommand === `update:${info.latest_version}`}
@@ -491,7 +495,7 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
                           </fieldset>
                         )}
 
-                        {selectedVersion && info.deployment_type === "container" ? (
+                        {selectedVersion && info.deployment_type === "container" && !info.update_supported ? (
                           <>
                             <VersionCommand
                               command={composeVersionCommand(selectedVersion)}
@@ -506,12 +510,12 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
                           </>
                         ) : null}
 
-                        {selectedVersion && info.deployment_type === "native" && !pendingRestartVersion ? (
+                        {selectedVersion && info.update_supported && !pendingRestartVersion ? (
                           <>
                             <button
                               className="version-native-action rollback"
                               disabled={Boolean(systemOperation)}
-                              onClick={() => void applyNativeRollback()}
+                              onClick={() => void applyManagedRollback()}
                               type="button"
                             >
                               {systemOperation === "rollback"
@@ -625,10 +629,17 @@ function normalizeVersionInfo(payload: SystemVersionPayload): SystemVersionInfo 
     : payload.build_type === "release"
       ? "container"
       : "source";
-  return { ...payload, deployment_type: deploymentType };
+  const updateSupported = typeof payload.update_supported === "boolean"
+    ? payload.update_supported
+    : deploymentType === "native";
+  return {
+    ...payload,
+    deployment_type: deploymentType,
+    update_supported: updateSupported,
+  };
 }
 
-async function waitForNativeVersion(api: ApiContext, targetVersion: string) {
+async function waitForManagedVersion(api: ApiContext, targetVersion: string) {
   const deadline = Date.now() + 90_000;
   while (Date.now() < deadline) {
     await new Promise((resolve) => window.setTimeout(resolve, 1_000));
@@ -644,7 +655,7 @@ async function waitForNativeVersion(api: ApiContext, targetVersion: string) {
         if (normalizeVersionInfo(payload).current_version === targetVersion) return;
       }
     } catch {
-      // A temporary connection failure is expected while systemd restarts TokenHub.
+      // A temporary connection failure is expected while the service supervisor restarts TokenHub.
     } finally {
       window.clearTimeout(timeout);
     }
@@ -667,7 +678,10 @@ function versionWarningText(warning: string | undefined, loadError: string) {
   if (warning?.includes("semantic release version")) {
     return tx("当前构建不是语义化发布版本，无法自动比较更新。");
   }
-  if (warning?.includes("does not include native assets")) {
+  if (
+    warning?.includes("does not include managed release assets") ||
+    warning?.includes("does not include native assets")
+  ) {
     return tx("最新版本不包含当前平台可用的原生安装包。");
   }
   return loadError || tx("暂时无法检查 GitHub Release，请稍后重试。");

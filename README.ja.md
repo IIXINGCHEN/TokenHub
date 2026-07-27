@@ -65,7 +65,7 @@ TokenHub は、日常的なモデル利用、チームガバナンス、プラ�
 Linux systemd または macOS launchd ホストでネイティブ Release を使用する場合:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/astaxie/TokenHub/main/deploy/native/install.sh \
+curl -fsSL https://raw.githubusercontent.com/wangle201210/TokenHub/main/deploy/native/install.sh \
   -o /tmp/tokenhub-install.sh
 sudo bash /tmp/tokenhub-install.sh install
 ```
@@ -90,7 +90,7 @@ cp deploy/.env.example deploy/.env
 - ネイティブインストールのパスワード: インストーラーが一度だけ表示
 - Docker のパスワード: `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD` の設定値
 
-ネイティブインストーラーは Release のチェックサムを検証し、systemd または launchd サービスをインストールして、バージョンパネルから直接更新、ロールバック、再起動できるようにします。Docker デプロイスクリプトは本番用認証情報を検証し、公開済みイメージを取得してコンテナを起動します。Docker のバージョンパネルには、引き続きコピー可能な更新コマンドを表示します。両方の方式については[デプロイガイド](docs/ja/deployment.md)を参照してください。
+ネイティブインストーラーは Release のチェックサムを検証し、systemd または launchd サービスをインストールして、バージョンパネルから直接更新、ロールバック、再起動できるようにします。デフォルトの Docker デプロイは、バックエンドと管理コンソールを 1 つの管理対象コンテナで実行し、Docker Socket をマウントせずに同じ直接操作を提供します。Release バンドルは `tokenhub-releases` ボリュームへ保存されるため、通常のコンテナ再起動や再作成でも画面から適用した更新は保持されます。マルチインスタンス Docker では、全レプリカを同時に切り替えるため Compose による運用更新を維持します。詳細は[デプロイガイド](docs/ja/deployment.md)を参照してください。
 
 ## ドキュメント
 

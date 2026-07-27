@@ -65,7 +65,7 @@ TokenHub separates everyday model usage, team governance, and platform administr
 Native Release on a Linux systemd host or macOS launchd host:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/astaxie/TokenHub/main/deploy/native/install.sh \
+curl -fsSL https://raw.githubusercontent.com/wangle201210/TokenHub/main/deploy/native/install.sh \
   -o /tmp/tokenhub-install.sh
 sudo bash /tmp/tokenhub-install.sh install
 ```
@@ -90,7 +90,7 @@ Initial admin login:
 - Native install password: printed once by the installer
 - Docker password: the value of `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD`
 
-The native installer verifies Release checksums, installs a systemd or launchd service, and enables direct update, rollback, and restart controls in the version panel. The Docker deployment script validates production credentials, pulls published images, and starts the containers without building locally. Until the images are publicly available, a failed pull of the default `latest` tag automatically falls back to a local source build; an explicitly selected tag never does. Docker deployments keep the copyable update commands in the version panel. See the [deployment guide](docs/deployment.md) for both modes.
+The native installer verifies Release checksums, installs a systemd or launchd service, and enables direct update, rollback, and restart controls in the version panel. The default Docker deployment runs the backend and console in one managed container and provides the same direct controls without mounting the Docker socket. Release bundles are stored in the `tokenhub-releases` volume so ordinary container restarts and recreations preserve a panel-applied update. Multi-instance Docker deployments keep operator-managed Compose updates so every replica changes version together. See the [deployment guide](docs/deployment.md) for both modes.
 
 ## Documentation
 

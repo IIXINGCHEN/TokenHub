@@ -190,8 +190,35 @@ func TestContainerDeploymentRejectsOnlineUpdateEndpoint(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Error.Code != "native_update_unavailable" {
+	if payload.Error.Code != "managed_update_unavailable" {
 		t.Fatalf("container update error code = %q", payload.Error.Code)
+	}
+}
+
+func TestManagedContainerReportsUpdateSupportAndPendingRestart(t *testing.T) {
+	root := prepareNativeInstallRoot(t, "0.3.1", map[string]string{"0.3.2": "next"})
+	service := newVersionService(Config{
+		AppVersion:        "0.3.1",
+		BuildType:         releaseBuildType,
+		DeploymentType:    containerDeploymentType,
+		ManagedUpdates:    true,
+		ReleaseRepository: "test/TokenHub",
+		InstallRoot:       root,
+	})
+
+	if !service.baseVersionInfo().UpdateSupported {
+		t.Fatal("managed container did not report online update support")
+	}
+	release, err := service.acquireNativeOperation()
+	if err != nil {
+		t.Fatalf("managed container could not acquire update operation: %v", err)
+	}
+	release()
+	if err := service.activateNativeRelease("0.3.2"); err != nil {
+		t.Fatal(err)
+	}
+	if got := service.pendingNativeRestartVersion(); got != "0.3.2" {
+		t.Fatalf("pending restart version = %q, want 0.3.2", got)
 	}
 }
 
@@ -226,7 +253,7 @@ func TestNativeRestartEndpointSignalsProcessAfterResponse(t *testing.T) {
 func TestValidateNativeAssetURL(t *testing.T) {
 	t.Parallel()
 	for _, rawURL := range []string{
-		"https://github.com/astaxie/TokenHub/releases/download/v0.3.2/archive.tar.gz",
+		"https://github.com/wangle201210/TokenHub/releases/download/v0.3.2/archive.tar.gz",
 		"https://release-assets.githubusercontent.com/github-production-release-asset/file",
 	} {
 		if err := validateNativeAssetURL(rawURL); err != nil {
@@ -234,7 +261,7 @@ func TestValidateNativeAssetURL(t *testing.T) {
 		}
 	}
 	for _, rawURL := range []string{
-		"http://github.com/astaxie/TokenHub/releases/download/v0.3.2/archive.tar.gz",
+		"http://github.com/wangle201210/TokenHub/releases/download/v0.3.2/archive.tar.gz",
 		"https://github.com:8443/archive.tar.gz",
 		"https://example.com/archive.tar.gz",
 	} {

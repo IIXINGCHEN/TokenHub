@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-GITHUB_REPOSITORY="${TOKENHUB_RELEASE_REPOSITORY:-astaxie/TokenHub}"
+GITHUB_REPOSITORY="${TOKENHUB_RELEASE_REPOSITORY:-wangle201210/TokenHub}"
 INSTALL_ROOT="${TOKENHUB_INSTALL_ROOT:-/opt/tokenhub}"
 CONFIG_DIR="${TOKENHUB_CONFIG_DIR:-/etc/tokenhub}"
 STATE_DIR="${TOKENHUB_STATE_DIR:-/var/lib/tokenhub}"
@@ -38,7 +38,7 @@ Usage:
   install.sh status
 
 Environment:
-  TOKENHUB_RELEASE_REPOSITORY  GitHub owner/repository (default: astaxie/TokenHub)
+  TOKENHUB_RELEASE_REPOSITORY  GitHub owner/repository (default: wangle201210/TokenHub)
   TOKENHUB_PUBLIC_HOST         Public hostname or IP used in generated URLs
   TOKENHUB_PUBLIC_BASE_URL     Public backend URL override
   TOKENHUB_API_BASE_URL        Browser-facing backend URL override

@@ -12,6 +12,7 @@ type Config struct {
 	AppVersion               string
 	BuildType                string
 	DeploymentType           string
+	ManagedUpdates           bool
 	ReleaseRepository        string
 	InstallRoot              string
 	AdminToken               string
@@ -73,6 +74,7 @@ func ConfigFromEnv() Config {
 		AppVersion:                 DefaultAppVersion,
 		BuildType:                  defaultBuildType,
 		DeploymentType:             sourceDeploymentType,
+		ManagedUpdates:             getenvBool("TOKENHUB_MANAGED_UPDATES", false),
 		ReleaseRepository:          getenv("TOKENHUB_RELEASE_REPOSITORY", defaultReleaseRepository),
 		InstallRoot:                getenv("TOKENHUB_INSTALL_ROOT", defaultNativeInstallRoot),
 		AdminToken:                 getenv("TOKENHUB_ADMIN_TOKEN", "dev_admin_token"),
@@ -114,10 +116,12 @@ func (c Config) ValidateForStartup() error {
 	if repository := strings.TrimSpace(c.ReleaseRepository); repository != "" && !validReleaseRepository(repository) {
 		return fmt.Errorf("invalid TOKENHUB_RELEASE_REPOSITORY: expected owner/repository")
 	}
-	if normalizeDeploymentType(c.DeploymentType, c.BuildType) == nativeDeploymentType {
+	deploymentType := normalizeDeploymentType(c.DeploymentType, c.BuildType)
+	if deploymentType == nativeDeploymentType ||
+		(deploymentType == containerDeploymentType && c.ManagedUpdates) {
 		root := filepath.Clean(strings.TrimSpace(c.InstallRoot))
 		if !filepath.IsAbs(root) || root == string(filepath.Separator) {
-			return fmt.Errorf("invalid TOKENHUB_INSTALL_ROOT: expected a non-root absolute path")
+			return fmt.Errorf("invalid TOKENHUB_INSTALL_ROOT: managed updates require a non-root absolute path")
 		}
 	}
 	environment := strings.ToLower(strings.TrimSpace(c.Environment))

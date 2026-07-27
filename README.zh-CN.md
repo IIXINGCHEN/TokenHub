@@ -65,7 +65,7 @@ TokenHub 将日常模型使用、团队治理和平台运维拆成清晰的角�
 Linux systemd 或 macOS launchd 主机使用原生 Release：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/astaxie/TokenHub/main/deploy/native/install.sh \
+curl -fsSL https://raw.githubusercontent.com/wangle201210/TokenHub/main/deploy/native/install.sh \
   -o /tmp/tokenhub-install.sh
 sudo bash /tmp/tokenhub-install.sh install
 ```
@@ -90,7 +90,7 @@ cp deploy/.env.example deploy/.env
 - 原生安装密码：由安装脚本输出一次
 - Docker 密码：`TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD` 的配置值
 
-原生安装脚本会校验 Release 文件、安装 systemd 或 launchd 服务，并在版本面板提供直接更新、回退和重启。Docker 部署脚本会校验生产凭证，拉取已发布镜像并启动容器；Docker 的版本面板继续提供可复制的更新命令。两种方式的完整说明见[部署指南](docs/zh-CN/deployment.md)。
+原生安装脚本会校验 Release 文件、安装 systemd 或 launchd 服务，并在版本面板提供直接更新、回退和重启。默认 Docker 部署使用一个托管容器同时运行后端与管理后台，无需挂载 Docker Socket，也提供相同的直接操作。Release 完整包保存在 `tokenhub-releases` 卷中，普通重启或重建容器不会丢失页面更新结果。多实例 Docker 部署仍由运维人员通过 Compose 统一更新，避免不同副本版本不一致。完整说明见[部署指南](docs/zh-CN/deployment.md)。
 
 ## 文档
 

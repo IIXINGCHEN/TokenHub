@@ -27,6 +27,9 @@ func main() {
 	config.AppVersion = buildVersion
 	config.BuildType = buildType
 	config.DeploymentType = deploymentType
+	if runtimeDeploymentType := os.Getenv("TOKENHUB_DEPLOYMENT_TYPE"); runtimeDeploymentType != "" {
+		config.DeploymentType = runtimeDeploymentType
+	}
 	if err := config.ValidateForStartup(); err != nil {
 		log.Fatal(err)
 	}

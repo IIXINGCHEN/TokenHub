@@ -23,7 +23,7 @@ TokenHub 支持两种数据库后端：
 **部署：**
 
 ```bash
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --remove-orphans
 ```
 
 ### PostgreSQL（推荐用于生产）
@@ -41,7 +41,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
 **部署：**
 
 ```bash
-docker compose --env-file deploy/.env -f deploy/docker-compose.postgres.yml up -d
+docker compose --env-file deploy/.env -f deploy/docker-compose.postgres.yml up -d --remove-orphans
 ```
 
 PostgreSQL 的详细配置见 [PostgreSQL 设置指南](../postgresql-setup.md)。
@@ -97,7 +97,7 @@ docker compose --env-file deploy/.env \
 下载安装脚本并检查内容，然后安装最新稳定版：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/astaxie/TokenHub/main/deploy/native/install.sh \
+curl -fsSL https://raw.githubusercontent.com/wangle201210/TokenHub/main/deploy/native/install.sh \
   -o /tmp/tokenhub-install.sh
 sudo bash /tmp/tokenhub-install.sh install
 ```
@@ -168,7 +168,7 @@ cp deploy/.env.example deploy/.env
 - `TOKENHUB_ADMIN_TOKEN`：Admin API 启动 Token，请使用至少 32 字节的随机值。
 - `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD`：仅用于创建初始 `admin` 用户，请设置至少 12 字节的密码。
 - `TOKENHUB_SECRET_KEY`：后端密钥，请使用至少 32 字节的随机值并保持稳定。
-- `TOKENHUB_IMAGE_TAG`：前后端共用的镜像标签，默认 `latest`。
+- `TOKENHUB_IMAGE_TAG`：托管 TokenHub 镜像标签，默认 `latest`。
 - `TOKENHUB_PUBLIC_BASE_URL`：展示给用户的后端访问地址。
 - `TOKENHUB_API_BASE_URL`：浏览器管理后台访问后端的地址，由前端服务在运行时读取。旧变量 `NEXT_PUBLIC_API_BASE_URL` 保留一个兼容周期，作为回退配置。
 - `TOKENHUB_BACKEND_PORT`：后端宿主机端口，默认 `8080`。
@@ -180,7 +180,7 @@ cp deploy/.env.example deploy/.env
 ./deploy/install.sh
 ```
 
-脚本会先校验 Compose 环境变量，再拉取已发布镜像并启动容器，不在部署服务器构建镜像。首次发布 GHCR 镜像期间，如果镜像无法拉取，脚本会自动改为从当前代码构建。校验失败时会列出不安全的变量，但不会输出敏感值。如果 Compose 失败，且本次创建或重启的后端容器处于已退出、重启中、失效或不健康状态，脚本会打印本次启动产生的最多 100 行后端日志。后端之外的故障不会导出无关的后端日志。
+脚本会先校验 Compose 环境变量，再拉取已发布镜像并启动托管应用容器，不在部署服务器构建镜像。从旧的双容器结构升级时，脚本会移除已废弃的独立前端容器，但保留 `tokenhub-data` 数据卷。首次发布 GHCR 镜像期间，如果镜像无法拉取，脚本会自动改为从当前代码构建。校验失败时会列出不安全的变量，但不会输出敏感值。如果 Compose 失败，且本次创建或重启的应用容器处于已退出、重启中、失效或不健康状态，脚本会打印本次启动产生的最多 100 行日志。
 
 只校验配置，不拉取镜像或启动容器：
 
@@ -192,22 +192,22 @@ cp deploy/.env.example deploy/.env
 
 ### 已发布镜像的版本规则
 
-GitHub Actions 为 `linux/amd64` 和 `linux/arm64` 发布 `ghcr.io/astaxie/tokenhub-backend` 与 `ghcr.io/astaxie/tokenhub-frontend`。
+GitHub Actions 为 `linux/amd64` 和 `linux/arm64` 发布完整的 `ghcr.io/wangle201210/tokenhub-backend` 镜像。镜像名称为兼容旧部署而保留，其中实际包含后端、独立 Next.js 管理后台、Node.js 运行时和容器监督进程。
 
 - GitHub Release 发布后，自动构建完整的语义化版本标签；非预发布版本同时更新主次版本标签和 `latest`。
 - `workflow_dispatch` 仅允许发布 `edge` 或独立的 `manual-*` 标签，不能覆盖正式版本标签或 `latest`。
 - PR 不构建或推送容器镜像。
 - 合并到 `main` 不发布镜像。
 
-工作流先为每个镜像推送本次运行专用的暂存标签，确认两个多平台镜像都存在后，再发布最终标签。前后端必须使用相同的 `TOKENHUB_IMAGE_TAG`。生产部署建议固定完整版本标签，不依赖持续变化的 `latest`。
+工作流先使用本次运行专用的暂存标签推送并验证多平台镜像，再发布最终标签。生产部署建议固定完整版本标签，不依赖持续变化的 `latest`。
 
-GHCR 首次发布产生的 Package 默认为私有。开放匿名部署前，仓库所有者需要将两个 Package 调整为 Public。在此之前，使用默认 `latest` 标签的安装会在拉取失败后自动改为从本地源码构建。如果显式配置的 `TOKENHUB_IMAGE_TAG` 无法拉取，安装脚本会直接退出，不会把当前源码标记成该版本。
+GHCR 首次发布产生的 Package 默认为私有。开放匿名部署前，仓库所有者需要将该 Package 调整为 Public。在此之前，使用默认 `latest` 标签的安装会在拉取失败后自动改为从本地源码构建。如果显式配置的 `TOKENHUB_IMAGE_TAG` 无法拉取，安装脚本会直接退出，不会把当前源码标记成该版本。
 
 ### Docker 版本状态与回退
 
 平台管理员可以点击 TokenHub 标志下方的版本胶囊，查看当前运行版本、检查最新的 GitHub 正式 Release，并列出最多 3 个更早的稳定版本。正式镜像构建会从发布工作流获得精确版本号；本地源码构建使用项目包版本，并明确标记为源码构建。
 
-版本检查会通过限时的出站 HTTPS 请求访问公开的 GitHub Releases API，并将成功结果缓存 20 分钟。默认检查 `astaxie/TokenHub`；维护者可以将 `TOKENHUB_RELEASE_REPOSITORY` 设置为其他可信的公开 `owner/repository`，用于 fork 发布验证。GitHub 故障或仓库尚无 Release 不会影响网关流量；面板会展示不可用状态，同时保留当前版本信息。
+版本检查会通过限时的出站 HTTPS 请求访问公开的 GitHub Releases API，并将成功结果缓存 20 分钟。默认检查 `wangle201210/TokenHub`；维护者可以将 `TOKENHUB_RELEASE_REPOSITORY` 设置为其他可信的公开 `owner/repository`，用于 fork 发布验证。GitHub 故障或仓库尚无 Release 不会影响网关流量；面板会展示不可用状态，同时保留当前版本信息。
 
 例如，在源码部署中检查 fork 的 Release：
 
@@ -215,7 +215,9 @@ GHCR 首次发布产生的 Package 默认为私有。开放匿名部署前，仓
 TOKENHUB_RELEASE_REPOSITORY=your-account/TokenHub ./start.sh
 ```
 
-TokenHub 分别部署后端和前端容器，因此应用不会挂载 Docker Socket，也不会直接修改宿主机。对于 Docker 部署，版本面板仍然只生成 Compose 命令，让两个镜像使用同一个精确的 `TOKENHUB_IMAGE_TAG`，不会在容器内直接更新。执行命令前，请先在 `deploy/.env` 中固定该标签，避免后续 Compose 操作重新切换到 `latest`。源码部署仍会提示按照发布说明手工更新。回退前必须完成数据库备份，并确认目标版本支持当前数据库结构。
+默认 SQLite 和本地 PostgreSQL Compose 使用一个托管应用容器。管理员可以点击「立即更新」，等待系统下载、校验并将当前平台的完整 Release 包安装到 `tokenhub-releases` 卷，然后点击「立即重启」。接口返回成功后进程主动退出，Docker 的 `restart: unless-stopped` 会同时以目标版本重新启动后端和前端。容器不会挂载 Docker Socket，也不会控制宿主机 Docker daemon。
+
+新拉取的镜像首次使用该卷时，镜像版本会成为基线。页面安装的版本、`current` 链接和历史 Release 都保存在 `tokenhub-releases`，因此使用同一镜像进行普通重启或重建容器不会丢失更新结果；主动拉取不同镜像标签时，则以该镜像版本作为新基线。远端 PostgreSQL 多实例 Compose 禁用原地更新，因为只更新收到管理员请求的单个副本会造成集群版本分裂；该模式继续显示由运维人员统一执行的 Compose 命令。源码部署仍提示手工更新。回退前必须完成数据库备份，并确认目标版本支持当前数据库结构。
 
 ### 可选：本地构建
 
@@ -300,8 +302,8 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_ENV` | `prod` | 运行环境标识 |
 | `TOKENHUB_HTTP_ADDR` | `:8080` | 后端监听地址 |
 | `TOKENHUB_PUBLIC_BASE_URL` | `http://localhost:8080` | 展示给用户的后端地址 |
-| `TOKENHUB_RELEASE_REPOSITORY` | `astaxie/TokenHub` | 版本检查使用的可信公开 GitHub 仓库，格式为 `owner/repository` |
-| `TOKENHUB_INSTALL_ROOT` | `/opt/tokenhub` | 原生 Release 在线更新与回退使用的安装根目录 |
+| `TOKENHUB_RELEASE_REPOSITORY` | `wangle201210/TokenHub` | 版本检查使用的可信公开 GitHub 仓库，格式为 `owner/repository` |
+| `TOKENHUB_INSTALL_ROOT` | `/opt/tokenhub` | 托管 Release 在线更新与回退使用的安装根目录 |
 | `TOKENHUB_TRUSTED_PROXY_CIDRS` | 空 | 允许提供 `X-Forwarded-For` 的代理 IP 或 CIDR，逗号分隔 |
 | `TOKENHUB_CORS_ALLOWED_ORIGINS` | 公网地址 | 允许调用后端的浏览器 Origin，逗号分隔 |
 | `TOKENHUB_ADMIN_TOKEN` | `change-me-tokenhub-admin-token` | Admin API 启动访问 Token |

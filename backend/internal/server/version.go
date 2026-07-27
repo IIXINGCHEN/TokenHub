@@ -26,7 +26,7 @@ const (
 	containerDeploymentType  = "container"
 	nativeDeploymentType     = "native"
 	defaultNativeInstallRoot = "/opt/tokenhub"
-	defaultReleaseRepository = "astaxie/TokenHub"
+	defaultReleaseRepository = "wangle201210/TokenHub"
 	githubAPIBaseURL         = "https://api.github.com"
 	versionCacheTTL          = 20 * time.Minute
 	releaseRequestTimeout    = 8 * time.Second
@@ -45,16 +45,17 @@ type versionReleaseInfo struct {
 }
 
 type systemVersionInfo struct {
-	CurrentVersion string              `json:"current_version"`
-	LatestVersion  string              `json:"latest_version"`
-	HasUpdate      bool                `json:"has_update"`
-	BuildType      string              `json:"build_type"`
-	DeploymentType string              `json:"deployment_type"`
-	PendingRestart string              `json:"pending_restart_version,omitempty"`
-	ReleasesURL    string              `json:"releases_url"`
-	ReleaseInfo    *versionReleaseInfo `json:"release_info,omitempty"`
-	Cached         bool                `json:"cached"`
-	Warning        string              `json:"warning,omitempty"`
+	CurrentVersion  string              `json:"current_version"`
+	LatestVersion   string              `json:"latest_version"`
+	HasUpdate       bool                `json:"has_update"`
+	BuildType       string              `json:"build_type"`
+	DeploymentType  string              `json:"deployment_type"`
+	UpdateSupported bool                `json:"update_supported"`
+	PendingRestart  string              `json:"pending_restart_version,omitempty"`
+	ReleasesURL     string              `json:"releases_url"`
+	ReleaseInfo     *versionReleaseInfo `json:"release_info,omitempty"`
+	Cached          bool                `json:"cached"`
+	Warning         string              `json:"warning,omitempty"`
 }
 
 type rollbackVersionInfo struct {
@@ -85,6 +86,7 @@ type versionService struct {
 	currentVersion   string
 	buildType        string
 	deploymentType   string
+	managedUpdates   bool
 	installRoot      string
 	now              func() time.Time
 	downloadClient   *http.Client
@@ -122,6 +124,7 @@ func newVersionService(config Config) *versionService {
 		currentVersion:   currentVersion,
 		buildType:        buildType,
 		deploymentType:   deploymentType,
+		managedUpdates:   config.ManagedUpdates,
 		installRoot:      filepath.Clean(strings.TrimSpace(config.InstallRoot)),
 		now:              time.Now,
 		operation:        make(chan struct{}, 1),
@@ -177,8 +180,8 @@ func (s *versionService) checkUpdate(ctx context.Context, force bool) systemVers
 	} else {
 		info.Warning = "Current build does not use a semantic release version"
 	}
-	if info.HasUpdate && s.deploymentType == nativeDeploymentType && !s.hasNativeReleaseAssets(release, latestVersion) {
-		info.Warning = "Latest GitHub release does not include native assets for this platform"
+	if info.HasUpdate && s.supportsManagedUpdates() && !s.hasNativeReleaseAssets(release, latestVersion) {
+		info.Warning = "Latest GitHub release does not include managed release assets for this platform"
 	}
 	s.storeLatest(info)
 	return info
@@ -221,7 +224,7 @@ func (s *versionService) listRollbackVersions(ctx context.Context) ([]rollbackVe
 		if currentOK && compareSemanticVersions(parsed, current) >= 0 {
 			continue
 		}
-		if s.deploymentType == nativeDeploymentType &&
+		if s.supportsManagedUpdates() &&
 			!s.installedNativeReleaseValid(canonical) &&
 			!s.hasNativeReleaseAssets(release, canonical) {
 			continue
@@ -254,12 +257,18 @@ func (s *versionService) listRollbackVersions(ctx context.Context) ([]rollbackVe
 
 func (s *versionService) baseVersionInfo() systemVersionInfo {
 	return s.withNativePendingRestart(systemVersionInfo{
-		CurrentVersion: s.currentVersion,
-		LatestVersion:  s.currentVersion,
-		BuildType:      s.buildType,
-		DeploymentType: s.deploymentType,
-		ReleasesURL:    s.releasesURL(),
+		CurrentVersion:  s.currentVersion,
+		LatestVersion:   s.currentVersion,
+		BuildType:       s.buildType,
+		DeploymentType:  s.deploymentType,
+		UpdateSupported: s.supportsManagedUpdates(),
+		ReleasesURL:     s.releasesURL(),
 	})
+}
+
+func (s *versionService) supportsManagedUpdates() bool {
+	return s.deploymentType == nativeDeploymentType ||
+		(s.deploymentType == containerDeploymentType && s.managedUpdates)
 }
 
 func (s *versionService) fetchLatestRelease(ctx context.Context) (githubRelease, error) {

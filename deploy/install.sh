@@ -301,7 +301,7 @@ if [ -n "$backend_container_id_before" ]; then
   backend_started_at_before="$("$DOCKER_BIN" inspect --format '{{.State.StartedAt}}' "$backend_container_id_before" 2>/dev/null || true)"
 fi
 
-if "${compose[@]}" up -d --no-build --pull never; then
+if "${compose[@]}" up -d --remove-orphans --no-build --pull never; then
   log "TokenHub started successfully"
   "${compose[@]}" ps
 else
