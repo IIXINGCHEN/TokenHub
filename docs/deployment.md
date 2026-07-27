@@ -132,6 +132,7 @@ sudo bash /tmp/tokenhub-install.sh uninstall
 ```
 
 `uninstall` preserves `/etc/tokenhub` and `/var/lib/tokenhub`. Use `uninstall --purge` only when configuration and application data should also be deleted.
+The installer records ownership markers in the application, configuration, and state directories. Uninstall refuses to recursively remove an unmarked or mismatched directory, and system-level paths such as `/opt`, `/etc`, and `/var/lib` are never accepted as managed directory targets. Install and upgrade report success only after the systemd unit is active and both the backend health endpoint and admin console respond.
 
 For a fork, use its installer URL and tell TokenHub which public Release repository to query:
 
@@ -141,6 +142,7 @@ sudo env TOKENHUB_RELEASE_REPOSITORY=your-account/TokenHub \
 ```
 
 Native Release installations are labeled `Native Release` in the version panel. Administrators can download and verify an update or rollback directly from the panel, then select **Restart now** to activate it through systemd. Each GitHub Release tag must be a strict `v`-prefixed semantic version and contain the Linux archive and `checksums.txt`; `.github/workflows/native-release.yml` builds and attaches the `linux/amd64` and `linux/arm64` assets when a Release is published.
+Previously downloaded, validated releases remain available for rollback when the GitHub Releases API cannot be reached.
 
 ## Docker Compose
 

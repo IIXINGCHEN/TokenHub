@@ -324,16 +324,6 @@
     padding-left: 0;
   }
 
-  .version-command-head {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .version-command-head button {
-    width: 100%;
-    min-height: 44px;
-  }
-
   .version-native-result {
     grid-template-columns: 24px minmax(0, 1fr);
   }

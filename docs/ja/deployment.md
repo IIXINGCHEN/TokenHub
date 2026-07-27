@@ -132,6 +132,7 @@ sudo bash /tmp/tokenhub-install.sh uninstall
 ```
 
 `uninstall` は `/etc/tokenhub` と `/var/lib/tokenhub` を保持します。設定とアプリケーションデータも削除する場合に限り、`uninstall --purge` を使用してください。
+インストーラーは、アプリケーション、設定、状態の各ディレクトリに所有権マーカーを記録します。マーカーがない、または現在の設定と一致しないディレクトリは再帰削除されず、`/opt`、`/etc`、`/var/lib` などのシステムレベルのパスを管理対象ディレクトリとして指定することもできません。インストールまたはアップグレードは、systemd ユニットが active になり、バックエンドのヘルスチェックと管理コンソールの両方が応答した後にのみ成功と報告されます。
 
 fork をテストする場合は、その fork のインストーラーをダウンロードし、公開 Release リポジトリを指定します。
 
@@ -141,6 +142,7 @@ sudo env TOKENHUB_RELEASE_REPOSITORY=your-account/TokenHub \
 ```
 
 ネイティブ Release インストールは、バージョンパネルに「ネイティブ Release」と表示されます。管理者はパネルから更新またはロールバックを直接ダウンロードして検証し、「今すぐ再起動」を選択して systemd で対象バージョンを有効化できます。各 GitHub Release タグは `v` で始まる厳密なセマンティックバージョンで、Linux アーカイブと `checksums.txt` を含む必要があります。Release の公開時に `.github/workflows/native-release.yml` が `linux/amd64` と `linux/arm64` のファイルをビルドして添付します。
+ダウンロードおよび検証済みの Release はローカルに保持されるため、GitHub Releases API に接続できない場合でもロールバックできます。
 
 ## Docker Compose
 

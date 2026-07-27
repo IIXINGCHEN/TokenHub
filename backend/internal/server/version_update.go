@@ -117,6 +117,12 @@ func (s *versionService) rollbackNativeRelease(ctx context.Context, requestedVer
 	if s.pendingNativeRestartVersion() == targetVersion {
 		return targetVersion, nil
 	}
+	if s.installedNativeReleaseValid(targetVersion) {
+		if err := s.activateNativeRelease(targetVersion); err != nil {
+			return "", err
+		}
+		return targetVersion, nil
+	}
 
 	releases, err := s.fetchRecentReleases(ctx, rollbackReleasePageSize)
 	if err != nil {
@@ -138,12 +144,6 @@ func (s *versionService) rollbackNativeRelease(ctx context.Context, requestedVer
 		return "", errNativeRollbackNotAllowed
 	}
 
-	if s.installedNativeReleaseValid(targetVersion) {
-		if err := s.activateNativeRelease(targetVersion); err != nil {
-			return "", err
-		}
-		return targetVersion, nil
-	}
 	if !s.hasNativeReleaseAssets(*selected, targetVersion) {
 		return "", errNativeRollbackNotAllowed
 	}

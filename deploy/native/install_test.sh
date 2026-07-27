@@ -48,6 +48,51 @@ assert_fails normalize_version "v0.3.3-01"
 validate_port "08" "test port"
 assert_fails validate_port "0" "test port"
 assert_fails validate_safe_path "/opt/../etc" "test path"
+assert_fails validate_safe_path "/opt/" "test path"
+assert_fails validate_safe_path "/var//lib" "test path"
+assert_fails validate_managed_path "/opt" "test path"
+assert_fails validate_managed_path "/etc" "test path"
+assert_fails validate_managed_path "/var/lib" "test path"
+assert_fails validate_managed_path "/custom" "test path"
+validate_managed_path "/opt/tokenhub" "test path"
+
+marker_root="$test_root/marker-root"
+INSTALL_ROOT="$marker_root/opt/tokenhub"
+CONFIG_DIR="$marker_root/etc/tokenhub"
+STATE_DIR="$marker_root/var/lib/tokenhub"
+SERVICE_NAME="tokenhub-test"
+SERVICE_USER="$(id -un)"
+SERVICE_GROUP="$(id -gn)"
+mkdir -p "$INSTALL_ROOT" "$CONFIG_DIR" "$STATE_DIR"
+assert_fails require_managed_directory_marker "$INSTALL_ROOT" "application"
+write_managed_directory_marker "$INSTALL_ROOT" "application"
+write_managed_directory_marker "$CONFIG_DIR" "configuration"
+write_managed_directory_marker "$STATE_DIR" "state"
+require_managed_directory_marker "$INSTALL_ROOT" "application"
+printf 'invalid\n' >"$INSTALL_ROOT/$MANAGED_DIRECTORY_MARKER"
+assert_fails require_managed_directory_marker "$INSTALL_ROOT" "application"
+
+unmarked_system_directory="$test_root/etc/ssh"
+mkdir -p "$unmarked_system_directory"
+: >"$unmarked_system_directory/sshd_config"
+assert_fails prepare_managed_directory "$unmarked_system_directory" "configuration" "$SERVICE_USER" "0700"
+
+readiness_config="$test_root/readiness-config"
+mkdir -p "$readiness_config"
+printf 'TOKENHUB_HTTP_ADDR=:18080\nTOKENHUB_FRONTEND_PORT=13000\n' >"$readiness_config/tokenhub.env"
+CONFIG_DIR="$readiness_config"
+SERVICE_READY_ATTEMPTS=1
+systemctl() {
+  [ "$1" = "status" ]
+}
+curl() {
+  return 0
+}
+sleep() {
+  return 0
+}
+assert_fails wait_for_service_ready
+unset -f systemctl curl sleep
 
 config_values="$test_root/config-values"
 printf 'TOKENHUB_RELEASE_REPOSITORY=first/repo\nTOKENHUB_RELEASE_REPOSITORY=second/repo\n' >"$config_values"
@@ -177,8 +222,12 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
-[ -n "$destination" ] && [ -n "$url" ]
+[ -n "$url" ]
 printf '%s\n' "$url" >>"$TOKENHUB_TEST_CURL_LOG"
+if [[ "$url" == http://127.0.0.1:* ]]; then
+  exit 0
+fi
+[ -n "$destination" ]
 if [ -n "${TOKENHUB_TEST_CURL_FAIL_ONCE:-}" ] &&
   [ ! -e "$TOKENHUB_TEST_CURL_FAIL_ONCE" ]; then
   touch "$TOKENHUB_TEST_CURL_FAIL_ONCE"
@@ -249,6 +298,18 @@ EOF
   [ "$(tr -d '[:space:]' <"$install_root/current/VERSION")" = "0.3.3" ] ||
     fail_test "integration install did not activate v0.3.3"
   [ -s "$config_dir/tokenhub.env" ] || fail_test "integration install did not create configuration"
+  [ -f "$install_root/.tokenhub-managed-directory" ] ||
+    fail_test "integration install did not mark the application directory"
+  [ -f "$config_dir/.tokenhub-managed-directory" ] ||
+    fail_test "integration install did not mark the configuration directory"
+  [ -f "$state_dir/.tokenhub-managed-directory" ] ||
+    fail_test "integration install did not mark the state directory"
+  grep -q '^is-active --quiet tokenhub-test$' "$test_root/systemctl.log" ||
+    fail_test "integration install did not verify systemd readiness"
+  grep -q 'http://127.0.0.1:8080/healthz' "$test_root/curl.log" ||
+    fail_test "integration install did not probe backend health"
+  grep -q 'http://127.0.0.1:3000/' "$test_root/curl.log" ||
+    fail_test "integration install did not probe the frontend"
   grep -q "$install_root/current/bin/tokenhub-run" "$systemd_dir/tokenhub-test.service" ||
     fail_test "systemd unit was not rendered with the install root"
   if grep -q '@[A-Z_]*@' "$systemd_dir/tokenhub-test.service"; then

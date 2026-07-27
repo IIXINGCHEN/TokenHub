@@ -2,10 +2,8 @@ import {
   AlertCircle,
   ArrowRight,
   ArrowUpCircle,
-  Check,
   CheckCircle2,
   ChevronDown,
-  Copy,
   Download,
   ExternalLink,
   History,
@@ -18,7 +16,6 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import packageMetadata from "../../../package.json";
 import { type AdminUser, type ApiContext } from "../core/types";
 import { languageLocale, tx } from "../i18n/runtime";
 import { adminFetch, readAdminError } from "../resources/payloads";
@@ -169,8 +166,8 @@ function RollbackConfirmDialog({
 }
 
 const fallbackVersionInfo: SystemVersionInfo = {
-  current_version: packageMetadata.version,
-  latest_version: packageMetadata.version,
+  current_version: "",
+  latest_version: "",
   has_update: false,
   build_type: "source",
   deployment_type: "source",
@@ -191,7 +188,6 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
   const [rollbackError, setRollbackError] = useState("");
   const [rollbackVersions, setRollbackVersions] = useState<RollbackVersionInfo[]>([]);
   const [selectedVersion, setSelectedVersion] = useState("");
-  const [copiedCommand, setCopiedCommand] = useState("");
   const [systemOperation, setSystemOperation] = useState<"" | "update" | "rollback" | "restart">("");
   const [operationError, setOperationError] = useState("");
   const [pendingRestartVersion, setPendingRestartVersion] = useState("");
@@ -302,18 +298,6 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
     }
   }
 
-  async function copyCommand(version: string, kind: "update" | "rollback") {
-    const command = composeVersionCommand(version);
-    try {
-      if (!navigator.clipboard) throw new Error("Clipboard API unavailable");
-      await navigator.clipboard.writeText(command);
-      setCopiedCommand(`${kind}:${version}`);
-      window.setTimeout(() => setCopiedCommand(""), 2000);
-    } catch {
-      setCopiedCommand("");
-    }
-  }
-
   async function applyManagedUpdate() {
     if (systemOperation || !info.latest_version) return;
     setSystemOperation("update");
@@ -374,10 +358,10 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
   }
 
   if (!canInspectVersions) {
-    return <span className="version">v{info.current_version}</span>;
+    return null;
   }
 
-  const versionLabel = info.current_version || packageMetadata.version;
+  const versionLabel = info.current_version || "...";
   const managedUpdateUnavailable = Boolean(
     info.warning?.includes("does not include managed release assets") ||
       info.warning?.includes("does not include native assets"),
@@ -530,12 +514,10 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
                   ) : null}
 
                   {info.has_update && info.deployment_type === "container" && !info.update_supported ? (
-                    <VersionCommand
-                      command={composeVersionCommand(info.latest_version)}
-                      copied={copiedCommand === `update:${info.latest_version}`}
-                      label={tx("更新命令")}
-                      onCopy={() => void copyCommand(info.latest_version, "update")}
-                    />
+                    <div className="version-message neutral">
+                      <Terminal aria-hidden="true" size={17} />
+                      <span>{tx("容器部署请使用初始部署时的 Compose 文件和环境配置手动切换版本。")}</span>
+                    </div>
                   ) : null}
 
                   {info.has_update && info.deployment_type === "source" ? (
@@ -609,12 +591,10 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
 
                         {selectedVersion && info.deployment_type === "container" && !info.update_supported ? (
                           <>
-                            <VersionCommand
-                              command={composeVersionCommand(selectedVersion)}
-                              copied={copiedCommand === `rollback:${selectedVersion}`}
-                              label={tx("回退命令")}
-                              onCopy={() => void copyCommand(selectedVersion, "rollback")}
-                            />
+                            <div className="version-message neutral">
+                              <Terminal aria-hidden="true" size={17} />
+                              <span>{tx("容器部署请使用初始部署时的 Compose 文件和环境配置手动切换版本。")}</span>
+                            </div>
                             <div className="version-rollback-warning">
                               <AlertCircle aria-hidden="true" size={15} />
                               <span>{tx("回退前请确认数据库与目标版本兼容，并先完成备份。")}</span>
@@ -655,7 +635,7 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
               </article>
               {rollbackConfirmationVersion ? (
                 <RollbackConfirmDialog
-                  currentVersion={info.current_version || packageMetadata.version}
+                  currentVersion={info.current_version}
                   onCancel={() => setRollbackConfirmationVersion("")}
                   onConfirm={() => void applyManagedRollback(rollbackConfirmationVersion)}
                   targetVersion={rollbackConfirmationVersion}
@@ -703,42 +683,6 @@ function VersionSummary({ info, loading }: { info: SystemVersionInfo; loading: b
       </span>
     </div>
   );
-}
-
-function VersionCommand({
-  command,
-  copied,
-  label,
-  onCopy,
-}: {
-  command: string;
-  copied: boolean;
-  label: string;
-  onCopy: () => void;
-}) {
-  return (
-    <section className="version-command">
-      <div className="version-command-head">
-        <div>
-          <strong>{label}</strong>
-          <span>{tx("将 deploy/.env 中的 TOKENHUB_IMAGE_TAG 固定为目标版本，再执行以下命令。")}</span>
-        </div>
-        <button onClick={onCopy} type="button">
-          {copied ? <Check size={14} /> : <Copy size={14} />}
-          {copied ? tx("已复制") : tx("复制命令")}
-        </button>
-      </div>
-      <pre><code>{command}</code></pre>
-    </section>
-  );
-}
-
-function composeVersionCommand(version: string) {
-  const compose = "docker compose --env-file deploy/.env -f deploy/docker-compose.remote-postgres.yml";
-  return [
-    `TOKENHUB_IMAGE_TAG=${version} ${compose} pull`,
-    `TOKENHUB_IMAGE_TAG=${version} ${compose} up -d --remove-orphans`,
-  ].join("\n");
 }
 
 function normalizeVersionInfo(payload: SystemVersionPayload): SystemVersionInfo {

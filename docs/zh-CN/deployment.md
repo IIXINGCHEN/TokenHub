@@ -132,6 +132,7 @@ sudo bash /tmp/tokenhub-install.sh uninstall
 ```
 
 `uninstall` 会保留 `/etc/tokenhub` 和 `/var/lib/tokenhub`。只有确定要同时删除配置和应用数据时，才使用 `uninstall --purge`。
+安装器会在应用、配置和状态目录中写入所有权标记。卸载时，如果目录没有标记或标记与当前配置不一致，安装器会拒绝递归删除；`/opt`、`/etc`、`/var/lib` 等系统级目录也不会被接受为托管目录。安装或升级只有在 systemd 服务处于 active 状态、后端健康检查和管理后台都可访问后才会报告成功。
 
 使用 fork 测试时，请下载该 fork 中的安装脚本，并指定它的公开 Release 仓库：
 
@@ -141,6 +142,7 @@ sudo env TOKENHUB_RELEASE_REPOSITORY=your-account/TokenHub \
 ```
 
 原生 Release 安装会在版本面板中显示为「原生 Release」。管理员可以直接在页面下载并校验更新或回退版本，然后点击「立即重启」，由 systemd 激活目标版本。每个 GitHub Release 标签必须是以 `v` 开头的严格语义化版本，并包含 Linux 压缩包和 `checksums.txt`；发布 Release 后，`.github/workflows/native-release.yml` 会构建并附加 `linux/amd64` 和 `linux/arm64` 文件。
+已经下载并校验通过的版本会保留在本地，即使 GitHub Releases API 暂时不可访问，也可以继续回退。
 
 ## Docker Compose
 

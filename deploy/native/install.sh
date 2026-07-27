@@ -23,6 +23,8 @@ MAX_NATIVE_CHECKSUM_BYTES=$((1024 * 1024))
 MAX_NATIVE_EXTRACTED_BYTES=$((2 * 1024 * 1024 * 1024))
 MAX_NATIVE_ARCHIVE_FILE_BYTES=$((600 * 1024 * 1024))
 MAX_NATIVE_ARCHIVE_ENTRIES=100000
+SERVICE_READY_ATTEMPTS="${TOKENHUB_INSTALLER_READY_ATTEMPTS:-60}"
+MANAGED_DIRECTORY_MARKER=".tokenhub-managed-directory"
 
 usage() {
   cat <<'EOF'
@@ -68,8 +70,43 @@ validate_safe_path() {
   [[ "$value" == /* ]] || fail "$label must be an absolute path"
   [[ "$value" != "/" ]] || fail "$label must not be /"
   [[ "$value" =~ ^/[A-Za-z0-9._/-]+$ ]] || fail "$label contains unsupported characters"
+  [[ "$value" != */ && "$value" != *"//"* ]] ||
+    fail "$label must not contain a trailing or repeated /"
   [[ "${value}/" != *"/../"* && "${value}/" != *"/./"* ]] ||
     fail "$label must not contain . or .. path segments"
+}
+
+validate_managed_path() {
+  local value="$1"
+  local label="$2"
+  local relative="${value#/}"
+  validate_safe_path "$value" "$label"
+  case "$value" in
+    /bin|/boot|/dev|/etc|/home|/lib|/lib64|/media|/mnt|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/usr/local|/var|/var/lib|/var/log|/var/tmp)
+      fail "$label must be an application-specific directory"
+      ;;
+  esac
+  [[ "$relative" == */* ]] ||
+    fail "$label must be at least two path segments below /"
+}
+
+validate_managed_paths_are_distinct() {
+  local first
+  local second
+  for first in "$INSTALL_ROOT" "$CONFIG_DIR" "$STATE_DIR"; do
+    for second in "$INSTALL_ROOT" "$CONFIG_DIR" "$STATE_DIR"; do
+      [ "$first" = "$second" ] && continue
+      case "${first}/" in
+        "${second}/"*)
+          fail "managed directories must not contain one another: $first and $second"
+          ;;
+      esac
+    done
+  done
+  [ "$INSTALL_ROOT" != "$CONFIG_DIR" ] &&
+    [ "$INSTALL_ROOT" != "$STATE_DIR" ] &&
+    [ "$CONFIG_DIR" != "$STATE_DIR" ] ||
+    fail "managed directories must be distinct"
 }
 
 validate_port() {
@@ -240,12 +277,15 @@ require_platform() {
   load_existing_release_repository
   [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ ]] ||
     fail "TOKENHUB_RELEASE_REPOSITORY must use owner/repository form"
-  validate_safe_path "$INSTALL_ROOT" "TOKENHUB_INSTALL_ROOT"
-  validate_safe_path "$CONFIG_DIR" "TOKENHUB_CONFIG_DIR"
-  validate_safe_path "$STATE_DIR" "TOKENHUB_STATE_DIR"
+  validate_managed_path "$INSTALL_ROOT" "TOKENHUB_INSTALL_ROOT"
+  validate_managed_path "$CONFIG_DIR" "TOKENHUB_CONFIG_DIR"
+  validate_managed_path "$STATE_DIR" "TOKENHUB_STATE_DIR"
+  validate_managed_paths_are_distinct
   validate_identifiers
   validate_port "$BACKEND_PORT" "TOKENHUB_BACKEND_PORT"
   validate_port "$FRONTEND_PORT" "TOKENHUB_FRONTEND_PORT"
+  [[ "$SERVICE_READY_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] ||
+    fail "TOKENHUB_INSTALLER_READY_ATTEMPTS must be a positive integer"
 }
 
 platform_arch() {
@@ -432,10 +472,104 @@ EOF
 
 prepare_directories() {
   local directory_mode="0750"
-  install -d -m "$directory_mode" -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$INSTALL_ROOT"
+  local config_owner="root"
+  local config_mode="0750"
+  if [ "${EUID:-$(id -u)}" -ne 0 ]; then
+    config_owner="$SERVICE_USER"
+    config_mode="0700"
+  fi
+  prepare_managed_directory "$INSTALL_ROOT" "application" "$SERVICE_USER" "$directory_mode"
+  prepare_managed_directory "$CONFIG_DIR" "configuration" "$config_owner" "$config_mode"
+  prepare_managed_directory "$STATE_DIR" "state" "$SERVICE_USER" "$directory_mode"
   install -d -m "$directory_mode" -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$INSTALL_ROOT/releases"
-  install -d -m "$directory_mode" -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$STATE_DIR"
   install -d -m "$directory_mode" -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$STATE_DIR/backups"
+}
+
+managed_directory_marker_content() {
+  local directory="$1"
+  local kind="$2"
+  printf 'tokenhub-native-managed-directory-v1\nkind=%s\npath=%s\nservice=%s\n' \
+    "$kind" "$directory" "$SERVICE_NAME"
+}
+
+write_managed_directory_marker() {
+  local directory="$1"
+  local kind="$2"
+  local marker="$directory/$MANAGED_DIRECTORY_MARKER"
+  local marker_owner="root"
+  if [ "${EUID:-$(id -u)}" -ne 0 ]; then
+    marker_owner="$SERVICE_USER"
+  fi
+  install -m 0600 -o "$marker_owner" -g "$SERVICE_GROUP" /dev/null "$marker"
+  managed_directory_marker_content "$directory" "$kind" >"$marker"
+  chown "$marker_owner:$SERVICE_GROUP" "$marker"
+  chmod 0600 "$marker"
+}
+
+require_managed_directory_marker() {
+  local directory="$1"
+  local kind="$2"
+  local marker="$directory/$MANAGED_DIRECTORY_MARKER"
+  local expected
+  local actual
+  [ -f "$marker" ] && [ ! -L "$marker" ] ||
+    fail "refusing to remove unmarked $kind directory: $directory"
+  expected="$(managed_directory_marker_content "$directory" "$kind")"
+  actual="$(cat "$marker")"
+  [ "$actual" = "$expected" ] ||
+    fail "refusing to remove $kind directory with an invalid ownership marker: $directory"
+}
+
+legacy_managed_directory_valid() {
+  local directory="$1"
+  local kind="$2"
+  local env_file="$CONFIG_DIR/tokenhub.env"
+  case "$kind" in
+    application)
+      [ -f "$directory/current/VERSION" ] ||
+        { [ -f "$env_file" ] &&
+          [ "$(read_config_value "$env_file" TOKENHUB_INSTALL_ROOT)" = "$directory" ]; }
+      ;;
+    configuration)
+      [ -f "$directory/tokenhub.env" ]
+      ;;
+    state)
+      [ -f "$directory/tokenhub.db" ] ||
+        { [ -f "$env_file" ] &&
+          { [ "$(read_config_value "$env_file" TOKENHUB_DATABASE_URL)" = "sqlite://$directory/tokenhub.db" ] ||
+            [ "$(read_config_value "$env_file" TOKENHUB_SQLITE_BACKUP_DIR)" = "$directory/backups" ]; }; }
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+prepare_managed_directory() {
+  local directory="$1"
+  local kind="$2"
+  local owner="$3"
+  local mode="$4"
+  local marker="$directory/$MANAGED_DIRECTORY_MARKER"
+  local can_claim=false
+  if [ -e "$directory" ] || [ -L "$directory" ]; then
+    [ -d "$directory" ] && [ ! -L "$directory" ] ||
+      fail "refusing to use a non-directory or symbolic link as $kind directory: $directory"
+    if [ -e "$marker" ] || [ -L "$marker" ]; then
+      require_managed_directory_marker "$directory" "$kind"
+    elif [ -z "$(find "$directory" -mindepth 1 -maxdepth 1 -print -quit)" ] ||
+      legacy_managed_directory_valid "$directory" "$kind"; then
+      can_claim=true
+    else
+      fail "refusing to claim non-empty unmarked $kind directory: $directory"
+    fi
+  else
+    can_claim=true
+  fi
+  install -d -m "$mode" -o "$owner" -g "$SERVICE_GROUP" "$directory"
+  if [ "$can_claim" = true ]; then
+    write_managed_directory_marker "$directory" "$kind"
+  fi
 }
 
 sha256_file() {
@@ -499,13 +633,13 @@ validate_release_archive() {
   local entry
   local listing
   local entry_type
-  local entry_mode
+  local _entry_mode
   local listing_field_2
   local listing_field_3
-  local listing_field_4
+  local _listing_field_4
   local listing_field_5
   local entry_size
-  local listing_remainder
+  local _listing_remainder
   local file_size
   local entry_count=0
   local extracted_bytes=0
@@ -526,7 +660,7 @@ validate_release_archive() {
     entry_type="${listing:0:1}"
     case "$entry_type" in
       -)
-        read -r entry_mode listing_field_2 listing_field_3 listing_field_4 listing_field_5 listing_remainder <<<"$listing"
+        read -r _entry_mode listing_field_2 listing_field_3 _listing_field_4 listing_field_5 _listing_remainder <<<"$listing"
         if [[ "$listing_field_2" == */* ]] && [[ "$listing_field_3" =~ ^[0-9]+$ ]]; then
           entry_size="$listing_field_3"
         elif [[ "$listing_field_2" =~ ^[0-9]+$ ]] && [[ "$listing_field_5" =~ ^[0-9]+$ ]]; then
@@ -624,6 +758,41 @@ install_service() {
 
 restart_service() {
   systemctl restart "$SERVICE_NAME"
+  wait_for_service_ready
+}
+
+configured_backend_port() {
+  local address
+  local port
+  address="$(read_config_value "$CONFIG_DIR/tokenhub.env" TOKENHUB_HTTP_ADDR)"
+  port="${address##*:}"
+  validate_port "$port" "TOKENHUB_HTTP_ADDR port"
+  printf '%s\n' "$port"
+}
+
+configured_frontend_port() {
+  local port
+  port="$(read_config_value "$CONFIG_DIR/tokenhub.env" TOKENHUB_FRONTEND_PORT)"
+  validate_port "$port" "TOKENHUB_FRONTEND_PORT"
+  printf '%s\n' "$port"
+}
+
+wait_for_service_ready() {
+  local backend_port
+  local frontend_port
+  local attempt
+  backend_port="$(configured_backend_port)"
+  frontend_port="$(configured_frontend_port)"
+  for ((attempt = 1; attempt <= SERVICE_READY_ATTEMPTS; attempt++)); do
+    if systemctl is-active --quiet "$SERVICE_NAME" &&
+      curl -fsS --connect-timeout 2 --max-time 3 "http://127.0.0.1:${backend_port}/healthz" >/dev/null 2>&1 &&
+      curl -fsS --connect-timeout 2 --max-time 3 "http://127.0.0.1:${frontend_port}/" >/dev/null 2>&1; then
+      return
+    fi
+    sleep 1
+  done
+  systemctl status --no-pager "$SERVICE_NAME" >&2 || true
+  fail "TokenHub did not become ready after ${SERVICE_READY_ATTEMPTS} readiness checks"
 }
 
 validate_rollback_target() {
@@ -689,6 +858,14 @@ uninstall_tokenhub() {
       [ "$(id -u "$SERVICE_USER" 2>/dev/null || true)" = "$expected_uid" ]; then
       remove_service_user=true
     fi
+  fi
+
+  if [ -e "$INSTALL_ROOT" ]; then
+    require_managed_directory_marker "$INSTALL_ROOT" "application"
+  fi
+  if [ "$PURGE" = true ]; then
+    [ ! -e "$CONFIG_DIR" ] || require_managed_directory_marker "$CONFIG_DIR" "configuration"
+    [ ! -e "$STATE_DIR" ] || require_managed_directory_marker "$STATE_DIR" "state"
   fi
 
   remove_service

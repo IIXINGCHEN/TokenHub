@@ -50,9 +50,17 @@ jobs:
           echo "version=${version}" >>"$GITHUB_OUTPUT"
 
   frontend:
-    name: Build native frontend
+    name: Build native frontend (linux/${{ matrix.arch }})
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - name: Check out release
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -69,6 +77,8 @@ jobs:
 
       - name: Build standalone frontend
         working-directory: frontend
+        env:
+          ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
           npm ci
@@ -84,18 +94,27 @@ jobs:
           done < <(find .next/standalone -type f -name server.js -print)
           test -n "$server_path"
           standalone_root="$(dirname "$server_path")"
-          mkdir -p ../native-frontend/frontend/.next
-          cp -a "$standalone_root/." ../native-frontend/frontend/
-          cp -a .next/static ../native-frontend/frontend/.next/static
-          cp -a public ../native-frontend/frontend/public
-          test -f ../native-frontend/frontend/server.js
-          tar -C ../native-frontend -czf ../native-frontend.tar.gz frontend
+          bundle="../native-frontend-${ARCH}"
+          mkdir -p "$bundle/frontend/.next"
+          cp -a "$standalone_root/." "$bundle/frontend/"
+          cp -a .next/static "$bundle/frontend/.next/static"
+          cp -a public "$bundle/frontend/public"
+          test -f "$bundle/frontend/server.js"
+
+          sharp_binary="$(find "$bundle" -type f -path '*/@img/sharp-linux-*/lib/*.node' -print -quit)"
+          test -n "$sharp_binary"
+          if [[ "$ARCH" == "arm64" ]]; then
+            file "$sharp_binary" | grep -Eq 'ARM aarch64|aarch64'
+          else
+            file "$sharp_binary" | grep -Eq 'x86-64|x86_64'
+          fi
+          tar -C "$bundle" -czf "../native-frontend-${ARCH}.tar.gz" frontend
 
       - name: Upload frontend bundle
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: tokenhub-native-frontend
-          path: native-frontend.tar.gz
+          name: tokenhub-native-frontend-${{ matrix.arch }}
+          path: native-frontend-${{ matrix.arch }}.tar.gz
           compression-level: 0
           if-no-files-found: error
 
@@ -166,7 +185,7 @@ jobs:
       - name: Download frontend bundle
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
-          name: tokenhub-native-frontend
+          name: tokenhub-native-frontend-${{ matrix.arch }}
           path: downloads/frontend
 
       - name: Download backend binary
@@ -203,7 +222,7 @@ jobs:
           stage="stage-${ARCH}"
           archive="tokenhub_${VERSION}_linux_${ARCH}.tar.gz"
           mkdir -p "$stage/bin" "$stage/catalog" "$stage/deploy"
-          tar -xzf downloads/frontend/native-frontend.tar.gz -C "$stage"
+          tar -xzf "downloads/frontend/native-frontend-${ARCH}.tar.gz" -C "$stage"
           cp downloads/backend/tokenhub "$stage/bin/tokenhub"
           cp downloads/node/node "$stage/bin/node"
           cp deploy/native/tokenhub-run "$stage/bin/tokenhub-run"

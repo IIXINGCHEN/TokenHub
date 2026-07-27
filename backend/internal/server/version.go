@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -201,6 +202,10 @@ func (s *versionService) listRollbackVersions(ctx context.Context) ([]rollbackVe
 
 	releases, err := s.fetchRecentReleases(ctx, rollbackReleasePageSize)
 	if err != nil {
+		if versions := s.installedRollbackVersions(current); len(versions) > 0 {
+			s.storeRollbacks(versions)
+			return versions, nil
+		}
 		if errors.Is(err, errNoGitHubReleases) {
 			versions := []rollbackVersionInfo{}
 			s.storeRollbacks(versions)
@@ -259,6 +264,52 @@ func (s *versionService) listRollbackVersions(ctx context.Context) ([]rollbackVe
 	}
 	s.storeRollbacks(versions)
 	return versions, nil
+}
+
+func (s *versionService) installedRollbackVersions(current semanticVersion) []rollbackVersionInfo {
+	if !s.supportsManagedUpdates() {
+		return nil
+	}
+	root, err := s.nativeInstallRoot()
+	if err != nil {
+		return nil
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "releases"))
+	if err != nil {
+		return nil
+	}
+	type candidate struct {
+		version   semanticVersion
+		canonical string
+	}
+	candidates := make([]candidate, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		canonical, parsed, ok := parseSemanticVersion(entry.Name())
+		if !ok || canonical != entry.Name() || compareSemanticVersions(parsed, current) >= 0 {
+			continue
+		}
+		if !s.installedNativeReleaseValid(canonical) {
+			continue
+		}
+		candidates = append(candidates, candidate{version: parsed, canonical: canonical})
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return compareSemanticVersions(candidates[i].version, candidates[j].version) > 0
+	})
+	if len(candidates) > maxRollbackVersions {
+		candidates = candidates[:maxRollbackVersions]
+	}
+	versions := make([]rollbackVersionInfo, 0, len(candidates))
+	for _, candidate := range candidates {
+		versions = append(versions, rollbackVersionInfo{
+			Version: candidate.canonical,
+			HTMLURL: s.releaseTagURL(candidate.canonical),
+		})
+	}
+	return versions
 }
 
 func (s *versionService) baseVersionInfo() systemVersionInfo {

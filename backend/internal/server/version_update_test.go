@@ -111,15 +111,10 @@ func TestExtractNativeArchiveRejectsPathTraversal(t *testing.T) {
 
 func TestNativeRollbackActivatesInstalledAllowedRelease(t *testing.T) {
 	root := prepareNativeInstallRoot(t, "0.3.2", map[string]string{"0.3.1": "old"})
-	releases := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/repos/test/TokenHub/releases" {
-			http.NotFound(w, r)
-			return
-		}
-		writeTestJSON(w, []map[string]any{
-			{"tag_name": "v0.3.2"},
-			{"tag_name": "v0.3.1"},
-		})
+	var calls int
+	releases := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		http.Error(w, "offline", http.StatusServiceUnavailable)
 	}))
 	defer releases.Close()
 
@@ -131,10 +126,45 @@ func TestNativeRollbackActivatesInstalledAllowedRelease(t *testing.T) {
 	if version != "0.3.1" {
 		t.Fatalf("rollback version = %q, want 0.3.1", version)
 	}
+	if calls != 0 {
+		t.Fatalf("installed rollback made %d GitHub requests, want none", calls)
+	}
 	assertNativeCurrentVersion(t, root, "0.3.1")
 	version, err = service.rollbackNativeRelease(context.Background(), "0.3.1")
 	if err != nil || version != "0.3.1" {
 		t.Fatalf("repeated rollback = %q, %v; want idempotent 0.3.1", version, err)
+	}
+}
+
+func TestNativeRollbackListsInstalledVersionsWhenGitHubIsUnavailable(t *testing.T) {
+	root := prepareNativeInstallRoot(t, "0.3.3", map[string]string{
+		"0.3.1": "old",
+		"0.3.2": "previous",
+	})
+	var calls int
+	releases := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		http.Error(w, "offline", http.StatusServiceUnavailable)
+	}))
+	defer releases.Close()
+
+	service := nativeTestVersionService(root, "0.3.3", releases)
+	versions, err := service.listRollbackVersions(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != 2 || versions[0].Version != "0.3.2" || versions[1].Version != "0.3.1" {
+		t.Fatalf("offline rollback versions = %+v, want 0.3.2 and 0.3.1", versions)
+	}
+	if calls != 1 {
+		t.Fatalf("offline rollback listing made %d GitHub requests, want 1", calls)
+	}
+	_, err = service.listRollbackVersions(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("cached offline rollback listing made %d GitHub requests, want 1", calls)
 	}
 }
 
