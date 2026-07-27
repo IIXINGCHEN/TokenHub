@@ -1,5 +1,6 @@
 import {
   AlertCircle,
+  ArrowRight,
   ArrowUpCircle,
   Check,
   CheckCircle2,
@@ -55,6 +56,116 @@ type RollbackVersionInfo = {
   html_url: string;
 };
 
+function RollbackConfirmDialog({
+  currentVersion,
+  targetVersion,
+  onCancel,
+  onConfirm,
+}: {
+  currentVersion: string;
+  targetVersion: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const dialogRef = useRef<HTMLElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    cancelRef.current?.focus();
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        onCancel();
+        return;
+      }
+      if (event.key !== "Tab" || !dialogRef.current) return;
+
+      const focusable = Array.from(
+        dialogRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+      if (focusable.length === 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const activeIndex = focusable.indexOf(document.activeElement as HTMLElement);
+      const nextIndex = event.shiftKey
+        ? (activeIndex <= 0 ? focusable.length - 1 : activeIndex - 1)
+        : (activeIndex < 0 || activeIndex === focusable.length - 1 ? 0 : activeIndex + 1);
+      focusable[nextIndex]?.focus();
+    }
+
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown, true);
+      previouslyFocused?.focus();
+    };
+  }, [onCancel]);
+
+  return (
+    <div
+      className="modal-backdrop version-confirm-backdrop"
+      onMouseDown={(event) => {
+        if (event.currentTarget === event.target) onCancel();
+      }}
+      role="presentation"
+    >
+      <section
+        ref={dialogRef}
+        aria-describedby="version-rollback-confirm-description"
+        aria-labelledby="version-rollback-confirm-title"
+        aria-modal="true"
+        className="confirm-modal version-confirm-modal"
+        role="alertdialog"
+      >
+        <header className="version-confirm-head">
+          <span aria-hidden="true" className="version-confirm-icon">
+            <RotateCcw size={20} />
+          </span>
+          <div>
+            <h2 id="version-rollback-confirm-title">
+              {tx("确认回退到")} v{targetVersion}
+            </h2>
+            <p>{tx("此操作将在重启后切换运行版本。")}</p>
+          </div>
+        </header>
+
+        <div className="version-confirm-route">
+          <span>
+            <small>{tx("当前版本")}</small>
+            <strong>v{currentVersion}</strong>
+          </span>
+          <ArrowRight aria-hidden="true" size={18} />
+          <span>
+            <small>{tx("回退目标")}</small>
+            <strong>v{targetVersion}</strong>
+          </span>
+        </div>
+
+        <div className="version-confirm-warning" id="version-rollback-confirm-description">
+          <AlertCircle aria-hidden="true" size={17} />
+          <span>{tx("回退前请确认数据库与目标版本兼容，并先完成备份。")}</span>
+        </div>
+
+        <footer className="modal-actions">
+          <button ref={cancelRef} className="secondary-button" onClick={onCancel} type="button">
+            {tx("取消")}
+          </button>
+          <button className="danger-confirm" onClick={onConfirm} type="button">
+            <RotateCcw aria-hidden="true" size={16} />
+            {tx("确认回退")}
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
 const fallbackVersionInfo: SystemVersionInfo = {
   current_version: packageMetadata.version,
   latest_version: packageMetadata.version,
@@ -83,6 +194,7 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
   const [operationError, setOperationError] = useState("");
   const [pendingRestartVersion, setPendingRestartVersion] = useState("");
   const [appliedOperation, setAppliedOperation] = useState<"" | "update" | "rollback">("");
+  const [rollbackConfirmationVersion, setRollbackConfirmationVersion] = useState("");
   const triggerRef = useRef<HTMLButtonElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const modalRef = useRef<HTMLElement>(null);
@@ -103,6 +215,7 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
       setPendingRestartVersion(normalized.pending_restart_version ?? "");
       setAppliedOperation("");
       if (force) {
+        setRollbackConfirmationVersion("");
         setRollbackOpen(false);
         setRollbackLoaded(false);
         setRollbackVersions([]);
@@ -174,6 +287,7 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
   }, [open]);
 
   function closeModal() {
+    setRollbackConfirmationVersion("");
     setOpen(false);
     triggerRef.current?.focus();
   }
@@ -217,25 +331,21 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
     }
   }
 
-  async function applyManagedRollback() {
-    if (systemOperation || !selectedVersion) return;
-    const confirmed = window.confirm(
-      `${tx("确认回退到")} v${selectedVersion}?\n${tx("回退前请确认数据库与目标版本兼容，并先完成备份。")}`,
-    );
-    if (!confirmed) return;
-
+  async function applyManagedRollback(targetVersion: string) {
+    if (systemOperation || !targetVersion) return;
+    setRollbackConfirmationVersion("");
     setSystemOperation("rollback");
     setOperationError("");
     try {
       const response = await adminFetch(api, "/api/admin/system/rollback", {
         method: "POST",
-        body: JSON.stringify({ version: selectedVersion }),
+        body: JSON.stringify({ version: targetVersion }),
       });
       if (!response.ok) {
         throw new Error(await readAdminError(response, tx("回退失败")));
       }
       const payload = await response.json() as { target_version?: string };
-      setPendingRestartVersion(payload.target_version || selectedVersion);
+      setPendingRestartVersion(payload.target_version || targetVersion);
       setAppliedOperation("rollback");
     } catch (error) {
       setOperationError(error instanceof Error ? error.message : tx("回退失败"));
@@ -515,7 +625,7 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
                             <button
                               className="version-native-action rollback"
                               disabled={Boolean(systemOperation)}
-                              onClick={() => void applyManagedRollback()}
+                              onClick={() => setRollbackConfirmationVersion(selectedVersion)}
                               type="button"
                             >
                               {systemOperation === "rollback"
@@ -541,6 +651,14 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
                   </section>
                 </div>
               </article>
+              {rollbackConfirmationVersion ? (
+                <RollbackConfirmDialog
+                  currentVersion={info.current_version || packageMetadata.version}
+                  onCancel={() => setRollbackConfirmationVersion("")}
+                  onConfirm={() => void applyManagedRollback(rollbackConfirmationVersion)}
+                  targetVersion={rollbackConfirmationVersion}
+                />
+              ) : null}
             </div>,
             document.querySelector(".app-shell") ?? document.body,
           )

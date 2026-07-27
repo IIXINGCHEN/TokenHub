@@ -563,6 +563,10 @@
   .version-modal .spin {
     animation: none;
   }
+
+  .confirm-modal.version-confirm-modal {
+    animation: none;
+  }
 }
 
 @media (max-width: 1180px) {
