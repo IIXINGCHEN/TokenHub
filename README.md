@@ -25,15 +25,9 @@
 
 ## Screenshots
 
-| Login Console | Gateway Overview |
-| --- | --- |
-| ![Login Console](docs/assets/screenshots/login-en.png) | ![Gateway Overview](docs/assets/screenshots/overview-en.png) |
-| API Documentation | Provider Channels |
-| ![API Documentation](docs/assets/screenshots/gateway-en.png) | ![Provider Channels](docs/assets/screenshots/providers-en.png) |
-| Model Catalog | Routing Policies |
-| ![Model Catalog](docs/assets/screenshots/models-en.png) | ![Routing Policies](docs/assets/screenshots/routes-en.png) |
-| Usage Analytics | System Settings |
-| ![Usage Analytics](docs/assets/screenshots/usage-en.png) | ![System Settings](docs/assets/screenshots/settings-en.png) |
+<p align="center">
+  <img src="docs/assets/screenshots/tokenhub-tour.webp" alt="TokenHub product tour: login, overview, API documentation, provider channels, model catalog, routing policies, usage analytics, and system settings" width="100%">
+</p>
 
 ## Designed Around Three Roles
 

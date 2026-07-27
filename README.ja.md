@@ -25,15 +25,9 @@
 
 ## スクリーンショット
 
-| ログインコンソール | ゲートウェイ概要 |
-| --- | --- |
-| ![Login Console](docs/assets/screenshots/login-en.png) | ![Gateway Overview](docs/assets/screenshots/overview-en.png) |
-| API ドキュメント | Provider チャネル |
-| ![API Documentation](docs/assets/screenshots/gateway-en.png) | ![Provider Channels](docs/assets/screenshots/providers-en.png) |
-| モデルカタログ | ルーティングポリシー |
-| ![Model Catalog](docs/assets/screenshots/models-en.png) | ![Routing Policies](docs/assets/screenshots/routes-en.png) |
-| 利用分析 | システム設定 |
-| ![Usage Analytics](docs/assets/screenshots/usage-en.png) | ![System Settings](docs/assets/screenshots/settings-en.png) |
+<p align="center">
+  <img src="docs/assets/screenshots/tokenhub-tour.webp" alt="TokenHub 製品ツアー：ログイン、概要、API ドキュメント、Provider チャネル、モデルカタログ、ルーティングポリシー、利用分析、システム設定" width="100%">
+</p>
 
 ## 3つのロールを中心に設計
 

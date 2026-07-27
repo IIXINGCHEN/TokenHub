@@ -25,15 +25,9 @@
 
 ## 产品截图
 
-| 登录控制台 | 网关概览 |
-| --- | --- |
-| ![Login Console](docs/assets/screenshots/login-en.png) | ![Gateway Overview](docs/assets/screenshots/overview-en.png) |
-| 接口文档 | Provider 渠道 |
-| ![API Documentation](docs/assets/screenshots/gateway-en.png) | ![Provider Channels](docs/assets/screenshots/providers-en.png) |
-| 模型目录 | 路由策略 |
-| ![Model Catalog](docs/assets/screenshots/models-en.png) | ![Routing Policies](docs/assets/screenshots/routes-en.png) |
-| 用量统计 | 系统设置 |
-| ![Usage Analytics](docs/assets/screenshots/usage-en.png) | ![System Settings](docs/assets/screenshots/settings-en.png) |
+<p align="center">
+  <img src="docs/assets/screenshots/tokenhub-tour.webp" alt="TokenHub 产品导览：登录、概览、接口文档、Provider 渠道、模型目录、路由策略、用量统计和系统设置" width="100%">
+</p>
 
 ## 围绕三大角色设计
 
