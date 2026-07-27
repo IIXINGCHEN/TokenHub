@@ -105,6 +105,10 @@
     flex-wrap: nowrap;
   }
 
+  .top-version-status {
+    display: flex;
+  }
+
   .top-search-wrap {
     flex: 1 1 auto;
     min-width: 0;
@@ -354,10 +358,6 @@
 
   .topbar-actions {
     gap: 6px;
-  }
-
-  .top-version-status {
-    display: flex;
   }
 
   .top-version-status .version {
