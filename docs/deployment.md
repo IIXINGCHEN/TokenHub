@@ -112,6 +112,7 @@ The first installation generates production secrets and an initial admin passwor
 - Releases and the `current` symlink: `/opt/tokenhub`
 - Configuration and secrets: `/etc/tokenhub/tokenhub.env`
 - SQLite database and backups: `/var/lib/tokenhub`
+- Generated images: `/var/lib/tokenhub/images`
 - Linux systemd unit: `/etc/systemd/system/tokenhub.service`
 
 Edit `/etc/tokenhub/tokenhub.env` when changing public URLs, CORS origins, ports, database settings, or secrets, then restart the service:
@@ -130,6 +131,8 @@ sudo bash /tmp/tokenhub-install.sh upgrade --version 0.3.3
 sudo bash /tmp/tokenhub-install.sh rollback --version 0.3.2
 sudo bash /tmp/tokenhub-install.sh uninstall
 ```
+
+`upgrade` refuses a target older than the installed version; use the explicit `rollback` command for a downgrade. Upgrading an installation created by an older installer automatically adds `/var/lib/tokenhub/images` as persistent image storage unless `TOKENHUB_IMAGE_STORAGE_DIR` is already configured.
 
 `uninstall` preserves `/etc/tokenhub` and `/var/lib/tokenhub`. Use `uninstall --purge` only when configuration and application data should also be deleted.
 The installer records ownership markers in the application, configuration, and state directories. Uninstall refuses to recursively remove an unmarked or mismatched directory, and system-level paths such as `/opt`, `/etc`, and `/var/lib` are never accepted as managed directory targets. Install and upgrade report success only after the systemd unit is active and both the backend health endpoint and admin console respond.

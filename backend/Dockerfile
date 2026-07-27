@@ -12,8 +12,11 @@ WORKDIR /src/frontend
 COPY --from=frontend-deps /src/frontend/node_modules ./node_modules
 COPY frontend/ ./
 RUN npm run build && \
-    server_path="$(find .next/standalone -type f -name server.js -print -quit)" && \
+    server_path="$(find .next/standalone -type f -name server.js -exec sh -c \
+      'for candidate do candidate_root=${candidate%/*}; if [ -d "$candidate_root/.next" ] && [ -f "$candidate_root/package.json" ]; then echo "$candidate"; fi; done' \
+      sh {} +)" && \
     test -n "$server_path" && \
+    test "$(printf '%s\n' "$server_path" | wc -l)" -eq 1 && \
     standalone_root="$(dirname "$server_path")" && \
     mkdir -p /out/frontend/.next && \
     cp -a "$standalone_root/." /out/frontend/ && \

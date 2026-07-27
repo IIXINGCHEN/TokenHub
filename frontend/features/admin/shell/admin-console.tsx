@@ -20,6 +20,7 @@ import { APIKeyWizardModal, UserImportModal } from "../shared/modals";
 import { ConfirmDialog, IssuedKeyModal } from "../shared/ui";
 import { currentOAuthReturnURL, LoginView, ResetPasswordView } from "./auth";
 import { PageHeader, Sidebar, StatusStack, TopNav } from "./navigation-ui";
+import { ResponsiveVersionStatus } from "./version-status";
 import { AuditView } from "../views/audit";
 import { CrudView, ReportsView } from "../views/crud-projects";
 import { DatabaseStatusView } from "../views/database-model-pricing";
@@ -704,7 +705,6 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
     <main className={sidebarCollapsed ? "app-shell sidebar-collapsed" : "app-shell"} data-theme={theme}>
       <Sidebar
         activeView={activeView}
-        api={api}
         onSelect={selectView}
         user={currentUser}
         onLogout={() => void logout()}
@@ -715,11 +715,11 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
           setOpenNavGroups((current) => ({ ...current, [title]: current[title] === false }))
         }
       />
+      <ResponsiveVersionStatus api={api} user={currentUser} />
 
       <section className="workspace">
         <TopNav
           activeView={activeView}
-          api={api}
           data={data}
           user={currentUser}
           theme={theme}

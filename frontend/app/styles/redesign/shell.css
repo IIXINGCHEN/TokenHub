@@ -53,6 +53,11 @@
   line-height: 1;
 }
 
+.sidebar-version-status {
+  min-width: 0;
+  grid-area: version;
+}
+
 .version {
   align-self: start;
   height: 24px;
@@ -408,6 +413,10 @@
   justify-content: flex-start;
 }
 
+.sidebar.collapsed .sidebar-version-status {
+  display: none;
+}
+
 .sidebar.collapsed .brand-logo {
   width: 34px;
   height: 34px;
@@ -500,7 +509,7 @@
 }
 
 .top-version-status {
-  display: flex;
+  display: none;
   align-items: center;
 }
 

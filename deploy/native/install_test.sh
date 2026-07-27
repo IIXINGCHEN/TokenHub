@@ -189,6 +189,8 @@ run_linux_integration() {
   local generated_password
   local invalid_rollback_output
   local invalid_rollback_status
+  local downgrade_output
+  local downgrade_status
   local -a installer_env
 
   service_user="$(id -un)"
@@ -298,6 +300,10 @@ EOF
   [ "$(tr -d '[:space:]' <"$install_root/current/VERSION")" = "0.3.3" ] ||
     fail_test "integration install did not activate v0.3.3"
   [ -s "$config_dir/tokenhub.env" ] || fail_test "integration install did not create configuration"
+  grep -q "^TOKENHUB_IMAGE_STORAGE_DIR=$state_dir/images$" "$config_dir/tokenhub.env" ||
+    fail_test "integration install did not configure persistent image storage"
+  [ -d "$state_dir/images" ] ||
+    fail_test "integration install did not create the persistent image directory"
   [ -f "$install_root/.tokenhub-managed-directory" ] ||
     fail_test "integration install did not mark the application directory"
   [ -f "$config_dir/.tokenhub-managed-directory" ] ||
@@ -333,11 +339,25 @@ EOF
       fail_test "rollback version $invalid_version failed for the wrong reason"
   done
 
+  set +e
+  downgrade_output="$(
+    env -u TOKENHUB_RELEASE_REPOSITORY "${installer_env[@]}" \
+      bash "$script_dir/install.sh" upgrade --version 0.3.2 2>&1
+  )"
+  downgrade_status=$?
+  set -e
+  [ "$downgrade_status" -ne 0 ] || fail_test "upgrade accepted an older version"
+  [[ "$downgrade_output" == *"must not be older than installed version"* ]] ||
+    fail_test "upgrade downgrade failed for the wrong reason: $downgrade_output"
+
   printf 'TOKENHUB_TEST_MARKER=preserved\n' >>"$config_dir/tokenhub.env"
+  sed -i '/^TOKENHUB_IMAGE_STORAGE_DIR=/d' "$config_dir/tokenhub.env"
   env -u TOKENHUB_RELEASE_REPOSITORY "${installer_env[@]}" \
     bash "$script_dir/install.sh" upgrade --version 0.3.3
   grep -q '^TOKENHUB_TEST_MARKER=preserved$' "$config_dir/tokenhub.env" ||
     fail_test "integration upgrade replaced existing configuration"
+  grep -q "^TOKENHUB_IMAGE_STORAGE_DIR=$state_dir/images$" "$config_dir/tokenhub.env" ||
+    fail_test "integration upgrade did not migrate persistent image storage"
 
   env -u TOKENHUB_RELEASE_REPOSITORY "${installer_env[@]}" \
     bash "$script_dir/install.sh" uninstall

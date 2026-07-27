@@ -176,6 +176,23 @@ const fallbackVersionInfo: SystemVersionInfo = {
   cached: false,
 };
 
+export function ResponsiveVersionStatus({ api, user }: { api: ApiContext; user: AdminUser }) {
+  const [target, setTarget] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 980px)");
+    const updateTarget = () => {
+      const targetID = media.matches ? "top-version-status" : "sidebar-version-status";
+      setTarget(document.getElementById(targetID));
+    };
+    updateTarget();
+    media.addEventListener("change", updateTarget);
+    return () => media.removeEventListener("change", updateTarget);
+  }, []);
+
+  return target ? createPortal(<VersionStatus api={api} user={user} />, target) : null;
+}
+
 export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser }) {
   const canInspectVersions = ["admin", "system_admin"].includes(user.role.trim().toLowerCase());
   const [info, setInfo] = useState<SystemVersionInfo>(fallbackVersionInfo);

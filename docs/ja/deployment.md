@@ -112,6 +112,7 @@ sudo env TOKENHUB_PUBLIC_HOST=tokenhub.example.com \
 - Release と `current` シンボリックリンク: `/opt/tokenhub`
 - 設定とシークレット: `/etc/tokenhub/tokenhub.env`
 - SQLite データベースとバックアップ: `/var/lib/tokenhub`
+- 生成画像: `/var/lib/tokenhub/images`
 - Linux systemd ユニット: `/etc/systemd/system/tokenhub.service`
 
 公開 URL、CORS Origin、ポート、データベース、シークレットを変更する場合は `/etc/tokenhub/tokenhub.env` を編集して、サービスを再起動します。
@@ -130,6 +131,8 @@ sudo bash /tmp/tokenhub-install.sh upgrade --version 0.3.3
 sudo bash /tmp/tokenhub-install.sh rollback --version 0.3.2
 sudo bash /tmp/tokenhub-install.sh uninstall
 ```
+
+`upgrade` は、インストール済みバージョンより古い対象を拒否します。ダウングレードする場合は、明示的に `rollback` を使用してください。古いインストーラーで作成した環境をアップグレードすると、`TOKENHUB_IMAGE_STORAGE_DIR` が未設定の場合に限り、永続画像ディレクトリとして `/var/lib/tokenhub/images` が自動的に追加されます。
 
 `uninstall` は `/etc/tokenhub` と `/var/lib/tokenhub` を保持します。設定とアプリケーションデータも削除する場合に限り、`uninstall --purge` を使用してください。
 インストーラーは、アプリケーション、設定、状態の各ディレクトリに所有権マーカーを記録します。マーカーがない、または現在の設定と一致しないディレクトリは再帰削除されず、`/opt`、`/etc`、`/var/lib` などのシステムレベルのパスを管理対象ディレクトリとして指定することもできません。インストールまたはアップグレードは、systemd ユニットが active になり、バックエンドのヘルスチェックと管理コンソールの両方が応答した後にのみ成功と報告されます。

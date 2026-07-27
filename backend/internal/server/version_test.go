@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestParseAndCompareSemanticVersions(t *testing.T) {
@@ -54,7 +56,7 @@ func TestParseReleaseTagRequiresVPrefix(t *testing.T) {
 	if version, _, ok := parseReleaseTag("v1.2.3-rc.1"); !ok || version != "1.2.3-rc.1" {
 		t.Fatalf("parseReleaseTag returned version=%q ok=%v", version, ok)
 	}
-	for _, value := range []string{"1.2.3", "v1.2.3-01", "latest"} {
+	for _, value := range []string{"1.2.3", "v1.2.3-01", "v1.2.3+build.1", "latest"} {
 		if _, _, ok := parseReleaseTag(value); ok {
 			t.Fatalf("parseReleaseTag(%q) unexpectedly succeeded", value)
 		}
@@ -159,6 +161,51 @@ func TestVersionServiceChecksLatestReleaseAndCachesResult(t *testing.T) {
 	_ = service.checkUpdate(t.Context(), true)
 	if calls.Load() != 2 {
 		t.Fatalf("forced refresh made %d upstream calls, want 2", calls.Load())
+	}
+}
+
+func TestVersionServiceCoalescesConcurrentCacheMisses(t *testing.T) {
+	var calls atomic.Int32
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	releases := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-release
+		writeTestJSON(w, map[string]any{"tag_name": "v0.4.0"})
+	}))
+	defer releases.Close()
+
+	service := testVersionService(releases, "0.3.0", releaseBuildType)
+	const requestCount = 12
+	start := make(chan struct{})
+	results := make(chan systemVersionInfo, requestCount)
+	var ready sync.WaitGroup
+	ready.Add(requestCount)
+	for range requestCount {
+		go func() {
+			ready.Done()
+			<-start
+			results <- service.checkUpdate(t.Context(), false)
+		}()
+	}
+	ready.Wait()
+	close(start)
+	<-entered
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+
+	for range requestCount {
+		info := <-results
+		if !info.HasUpdate || info.LatestVersion != "0.4.0" {
+			t.Fatalf("unexpected concurrent version result: %+v", info)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("concurrent cache misses made %d GitHub requests, want 1", got)
 	}
 }
 

@@ -80,6 +80,17 @@ type githubAsset struct {
 	Size               int64  `json:"size"`
 }
 
+type latestVersionCall struct {
+	done chan struct{}
+	info systemVersionInfo
+}
+
+type rollbackVersionsCall struct {
+	done     chan struct{}
+	versions []rollbackVersionInfo
+	err      error
+}
+
 type versionService struct {
 	client           *http.Client
 	apiBaseURL       string
@@ -100,8 +111,10 @@ type versionService struct {
 	mu                  sync.Mutex
 	latestCache         *systemVersionInfo
 	latestCacheExpires  time.Time
+	latestInFlight      *latestVersionCall
 	rollbackCache       []rollbackVersionInfo
 	rollbackCacheExpiry time.Time
+	rollbackInFlight    *rollbackVersionsCall
 }
 
 func newVersionService(config Config) *versionService {
@@ -138,12 +151,27 @@ func newVersionService(config Config) *versionService {
 }
 
 func (s *versionService) checkUpdate(ctx context.Context, force bool) systemVersionInfo {
-	if !force {
-		if cached, ok := s.cachedLatest(false); ok {
-			return s.withNativePendingRestart(cached)
+	cached, call, leader := s.beginLatestCheck(force)
+	if cached != nil {
+		return s.withNativePendingRestart(*cached)
+	}
+	if !leader {
+		select {
+		case <-call.done:
+			return s.withNativePendingRestart(cloneSystemVersionInfo(call.info))
+		case <-ctx.Done():
+			info := s.baseVersionInfo()
+			info.Warning = "GitHub release lookup canceled"
+			return info
 		}
 	}
 
+	info := s.checkUpdateRemote(ctx)
+	s.finishLatestCheck(call, info)
+	return info
+}
+
+func (s *versionService) checkUpdateRemote(ctx context.Context) systemVersionInfo {
 	release, err := s.fetchLatestRelease(ctx)
 	if err != nil {
 		if errors.Is(err, errNoGitHubReleases) {
@@ -189,10 +217,25 @@ func (s *versionService) checkUpdate(ctx context.Context, force bool) systemVers
 }
 
 func (s *versionService) listRollbackVersions(ctx context.Context) ([]rollbackVersionInfo, error) {
-	if cached, ok := s.cachedRollbacks(); ok {
+	cached, call, leader := s.beginRollbackCheck()
+	if cached != nil {
 		return cached, nil
 	}
+	if !leader {
+		select {
+		case <-call.done:
+			return append([]rollbackVersionInfo{}, call.versions...), call.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 
+	versions, err := s.listRollbackVersionsRemote(ctx)
+	s.finishRollbackCheck(call, versions, err)
+	return versions, err
+}
+
+func (s *versionService) listRollbackVersionsRemote(ctx context.Context) ([]rollbackVersionInfo, error) {
 	_, current, currentOK := parseSemanticVersion(s.currentVersion)
 	if !currentOK {
 		versions := []rollbackVersionInfo{}
@@ -381,6 +424,57 @@ func (s *versionService) getJSON(ctx context.Context, path string, target any) e
 	return nil
 }
 
+func (s *versionService) beginLatestCheck(force bool) (*systemVersionInfo, *latestVersionCall, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !force && s.latestCache != nil && s.now().Before(s.latestCacheExpires) {
+		cached := cloneSystemVersionInfo(*s.latestCache)
+		cached.Cached = true
+		return &cached, nil, false
+	}
+	if s.latestInFlight != nil {
+		return nil, s.latestInFlight, false
+	}
+	call := &latestVersionCall{done: make(chan struct{})}
+	s.latestInFlight = call
+	return nil, call, true
+}
+
+func (s *versionService) finishLatestCheck(call *latestVersionCall, info systemVersionInfo) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	call.info = cloneSystemVersionInfo(info)
+	if s.latestInFlight == call {
+		s.latestInFlight = nil
+	}
+	close(call.done)
+}
+
+func (s *versionService) beginRollbackCheck() ([]rollbackVersionInfo, *rollbackVersionsCall, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.rollbackCache != nil && s.now().Before(s.rollbackCacheExpiry) {
+		return append([]rollbackVersionInfo{}, s.rollbackCache...), nil, false
+	}
+	if s.rollbackInFlight != nil {
+		return nil, s.rollbackInFlight, false
+	}
+	call := &rollbackVersionsCall{done: make(chan struct{})}
+	s.rollbackInFlight = call
+	return nil, call, true
+}
+
+func (s *versionService) finishRollbackCheck(call *rollbackVersionsCall, versions []rollbackVersionInfo, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	call.versions = append([]rollbackVersionInfo{}, versions...)
+	call.err = err
+	if s.rollbackInFlight == call {
+		s.rollbackInFlight = nil
+	}
+	close(call.done)
+}
+
 func (s *versionService) cachedLatest(allowExpired bool) (systemVersionInfo, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -401,15 +495,6 @@ func (s *versionService) storeLatest(info systemVersionInfo) {
 	cached := cloneSystemVersionInfo(info)
 	s.latestCache = &cached
 	s.latestCacheExpires = s.now().Add(versionCacheTTL)
-}
-
-func (s *versionService) cachedRollbacks() ([]rollbackVersionInfo, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.rollbackCache == nil || !s.now().Before(s.rollbackCacheExpiry) {
-		return nil, false
-	}
-	return append([]rollbackVersionInfo{}, s.rollbackCache...), true
 }
 
 func (s *versionService) storeRollbacks(versions []rollbackVersionInfo) {
@@ -534,7 +619,7 @@ func parseSemanticVersion(raw string) (string, semanticVersion, bool) {
 
 func parseReleaseTag(raw string) (string, semanticVersion, bool) {
 	value := strings.TrimSpace(raw)
-	if !strings.HasPrefix(value, "v") {
+	if !strings.HasPrefix(value, "v") || strings.Contains(value, "+") {
 		return "", semanticVersion{}, false
 	}
 	return parseSemanticVersion(value)

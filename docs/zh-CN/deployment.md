@@ -112,6 +112,7 @@ sudo env TOKENHUB_PUBLIC_HOST=tokenhub.example.com \
 - Release 和 `current` 软链接：`/opt/tokenhub`
 - 配置与密钥：`/etc/tokenhub/tokenhub.env`
 - SQLite 数据库与备份：`/var/lib/tokenhub`
+- 生成图片：`/var/lib/tokenhub/images`
 - Linux systemd 单元：`/etc/systemd/system/tokenhub.service`
 
 需要修改公网地址、CORS Origin、端口、数据库或密钥时，编辑 `/etc/tokenhub/tokenhub.env`，然后重启服务：
@@ -130,6 +131,8 @@ sudo bash /tmp/tokenhub-install.sh upgrade --version 0.3.3
 sudo bash /tmp/tokenhub-install.sh rollback --version 0.3.2
 sudo bash /tmp/tokenhub-install.sh uninstall
 ```
+
+`upgrade` 会拒绝低于当前安装版本的目标；需要降级时必须显式使用 `rollback`。使用新版安装器升级旧安装时，如果尚未配置 `TOKENHUB_IMAGE_STORAGE_DIR`，安装器会自动将持久化图片目录补充为 `/var/lib/tokenhub/images`。
 
 `uninstall` 会保留 `/etc/tokenhub` 和 `/var/lib/tokenhub`。只有确定要同时删除配置和应用数据时，才使用 `uninstall --purge`。
 安装器会在应用、配置和状态目录中写入所有权标记。卸载时，如果目录没有标记或标记与当前配置不一致，安装器会拒绝递归删除；`/opt`、`/etc`、`/var/lib` 等系统级目录也不会被接受为托管目录。安装或升级只有在 systemd 服务处于 active 状态、后端健康检查和管理后台都可访问后才会报告成功。

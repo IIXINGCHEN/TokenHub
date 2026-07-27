@@ -356,6 +356,10 @@
     gap: 6px;
   }
 
+  .top-version-status {
+    display: flex;
+  }
+
   .top-version-status .version {
     max-width: 78px;
     padding: 0 8px;

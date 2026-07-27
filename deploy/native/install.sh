@@ -455,6 +455,7 @@ TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD=${GENERATED_ADMIN_PASSWORD}
 TOKENHUB_SECRET_KEY=${secret_key}
 TOKENHUB_DATABASE_URL=sqlite://${STATE_DIR}/tokenhub.db
 TOKENHUB_SQLITE_BACKUP_DIR=${STATE_DIR}/backups
+TOKENHUB_IMAGE_STORAGE_DIR=${STATE_DIR}/images
 TOKENHUB_MODEL_CATALOG_FILE=${INSTALL_ROOT}/current/catalog/model-catalog.yaml
 TOKENHUB_PROVIDER_CATALOG_FILE=${INSTALL_ROOT}/current/catalog/provider-catalog.json
 TOKENHUB_INSTALL_ROOT=${INSTALL_ROOT}
@@ -470,6 +471,17 @@ EOF
   info "Created configuration at $env_file"
 }
 
+ensure_persistent_image_storage_config() {
+  local env_file="$CONFIG_DIR/tokenhub.env"
+  local configured
+  configured="$(read_config_value "$env_file" TOKENHUB_IMAGE_STORAGE_DIR)"
+  if [ -n "$configured" ]; then
+    return
+  fi
+  printf '\nTOKENHUB_IMAGE_STORAGE_DIR=%s/images\n' "$STATE_DIR" >>"$env_file"
+  info "Added persistent image storage to $env_file"
+}
+
 prepare_directories() {
   local directory_mode="0750"
   local config_owner="root"
@@ -483,6 +495,7 @@ prepare_directories() {
   prepare_managed_directory "$STATE_DIR" "state" "$SERVICE_USER" "$directory_mode"
   install -d -m "$directory_mode" -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$INSTALL_ROOT/releases"
   install -d -m "$directory_mode" -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$STATE_DIR/backups"
+  install -d -m "$directory_mode" -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$STATE_DIR/images"
 }
 
 managed_directory_marker_content() {
@@ -806,6 +819,18 @@ validate_rollback_target() {
     fail "rollback target v$VERSION must be older than installed version v$current_version"
 }
 
+validate_upgrade_target() {
+  local target_version="$1"
+  local current_file="$INSTALL_ROOT/current/VERSION"
+  local current_version
+  local comparison
+  [ -f "$current_file" ] || return
+  current_version="$(normalize_version "$(tr -d '[:space:]' <"$current_file")")"
+  comparison="$(compare_semantic_versions "$target_version" "$current_version")"
+  [ "$comparison" -ge 0 ] ||
+    fail "upgrade target v$target_version must not be older than installed version v$current_version; use rollback instead"
+}
+
 service_status() {
   systemctl status "$SERVICE_NAME"
 }
@@ -820,10 +845,14 @@ install_or_upgrade() {
   local target_version="$VERSION"
   local archive
   [ -n "$target_version" ] || target_version="$(latest_version)"
+  if [ "$COMMAND" = "upgrade" ]; then
+    validate_upgrade_target "$target_version"
+  fi
 
   ensure_service_user
   prepare_directories
   write_initial_config
+  ensure_persistent_image_storage_config
   record_created_service_user
   if [ -f "$INSTALL_ROOT/current/VERSION" ] &&
     [ "$(tr -d '[:space:]' <"$INSTALL_ROOT/current/VERSION")" = "$target_version" ]; then
