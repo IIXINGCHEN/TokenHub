@@ -181,6 +181,7 @@ run_linux_integration() {
   local state_dir="$test_root/var/lib/tokenhub"
   local systemd_dir="$test_root/etc/systemd/system"
   local integration_bundle="$test_root/integration-bundle"
+  local integration_upgrade_bundle="$test_root/integration-upgrade-bundle"
   local service_user
   local asset
   local first_output
@@ -191,6 +192,7 @@ run_linux_integration() {
   local invalid_rollback_status
   local downgrade_output
   local downgrade_status
+  local upgrade_output
   local -a installer_env
 
   service_user="$(id -un)"
@@ -201,6 +203,16 @@ run_linux_integration() {
     tokenhub_0.3.3_linux_amd64.tar.gz \
     tokenhub_0.3.3_linux_arm64.tar.gz; do
     tar -czf "$fixtures/$asset" -C "$integration_bundle" .
+  done
+  create_bundle "$integration_upgrade_bundle" "0.3.4"
+  chmod 0755 \
+    "$integration_upgrade_bundle/bin/tokenhub" \
+    "$integration_upgrade_bundle/bin/node" \
+    "$integration_upgrade_bundle/bin/tokenhub-run"
+  for asset in \
+    tokenhub_0.3.4_linux_amd64.tar.gz \
+    tokenhub_0.3.4_linux_arm64.tar.gz; do
+    tar -czf "$fixtures/$asset" -C "$integration_upgrade_bundle" .
   done
   (
     cd "$fixtures"
@@ -358,6 +370,21 @@ EOF
     fail_test "integration upgrade replaced existing configuration"
   grep -q "^TOKENHUB_IMAGE_STORAGE_DIR=$state_dir/images$" "$config_dir/tokenhub.env" ||
     fail_test "integration upgrade did not migrate persistent image storage"
+
+  sed -i 's/^TOKENHUB_FRONTEND_PORT=.*/TOKENHUB_FRONTEND_PORT=23000/' "$config_dir/tokenhub.env"
+  : >"$test_root/curl.log"
+  upgrade_output="$(
+    env -u TOKENHUB_RELEASE_REPOSITORY "${installer_env[@]}" \
+      bash "$script_dir/install.sh" upgrade --version 0.3.4 2>&1
+  )"
+  [ "$(tr -d '[:space:]' <"$install_root/current/VERSION")" = "0.3.4" ] ||
+    fail_test "integration upgrade did not activate v0.3.4"
+  grep -q 'http://127.0.0.1:23000/' "$test_root/curl.log" ||
+    fail_test "integration upgrade did not probe the configured frontend port"
+  [[ "$upgrade_output" == *"Admin console: http://127.0.0.1:23000"* ]] ||
+    fail_test "integration upgrade did not print the configured frontend port: $upgrade_output"
+  [[ "$upgrade_output" != *"Admin console: http://127.0.0.1:3000"* ]] ||
+    fail_test "integration upgrade printed the invocation default frontend port"
 
   env -u TOKENHUB_RELEASE_REPOSITORY "${installer_env[@]}" \
     bash "$script_dir/install.sh" uninstall

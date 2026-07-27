@@ -211,7 +211,7 @@ TOKENHUB_RELEASE_REPOSITORY=your-account/TokenHub ./start.sh
 
 默认 SQLite 和本地 PostgreSQL Compose 使用一个托管应用容器。管理员可以点击「立即更新」，等待系统下载、校验并将当前平台的完整 Release 包安装到 `tokenhub-releases` 卷，然后点击「立即重启」。接口返回成功后进程主动退出，Docker 的 `restart: unless-stopped` 会同时以目标版本重新启动后端和前端。容器不会挂载 Docker Socket，也不会控制宿主机 Docker daemon。
 
-新拉取的镜像首次使用该卷时，镜像版本和内容指纹共同构成基线。页面安装的版本、`current` 链接和历史 Release 都保存在 `tokenhub-releases`，因此使用同一镜像进行普通重启或重建容器不会丢失更新结果；拉取其他镜像，或者在相同版本下重新构建了不同源码时，会激活新的镜像内容。远端 PostgreSQL 多实例 Compose 禁用原地更新，因为只更新收到管理员请求的单个副本会造成集群版本分裂；该模式显示针对 `docker-compose.remote-postgres.yml` 的运维命令，并保留 `deploy/.env` 中配置的副本数。源码部署仍提示手工更新。回退前必须完成数据库备份，并确认目标版本支持当前数据库结构。
+新拉取的镜像首次使用该卷时，镜像版本和内容指纹共同构成基线。页面安装的版本、`current` 链接和历史 Release 都保存在 `tokenhub-releases`，因此使用同一镜像进行普通重启或重建容器不会丢失更新结果；拉取其他镜像，或者在相同版本下重新构建了不同源码时，会激活新的镜像内容。远端 PostgreSQL 多实例 Compose 禁用原地更新，因为只更新收到管理员请求的单个副本会造成集群版本分裂；该模式提示管理员使用原来的 Compose 文件和环境配置手工更新，以保留已配置的副本数。源码部署仍提示手工更新。回退前必须完成数据库备份，并确认目标版本支持当前数据库结构。
 
 ### 可选：本地构建
 

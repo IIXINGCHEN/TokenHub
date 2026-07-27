@@ -10,8 +10,8 @@ const sourceExtensions = new Set([".css", ".ts", ".tsx"]);
 const maximumLines = 1500;
 const legacyLineBaselines = new Map([
   ["app/styles/legacy/resources.css", 1510],
-  ["features/admin/i18n/en.tsx", 1555],
-  ["features/admin/i18n/ja.tsx", 1541],
+  ["features/admin/i18n/en.tsx", 1540],
+  ["features/admin/i18n/ja.tsx", 1526],
   ["features/admin/views/provider-editor.tsx", 2093],
 ]);
 

@@ -155,20 +155,22 @@ func (s *versionService) checkUpdate(ctx context.Context, force bool) systemVers
 	if cached != nil {
 		return s.withNativePendingRestart(*cached)
 	}
-	if !leader {
-		select {
-		case <-call.done:
-			return s.withNativePendingRestart(cloneSystemVersionInfo(call.info))
-		case <-ctx.Done():
-			info := s.baseVersionInfo()
-			info.Warning = "GitHub release lookup canceled"
-			return info
-		}
+	if leader {
+		go func() {
+			lookupCtx, cancel := context.WithTimeout(context.Background(), releaseRequestTimeout)
+			defer cancel()
+			s.finishLatestCheck(call, s.checkUpdateRemote(lookupCtx))
+		}()
 	}
 
-	info := s.checkUpdateRemote(ctx)
-	s.finishLatestCheck(call, info)
-	return info
+	select {
+	case <-call.done:
+		return s.withNativePendingRestart(cloneSystemVersionInfo(call.info))
+	case <-ctx.Done():
+		info := s.baseVersionInfo()
+		info.Warning = "GitHub release lookup canceled"
+		return info
+	}
 }
 
 func (s *versionService) checkUpdateRemote(ctx context.Context) systemVersionInfo {
@@ -221,18 +223,21 @@ func (s *versionService) listRollbackVersions(ctx context.Context) ([]rollbackVe
 	if cached != nil {
 		return cached, nil
 	}
-	if !leader {
-		select {
-		case <-call.done:
-			return append([]rollbackVersionInfo{}, call.versions...), call.err
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
+	if leader {
+		go func() {
+			lookupCtx, cancel := context.WithTimeout(context.Background(), releaseRequestTimeout)
+			defer cancel()
+			versions, err := s.listRollbackVersionsRemote(lookupCtx)
+			s.finishRollbackCheck(call, versions, err)
+		}()
 	}
 
-	versions, err := s.listRollbackVersionsRemote(ctx)
-	s.finishRollbackCheck(call, versions, err)
-	return versions, err
+	select {
+	case <-call.done:
+		return append([]rollbackVersionInfo{}, call.versions...), call.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func (s *versionService) listRollbackVersionsRemote(ctx context.Context) ([]rollbackVersionInfo, error) {

@@ -843,6 +843,7 @@ remove_service() {
 
 install_or_upgrade() {
   local target_version="$VERSION"
+  local admin_console_port
   local archive
   [ -n "$target_version" ] || target_version="$(latest_version)"
   if [ "$COMMAND" = "upgrade" ]; then
@@ -868,8 +869,9 @@ install_or_upgrade() {
   install_service
   restart_service
 
+  admin_console_port="$(configured_frontend_port)"
   info "TokenHub v$target_version is running"
-  info "Admin console: http://$(url_host "$(default_public_host)"):${FRONTEND_PORT}"
+  info "Admin console: http://$(url_host "$(default_public_host)"):${admin_console_port}"
   show_initial_admin_credentials
   info "Configuration: $CONFIG_DIR/tokenhub.env"
   info "Logs: journalctl -u ${SERVICE_NAME} -f"

@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -209,6 +211,68 @@ func TestVersionServiceCoalescesConcurrentCacheMisses(t *testing.T) {
 	}
 }
 
+func TestVersionServiceLeaderCancellationDoesNotCancelSharedLatestCheck(t *testing.T) {
+	var calls atomic.Int32
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() {
+		releaseOnce.Do(func() {
+			close(release)
+		})
+	}
+
+	releases := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-release
+		writeTestJSON(w, map[string]any{"tag_name": "v0.4.0"})
+	}))
+	defer func() {
+		unblock()
+		releases.Close()
+	}()
+
+	service := testVersionService(releases, "0.3.0", releaseBuildType)
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leaderResult := make(chan systemVersionInfo, 1)
+	go func() {
+		leaderResult <- service.checkUpdate(leaderCtx, false)
+	}()
+
+	<-entered
+	cancelLeader()
+	select {
+	case info := <-leaderResult:
+		if info.Warning != "GitHub release lookup canceled" {
+			t.Fatalf("canceled leader warning = %q", info.Warning)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled leader did not return promptly")
+	}
+
+	followerResult := make(chan systemVersionInfo, 1)
+	go func() {
+		followerResult <- service.checkUpdate(context.Background(), false)
+	}()
+	unblock()
+
+	select {
+	case info := <-followerResult:
+		if !info.HasUpdate || info.LatestVersion != "0.4.0" {
+			t.Fatalf("unexpected follower version result: %+v", info)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("follower did not receive the shared version result")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("leader cancellation caused %d GitHub requests, want 1", got)
+	}
+}
+
 func TestVersionServiceHandlesRepositoryWithoutReleases(t *testing.T) {
 	var calls atomic.Int32
 	releases := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -248,6 +312,77 @@ func TestVersionServiceCachesEmptyRollbackHistory(t *testing.T) {
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("empty rollback history made %d upstream calls, want 1", calls.Load())
+	}
+}
+
+func TestVersionServiceLeaderCancellationDoesNotCancelSharedRollbackCheck(t *testing.T) {
+	var calls atomic.Int32
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() {
+		releaseOnce.Do(func() {
+			close(release)
+		})
+	}
+
+	releases := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-release
+		writeTestJSON(w, []map[string]any{{"tag_name": "v0.2.9"}})
+	}))
+	defer func() {
+		unblock()
+		releases.Close()
+	}()
+
+	service := testVersionService(releases, "0.3.0", releaseBuildType)
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	type rollbackResult struct {
+		versions []rollbackVersionInfo
+		err      error
+	}
+	leaderResult := make(chan rollbackResult, 1)
+	go func() {
+		versions, err := service.listRollbackVersions(leaderCtx)
+		leaderResult <- rollbackResult{versions: versions, err: err}
+	}()
+
+	<-entered
+	cancelLeader()
+	select {
+	case result := <-leaderResult:
+		if !errors.Is(result.err, context.Canceled) {
+			t.Fatalf("canceled leader error = %v, want context canceled", result.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled rollback leader did not return promptly")
+	}
+
+	followerResult := make(chan rollbackResult, 1)
+	go func() {
+		versions, err := service.listRollbackVersions(context.Background())
+		followerResult <- rollbackResult{versions: versions, err: err}
+	}()
+	unblock()
+
+	select {
+	case result := <-followerResult:
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if len(result.versions) != 1 || result.versions[0].Version != "0.2.9" {
+			t.Fatalf("unexpected follower rollback result: %+v", result.versions)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("follower did not receive the shared rollback result")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("leader cancellation caused %d rollback requests, want 1", got)
 	}
 }
 
