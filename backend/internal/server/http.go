@@ -3582,7 +3582,12 @@ func (s *Server) createProviderCatalogRoutes(providerID string, catalog Provider
 	modelNames := []string{}
 	routeIDs := []string{}
 	category := strings.TrimSpace(req.ModelCategory)
-	standardModelNames := standardModelNameSet(s.store.ListModels())
+	existingModels := s.store.ListModels()
+	standardModelNames := standardModelNameSet(existingModels)
+	exactModelNames := map[string]bool{}
+	for _, model := range existingModels {
+		exactModelNames[model.Name] = true
+	}
 	existingRoutes := s.store.ListRoutes()
 	existingRouteIDs := existingRouteIDSet(existingRoutes)
 	routePriorities := routePriorityByModel(existingRoutes)
@@ -3596,11 +3601,12 @@ func (s *Server) createProviderCatalogRoutes(providerID string, catalog Provider
 		}
 		route := ProviderCatalogModelRoute(providerID, catalogModel)
 		normalizedModelName := normalizeModelLookupName(route.ModelName)
-		if !standardModelNames[normalizedModelName] {
-			if !expandModelCatalog {
+		if !exactModelNames[route.ModelName] {
+			if !expandModelCatalog && !standardModelNames[normalizedModelName] {
 				continue
 			}
 			s.store.AddModel(withExternalModelRole(providerCatalogModelRecord(catalogModel, route.ModelName)))
+			exactModelNames[route.ModelName] = true
 			standardModelNames[normalizedModelName] = true
 		}
 		s.store.AddProviderModel(providerModelFromCatalog(providerID, catalogModel))

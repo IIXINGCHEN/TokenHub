@@ -4321,7 +4321,7 @@ func (s *GormStore) AccessibleModels(key APIKey) []Model {
 		Select("model_name").
 		Where("status = ?", StatusActive)
 	if err := s.db.Where("status = ?", StatusActive).
-		Where("name IN (?)", publishedModelNames).
+		Where("name IN (?) OR name = ?", publishedModelNames, codexImageModelName).
 		Order("name asc").
 		Find(&models).Error; err != nil {
 		return nil
