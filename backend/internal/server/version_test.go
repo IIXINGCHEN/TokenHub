@@ -238,6 +238,26 @@ func TestVersionServiceListsThreeNewestOlderStableReleases(t *testing.T) {
 	}
 }
 
+func TestVersionServiceDoesNotOfferRollbacksForNonSemanticCurrentVersion(t *testing.T) {
+	var calls atomic.Int32
+	releases := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		writeTestJSON(w, []map[string]any{{"tag_name": "v0.3.2"}})
+	}))
+	defer releases.Close()
+
+	versions, err := testVersionService(releases, "edge", releaseBuildType).listRollbackVersions(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != 0 {
+		t.Fatalf("rollback versions = %v, want none for a non-semantic current version", versions)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("non-semantic current version made %d release-history requests, want none", calls.Load())
+	}
+}
+
 func TestAdminVersionEndpointsRequireAuthenticationAndReturnReleaseData(t *testing.T) {
 	releases := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/repos/astaxie/TokenHub/releases/latest" {

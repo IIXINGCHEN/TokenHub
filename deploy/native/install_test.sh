@@ -36,12 +36,23 @@ create_bundle() {
 [ "$(normalize_version v0.3.3)" = "0.3.3" ] || fail_test "version normalization failed"
 assert_fails normalize_version "0.3"
 assert_fails normalize_version "v0.3.3-01"
+[ "$(compare_semantic_versions 0.3.2 0.3.3)" = "-1" ] ||
+  fail_test "semantic patch comparison failed"
+[ "$(compare_semantic_versions 1.0.0-rc.10 1.0.0-rc.2)" = "1" ] ||
+  fail_test "semantic numeric prerelease comparison failed"
+[ "$(compare_semantic_versions 1.0.0-rc.1 1.0.0)" = "-1" ] ||
+  fail_test "semantic stable/prerelease comparison failed"
 [ "$(url_host "127.0.0.1")" = "127.0.0.1" ] || fail_test "IPv4 URL host normalization failed"
 [ "$(url_host "2001:db8::1")" = "[2001:db8::1]" ] || fail_test "IPv6 URL host normalization failed"
 [ "$(url_host "[2001:db8::1]")" = "[2001:db8::1]" ] || fail_test "bracketed IPv6 URL host normalization failed"
 validate_port "08" "test port"
 assert_fails validate_port "0" "test port"
 assert_fails validate_safe_path "/opt/../etc" "test path"
+
+config_values="$test_root/config-values"
+printf 'TOKENHUB_RELEASE_REPOSITORY=first/repo\nTOKENHUB_RELEASE_REPOSITORY=second/repo\n' >"$config_values"
+[ "$(read_config_value "$config_values" TOKENHUB_RELEASE_REPOSITORY)" = "second/repo" ] ||
+  fail_test "configuration reader did not use the final assignment"
 
 SERVICE_USER="tokenhub"
 SERVICE_NAME="tokenhub"
@@ -58,6 +69,19 @@ validate_release_archive "$valid_archive"
 validate_staged_release "$valid_bundle" "0.3.3"
 assert_fails validate_staged_release "$valid_bundle" "0.3.2"
 
+saved_entry_limit="$MAX_NATIVE_ARCHIVE_ENTRIES"
+MAX_NATIVE_ARCHIVE_ENTRIES=1
+assert_fails validate_release_archive "$valid_archive"
+MAX_NATIVE_ARCHIVE_ENTRIES="$saved_entry_limit"
+saved_file_limit="$MAX_NATIVE_ARCHIVE_FILE_BYTES"
+MAX_NATIVE_ARCHIVE_FILE_BYTES=1
+assert_fails validate_release_archive "$valid_archive"
+MAX_NATIVE_ARCHIVE_FILE_BYTES="$saved_file_limit"
+saved_extracted_limit="$MAX_NATIVE_EXTRACTED_BYTES"
+MAX_NATIVE_EXTRACTED_BYTES=1
+assert_fails validate_release_archive "$valid_archive"
+MAX_NATIVE_EXTRACTED_BYTES="$saved_extracted_limit"
+
 linked_bundle="$test_root/linked"
 linked_archive="$test_root/linked.tar.gz"
 create_bundle "$linked_bundle" "0.3.3"
@@ -65,6 +89,21 @@ ln -s /etc/passwd "$linked_bundle/frontend/external"
 tar -czf "$linked_archive" -C "$linked_bundle" .
 assert_fails validate_release_archive "$linked_archive"
 assert_fails validate_staged_release "$linked_bundle" "0.3.3"
+
+curl() {
+  local destination=""
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "-o" ]; then
+      destination="$2"
+      shift 2
+      continue
+    fi
+    shift
+  done
+  dd if=/dev/zero of="$destination" bs=2048 count=1 2>/dev/null
+}
+assert_fails download_file "https://example.com/oversized" "$test_root/oversized" 16 "oversized test asset"
+unset -f curl
 
 runner_root="$test_root/runner"
 mkdir -p "$runner_root/bin" "$runner_root/frontend"
@@ -97,8 +136,17 @@ run_linux_integration() {
   local state_dir="$test_root/var/lib/tokenhub"
   local systemd_dir="$test_root/etc/systemd/system"
   local integration_bundle="$test_root/integration-bundle"
+  local service_user
   local asset
+  local first_output
+  local first_status
+  local retry_output
+  local generated_password
+  local invalid_rollback_output
+  local invalid_rollback_status
+  local -a installer_env
 
+  service_user="$(id -un)"
   mkdir -p "$fixtures" "$fake_bin" "$systemd_dir"
   create_bundle "$integration_bundle" "0.3.3"
   chmod 0755 "$integration_bundle/bin/tokenhub" "$integration_bundle/bin/node" "$integration_bundle/bin/tokenhub-run"
@@ -130,6 +178,12 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 [ -n "$destination" ] && [ -n "$url" ]
+printf '%s\n' "$url" >>"$TOKENHUB_TEST_CURL_LOG"
+if [ -n "${TOKENHUB_TEST_CURL_FAIL_ONCE:-}" ] &&
+  [ ! -e "$TOKENHUB_TEST_CURL_FAIL_ONCE" ]; then
+  touch "$TOKENHUB_TEST_CURL_FAIL_ONCE"
+  exit 22
+fi
 cp "$TOKENHUB_TEST_FIXTURES/${url##*/}" "$destination"
 EOF
   cat >"$fake_bin/systemctl" <<'EOF'
@@ -142,18 +196,55 @@ touch "$TOKENHUB_TEST_USERDEL_LOG"
 EOF
   chmod 0755 "$fake_bin/curl" "$fake_bin/systemctl" "$fake_bin/userdel"
 
-  env \
-    PATH="$fake_bin:$PATH" \
-    TOKENHUB_TEST_FIXTURES="$fixtures" \
-    TOKENHUB_TEST_SYSTEMCTL_LOG="$test_root/systemctl.log" \
-    TOKENHUB_INSTALL_ROOT="$install_root" \
-    TOKENHUB_CONFIG_DIR="$config_dir" \
-    TOKENHUB_STATE_DIR="$state_dir" \
-    TOKENHUB_SYSTEMD_DIR="$systemd_dir" \
-    TOKENHUB_SERVICE_USER=root \
-    TOKENHUB_SERVICE_NAME=tokenhub-test \
-    TOKENHUB_PUBLIC_HOST=127.0.0.1 \
-    bash "$script_dir/install.sh" install --version 0.3.3
+  installer_env=(
+    "PATH=$fake_bin:$PATH"
+    "TOKENHUB_TEST_FIXTURES=$fixtures"
+    "TOKENHUB_TEST_SYSTEMCTL_LOG=$test_root/systemctl.log"
+    "TOKENHUB_TEST_CURL_LOG=$test_root/curl.log"
+    "TOKENHUB_TEST_CURL_FAIL_ONCE=$test_root/curl-failed"
+    "TOKENHUB_TEST_USERDEL_LOG=$test_root/userdel.log"
+    "TOKENHUB_INSTALL_ROOT=$install_root"
+    "TOKENHUB_CONFIG_DIR=$config_dir"
+    "TOKENHUB_STATE_DIR=$state_dir"
+    "TOKENHUB_SYSTEMD_DIR=$systemd_dir"
+    "TOKENHUB_INSTALLER_ALLOW_NON_ROOT=1"
+    "TOKENHUB_SERVICE_USER=$service_user"
+    "TOKENHUB_SERVICE_NAME=tokenhub-test"
+    "TOKENHUB_PUBLIC_HOST=127.0.0.1"
+  )
+
+  set +e
+  first_output="$(
+    env "${installer_env[@]}" \
+      TOKENHUB_RELEASE_REPOSITORY=example/TokenHub \
+      bash "$script_dir/install.sh" install --version 0.3.3 2>&1
+  )"
+  first_status=$?
+  set -e
+  [ "$first_status" -ne 0 ] || fail_test "integration install unexpectedly survived its forced download failure"
+  [ -s "$config_dir/tokenhub.env" ] ||
+    fail_test "failed install did not preserve generated configuration: $first_output"
+  [ -f "$config_dir/.initial-admin-password-pending" ] ||
+    fail_test "failed install did not retain the pending password marker"
+  [[ "$first_output" != *"Initial admin password:"* ]] ||
+    fail_test "failed install printed credentials before installation completed"
+
+  : >"$test_root/curl.log"
+  retry_output="$(
+    env -u TOKENHUB_RELEASE_REPOSITORY "${installer_env[@]}" \
+      bash "$script_dir/install.sh" install --version 0.3.3 2>&1
+  )"
+  generated_password="$(
+    awk -F= '$1 == "TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD" { print substr($0, index($0, "=") + 1); exit }' \
+      "$config_dir/tokenhub.env"
+  )"
+  [ -n "$generated_password" ] || fail_test "integration install did not generate an admin password"
+  [[ "$retry_output" == *"Initial admin password: $generated_password"* ]] ||
+    fail_test "successful install retry did not print the pending admin password"
+  [ ! -e "$config_dir/.initial-admin-password-pending" ] ||
+    fail_test "successful install retry kept the pending password marker"
+  grep -q 'github.com/example/TokenHub/releases/download/' "$test_root/curl.log" ||
+    fail_test "install retry did not reuse the configured release repository"
 
   [ "$(tr -d '[:space:]' <"$install_root/current/VERSION")" = "0.3.3" ] ||
     fail_test "integration install did not activate v0.3.3"
@@ -167,46 +258,33 @@ EOF
     fail_test "systemd unit treats the production environment file as optional"
   fi
 
+  for invalid_version in 0.3.3 0.3.4; do
+    set +e
+    invalid_rollback_output="$(
+      env -u TOKENHUB_RELEASE_REPOSITORY "${installer_env[@]}" \
+        bash "$script_dir/install.sh" rollback --version "$invalid_version" 2>&1
+    )"
+    invalid_rollback_status=$?
+    set -e
+    [ "$invalid_rollback_status" -ne 0 ] ||
+      fail_test "rollback accepted non-older version $invalid_version"
+    [[ "$invalid_rollback_output" == *"must be older than installed version"* ]] ||
+      fail_test "rollback version $invalid_version failed for the wrong reason"
+  done
+
   printf 'TOKENHUB_TEST_MARKER=preserved\n' >>"$config_dir/tokenhub.env"
-  env \
-    PATH="$fake_bin:$PATH" \
-    TOKENHUB_TEST_FIXTURES="$fixtures" \
-    TOKENHUB_TEST_SYSTEMCTL_LOG="$test_root/systemctl.log" \
-    TOKENHUB_INSTALL_ROOT="$install_root" \
-    TOKENHUB_CONFIG_DIR="$config_dir" \
-    TOKENHUB_STATE_DIR="$state_dir" \
-    TOKENHUB_SYSTEMD_DIR="$systemd_dir" \
-    TOKENHUB_SERVICE_USER=root \
-    TOKENHUB_SERVICE_NAME=tokenhub-test \
-    TOKENHUB_PUBLIC_HOST=127.0.0.1 \
+  env -u TOKENHUB_RELEASE_REPOSITORY "${installer_env[@]}" \
     bash "$script_dir/install.sh" upgrade --version 0.3.3
   grep -q '^TOKENHUB_TEST_MARKER=preserved$' "$config_dir/tokenhub.env" ||
     fail_test "integration upgrade replaced existing configuration"
 
-  env \
-    PATH="$fake_bin:$PATH" \
-    TOKENHUB_TEST_SYSTEMCTL_LOG="$test_root/systemctl.log" \
-    TOKENHUB_INSTALL_ROOT="$install_root" \
-    TOKENHUB_CONFIG_DIR="$config_dir" \
-    TOKENHUB_STATE_DIR="$state_dir" \
-    TOKENHUB_SYSTEMD_DIR="$systemd_dir" \
-    TOKENHUB_SERVICE_USER=root \
-    TOKENHUB_SERVICE_NAME=tokenhub-test \
+  env -u TOKENHUB_RELEASE_REPOSITORY "${installer_env[@]}" \
     bash "$script_dir/install.sh" uninstall
   [ ! -e "$install_root" ] || fail_test "uninstall kept the application directory"
   [ -f "$config_dir/tokenhub.env" ] || fail_test "uninstall removed preserved configuration"
   [ -d "$state_dir" ] || fail_test "uninstall removed preserved state"
 
-  env \
-    PATH="$fake_bin:$PATH" \
-    TOKENHUB_TEST_SYSTEMCTL_LOG="$test_root/systemctl.log" \
-    TOKENHUB_TEST_USERDEL_LOG="$test_root/userdel.log" \
-    TOKENHUB_INSTALL_ROOT="$install_root" \
-    TOKENHUB_CONFIG_DIR="$config_dir" \
-    TOKENHUB_STATE_DIR="$state_dir" \
-    TOKENHUB_SYSTEMD_DIR="$systemd_dir" \
-    TOKENHUB_SERVICE_USER=root \
-    TOKENHUB_SERVICE_NAME=tokenhub-test \
+  env -u TOKENHUB_RELEASE_REPOSITORY "${installer_env[@]}" \
     bash "$script_dir/install.sh" uninstall --purge
   [ ! -e "$config_dir" ] && [ ! -e "$state_dir" ] ||
     fail_test "purge kept configuration or state"

@@ -746,13 +746,16 @@ func (s *Server) handleAdminSystemRestart(w http.ResponseWriter, r *http.Request
 	if targetVersion == "" {
 		targetVersion = s.versions.currentVersion
 	}
-	s.recordSystemVersionAudit(r, actor, "restart", targetVersion, "success", "")
+	auditRequest := r.Clone(context.Background())
 	log.Printf("[tokenhub] managed restart requested by admin %s", actor.ID)
 	writeJSON(w, http.StatusOK, map[string]any{"message": "TokenHub restart initiated"})
 	time.AfterFunc(500*time.Millisecond, func() {
 		if err := s.versions.restartProcess(); err != nil {
 			<-s.versions.operation
+			s.recordSystemVersionAudit(auditRequest, actor, "restart", targetVersion, "failed", err.Error())
 			log.Printf("[tokenhub] managed restart signal failed: %v", err)
+			return
 		}
+		s.recordSystemVersionAudit(auditRequest, actor, "restart", targetVersion, "success", "")
 	})
 }

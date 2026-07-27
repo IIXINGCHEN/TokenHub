@@ -18,6 +18,11 @@ TEMP_DIR=""
 DOWNLOADED_ARCHIVE=""
 GENERATED_ADMIN_PASSWORD=""
 CREATED_SERVICE_USER=false
+MAX_NATIVE_ARCHIVE_BYTES=$((600 * 1024 * 1024))
+MAX_NATIVE_CHECKSUM_BYTES=$((1024 * 1024))
+MAX_NATIVE_EXTRACTED_BYTES=$((2 * 1024 * 1024 * 1024))
+MAX_NATIVE_ARCHIVE_FILE_BYTES=$((600 * 1024 * 1024))
+MAX_NATIVE_ARCHIVE_ENTRIES=100000
 
 usage() {
   cat <<'EOF'
@@ -91,6 +96,106 @@ normalize_version() {
   printf '%s\n' "$value"
 }
 
+compare_decimal_identifiers() {
+  local left="$1"
+  local right="$2"
+  if ((${#left} < ${#right})); then
+    printf '%s\n' -1
+  elif ((${#left} > ${#right})); then
+    printf '%s\n' 1
+  elif [ "$left" = "$right" ]; then
+    printf '%s\n' 0
+  elif [[ "$left" < "$right" ]]; then
+    printf '%s\n' -1
+  else
+    printf '%s\n' 1
+  fi
+}
+
+compare_semantic_versions() {
+  local left
+  local right
+  local left_core
+  local right_core
+  local left_prerelease=""
+  local right_prerelease=""
+  local comparison
+  local index
+  local left_identifier
+  local right_identifier
+  local LC_ALL=C
+  local -a left_core_parts
+  local -a right_core_parts
+  local -a left_prerelease_parts
+  local -a right_prerelease_parts
+
+  left="$(normalize_version "$1")"
+  right="$(normalize_version "$2")"
+  left_core="${left%%-*}"
+  right_core="${right%%-*}"
+  if [[ "$left" == *-* ]]; then
+    left_prerelease="${left#*-}"
+  fi
+  if [[ "$right" == *-* ]]; then
+    right_prerelease="${right#*-}"
+  fi
+  IFS=. read -r -a left_core_parts <<<"$left_core"
+  IFS=. read -r -a right_core_parts <<<"$right_core"
+  for index in 0 1 2; do
+    comparison="$(compare_decimal_identifiers "${left_core_parts[$index]}" "${right_core_parts[$index]}")"
+    if [ "$comparison" -ne 0 ]; then
+      printf '%s\n' "$comparison"
+      return
+    fi
+  done
+
+  if [ -z "$left_prerelease" ] && [ -z "$right_prerelease" ]; then
+    printf '%s\n' 0
+    return
+  fi
+  if [ -z "$left_prerelease" ]; then
+    printf '%s\n' 1
+    return
+  fi
+  if [ -z "$right_prerelease" ]; then
+    printf '%s\n' -1
+    return
+  fi
+
+  IFS=. read -r -a left_prerelease_parts <<<"$left_prerelease"
+  IFS=. read -r -a right_prerelease_parts <<<"$right_prerelease"
+  for ((index = 0; index < ${#left_prerelease_parts[@]} || index < ${#right_prerelease_parts[@]}; index++)); do
+    if ((index >= ${#left_prerelease_parts[@]})); then
+      printf '%s\n' -1
+      return
+    fi
+    if ((index >= ${#right_prerelease_parts[@]})); then
+      printf '%s\n' 1
+      return
+    fi
+    left_identifier="${left_prerelease_parts[$index]}"
+    right_identifier="${right_prerelease_parts[$index]}"
+    if [[ "$left_identifier" =~ ^[0-9]+$ ]] && [[ "$right_identifier" =~ ^[0-9]+$ ]]; then
+      comparison="$(compare_decimal_identifiers "$left_identifier" "$right_identifier")"
+    elif [[ "$left_identifier" =~ ^[0-9]+$ ]]; then
+      comparison=-1
+    elif [[ "$right_identifier" =~ ^[0-9]+$ ]]; then
+      comparison=1
+    elif [ "$left_identifier" = "$right_identifier" ]; then
+      comparison=0
+    elif [[ "$left_identifier" < "$right_identifier" ]]; then
+      comparison=-1
+    else
+      comparison=1
+    fi
+    if [ "$comparison" -ne 0 ]; then
+      printf '%s\n' "$comparison"
+      return
+    fi
+  done
+  printf '%s\n' 0
+}
+
 parse_args() {
   if [ "$#" -gt 0 ] && [[ "$1" != -* ]]; then
     COMMAND="$1"
@@ -129,9 +234,10 @@ require_platform() {
   command -v systemctl >/dev/null 2>&1 || fail "systemd is required on Linux"
   command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is required on Linux"
   validate_safe_path "$SYSTEMD_DIR" "TOKENHUB_SYSTEMD_DIR"
-  for command in curl tar sed awk find grep install od tr; do
+  for command in curl tar sed awk find grep install od tr wc; do
     command -v "$command" >/dev/null 2>&1 || fail "missing required command: $command"
   done
+  load_existing_release_repository
   [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ ]] ||
     fail "TOKENHUB_RELEASE_REPOSITORY must use owner/repository form"
   validate_safe_path "$INSTALL_ROOT" "TOKENHUB_INSTALL_ROOT"
@@ -193,6 +299,57 @@ random_hex() {
   od -An -N "$bytes" -tx1 /dev/urandom | tr -d ' \n'
 }
 
+read_config_value() {
+  local env_file="$1"
+  local key="$2"
+  awk -v key="$key" '
+    index($0, key "=") == 1 {
+      value = substr($0, length(key) + 2)
+      found = 1
+    }
+    END {
+      if (found) {
+        print value
+      }
+    }
+  ' "$env_file"
+}
+
+load_existing_release_repository() {
+  local env_file="$CONFIG_DIR/tokenhub.env"
+  local configured_repository
+  if [ -n "${TOKENHUB_RELEASE_REPOSITORY:-}" ] || [ ! -f "$env_file" ]; then
+    return 0
+  fi
+  configured_repository="$(read_config_value "$env_file" TOKENHUB_RELEASE_REPOSITORY)"
+  if [ -n "$configured_repository" ]; then
+    GITHUB_REPOSITORY="$configured_repository"
+  fi
+}
+
+load_pending_admin_password() {
+  local env_file="$CONFIG_DIR/tokenhub.env"
+  local marker="$CONFIG_DIR/.initial-admin-password-pending"
+  if [ ! -f "$marker" ]; then
+    return 0
+  fi
+  [ -f "$env_file" ] || fail "initial admin password marker exists without tokenhub.env"
+  GENERATED_ADMIN_PASSWORD="$(read_config_value "$env_file" TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD)"
+  [ -n "$GENERATED_ADMIN_PASSWORD" ] ||
+    fail "tokenhub.env has no initial admin password for the pending installation"
+}
+
+show_initial_admin_credentials() {
+  local marker="$CONFIG_DIR/.initial-admin-password-pending"
+  if [ -z "$GENERATED_ADMIN_PASSWORD" ]; then
+    return
+  fi
+  info "Initial admin username: admin"
+  info "Initial admin password: $GENERATED_ADMIN_PASSWORD"
+  rm -f -- "$marker"
+  GENERATED_ADMIN_PASSWORD=""
+}
+
 default_public_host() {
   local host
   host="${TOKENHUB_PUBLIC_HOST:-}"
@@ -219,6 +376,7 @@ write_initial_config() {
   local directory_mode="0750"
   if [ -f "$env_file" ]; then
     info "Keeping existing configuration at $env_file"
+    load_pending_admin_password
     return
   fi
   if [ "${EUID:-$(id -u)}" -ne 0 ]; then
@@ -267,6 +425,8 @@ TOKENHUB_API_BASE_URL=${api_base_url}
 EOF
   chown "$config_owner:$SERVICE_GROUP" "$env_file"
   chmod "$config_mode" "$env_file"
+  install -m 0600 -o "$config_owner" -g "$SERVICE_GROUP" /dev/null \
+    "$CONFIG_DIR/.initial-admin-password-pending"
   info "Created configuration at $env_file"
 }
 
@@ -281,6 +441,29 @@ prepare_directories() {
 sha256_file() {
   local path="$1"
   sha256sum "$path" | awk '{print $1}'
+}
+
+download_file() {
+  local url="$1"
+  local destination="$2"
+  local max_bytes="$3"
+  local label="$4"
+  local file_blocks=$(((max_bytes + 1023) / 1024))
+  local downloaded_bytes
+
+  rm -f -- "$destination"
+  if ! (
+    ulimit -f "$file_blocks"
+    curl -fL --retry 3 --connect-timeout 15 -o "$destination" "$url"
+  ); then
+    rm -f -- "$destination"
+    fail "unable to download $label"
+  fi
+  downloaded_bytes="$(wc -c <"$destination" | tr -d '[:space:]')"
+  if ((downloaded_bytes > max_bytes)); then
+    rm -f -- "$destination"
+    fail "$label exceeds the allowed download size"
+  fi
 }
 
 download_release() {
@@ -300,10 +483,8 @@ download_release() {
   checksums="$TEMP_DIR/checksums.txt"
 
   info "Downloading TokenHub v${version} for linux/${arch}"
-  curl -fL --retry 3 --connect-timeout 15 -o "$archive" "$base_url/$asset" ||
-    fail "unable to download $asset"
-  curl -fL --retry 3 --connect-timeout 15 -o "$checksums" "$base_url/checksums.txt" ||
-    fail "unable to download checksums.txt"
+  download_file "$base_url/$asset" "$archive" "$MAX_NATIVE_ARCHIVE_BYTES" "$asset"
+  download_file "$base_url/checksums.txt" "$checksums" "$MAX_NATIVE_CHECKSUM_BYTES" "checksums.txt"
 
   expected="$(awk -v file="$asset" '$2 == file || $2 == "*" file { print $1; exit }' "$checksums")"
   [[ "$expected" =~ ^[0-9a-fA-F]{64}$ ]] || fail "checksums.txt has no valid entry for $asset"
@@ -318,6 +499,16 @@ validate_release_archive() {
   local entry
   local listing
   local entry_type
+  local entry_mode
+  local listing_field_2
+  local listing_field_3
+  local listing_field_4
+  local listing_field_5
+  local entry_size
+  local listing_remainder
+  local file_size
+  local entry_count=0
+  local extracted_bytes=0
 
   tar -tzf "$archive" >/dev/null || fail "release archive is not a valid gzip-compressed tar file"
   while IFS= read -r entry; do
@@ -329,9 +520,30 @@ validate_release_archive() {
 
   while IFS= read -r listing; do
     [ -z "$listing" ] && continue
+    ((entry_count += 1))
+    ((entry_count <= MAX_NATIVE_ARCHIVE_ENTRIES)) ||
+      fail "release archive contains too many entries"
     entry_type="${listing:0:1}"
     case "$entry_type" in
-      -|d) ;;
+      -)
+        read -r entry_mode listing_field_2 listing_field_3 listing_field_4 listing_field_5 listing_remainder <<<"$listing"
+        if [[ "$listing_field_2" == */* ]] && [[ "$listing_field_3" =~ ^[0-9]+$ ]]; then
+          entry_size="$listing_field_3"
+        elif [[ "$listing_field_2" =~ ^[0-9]+$ ]] && [[ "$listing_field_5" =~ ^[0-9]+$ ]]; then
+          entry_size="$listing_field_5"
+        else
+          entry_size=""
+        fi
+        [[ "$entry_size" =~ ^[0-9]+$ ]] ||
+          fail "release archive contains an unreadable file size"
+        [ "$(compare_decimal_identifiers "$entry_size" "$MAX_NATIVE_ARCHIVE_FILE_BYTES")" -le 0 ] ||
+          fail "release archive contains an oversized file"
+        file_size=$((10#$entry_size))
+        ((extracted_bytes <= MAX_NATIVE_EXTRACTED_BYTES - file_size)) ||
+          fail "release archive exceeds the allowed extracted size"
+        extracted_bytes=$((extracted_bytes + file_size))
+        ;;
+      d) ;;
       *) fail "release archive contains a link or special file" ;;
     esac
   done < <(LC_ALL=C tar -tvzf "$archive")
@@ -414,6 +626,17 @@ restart_service() {
   systemctl restart "$SERVICE_NAME"
 }
 
+validate_rollback_target() {
+  local current_file="$INSTALL_ROOT/current/VERSION"
+  local current_version
+  local comparison
+  [ -f "$current_file" ] || fail "rollback requires an installed TokenHub release"
+  current_version="$(normalize_version "$(tr -d '[:space:]' <"$current_file")")"
+  comparison="$(compare_semantic_versions "$VERSION" "$current_version")"
+  [ "$comparison" -lt 0 ] ||
+    fail "rollback target v$VERSION must be older than installed version v$current_version"
+}
+
 service_status() {
   systemctl status "$SERVICE_NAME"
 }
@@ -438,6 +661,7 @@ install_or_upgrade() {
     info "TokenHub v$target_version is already installed"
     install_service
     restart_service
+    show_initial_admin_credentials
     return
   fi
   download_release "$target_version"
@@ -448,10 +672,7 @@ install_or_upgrade() {
 
   info "TokenHub v$target_version is running"
   info "Admin console: http://$(url_host "$(default_public_host)"):${FRONTEND_PORT}"
-  if [ -n "$GENERATED_ADMIN_PASSWORD" ]; then
-    info "Initial admin username: admin"
-    info "Initial admin password: $GENERATED_ADMIN_PASSWORD"
-  fi
+  show_initial_admin_credentials
   info "Configuration: $CONFIG_DIR/tokenhub.env"
   info "Logs: journalctl -u ${SERVICE_NAME} -f"
 }
@@ -501,6 +722,7 @@ main() {
     rollback)
       require_platform
       [ -n "$VERSION" ] || fail "rollback requires --version"
+      validate_rollback_target
       install_or_upgrade
       ;;
     uninstall)

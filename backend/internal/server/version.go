@@ -192,6 +192,13 @@ func (s *versionService) listRollbackVersions(ctx context.Context) ([]rollbackVe
 		return cached, nil
 	}
 
+	_, current, currentOK := parseSemanticVersion(s.currentVersion)
+	if !currentOK {
+		versions := []rollbackVersionInfo{}
+		s.storeRollbacks(versions)
+		return versions, nil
+	}
+
 	releases, err := s.fetchRecentReleases(ctx, rollbackReleasePageSize)
 	if err != nil {
 		if errors.Is(err, errNoGitHubReleases) {
@@ -202,7 +209,6 @@ func (s *versionService) listRollbackVersions(ctx context.Context) ([]rollbackVe
 		return nil, err
 	}
 
-	_, current, currentOK := parseSemanticVersion(s.currentVersion)
 	type candidate struct {
 		version   semanticVersion
 		canonical string
@@ -221,7 +227,7 @@ func (s *versionService) listRollbackVersions(ctx context.Context) ([]rollbackVe
 		if _, exists := seen[canonical]; exists {
 			continue
 		}
-		if currentOK && compareSemanticVersions(parsed, current) >= 0 {
+		if compareSemanticVersions(parsed, current) >= 0 {
 			continue
 		}
 		if s.supportsManagedUpdates() &&

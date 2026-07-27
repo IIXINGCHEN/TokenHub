@@ -37,6 +37,22 @@ EOF
   chmod 0755 "$root/bin/tokenhub" "$root/bin/node" "$root/bin/tokenhub-run"
 }
 
+build_id_root="$test_root/build-id"
+mkdir -p "$build_id_root/nested"
+printf 'alpha\n' >"$build_id_root/alpha"
+printf 'beta\n' >"$build_id_root/nested/beta"
+for _attempt in {1..100}; do
+  sh "$script_dir/tokenhub-build-id" "$build_id_root"
+  cat "$build_id_root/BUILD_ID"
+done >"$test_root/build-ids"
+[ "$(sort -u "$test_root/build-ids" | wc -l | tr -d '[:space:]')" = "1" ] ||
+  fail_test "identical image contents produced different build identities"
+first_build_id="$(sed -n '1p' "$test_root/build-ids")"
+printf 'changed\n' >>"$build_id_root/alpha"
+sh "$script_dir/tokenhub-build-id" "$build_id_root"
+[ "$(<"$build_id_root/BUILD_ID")" != "$first_build_id" ] ||
+  fail_test "changed image contents kept the previous build identity"
+
 run_entrypoint() {
   local image_root="$1"
   TOKENHUB_CONTAINER_IMAGE_ROOT="$image_root" \

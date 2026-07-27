@@ -50,6 +50,8 @@ type SystemVersionPayload = Omit<SystemVersionInfo, "deployment_type" | "update_
   update_supported?: boolean;
 };
 
+const managedRestartWaitMs = 210_000;
+
 type RollbackVersionInfo = {
   version: string;
   published_at: string;
@@ -758,7 +760,7 @@ function normalizeVersionInfo(payload: SystemVersionPayload): SystemVersionInfo 
 }
 
 async function waitForManagedVersion(api: ApiContext, targetVersion: string) {
-  const deadline = Date.now() + 90_000;
+  const deadline = Date.now() + managedRestartWaitMs;
   while (Date.now() < deadline) {
     await new Promise((resolve) => window.setTimeout(resolve, 1_000));
     const controller = new AbortController();
