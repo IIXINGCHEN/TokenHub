@@ -170,6 +170,8 @@ export function routePayload(values: Record<string, string>) {
     provider_model: values.provider_model,
     status: values.status,
     strategy: values.strategy,
+    project_scope: values.project_scope || "all",
+    project_ids: splitList(values.project_ids),
     sticky_session: values.sticky_session === "true",
     priority: numberOr(values.priority, 0),
     weight: numberOr(values.weight, 0),
@@ -179,16 +181,26 @@ export function routePayload(values: Record<string, string>) {
   return payload;
 }
 
-export async function createModelRoutes(ctx: ApiContext, values: Record<string, string>) {
+export async function createModelRoutes(ctx: ApiContext, values: Record<string, string>, data?: AppData) {
   const modelNames = splitList(values.model_name);
   if (modelNames.length === 0) {
-    throw new Error("请选择至少一个统一模型");
+    throw new Error("请选择模型目录中的模型");
   }
   for (const modelName of modelNames) {
+    const existingRoutes = data?.routes.filter((route) => route.model_name === modelName) ?? [];
+    const strategy = existingRoutes[0]?.strategy || "priority_weighted";
+    const priority = strategy === "priority_only"
+      ? Math.max(0, ...existingRoutes.map((route) => route.priority || 0)) + 1
+      : 1;
     const routeValues = {
       ...values,
       model_name: modelName,
       provider_model: values.provider_model?.trim() || modelName,
+      priority: String(priority),
+      weight: values.weight || "100",
+      quality_score: values.quality_score || "50",
+      cost_score: values.cost_score || "50",
+      strategy,
     };
     await adminMutate(ctx, "/api/admin/routing-rules", "POST", routePayload(routeValues));
   }
@@ -371,7 +383,8 @@ export function defaultFormValues<T>(config: ResourceConfig<T>, data: AppData, c
     if (field.key === "weight") values[field.key] = "100";
     if (field.key === "quality_score") values[field.key] = "50";
     if (field.key === "cost_score") values[field.key] = "50";
-    if (field.key === "strategy") values[field.key] = "balanced";
+    if (field.key === "strategy") values[field.key] = config.view === "routes" ? "priority_weighted" : "balanced";
+    if (field.key === "project_scope") values[field.key] = "all";
     if (field.key === "provider_id") values[field.key] = firstActiveProvider(data)?.id ?? "";
     if (field.key === "model_name") values[field.key] = firstActiveModel(data)?.name ?? "";
     if (field.key === "group") values[field.key] = "default";

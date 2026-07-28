@@ -83,6 +83,8 @@ export function translateGeneratedText(value: string, language: Exclude<AppLangu
   }
   const routeOrderMatch = value.match(/^已更新 (.+) 的 Provider 调用顺序$/);
   if (routeOrderMatch) return language === "ja" ? `${routeOrderMatch[1]} の Provider 呼び出し順を更新しました` : `Updated Provider call order for ${routeOrderMatch[1]}`;
+  const routePolicyMatch = value.match(/^已应用 (.+) 的模型路由策略$/);
+  if (routePolicyMatch) return language === "ja" ? `${routePolicyMatch[1]} のモデルルーティング戦略を適用しました` : `Applied the model routing strategy for ${routePolicyMatch[1]}`;
   const enabledRoutesMatch = value.match(/^(\d+)\/(\d+) 启用 · (.+)$/);
   if (enabledRoutesMatch) {
     return language === "ja"
@@ -152,6 +154,12 @@ export function selectedModelsText(count: number) {
   if (activeLanguage === "en") return `${count} models selected`;
   if (activeLanguage === "ja") return `${count} 件のモデルを選択済み`;
   return `已选择 ${count} 个模型`;
+}
+
+export function selectedOptionsText(count: number) {
+  if (activeLanguage === "en") return `${count} options selected`;
+  if (activeLanguage === "ja") return `${count} 件の項目を選択済み`;
+  return `已选择 ${count} 个选项`;
 }
 
 export function defaultPlaygroundSystemPrompt() {

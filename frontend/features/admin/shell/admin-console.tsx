@@ -5,15 +5,15 @@ import { useEffect, useMemo, useState } from "react";
 import { type LoadedData, loadPlanForView, mergeLoadedData } from "../core/data-loading";
 import { allNavGroupTitles, canAccessView, defaultViewForRole, rememberRecentView, standaloneViewMeta } from "../core/navigation";
 import { clearOAuthLoginResult, clearPendingOAuthBaseURL, clearProviderAccountOAuthResultFromLocation, clearSavedSession, forwardOAuthAuthorizationResponse, hasPendingProviderAccountOAuthResult, isOAuthAuthorizationResponse, readOAuthLoginResult, readPendingOAuthBaseURL, readProviderAccountOAuthResultFromLocation, readSavedSession, savePendingProviderAccountOAuthResult, saveSession } from "../core/session";
-import { type AdminResource, type AdminUser, type AlertDelivery, type AlertEvent, type APIKey, type AppData, type ApprovalRequest, type AuditEvent, authExpiredEventName, type ConfirmState, languageStorageKey, type LoginIdentityProvider, type ModalState, type Model, type ModelRoute, notificationChannelTypes, type Provider, type ProviderCatalogEntry, type ProviderModel, type ProviderMonitoringSnapshot, type ProviderResource, type ReportExportHistoryItem, type RequestLog, type ResourceAction, type ResourceConfig, type SettingsTabKey, type SQLiteBackup, type ToolbarAction, type UsageBreakdown, type UsagePoint, type ViewKey, viewRoutes } from "../core/types";
+import { type AdminResource, type AdminUser, type AlertDelivery, type AlertEvent, type APIKey, type AppData, type ApprovalRequest, type AuditEvent, authExpiredEventName, type ConfirmState, languageStorageKey, type LoginIdentityProvider, type ModalState, type Model, type ModelRoute, type ModelRoutePolicy, notificationChannelTypes, type Provider, type ProviderCatalogEntry, type ProviderModel, type ProviderMonitoringSnapshot, type ProviderResource, type ReportExportHistoryItem, type RequestLog, type ResourceAction, type ResourceConfig, type SettingsTabKey, type SQLiteBackup, type ToolbarAction, type UsageBreakdown, type UsagePoint, type ViewKey, viewRoutes } from "../core/types";
 import { emptyData, emptySummary, filterByModelCategory, filterRows } from "../domain/catalog";
-import { rowTitle, stringifyForm } from "../domain/entities";
+import { modelRouteDefaults, rowTitle } from "../domain/entities";
 import { uniqueUIID, viewFromPath } from "../domain/formatting";
 import { reportDatasetLabel } from "../domain/labels";
 import { type AppLanguage, bulkDeleteConfirmMessage, deleteConfirmMessage, importUsersDoneMessage, importUsersSkippedMessage, isIssuedAPIKey, readSavedLanguage, setActiveLanguage, tx } from "../i18n/runtime";
 import { createKeyWithCapture } from "../resources/generic-config";
 import { downloadReport } from "../resources/governance-config";
-import { adminFetch, adminMutate, importUsersFromCSVContent, isAuthExpiredError, loadRequestLabel, notificationChannelDefaults, permissionPartialLoadMessage, readAdminError, readLoadError, restoreDefaultModelCatalog, routePayload } from "../resources/payloads";
+import { adminFetch, adminMutate, importUsersFromCSVContent, isAuthExpiredError, loadRequestLabel, notificationChannelDefaults, permissionPartialLoadMessage, readAdminError, readLoadError, restoreDefaultModelCatalog } from "../resources/payloads";
 import { projectMemberConfig, projectMemberInitialValues } from "../resources/project-key-config";
 import { resourceConfigFor } from "../resources/settings-config";
 import { APIKeyWizardModal, UserImportModal } from "../shared/modals";
@@ -26,6 +26,7 @@ import { DatabaseStatusView } from "../views/database-model-pricing";
 import { GatewayView } from "../views/gateway-view";
 import { ModelDirectoryView } from "../views/model-directory";
 import { RouteStrategyView } from "../views/model-catalog";
+import { modelRoutePolicyPayload } from "../views/model-routing-policy";
 import { OverviewView } from "../views/overview";
 import { PlaygroundPage } from "../views/playground";
 import { ProviderUpsertModal } from "../views/provider-editor";
@@ -573,17 +574,11 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
     }
   }
 
-  function openCreateRoute() {
+  function openCreateRoute(model: Model) {
     if (!activeConfig) return;
     if (loading) {
       setNotice("");
       setError(tx("数据加载中，请稍后再操作。"));
-      return;
-    }
-    if (data.models.length === 0) {
-      setNotice("");
-      setError(tx("请先维护模型目录，再新增路由策略。"));
-      selectView("models");
       return;
     }
     if (data.providers.length === 0) {
@@ -592,7 +587,15 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
       selectView("providers");
       return;
     }
-    setModal({ config: activeConfig });
+    const routeConfig = activeConfig as ResourceConfig<ModelRoute>;
+    setModal({
+      config: {
+        ...routeConfig,
+        title: `${tx("添加线路")} · ${model.name}`,
+        fields: routeConfig.fields.filter((field) => field.key !== "model_name"),
+      },
+      initialValues: modelRouteDefaults(model, data),
+    });
   }
 
   function openCreateAPIKey() {
@@ -611,10 +614,6 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
 
   function openCreateForCurrentView() {
     if (!activeConfig) return;
-    if (activeView === "routes") {
-      openCreateRoute();
-      return;
-    }
     if (loading) {
       setNotice("");
       setError(tx("数据加载中，请稍后再操作。"));
@@ -635,28 +634,28 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
     setModal({ config: activeConfig });
   }
 
-  async function reorderModelRoutes(model: Model, orderedRoutes: ModelRoute[]) {
+  async function saveModelRoutingPolicy(model: Model, policy: ModelRoutePolicy, successMessage = `已应用 ${model.name} 的模型路由策略`) {
     setLoading(true);
     setError("");
     setNotice("");
     try {
-      for (let index = 0; index < orderedRoutes.length; index += 1) {
-        const route = orderedRoutes[index];
-        const nextPriority = index + 1;
-        if (route.priority === nextPriority) continue;
-        await adminMutate(api, `/api/admin/routing-rules/${route.id}`, "PATCH", routePayload({
-          ...stringifyForm(route),
-          priority: String(nextPriority),
-        }));
-      }
-      setNotice(tx(`已更新 ${model.name} 的 Provider 调用顺序`));
+      await adminMutate(api, `/api/admin/model-routing-policies/${encodeURIComponent(model.name)}`, "PATCH", policy);
+      setNotice(tx(successMessage));
       await load();
     } catch (err) {
       if (isAuthExpiredError(err)) return;
-      setError(err instanceof Error ? err.message : tx("更新路由顺序失败"));
+      setError(err instanceof Error ? err.message : tx("更新模型路由策略失败"));
     } finally {
       setLoading(false);
     }
+  }
+
+  function reorderModelRoutes(model: Model, orderedRoutes: ModelRoute[]) {
+    return saveModelRoutingPolicy(
+      model,
+      modelRoutePolicyPayload("priority_only", orderedRoutes),
+      `已更新 ${model.name} 的 Provider 调用顺序`,
+    );
   }
 
   const viewItems = activeConfig?.list(data) ?? [];
@@ -786,6 +785,7 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
               onEdit={(route) => setModal({ config: activeConfig, item: route })}
               onDelete={(route) => setConfirmDelete({ config: activeConfig, item: route })}
               onReorder={(model, routes) => void reorderModelRoutes(model, routes)}
+              onSavePolicy={(model, policy) => void saveModelRoutingPolicy(model, policy)}
             />
           ) : activeView === "models" && activeConfig ? (
             <ModelDirectoryView

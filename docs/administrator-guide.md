@@ -45,6 +45,27 @@ An administrator can instead create an external model manually and select one of
 
 Publication and runtime health are different states. Membership in `GET /v1/models` requires an active external `Model`, at least one active `ModelRoute`, and API-key access when a model allowlist is configured. It does not change when a Provider or Provider Resource is temporarily unhealthy. Health affects whether a request can be served and is shown separately in the directory and routing diagnostics. Disabling the external model removes it from `GET /v1/models` while retaining its mappings for later re-publication.
 
+## Model Routing Policies
+
+The admin console configures one routing strategy for the whole external model. Open the model card and select a strategy tab; the active tab explains its best use case, actual selection behaviour, parameter meaning, and a concrete example. Adjust the Provider parameters shown for that strategy, then choose **Apply Strategy**. The policy and every Provider parameter are saved atomically, so a model never runs with a partially updated configuration.
+
+For fixed-ratio routing, enter the relative weight beside each Provider. Two Providers with weights 75 and 25 display target shares of 75% and 25%. Adaptive routing uses the same values as base weights and dynamically adjusts effective shares. Quality, cost, and balanced modes expose only their relevant scores. All of these strategies place eligible Providers in one traffic-allocation pool. Sequential failover is the only mode that uses Provider order; drag the rows to set first, second, and later choices.
+
+| Strategy | Behaviour |
+| --- | --- |
+| `priority_weighted` | Uses the configured weights as the target traffic ratio across routes at the same priority. For example, weights 75 and 25 target a 75:25 split over a representative request volume. |
+| `adaptive` | Starts from the configured weights and adjusts the effective weights using invoked attempts from the last 15 minutes. A route begins adapting after 5 samples; recent success rate and successful-request latency influence its share, with bounded adjustments to prevent starvation or extreme shifts. |
+| `quality` | Always tries the highest quality score first, with weight used only to break score ties. |
+| `cost` | Always tries the highest cost-efficiency score first. A higher score means a cheaper, more preferred Provider. |
+| `priority_only` | Uses the Provider list as a strict primary/backup order and does not distribute normal traffic. |
+| `balanced` | Preserves legacy behaviour by using `weight + quality score + cost score` as the effective probabilistic weight. New configurations should normally use fixed ratio or adaptive routing instead. |
+
+Provider connection details and project restrictions remain route-specific. Editing one Provider route changes its upstream model, project scope, sticky-session setting, or status; overall strategy, weight, and scores are edited in the model policy instead. `all` makes a route available to every project, `include` limits it to the selected projects, and `exclude` makes it available to every project except those selected. Project scope is evaluated before traffic allocation and failover, and displayed traffic shares are recalculated across the eligible Providers.
+
+For a private-project boundary, create an internal Provider route with scope `include` and select the private projects. Create the corresponding external Provider route with scope `exclude` and select the same projects. The private projects can then use only the internal route, while other projects continue to use the external Provider.
+
+Project route scope also controls model discovery: `GET /v1/models` includes an external model only when the calling API key's project has at least one active eligible route, in addition to the normal model and API-key allowlist checks.
+
 ## Provider Resource Recovery
 
 A provider resource that fails `TOKENHUB_RESOURCE_FAILURE_THRESHOLD` times in a row is parked: it stops receiving traffic and enters a cooldown. Recovery is automatic and needs no admin action.

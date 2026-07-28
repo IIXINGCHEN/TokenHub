@@ -250,7 +250,7 @@ export function RouteStrategyHint({ data }: { data: AppData }) {
     <div className="workflow-hint">
       <div>
         <strong>{tx("模型路由器")}</strong>
-        <span>{tx("平衡模式综合权重、质量和成本；质量优先会先选高质量线路；成本优先会先选低成本线路。调用失败时会按候选顺序自动回退。")}</span>
+        <span>{tx("每个统一模型只选择一次整体策略；在策略 Tab 下配置各 Provider 的比例或评分。项目作用域仍在线路上控制内部与外部流量边界。")}</span>
       </div>
       <div className="workflow-hint-stats">
         <span>{activeRoutes} {tx("条启用线路")}</span>
@@ -646,7 +646,7 @@ export function EditModal<T>({
         </div>
         <div className="modal-actions">
           <button className="secondary-button" onClick={onClose} type="button">{tx("取消")}</button>
-          <button className="button" disabled={loading} type="submit">{tx("保存")}</button>
+          <button className="button" disabled={loading} type="submit">{tx(state.config.view === "routes" && !state.item ? "添加路由" : "保存")}</button>
         </div>
       </form>
     </div>

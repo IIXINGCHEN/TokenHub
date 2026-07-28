@@ -197,6 +197,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/admin/models", s.handleAdminModels)
 	s.mux.HandleFunc("/api/admin/models/restore-defaults", s.handleAdminModelsRestoreDefaults)
 	s.mux.HandleFunc("/api/admin/models/", s.handleAdminModelItem)
+	s.mux.HandleFunc("/api/admin/model-routing-policies/", s.handleAdminModelRoutingPolicy)
 	s.mux.HandleFunc("/api/admin/routing-rules", s.handleAdminRoutes)
 	s.mux.HandleFunc("/api/admin/routing-rules/", s.handleAdminRouteItem)
 	s.mux.HandleFunc("/api/admin/resources/", s.handleAdminResources)
@@ -1003,7 +1004,9 @@ func executeRoutedWithStore[T any](
 		}
 		omitReasoningEffort := false
 		for {
+			attemptStartedAt := time.Now()
 			resp, usage, err := call(leaseCtx, route, omitReasoningEffort, len(attempts)+1)
+			latencyMS := maxInt64(1, time.Since(attemptStartedAt).Milliseconds())
 			if leaseErr := coordinationLeaseError(leaseCtx); leaseErr != nil {
 				err = leaseErr
 			}
@@ -1027,6 +1030,8 @@ func executeRoutedWithStore[T any](
 				Status:    status,
 				ErrorCode: code,
 				Error:     errorMessage(err),
+				Invoked:   true,
+				LatencyMS: latencyMS,
 			})
 			if err == nil {
 				rebindReason := ""
@@ -1211,7 +1216,12 @@ func (s *Server) routesWithAdapterCapability(routes []RouteSelection, capability
 }
 
 func (s *Server) planRouteOrder(call CallContext, routes []RouteSelection) []RouteSelection {
-	ordered := append([]RouteSelection(nil), routes...)
+	ordered := make([]RouteSelection, 0, len(routes))
+	for _, route := range routes {
+		if routeMatchesProject(route.Route, call.Project.ID) {
+			ordered = append(ordered, route)
+		}
+	}
 	sort.SliceStable(ordered, func(i, j int) bool {
 		if ordered[i].Route.Priority != ordered[j].Route.Priority {
 			return ordered[i].Route.Priority < ordered[j].Route.Priority
@@ -1241,6 +1251,7 @@ func (s *Server) planRouteOrder(call CallContext, routes []RouteSelection) []Rou
 			}
 			group := append([]RouteSelection(nil), priorityGroup[:groupEnd]...)
 			strategy := routeStrategy(group[0].Route)
+			applyRouteRuntimeWeights(strategy, group)
 			if strategy == RouteStrategyPriorityOnly || strategy == RouteStrategyQuality || strategy == RouteStrategyCost {
 				sortRouteGroupByStrategy(strategy, group)
 				planned = append(planned, group...)
@@ -1274,8 +1285,8 @@ func (s *Server) planRouteOrder(call CallContext, routes []RouteSelection) []Rou
 					score = weightedCacheDomainScore
 				}
 				sort.SliceStable(group, func(i, j int) bool {
-					left := score(routingKey, identity(group[i]), routeEffectiveWeight(group[i].Route))
-					right := score(routingKey, identity(group[j]), routeEffectiveWeight(group[j].Route))
+					left := score(routingKey, identity(group[i]), routeEffectiveWeight(group[i]))
+					right := score(routingKey, identity(group[j]), routeEffectiveWeight(group[j]))
 					if left != right {
 						return left > right
 					}
@@ -1390,14 +1401,14 @@ func weightedRouteIndex(requestID string, salt int, routes []RouteSelection) int
 	}
 	total := 0
 	for _, route := range routes {
-		total += routeEffectiveWeight(route.Route)
+		total += routeEffectiveWeight(route)
 	}
 	if total <= 0 {
 		return 0
 	}
 	needle := stableHashInt(requestID, salt) % total
 	for index, route := range routes {
-		needle -= routeEffectiveWeight(route.Route)
+		needle -= routeEffectiveWeight(route)
 		if needle < 0 {
 			return index
 		}
@@ -1420,14 +1431,91 @@ func routeWeight(route ModelRoute) int {
 	return route.Weight
 }
 
-func routeEffectiveWeight(route ModelRoute) int {
-	weight := routeWeight(route)
-	switch routeStrategy(route) {
+func routeEffectiveWeight(route RouteSelection) int {
+	if route.Runtime.EffectiveWeight > 0 {
+		return route.Runtime.EffectiveWeight
+	}
+	weight := routeWeight(route.Route)
+	switch routeStrategy(route.Route) {
 	case RouteStrategyBalanced:
-		return maxInt(1, weight+routeQualityScore(route)+routeCostScore(route))
+		return maxInt(1, weight+routeQualityScore(route.Route)+routeCostScore(route.Route))
 	default:
 		return weight
 	}
+}
+
+func applyRouteRuntimeWeights(strategy string, routes []RouteSelection) {
+	if strategy != RouteStrategyAdaptive {
+		return
+	}
+	for index := range routes {
+		routes[index].Runtime.EffectiveWeight = routeWeight(routes[index].Route)
+	}
+	latencies := make([]int64, 0, len(routes))
+	for _, route := range routes {
+		if route.Runtime.Samples >= 5 && route.Runtime.LatencyMS > 0 {
+			latencies = append(latencies, route.Runtime.LatencyMS)
+		}
+	}
+	referenceLatency := float64(0)
+	if len(latencies) > 0 {
+		sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+		referenceLatency = float64(latencies[len(latencies)/2])
+	}
+	for index := range routes {
+		route := &routes[index]
+		if route.Runtime.Samples < 5 {
+			continue
+		}
+		latencyFactor := float64(1)
+		if referenceLatency > 0 && route.Runtime.LatencyMS > 0 {
+			latencyFactor = clampFloat(referenceLatency/float64(route.Runtime.LatencyMS), 0.25, 4)
+		}
+		successFactor := clampFloat(route.Runtime.SuccessRate, 0.25, 1)
+		baseWeight := routeWeight(route.Route)
+		effective := int(math.Round(float64(baseWeight) * latencyFactor * successFactor))
+		route.Runtime.EffectiveWeight = routeMinInt(maxInt(1, effective), baseWeight*4)
+	}
+}
+
+func clampFloat(value float64, minimum float64, maximum float64) float64 {
+	if value < minimum {
+		return minimum
+	}
+	if value > maximum {
+		return maximum
+	}
+	return value
+}
+
+func routeMatchesProject(route ModelRoute, projectID string) bool {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" || projectID == "admin_playground" {
+		return true
+	}
+	matched := false
+	for _, candidate := range route.ProjectIDs {
+		if strings.TrimSpace(candidate) == projectID {
+			matched = true
+			break
+		}
+	}
+	switch routeProjectScope(route) {
+	case RouteProjectScopeInclude:
+		return matched
+	case RouteProjectScopeExclude:
+		return !matched
+	default:
+		return true
+	}
+}
+
+func routeProjectScope(route ModelRoute) string {
+	scope := strings.ToLower(strings.TrimSpace(route.ProjectScope))
+	if scope == RouteProjectScopeInclude || scope == RouteProjectScopeExclude {
+		return scope
+	}
+	return RouteProjectScopeAll
 }
 
 func routeQualityScore(route ModelRoute) int {
@@ -1452,6 +1540,13 @@ func routeCostScore(route ModelRoute) int {
 
 func maxInt(left int, right int) int {
 	if left > right {
+		return left
+	}
+	return right
+}
+
+func routeMinInt(left int, right int) int {
+	if left < right {
 		return left
 	}
 	return right
@@ -1482,11 +1577,7 @@ func routeStrategy(route ModelRoute) string {
 	if strings.TrimSpace(route.Strategy) == "" {
 		return RouteStrategyBalanced
 	}
-	strategy := strings.TrimSpace(route.Strategy)
-	if strategy == RouteStrategyPriorityWeighted {
-		return RouteStrategyBalanced
-	}
-	return strategy
+	return strings.TrimSpace(route.Strategy)
 }
 
 func shouldFailoverRoutedError(err error, routeIsBound bool) bool {
@@ -1576,6 +1667,10 @@ func playgroundRouteSummary(route RouteSelection) PlaygroundRouteSummary {
 		QualityScore:     routeQualityScore(route.Route),
 		CostScore:        routeCostScore(route.Route),
 		Strategy:         routeStrategy(route.Route),
+		EffectiveWeight:  routeEffectiveWeight(route),
+		Samples:          route.Runtime.Samples,
+		SuccessRate:      route.Runtime.SuccessRate,
+		LatencyMS:        route.Runtime.LatencyMS,
 	}
 	if route.Resource != nil {
 		summary.ResourceName = route.Resource.Name
@@ -4300,6 +4395,60 @@ func adminModelNameFromPath(r *http.Request) (string, bool) {
 	return modelName, true
 }
 
+func (s *Server) handleAdminModelRoutingPolicy(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdmin(w, r, "routing", r.Method)
+	if !ok {
+		return
+	}
+	if r.Method != http.MethodPatch {
+		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
+		return
+	}
+	modelName, ok := adminModelRoutingPolicyNameFromPath(r)
+	if !ok {
+		writeError(w, r, NewHTTPError(http.StatusNotFound, "not_found", "Not found"))
+		return
+	}
+	var policy ModelRoutePolicy
+	if err := decodeJSON(r, &policy); err != nil {
+		writeError(w, r, NewHTTPError(http.StatusBadRequest, "invalid_request", err.Error()))
+		return
+	}
+	policy.Strategy = strings.TrimSpace(policy.Strategy)
+	if policy.Strategy == "" {
+		writeError(w, r, NewHTTPError(http.StatusBadRequest, "invalid_route_strategy", "Routing strategy is required"))
+		return
+	}
+	if err := s.validateRoutePolicy(ModelRoute{Strategy: policy.Strategy}); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	routes, err := s.store.UpdateModelRoutePolicy(modelName, policy)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	s.recordAdminAudit(r, user, "update", "model_routing_policy", modelName, "", map[string]any{
+		"strategy": policy.Strategy,
+		"routes":   routes,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"strategy": policy.Strategy, "data": routes})
+}
+
+func adminModelRoutingPolicyNameFromPath(r *http.Request) (string, bool) {
+	const prefix = "/api/admin/model-routing-policies/"
+	escaped := strings.Trim(strings.TrimPrefix(r.URL.EscapedPath(), prefix), "/")
+	if escaped == "" || strings.Contains(escaped, "/") {
+		return "", false
+	}
+	modelName, err := url.PathUnescape(escaped)
+	if err != nil {
+		return "", false
+	}
+	modelName = strings.TrimSpace(modelName)
+	return modelName, modelName != ""
+}
+
 func (s *Server) handleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAdmin(w, r, "routing", r.Method)
 	if !ok {
@@ -4390,6 +4539,12 @@ func (s *Server) handleAdminRouteItem(w http.ResponseWriter, r *http.Request) {
 				QualityScore:     routeQualityScore(route.Route),
 				CostScore:        routeCostScore(route.Route),
 				Strategy:         routeStrategy(route.Route),
+				ProjectScope:     routeProjectScope(route.Route),
+				ProjectIDs:       route.Route.ProjectIDs,
+				EffectiveWeight:  routeEffectiveWeight(route),
+				Samples:          route.Runtime.Samples,
+				SuccessRate:      route.Runtime.SuccessRate,
+				LatencyMS:        route.Runtime.LatencyMS,
 				Status:           "candidate",
 			})
 		}
@@ -4445,6 +4600,9 @@ func (s *Server) handleAdminRouteItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) validateRouteAdapter(route ModelRoute) error {
+	if err := s.validateRoutePolicy(route); err != nil {
+		return err
+	}
 	provider, ok := s.providerByID(route.ProviderID)
 	if !ok {
 		return NewHTTPError(http.StatusBadRequest, "route_provider_not_found", "Route provider does not exist")
@@ -4458,6 +4616,32 @@ func (s *Server) validateRouteAdapter(route ModelRoute) error {
 	resource, ok := s.providerResourceByID(route.ProviderResourceID)
 	if !ok || resource.ProviderID != provider.ID {
 		return NewHTTPError(http.StatusBadRequest, "route_resource_mismatch", "Route resource must belong to the selected Provider")
+	}
+	return nil
+}
+
+func (s *Server) validateRoutePolicy(route ModelRoute) error {
+	switch routeStrategy(route) {
+	case RouteStrategyBalanced, RouteStrategyAdaptive, RouteStrategyCost, RouteStrategyQuality, RouteStrategyPriorityWeighted, RouteStrategyPriorityOnly:
+	default:
+		return NewHTTPError(http.StatusBadRequest, "invalid_route_strategy", "Unsupported route strategy")
+	}
+	scope := strings.ToLower(strings.TrimSpace(route.ProjectScope))
+	switch scope {
+	case "", RouteProjectScopeAll:
+		return nil
+	case RouteProjectScopeInclude, RouteProjectScopeExclude:
+	default:
+		return NewHTTPError(http.StatusBadRequest, "invalid_route_project_scope", "Unsupported route project scope")
+	}
+	projectIDs := uniqueStrings(route.ProjectIDs)
+	if len(projectIDs) == 0 {
+		return NewHTTPError(http.StatusBadRequest, "route_projects_required", "Project-scoped routes require at least one project")
+	}
+	for _, projectID := range projectIDs {
+		if _, ok := s.store.GetProject(projectID); !ok {
+			return NewHTTPError(http.StatusBadRequest, "route_project_not_found", "Route project does not exist")
+		}
 	}
 	return nil
 }
@@ -4507,6 +4691,13 @@ func mergedModelRoute(current ModelRoute, patch ModelRoute) ModelRoute {
 	current.ResourceGroup = patch.ResourceGroup
 	if patch.ProviderModel != "" {
 		current.ProviderModel = patch.ProviderModel
+	}
+	if patch.Strategy != "" {
+		current.Strategy = patch.Strategy
+	}
+	if patch.ProjectScope != "" || patch.ProjectIDs != nil {
+		current.ProjectScope = patch.ProjectScope
+		current.ProjectIDs = patch.ProjectIDs
 	}
 	return current
 }
