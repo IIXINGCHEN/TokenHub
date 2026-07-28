@@ -50,6 +50,9 @@ is_ip_address "2606:4700:4700::1111" || fail_test "IPv6 address was rejected"
 assert_fails is_ip_address "999.1.1.1"
 assert_fails is_ip_address '1.2.3.4$(touch /tmp/tokenhub-test)'
 
+public_host_config="$test_root/public-host-config"
+mkdir -p "$public_host_config"
+CONFIG_DIR="$public_host_config"
 RESOLVED_PUBLIC_HOST=""
 RESOLVED_PUBLIC_HOST_SOURCE=""
 TOKENHUB_PUBLIC_HOST="tokenhub.example.com"
@@ -58,6 +61,28 @@ resolve_public_host
   fail_test "explicit public host was not preserved"
 [ "$RESOLVED_PUBLIC_HOST_SOURCE" = "explicit" ] ||
   fail_test "explicit public host source was not recorded"
+unset TOKENHUB_PUBLIC_HOST
+
+printf 'TOKENHUB_PUBLIC_HOST=stored.example.com\n' >"$CONFIG_DIR/tokenhub.env"
+TOKENHUB_PUBLIC_HOST="ignored.example.com"
+RESOLVED_PUBLIC_HOST=""
+RESOLVED_PUBLIC_HOST_SOURCE=""
+resolve_public_host
+[ "$RESOLVED_PUBLIC_HOST" = "stored.example.com" ] ||
+  fail_test "stored public host was not reused"
+[ "$RESOLVED_PUBLIC_HOST_SOURCE" = "config" ] ||
+  fail_test "stored public host source was not recorded"
+rm -f -- "$CONFIG_DIR/tokenhub.env"
+unset TOKENHUB_PUBLIC_HOST
+
+printf 'TOKENHUB_ENV=prod\n' >"$CONFIG_DIR/tokenhub.env"
+TOKENHUB_PUBLIC_HOST="migrated.example.com"
+RESOLVED_PUBLIC_HOST=""
+RESOLVED_PUBLIC_HOST_SOURCE=""
+ensure_public_host_config
+grep -Fqx "TOKENHUB_PUBLIC_HOST=migrated.example.com" "$CONFIG_DIR/tokenhub.env" ||
+  fail_test "missing public host was not added to an existing configuration"
+rm -f -- "$CONFIG_DIR/tokenhub.env"
 unset TOKENHUB_PUBLIC_HOST
 
 curl() {
@@ -106,8 +131,46 @@ unset -f curl hostname
 RESOLVED_PUBLIC_HOST=""
 RESOLVED_PUBLIC_HOST_SOURCE=""
 
+TOKENHUB_DATABASE_URL=""
+[ "$(initial_database_url)" = "sqlite:///var/lib/tokenhub/tokenhub.db" ] ||
+  fail_test "empty database URL did not use the native SQLite default"
+TOKENHUB_DATABASE_URL="postgres://tokenhub:test@db.internal:5432/tokenhub?sslmode=require"
+[ "$(initial_database_url)" = "$TOKENHUB_DATABASE_URL" ] ||
+  fail_test "explicit database URL was not preserved"
+TOKENHUB_DATABASE_URL=$'postgres://tokenhub:test@db.internal/tokenhub\nINJECTED=value'
+assert_fails initial_database_url
+unset TOKENHUB_DATABASE_URL
+
 validate_port "08" "test port"
 assert_fails validate_port "0" "test port"
+port_config="$test_root/port-config"
+mkdir -p "$port_config"
+CONFIG_DIR="$port_config"
+BACKEND_PORT=18080
+FRONTEND_PORT=13000
+ss() {
+  case "$*" in
+    *":18080"*) printf 'LISTEN 0 4096 0.0.0.0:18080 0.0.0.0:*\n' ;;
+  esac
+}
+set +e
+port_output="$(validate_fresh_install_ports 2>&1)"
+port_status=$?
+set -e
+[ "$port_status" -ne 0 ] || fail_test "fresh install accepted an occupied backend port"
+[[ "$port_output" == *"backend port 18080 is already in use"* ]] ||
+  fail_test "occupied backend port failed without an actionable message: $port_output"
+printf 'TOKENHUB_HTTP_ADDR=:18080\n' >"$CONFIG_DIR/tokenhub.env"
+validate_fresh_install_ports
+rm -f -- "$CONFIG_DIR/tokenhub.env"
+BACKEND_PORT=13000
+assert_fails validate_fresh_install_ports
+BACKEND_PORT=18081
+FRONTEND_PORT=13001
+validate_fresh_install_ports
+unset -f ss
+BACKEND_PORT=8080
+FRONTEND_PORT=3000
 assert_fails validate_safe_path "/opt/../etc" "test path"
 assert_fails validate_safe_path "/opt/" "test path"
 assert_fails validate_safe_path "/var//lib" "test path"
@@ -130,6 +193,7 @@ write_managed_directory_marker "$INSTALL_ROOT" "application"
 write_managed_directory_marker "$CONFIG_DIR" "configuration"
 write_managed_directory_marker "$STATE_DIR" "state"
 require_managed_directory_marker "$INSTALL_ROOT" "application"
+validate_upgrade_target "0.3.3"
 printf 'invalid\n' >"$INSTALL_ROOT/$MANAGED_DIRECTORY_MARKER"
 assert_fails require_managed_directory_marker "$INSTALL_ROOT" "application"
 
@@ -152,8 +216,16 @@ curl() {
 sleep() {
   return 0
 }
+readiness_journal_log="$test_root/readiness-journal.log"
+journalctl() {
+  printf '%s\n' "$*" >"$readiness_journal_log"
+}
 assert_fails wait_for_service_ready
-unset -f systemctl curl sleep
+[ -s "$readiness_journal_log" ] ||
+  fail_test "readiness failure did not request recent service logs"
+grep -Fqx -- "-u tokenhub-test -n 50 --no-pager" "$readiness_journal_log" ||
+  fail_test "readiness failure requested the wrong journal range"
+unset -f systemctl curl sleep journalctl
 
 config_values="$test_root/config-values"
 printf 'TOKENHUB_RELEASE_REPOSITORY=first/repo\nTOKENHUB_RELEASE_REPOSITORY=second/repo\n' >"$config_values"
@@ -249,6 +321,7 @@ run_linux_integration() {
   local first_status
   local retry_output
   local generated_password
+  local postgres_url="postgres://tokenhub:test@db.internal:5432/tokenhub?sslmode=require"
   local invalid_rollback_output
   local invalid_rollback_status
   local downgrade_output
@@ -318,7 +391,11 @@ EOF
 #!/usr/bin/env bash
 touch "$TOKENHUB_TEST_USERDEL_LOG"
 EOF
-  chmod 0755 "$fake_bin/curl" "$fake_bin/systemctl" "$fake_bin/userdel"
+  cat >"$fake_bin/ss" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod 0755 "$fake_bin/curl" "$fake_bin/systemctl" "$fake_bin/userdel" "$fake_bin/ss"
 
   installer_env=(
     "PATH=$fake_bin:$PATH"
@@ -335,6 +412,7 @@ EOF
     "TOKENHUB_SERVICE_USER=$service_user"
     "TOKENHUB_SERVICE_NAME=tokenhub-test"
     "TOKENHUB_PUBLIC_HOST=127.0.0.1"
+    "TOKENHUB_DATABASE_URL=$postgres_url"
   )
 
   set +e
@@ -350,12 +428,17 @@ EOF
     fail_test "failed install did not preserve generated configuration: $first_output"
   [ -f "$config_dir/.initial-admin-password-pending" ] ||
     fail_test "failed install did not retain the pending password marker"
+  grep -Fqx "TOKENHUB_DATABASE_URL=$postgres_url" "$config_dir/tokenhub.env" ||
+    fail_test "first install did not persist the explicit database URL"
+  grep -Fqx "TOKENHUB_PUBLIC_HOST=127.0.0.1" "$config_dir/tokenhub.env" ||
+    fail_test "first install did not persist the resolved public host"
   [[ "$first_output" != *"Initial admin password:"* ]] ||
     fail_test "failed install printed credentials before installation completed"
 
   : >"$test_root/curl.log"
   retry_output="$(
     env -u TOKENHUB_RELEASE_REPOSITORY "${installer_env[@]}" \
+      TOKENHUB_DATABASE_URL=postgres://ignored:ignored@other.invalid/ignored \
       bash "$script_dir/install.sh" install --version 0.3.3 2>&1
   )"
   generated_password="$(
@@ -369,6 +452,10 @@ EOF
     fail_test "successful install retry kept the pending password marker"
   grep -q 'github.com/example/TokenHub/releases/download/' "$test_root/curl.log" ||
     fail_test "install retry did not reuse the configured release repository"
+  grep -Fqx "TOKENHUB_DATABASE_URL=$postgres_url" "$config_dir/tokenhub.env" ||
+    fail_test "install retry replaced the existing database URL"
+  [[ "$retry_output" == *"Existing configuration keeps its current TOKENHUB_DATABASE_URL"* ]] ||
+    fail_test "install retry did not warn that a different database URL was ignored"
 
   [ "$(tr -d '[:space:]' <"$install_root/current/VERSION")" = "0.3.3" ] ||
     fail_test "integration install did not activate v0.3.3"
@@ -425,17 +512,21 @@ EOF
 
   printf 'TOKENHUB_TEST_MARKER=preserved\n' >>"$config_dir/tokenhub.env"
   sed -i '/^TOKENHUB_IMAGE_STORAGE_DIR=/d' "$config_dir/tokenhub.env"
+  sed -i '/^TOKENHUB_PUBLIC_HOST=/d' "$config_dir/tokenhub.env"
   env -u TOKENHUB_RELEASE_REPOSITORY "${installer_env[@]}" \
     bash "$script_dir/install.sh" upgrade --version 0.3.3
   grep -q '^TOKENHUB_TEST_MARKER=preserved$' "$config_dir/tokenhub.env" ||
     fail_test "integration upgrade replaced existing configuration"
   grep -q "^TOKENHUB_IMAGE_STORAGE_DIR=$state_dir/images$" "$config_dir/tokenhub.env" ||
     fail_test "integration upgrade did not migrate persistent image storage"
+  grep -Fqx "TOKENHUB_PUBLIC_HOST=127.0.0.1" "$config_dir/tokenhub.env" ||
+    fail_test "integration upgrade did not migrate the installer public host"
 
   sed -i 's/^TOKENHUB_FRONTEND_PORT=.*/TOKENHUB_FRONTEND_PORT=23000/' "$config_dir/tokenhub.env"
   : >"$test_root/curl.log"
   upgrade_output="$(
     env -u TOKENHUB_RELEASE_REPOSITORY "${installer_env[@]}" \
+      TOKENHUB_PUBLIC_HOST= \
       bash "$script_dir/install.sh" upgrade --version 0.3.4 2>&1
   )"
   [ "$(tr -d '[:space:]' <"$install_root/current/VERSION")" = "0.3.4" ] ||

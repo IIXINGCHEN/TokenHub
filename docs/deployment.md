@@ -107,6 +107,18 @@ sudo env TOKENHUB_PUBLIC_HOST=tokenhub.example.com \
   bash /tmp/tokenhub-install.sh install
 ```
 
+The resolved host is stored in `/etc/tokenhub/tokenhub.env` and reused by later installer runs, so upgrade output remains consistent even when automatic IP discovery changes.
+
+To use PostgreSQL from the first start instead of the default SQLite database, pass its URL to the initial installation:
+
+```bash
+sudo env \
+  TOKENHUB_DATABASE_URL='postgres://user:password@db.example.com:5432/tokenhub?sslmode=require' \
+  bash /tmp/tokenhub-install.sh install
+```
+
+The installer writes this value to `/etc/tokenhub/tokenhub.env` only when creating the configuration. Later install, upgrade, and rollback runs preserve the existing file; edit it and restart TokenHub when intentionally changing databases.
+
 The first installation generates production secrets and an initial admin password. The password is printed once. Runtime files are kept in separate locations:
 
 - Releases and the `current` symlink: `/opt/tokenhub`
@@ -135,7 +147,7 @@ sudo bash /tmp/tokenhub-install.sh uninstall
 `upgrade` refuses a target older than the installed version; use the explicit `rollback` command for a downgrade. Upgrading an installation created by an older installer automatically adds `/var/lib/tokenhub/images` as persistent image storage unless `TOKENHUB_IMAGE_STORAGE_DIR` is already configured.
 
 `uninstall` preserves `/etc/tokenhub` and `/var/lib/tokenhub`. Use `uninstall --purge` only when configuration and application data should also be deleted.
-The installer records ownership markers in the application, configuration, and state directories. Uninstall refuses to recursively remove an unmarked or mismatched directory, and system-level paths such as `/opt`, `/etc`, and `/var/lib` are never accepted as managed directory targets. Install and upgrade report success only after the systemd unit is active and both the backend health endpoint and admin console respond.
+The installer records ownership markers in the application, configuration, and state directories. Uninstall refuses to recursively remove an unmarked or mismatched directory, and system-level paths such as `/opt`, `/etc`, and `/var/lib` are never accepted as managed directory targets. A fresh installation rejects equal backend and frontend ports. When `ss` or `lsof` is available, it also rejects occupied ports before downloading a Release. Install and upgrade report success only after the systemd unit is active and both the backend health endpoint and admin console respond; readiness failures include recent service logs.
 
 For a fork, use its installer URL and tell TokenHub which public Release repository to query:
 
@@ -174,7 +186,7 @@ Start the stack from the repository root:
 ./deploy/install.sh
 ```
 
-The script validates the Compose environment, pulls the published image, and starts the managed application container without building locally. It also removes the obsolete standalone frontend container when upgrading from the former two-container layout; the `tokenhub-data` volume is preserved. If the image cannot be pulled during the initial GHCR rollout, it falls back to building from the local checkout. Validation errors name every unsafe variable without printing their values. If Compose fails and the application container created or restarted by that attempt is exited, restarting, dead, or unhealthy, the script prints up to 100 log lines from that attempt.
+The script validates the Compose environment, pulls the published image, and starts the managed application container without building locally. It waits up to 180 seconds for the Compose health check before reporting success. It also removes the obsolete standalone frontend container when upgrading from the former two-container layout; the `tokenhub-data` volume is preserved. If the image cannot be pulled during the initial GHCR rollout, it falls back to building from the local checkout. Validation errors name every unsafe variable without printing their values. If the new backend fails or does not become healthy, the script prints up to 100 log lines from that attempt.
 
 Validate without pulling or starting containers:
 

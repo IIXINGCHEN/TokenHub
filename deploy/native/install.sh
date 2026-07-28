@@ -47,6 +47,7 @@ Environment:
   TOKENHUB_CORS_ALLOWED_ORIGINS
   TOKENHUB_BACKEND_PORT        Backend port (default: 8080)
   TOKENHUB_FRONTEND_PORT       Admin console port (default: 3000)
+  TOKENHUB_DATABASE_URL        Database URL written on first install (default: SQLite)
   TOKENHUB_SERVICE_USER        Linux service user (default: tokenhub)
 EOF
 }
@@ -120,6 +121,43 @@ validate_port() {
   local label="$2"
   [[ "$value" =~ ^[0-9]+$ ]] || fail "$label must be a number"
   (( 10#$value >= 1 && 10#$value <= 65535 )) || fail "$label must be between 1 and 65535"
+}
+
+validate_single_line_value() {
+  local value="$1"
+  local label="$2"
+  if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+    fail "$label must not contain line breaks"
+  fi
+}
+
+port_is_listening() {
+  local port="$1"
+  local listeners
+  if command -v ss >/dev/null 2>&1; then
+    listeners="$(ss -H -ltn "sport = :$port" 2>/dev/null || true)"
+    [ -n "$listeners" ]
+    return
+  fi
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
+    return
+  fi
+  return 1
+}
+
+validate_fresh_install_ports() {
+  local backend_port=$((10#$BACKEND_PORT))
+  local frontend_port=$((10#$FRONTEND_PORT))
+  [ ! -f "$CONFIG_DIR/tokenhub.env" ] || return 0
+  [ "$backend_port" -ne "$frontend_port" ] ||
+    fail "TOKENHUB_BACKEND_PORT and TOKENHUB_FRONTEND_PORT must use different ports"
+  if port_is_listening "$backend_port"; then
+    fail "backend port $backend_port is already in use; set TOKENHUB_BACKEND_PORT to a free port and rerun the installer"
+  fi
+  if port_is_listening "$frontend_port"; then
+    fail "admin console port $frontend_port is already in use; set TOKENHUB_FRONTEND_PORT to a free port and rerun the installer"
+  fi
 }
 
 validate_identifiers() {
@@ -440,11 +478,23 @@ detect_ipinfo_public_address() {
 
 resolve_public_host() {
   local addresses
+  local configured_host
+  local env_file="$CONFIG_DIR/tokenhub.env"
   local host
   if [ -n "$RESOLVED_PUBLIC_HOST" ]; then
     return
   fi
+  if [ -f "$env_file" ]; then
+    configured_host="$(read_config_value "$env_file" TOKENHUB_PUBLIC_HOST)"
+    if [ -n "$configured_host" ]; then
+      validate_single_line_value "$configured_host" "configured TOKENHUB_PUBLIC_HOST"
+      RESOLVED_PUBLIC_HOST="$configured_host"
+      RESOLVED_PUBLIC_HOST_SOURCE="config"
+      return
+    fi
+  fi
   if [ -n "${TOKENHUB_PUBLIC_HOST:-}" ]; then
+    validate_single_line_value "$TOKENHUB_PUBLIC_HOST" "TOKENHUB_PUBLIC_HOST"
     RESOLVED_PUBLIC_HOST="$TOKENHUB_PUBLIC_HOST"
     RESOLVED_PUBLIC_HOST_SOURCE="explicit"
     return
@@ -467,6 +517,12 @@ resolve_public_host() {
   RESOLVED_PUBLIC_HOST_SOURCE="loopback"
 }
 
+initial_database_url() {
+  local database_url="${TOKENHUB_DATABASE_URL:-sqlite://${STATE_DIR}/tokenhub.db}"
+  validate_single_line_value "$database_url" "TOKENHUB_DATABASE_URL"
+  printf '%s\n' "$database_url"
+}
+
 url_host() {
   local host="${1#[}"
   host="${host%]}"
@@ -484,6 +540,10 @@ write_initial_config() {
   local directory_mode="0750"
   if [ -f "$env_file" ]; then
     info "Keeping existing configuration at $env_file"
+    if [ -n "${TOKENHUB_DATABASE_URL:-}" ] &&
+      [ "$(read_config_value "$env_file" TOKENHUB_DATABASE_URL)" != "$TOKENHUB_DATABASE_URL" ]; then
+      warn "Existing configuration keeps its current TOKENHUB_DATABASE_URL; edit $env_file and restart TokenHub to change databases."
+    fi
     load_pending_admin_password
     return
   fi
@@ -499,6 +559,7 @@ write_initial_config() {
   local api_base_url
   local allowed_origins
   local public_url_host
+  local database_url
   local admin_token
   local secret_key
   resolve_public_host
@@ -512,6 +573,7 @@ write_initial_config() {
   frontend_url="http://${public_url_host}:${FRONTEND_PORT}"
   api_base_url="${TOKENHUB_API_BASE_URL:-$public_base_url}"
   allowed_origins="${TOKENHUB_CORS_ALLOWED_ORIGINS:-$frontend_url}"
+  database_url="$(initial_database_url)"
   admin_token="$(random_hex 32)"
   secret_key="$(random_hex 32)"
   GENERATED_ADMIN_PASSWORD="$(random_hex 12)"
@@ -520,13 +582,14 @@ write_initial_config() {
   cat >"$env_file" <<EOF
 TOKENHUB_ENV=prod
 TOKENHUB_HTTP_ADDR=:${BACKEND_PORT}
+TOKENHUB_PUBLIC_HOST=${public_host}
 TOKENHUB_PUBLIC_BASE_URL=${public_base_url}
 TOKENHUB_RELEASE_REPOSITORY=${GITHUB_REPOSITORY}
 TOKENHUB_CORS_ALLOWED_ORIGINS=${allowed_origins}
 TOKENHUB_ADMIN_TOKEN=${admin_token}
 TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD=${GENERATED_ADMIN_PASSWORD}
 TOKENHUB_SECRET_KEY=${secret_key}
-TOKENHUB_DATABASE_URL=sqlite://${STATE_DIR}/tokenhub.db
+TOKENHUB_DATABASE_URL=${database_url}
 TOKENHUB_SQLITE_BACKUP_DIR=${STATE_DIR}/backups
 TOKENHUB_IMAGE_STORAGE_DIR=${STATE_DIR}/images
 TOKENHUB_MODEL_CATALOG_FILE=${INSTALL_ROOT}/current/catalog/model-catalog.yaml
@@ -542,6 +605,19 @@ EOF
   install -m 0600 -o "$config_owner" -g "$SERVICE_GROUP" /dev/null \
     "$CONFIG_DIR/.initial-admin-password-pending"
   info "Created configuration at $env_file"
+}
+
+ensure_public_host_config() {
+  local env_file="$CONFIG_DIR/tokenhub.env"
+  local configured
+  configured="$(read_config_value "$env_file" TOKENHUB_PUBLIC_HOST)"
+  if [ -n "$configured" ]; then
+    return
+  fi
+  resolve_public_host
+  validate_single_line_value "$RESOLVED_PUBLIC_HOST" "TOKENHUB_PUBLIC_HOST"
+  printf '\nTOKENHUB_PUBLIC_HOST=%s\n' "$RESOLVED_PUBLIC_HOST" >>"$env_file"
+  info "Added the installer public host to $env_file"
 }
 
 ensure_persistent_image_storage_config() {
@@ -878,6 +954,9 @@ wait_for_service_ready() {
     sleep 1
   done
   systemctl status --no-pager "$SERVICE_NAME" >&2 || true
+  if command -v journalctl >/dev/null 2>&1; then
+    journalctl -u "$SERVICE_NAME" -n 50 --no-pager >&2 || true
+  fi
   fail "TokenHub did not become ready after ${SERVICE_READY_ATTEMPTS} readiness checks"
 }
 
@@ -897,7 +976,7 @@ validate_upgrade_target() {
   local current_file="$INSTALL_ROOT/current/VERSION"
   local current_version
   local comparison
-  [ -f "$current_file" ] || return
+  [ -f "$current_file" ] || return 0
   current_version="$(normalize_version "$(tr -d '[:space:]' <"$current_file")")"
   comparison="$(compare_semantic_versions "$target_version" "$current_version")"
   [ "$comparison" -ge 0 ] ||
@@ -918,6 +997,7 @@ install_or_upgrade() {
   local target_version="$VERSION"
   local admin_console_port
   local archive
+  validate_fresh_install_ports
   [ -n "$target_version" ] || target_version="$(latest_version)"
   if [ "$COMMAND" = "upgrade" ]; then
     validate_upgrade_target "$target_version"
@@ -926,6 +1006,7 @@ install_or_upgrade() {
   ensure_service_user
   prepare_directories
   write_initial_config
+  ensure_public_host_config
   ensure_persistent_image_storage_config
   record_created_service_user
   if [ -f "$INSTALL_ROOT/current/VERSION" ] &&

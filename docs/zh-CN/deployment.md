@@ -107,6 +107,18 @@ sudo env TOKENHUB_PUBLIC_HOST=tokenhub.example.com \
   bash /tmp/tokenhub-install.sh install
 ```
 
+安装器会把最终使用的主机地址写入 `/etc/tokenhub/tokenhub.env`，后续执行升级等操作时会继续使用该值，避免自动 IP 检测结果变化导致输出地址漂移。
+
+如果希望首次启动就使用 PostgreSQL，而不是默认的 SQLite，请在第一次安装时传入数据库 URL：
+
+```bash
+sudo env \
+  TOKENHUB_DATABASE_URL='postgres://user:password@db.example.com:5432/tokenhub?sslmode=require' \
+  bash /tmp/tokenhub-install.sh install
+```
+
+安装器只会在首次创建配置时将该值写入 `/etc/tokenhub/tokenhub.env`。后续执行 install、upgrade 或 rollback 会保留已有配置；确需切换数据库时，请编辑该文件并重启 TokenHub。
+
 首次安装会生成生产密钥和初始管理员密码，密码只会输出一次。运行文件分别保存在：
 
 - Release 和 `current` 软链接：`/opt/tokenhub`
@@ -135,7 +147,7 @@ sudo bash /tmp/tokenhub-install.sh uninstall
 `upgrade` 会拒绝低于当前安装版本的目标；需要降级时必须显式使用 `rollback`。使用新版安装器升级旧安装时，如果尚未配置 `TOKENHUB_IMAGE_STORAGE_DIR`，安装器会自动将持久化图片目录补充为 `/var/lib/tokenhub/images`。
 
 `uninstall` 会保留 `/etc/tokenhub` 和 `/var/lib/tokenhub`。只有确定要同时删除配置和应用数据时，才使用 `uninstall --purge`。
-安装器会在应用、配置和状态目录中写入所有权标记。卸载时，如果目录没有标记或标记与当前配置不一致，安装器会拒绝递归删除；`/opt`、`/etc`、`/var/lib` 等系统级目录也不会被接受为托管目录。安装或升级只有在 systemd 服务处于 active 状态、后端健康检查和管理后台都可访问后才会报告成功。
+安装器会在应用、配置和状态目录中写入所有权标记。卸载时，如果目录没有标记或标记与当前配置不一致，安装器会拒绝递归删除；`/opt`、`/etc`、`/var/lib` 等系统级目录也不会被接受为托管目录。首次安装会拒绝相同的前后端端口；如果系统提供 `ss` 或 `lsof`，脚本还会在下载 Release 前拒绝已被占用的端口。安装或升级只有在 systemd 服务处于 active 状态、后端健康检查和管理后台都可访问后才会报告成功；就绪检查失败时会同时输出近期服务日志。
 
 使用 fork 测试时，请下载该 fork 中的安装脚本，并指定它的公开 Release 仓库：
 
@@ -174,7 +186,7 @@ cp deploy/.env.example deploy/.env
 ./deploy/install.sh
 ```
 
-脚本会先校验 Compose 环境变量，再拉取已发布镜像并启动托管应用容器，不在部署服务器构建镜像。从旧的双容器结构升级时，脚本会移除已废弃的独立前端容器，但保留 `tokenhub-data` 数据卷。首次发布 GHCR 镜像期间，如果镜像无法拉取，脚本会自动改为从当前代码构建。校验失败时会列出不安全的变量，但不会输出敏感值。如果 Compose 失败，且本次创建或重启的应用容器处于已退出、重启中、失效或不健康状态，脚本会打印本次启动产生的最多 100 行日志。
+脚本会先校验 Compose 环境变量，再拉取已发布镜像并启动托管应用容器，不在部署服务器构建镜像；只有在最多等待 180 秒且 Compose 健康检查通过后才报告成功。从旧的双容器结构升级时，脚本会移除已废弃的独立前端容器，但保留 `tokenhub-data` 数据卷。首次发布 GHCR 镜像期间，如果镜像无法拉取，脚本会自动改为从当前代码构建。校验失败时会列出不安全的变量，但不会输出敏感值。新后端启动失败或未能进入健康状态时，脚本会打印本次启动产生的最多 100 行日志。
 
 只校验配置，不拉取镜像或启动容器：
 
