@@ -1,3 +1,4 @@
+import { appRole } from "../core/navigation";
 import { clearSavedSession } from "../core/session";
 import { type AdminResource, type AdminUser, type ApiContext, type APIKey, type AppData, type ApprovalRequest, authExpiredEventName, type FieldConfig, type Project, type ProviderCatalogModel, type ProviderResource, type ResourceConfig, type UserImportResult } from "../core/types";
 import { inferModelCategoryText, normalizeNotificationChannelType, notificationChannelDescription, notificationChannelLabel, notificationChannelURLPlaceholder } from "../domain/catalog";
@@ -378,6 +379,7 @@ export function defaultFormValues<T>(config: ResourceConfig<T>, data: AppData, c
     if (field.key === "resource_type") values[field.key] = "api_key";
     if (field.key === "environment") values[field.key] = "prod";
     if (field.key === "project_id") values[field.key] = config.view === "api-keys" ? firstIssueableProject(data, currentUser) : (firstActiveProject(data)?.id ?? "");
+    if (field.key === "owner_user_id" && config.view === "api-keys") values[field.key] = currentUser && appRole(currentUser.role) !== "admin" ? currentUser.id : "";
     if (field.key === "team_id") values[field.key] = firstActiveTeam(data)?.id ?? "";
     if (field.key === "allowed_models") values[field.key] = "";
     if (field.key === "daily_requests") values[field.key] = "1000";
@@ -438,6 +440,7 @@ export function keyCreatePayload(values: Record<string, string>) {
   return {
     name: values.name,
     group: values.group || "default",
+    owner_user_id: values.owner_user_id,
     allowed_models: splitList(values.allowed_models),
     ip_allowlist: splitList(values.ip_allowlist),
     limits: keyLimits(values),
@@ -448,6 +451,7 @@ export function keyPatchPayload(values: Record<string, string>) {
   return {
     name: values.name,
     group: values.group || "default",
+    owner_user_id: values.owner_user_id,
     status: values.status || "active",
     allowed_models: splitList(values.allowed_models),
     ip_allowlist: splitList(values.ip_allowlist),

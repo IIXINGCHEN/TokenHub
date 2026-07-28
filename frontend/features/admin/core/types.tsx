@@ -33,6 +33,7 @@ export type Project = {
 export type APIKey = {
   id: string;
   project_id: string;
+  owner_user_id?: string;
   name: string;
   group?: string;
   key_prefix: string;
@@ -45,6 +46,7 @@ export type APIKey = {
   rotated_from_id?: string;
   grace_until?: string;
   last_used_at?: string;
+  metadata?: Record<string, string>;
 };
 
 export type DatabaseStatus = {
@@ -437,6 +439,7 @@ export type UsageRecord = {
   request_id: string;
   project_id: string;
   api_key_id: string;
+  attributed_user_id?: string;
   model: string;
   provider_id?: string;
   provider_resource_id?: string;
@@ -506,6 +509,8 @@ export type UsageBreakdownRow = {
   output_tokens: number;
   total_tokens: number;
   estimated_cost_usd: number;
+  owned_key_count?: number;
+  used_key_count?: number;
 };
 
 export type UsageBreakdown = {

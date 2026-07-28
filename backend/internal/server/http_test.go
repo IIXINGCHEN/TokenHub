@@ -2780,6 +2780,13 @@ func TestProjectMembersAssignMultipleProjectsAndKeyIssueScope(t *testing.T) {
 	if createdKey.Code != http.StatusCreated || !strings.Contains(createdKey.Body, `"api_key"`) {
 		t.Fatalf("developer member should issue key, got %d: %s", createdKey.Code, createdKey.Body)
 	}
+	forbiddenOwner := doJSON(t, app, http.MethodPost, "/api/admin/projects/"+developerProject.ID+"/keys", map[string]any{
+		"name":          "Wrong Owner Key",
+		"owner_user_id": otherUser.ID,
+	}, payload.Token)
+	if forbiddenOwner.Code != http.StatusForbidden {
+		t.Fatalf("ordinary user should not assign a key to another user, got %d: %s", forbiddenOwner.Code, forbiddenOwner.Body)
+	}
 	viewerKey := doJSON(t, app, http.MethodPost, "/api/admin/projects/"+viewerProject.ID+"/keys", map[string]any{
 		"name": "Viewer Key",
 	}, payload.Token)
@@ -2791,6 +2798,211 @@ func TestProjectMembersAssignMultipleProjectsAndKeyIssueScope(t *testing.T) {
 	}, payload.Token)
 	if unassignedKey.Code != http.StatusForbidden {
 		t.Fatalf("same-team unassigned user should not issue key, got %d: %s", unassignedKey.Code, unassignedKey.Body)
+	}
+}
+
+func TestAdminAPIKeyOwnerAttributionAndUsageSnapshot(t *testing.T) {
+	store := NewMemoryStore()
+	if _, err := store.CreateAdminUser(AdminUser{
+		ID:       "usr_admin",
+		Username: "key-owner-admin",
+		Name:     "Key Owner Admin",
+		Email:    "key-owner-admin@tokenhub.local",
+		Role:     "admin",
+		Status:   StatusActive,
+	}, "admin123456"); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := store.CreateAdminUser(AdminUser{
+		Username: "key-owner",
+		Name:     "Key Owner",
+		Email:    "key-owner@tokenhub.local",
+		Role:     "user",
+		TeamID:   "team_key_owner",
+		Status:   StatusActive,
+	}, "owner123456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherOwner, err := store.CreateAdminUser(AdminUser{
+		Username: "key-owner-other",
+		Name:     "Other Key Owner",
+		Email:    "key-owner-other@tokenhub.local",
+		Role:     "user",
+		TeamID:   "team_key_owner",
+		Status:   StatusActive,
+	}, "owner123456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := store.CreateProject(Project{Name: "Key Attribution Project", TeamID: owner.TeamID, Status: StatusActive})
+	server := New(store)
+	app := server.Handler()
+
+	createKey := func(name string) APIKey {
+		t.Helper()
+		resp := doJSON(t, app, http.MethodPost, "/api/admin/projects/"+project.ID+"/keys", map[string]any{
+			"name":          name,
+			"owner_user_id": owner.ID,
+		}, "")
+		if resp.Code != http.StatusCreated {
+			t.Fatalf("create owned key failed: %d %s", resp.Code, resp.Body)
+		}
+		var payload struct {
+			ID          string `json:"id"`
+			OwnerUserID string `json:"owner_user_id"`
+		}
+		if err := json.Unmarshal([]byte(resp.Body), &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.OwnerUserID != owner.ID {
+			t.Fatalf("created key owner = %q, want %q", payload.OwnerUserID, owner.ID)
+		}
+		for _, key := range store.ListAPIKeys() {
+			if key.ID == payload.ID {
+				return key
+			}
+		}
+		t.Fatalf("created key %q not found", payload.ID)
+		return APIKey{}
+	}
+
+	keyA := createKey("Owner Key A")
+	keyB := createKey("Owner Key B")
+	if keyA.Metadata["created_by"] != "usr_admin" {
+		t.Fatalf("key issuer metadata = %q, want usr_admin", keyA.Metadata["created_by"])
+	}
+	finishUsage := func(requestID string, key APIKey, totalTokens int64) {
+		store.FinishCall(CallContext{
+			RequestID: requestID,
+			Project:   project,
+			Key:       key,
+			Model:     Model{Name: "gpt-4.1-mini"},
+			StartedAt: time.Now(),
+		}, RouteSelection{}, Usage{PromptTokens: totalTokens, TotalTokens: totalTokens}, http.StatusOK, "", "127.0.0.1", "owner-test")
+	}
+	finishUsage("req_owner_a_before_transfer", keyA, 100)
+
+	transfer := doJSON(t, app, http.MethodPatch, "/api/admin/api-keys/"+keyA.ID, map[string]any{
+		"owner_user_id": otherOwner.ID,
+	}, "")
+	if transfer.Code != http.StatusOK {
+		t.Fatalf("transfer key owner failed: %d %s", transfer.Code, transfer.Body)
+	}
+	updatedKeyA, err := server.findAPIKey(keyA.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finishUsage("req_owner_a_after_transfer", updatedKeyA, 300)
+	finishUsage("req_owner_b", keyB, 200)
+
+	rotate := doJSON(t, app, http.MethodPost, "/api/admin/api-keys/"+keyA.ID+"/rotate", map[string]any{}, "")
+	if rotate.Code != http.StatusCreated {
+		t.Fatalf("rotate transferred key failed: %d %s", rotate.Code, rotate.Body)
+	}
+	var rotatedPayload struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(rotate.Body), &rotatedPayload); err != nil {
+		t.Fatal(err)
+	}
+	rotatedKey, err := server.findAPIKey(rotatedPayload.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rotatedKey.OwnerUserID != otherOwner.ID {
+		t.Fatalf("rotated key owner = %q, want %q", rotatedKey.OwnerUserID, otherOwner.ID)
+	}
+
+	resp := doJSON(t, app, http.MethodGet, "/api/admin/usage/breakdown", nil, "")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("usage breakdown failed: %d %s", resp.Code, resp.Body)
+	}
+	var breakdown struct {
+		Members []struct {
+			ID            string `json:"id"`
+			RequestCount  int64  `json:"request_count"`
+			TotalTokens   int64  `json:"total_tokens"`
+			OwnedKeyCount int    `json:"owned_key_count"`
+			UsedKeyCount  int    `json:"used_key_count"`
+		} `json:"members"`
+	}
+	if err := json.Unmarshal([]byte(resp.Body), &breakdown); err != nil {
+		t.Fatal(err)
+	}
+	rows := map[string]struct {
+		requests int64
+		tokens   int64
+		owned    int
+		used     int
+	}{}
+	for _, row := range breakdown.Members {
+		rows[row.ID] = struct {
+			requests int64
+			tokens   int64
+			owned    int
+			used     int
+		}{row.RequestCount, row.TotalTokens, row.OwnedKeyCount, row.UsedKeyCount}
+	}
+	if got := rows[owner.ID]; got.requests != 2 || got.tokens != 300 || got.owned != 1 || got.used != 2 {
+		t.Fatalf("original owner usage = %+v, want requests=2 tokens=300 owned=1 used=2", got)
+	}
+	if got := rows[otherOwner.ID]; got.requests != 1 || got.tokens != 300 || got.owned != 1 || got.used != 1 {
+		t.Fatalf("new owner usage = %+v, want requests=1 tokens=300 owned=1 used=1", got)
+	}
+}
+
+func TestAPIKeyCreateApprovalPreservesOwnerAndIssuer(t *testing.T) {
+	store := NewMemoryStore()
+	requester, err := store.CreateAdminUser(AdminUser{
+		Username: "approval-key-requester",
+		Name:     "Approval Key Requester",
+		Email:    "approval-key-requester@tokenhub.local",
+		Role:     "team_leader",
+		TeamID:   "team_approval_key",
+		Status:   StatusActive,
+	}, "requester123456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := store.CreateAdminUser(AdminUser{
+		Username: "approval-key-owner",
+		Name:     "Approval Key Owner",
+		Email:    "approval-key-owner@tokenhub.local",
+		Role:     "user",
+		TeamID:   requester.TeamID,
+		Status:   StatusActive,
+	}, "owner123456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := store.CreateProject(Project{Name: "Approval Key Project", TeamID: requester.TeamID, Status: StatusActive})
+	server := New(store)
+	result, err := server.applyApprovalRequest(ApprovalRequest{
+		ID:           "approval_key_create",
+		Trigger:      "api_key_create",
+		ResourceType: "api_key",
+		RequesterID:  requester.ID,
+		Status:       "pending",
+		Payload: snapshotJSON(map[string]any{
+			"project_id":    project.ID,
+			"name":          "Approved Owned Key",
+			"owner_user_id": owner.ID,
+		}),
+	}, AdminUser{ID: "approval-admin", Role: "admin", Status: StatusActive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, ok := result.(map[string]any)
+	if !ok || payload["owner_user_id"] != owner.ID {
+		t.Fatalf("approval result = %#v, want owner %q", result, owner.ID)
+	}
+	keys := store.ListAPIKeys()
+	if len(keys) != 1 {
+		t.Fatalf("approved keys = %d, want 1", len(keys))
+	}
+	if keys[0].OwnerUserID != owner.ID || keys[0].Metadata["created_by"] != requester.ID {
+		t.Fatalf("approved key attribution = owner %q issuer %q", keys[0].OwnerUserID, keys[0].Metadata["created_by"])
 	}
 }
 

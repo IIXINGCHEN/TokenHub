@@ -1072,6 +1072,9 @@ func (s *GormStore) UpdateAPIKey(id string, patch APIKey) (APIKey, error) {
 	if patch.Group != "" {
 		key.Group = patch.Group
 	}
+	if patch.OwnerUserID != "" {
+		key.OwnerUserID = patch.OwnerUserID
+	}
 	if patch.Status != "" {
 		key.Status = patch.Status
 	}
@@ -2717,6 +2720,7 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 			RequestID:          call.RequestID,
 			ProjectID:          call.Project.ID,
 			APIKeyID:           call.Key.ID,
+			AttributedUserID:   usageAttributionUserID(call.Key, call.Project),
 			ModelName:          call.Model.Name,
 			ProviderID:         route.Provider.ID,
 			ProviderResourceID: routeResourceID(route),
@@ -3902,6 +3906,18 @@ func ensureAnotherActivePlatformAdmin(db *gorm.DB, excludedUserID string) error 
 		return NewHTTPError(400, "last_admin_user", "Cannot remove, disable, or demote the last active platform administrator")
 	}
 	return nil
+}
+
+func usageAttributionUserID(key APIKey, project Project) string {
+	if ownerUserID := strings.TrimSpace(key.OwnerUserID); ownerUserID != "" {
+		return ownerUserID
+	}
+	if key.Metadata != nil {
+		if creatorUserID := strings.TrimSpace(key.Metadata["created_by"]); creatorUserID != "" {
+			return creatorUserID
+		}
+	}
+	return strings.TrimSpace(project.OwnerUserID)
 }
 
 func (s *GormStore) CreateAdminPasswordResetToken(userID string, createdBy string, ttl time.Duration) (string, AdminPasswordResetToken, error) {

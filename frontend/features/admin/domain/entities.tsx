@@ -1,5 +1,5 @@
 import { appRole } from "../core/navigation";
-import { type AdminResource, type AdminUser, type AppData, DEFAULT_PROJECT_ID, type Model, type ModelRoute, type Project, type Provider, type ProviderResource, type RequestLog, type RouteAttemptLog, type UsageBreakdownRow } from "../core/types";
+import { type AdminResource, type AdminUser, type APIKey, type AppData, DEFAULT_PROJECT_ID, type Model, type ModelRoute, type Project, type Provider, type ProviderResource, type RequestLog, type RouteAttemptLog, type UsageBreakdownRow } from "../core/types";
 import { modelCategory, modelCategoryLabel } from "./catalog";
 import { formatMoney, modelCategoryRank } from "./formatting";
 import { compactList, enumValueLabel, fieldKeyLabel, fieldValueLabel, providerTypeLabel, roleLabel, splitList } from "./labels";
@@ -211,6 +211,27 @@ export function userSelectOptions(data: AppData) {
     }));
 }
 
+export function apiKeyOwnerSelectOptions(data: AppData, currentUser?: AdminUser | null) {
+  const role = currentUser ? appRole(currentUser.role) : "admin";
+  const users = data.users.slice();
+  if (currentUser && !users.some((user) => user.id === currentUser.id)) {
+    users.push(currentUser);
+  }
+  return users
+    .filter((user) => user.status === "active")
+    .filter((user) => {
+      if (!currentUser || role === "admin") return true;
+      if (role === "team_leader") return Boolean(currentUser.team_id) && user.team_id === currentUser.team_id;
+      return user.id === currentUser.id;
+    })
+    .slice()
+    .sort((left, right) => (left.name || left.username).localeCompare(right.name || right.username))
+    .map((user) => ({
+      value: user.id,
+      label: `${user.name || user.username} / ${user.email || user.username}`,
+    }));
+}
+
 export function teamSelectOptions(data: AppData) {
   return (data.resources.teams ?? [])
     .slice()
@@ -339,6 +360,12 @@ export function ownerUserLabel(data: AppData, owner: string) {
   const user = data.users.find((item) => item.id === owner || item.username === owner || item.email === owner);
   if (!user) return owner;
   return [user.name || user.username, user.email].filter(Boolean).join(" / ");
+}
+
+export function apiKeyOwnerUserID(data: AppData, key: APIKey) {
+  if (key.owner_user_id) return key.owner_user_id;
+  if (key.metadata?.created_by) return key.metadata.created_by;
+  return findProject(data, key.project_id)?.owner_user_id || "";
 }
 
 export function usageMemberLabel(data: AppData, memberID: string) {
