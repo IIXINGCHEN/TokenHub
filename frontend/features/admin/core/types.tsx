@@ -255,7 +255,23 @@ export type ModelRoute = {
   cost_score?: number;
   status: string;
   strategy?: string;
+  project_scope?: "all" | "include" | "exclude";
+  project_ids?: string[];
   last_used_at?: string;
+};
+
+export type ModelRouteStrategy = "priority_weighted" | "adaptive" | "quality" | "cost" | "priority_only" | "balanced";
+
+export type ModelRoutePolicyRoute = {
+  route_id: string;
+  weight: number;
+  quality_score: number;
+  cost_score: number;
+};
+
+export type ModelRoutePolicy = {
+  strategy: ModelRouteStrategy;
+  routes: ModelRoutePolicyRoute[];
 };
 
 export type ChatRole = "system" | "user" | "assistant";
@@ -461,6 +477,8 @@ export type RouteAttemptLog = {
   status_code: number;
   error_code?: string;
   error_message?: string;
+  invoked: boolean;
+  latency_ms?: number;
   created_at: string;
 };
 
@@ -646,6 +664,7 @@ export type FieldConfig = {
   required?: boolean;
   help?: string;
   readOnlyOnEdit?: boolean;
+  multiSelectOnEdit?: boolean;
   visible?: (values: Record<string, string>) => boolean;
 };
 

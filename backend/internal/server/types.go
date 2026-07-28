@@ -21,10 +21,15 @@ const (
 	StatusRevoked  = "revoked"
 
 	RouteStrategyBalanced         = "balanced"
+	RouteStrategyAdaptive         = "adaptive"
 	RouteStrategyCost             = "cost"
 	RouteStrategyQuality          = "quality"
 	RouteStrategyPriorityWeighted = "priority_weighted"
 	RouteStrategyPriorityOnly     = "priority_only"
+
+	RouteProjectScopeAll     = "all"
+	RouteProjectScopeInclude = "include"
+	RouteProjectScopeExclude = "exclude"
 
 	ProviderMock             = "mock"
 	ProviderOpenAI           = "openai"
@@ -351,8 +356,22 @@ type ModelRoute struct {
 	CostScore          int        `json:"cost_score,omitempty"`
 	Status             string     `json:"status"`
 	Strategy           string     `json:"strategy,omitempty"`
+	ProjectScope       string     `json:"project_scope,omitempty"`
+	ProjectIDs         []string   `json:"project_ids,omitempty" gorm:"serializer:json"`
 	LastUsedAt         *time.Time `json:"last_used_at,omitempty"`
 	CreatedAt          time.Time  `json:"created_at"`
+}
+
+type ModelRoutePolicyRoute struct {
+	RouteID      string `json:"route_id"`
+	Weight       int    `json:"weight"`
+	QualityScore int    `json:"quality_score"`
+	CostScore    int    `json:"cost_score"`
+}
+
+type ModelRoutePolicy struct {
+	Strategy string                  `json:"strategy"`
+	Routes   []ModelRoutePolicyRoute `json:"routes"`
 }
 
 type Usage struct {
@@ -464,14 +483,16 @@ type RouteAttemptLog struct {
 	ID                 string    `json:"id" gorm:"primaryKey"`
 	RequestID          string    `json:"request_id" gorm:"index"`
 	AttemptIndex       int       `json:"attempt_index"`
-	RouteID            string    `json:"route_id,omitempty" gorm:"index"`
+	RouteID            string    `json:"route_id,omitempty" gorm:"index;index:idx_route_attempt_adaptive,priority:1"`
 	ProviderID         string    `json:"provider_id,omitempty" gorm:"index"`
 	ProviderResourceID string    `json:"provider_resource_id,omitempty" gorm:"index"`
 	ProviderModel      string    `json:"provider_model,omitempty"`
 	StatusCode         int       `json:"status_code"`
 	ErrorCode          string    `json:"error_code,omitempty"`
 	ErrorMessage       string    `json:"error_message,omitempty"`
-	CreatedAt          time.Time `json:"created_at"`
+	Invoked            bool      `json:"invoked" gorm:"index;index:idx_route_attempt_adaptive,priority:2"`
+	LatencyMS          int64     `json:"latency_ms,omitempty"`
+	CreatedAt          time.Time `json:"created_at" gorm:"index:idx_route_attempt_adaptive,priority:3"`
 }
 
 type AlertEvent struct {
@@ -751,18 +772,22 @@ type PlaygroundChatResponse struct {
 }
 
 type PlaygroundRouteSummary struct {
-	RouteID          string `json:"route_id,omitempty"`
-	ProviderID       string `json:"provider_id,omitempty"`
-	ProviderName     string `json:"provider_name,omitempty"`
-	ResourceID       string `json:"resource_id,omitempty"`
-	ResourceName     string `json:"resource_name,omitempty"`
-	ProviderModel    string `json:"provider_model,omitempty"`
-	Priority         int    `json:"priority,omitempty"`
-	ResourcePriority int    `json:"resource_priority,omitempty"`
-	Weight           int    `json:"weight,omitempty"`
-	QualityScore     int    `json:"quality_score,omitempty"`
-	CostScore        int    `json:"cost_score,omitempty"`
-	Strategy         string `json:"strategy,omitempty"`
+	RouteID          string  `json:"route_id,omitempty"`
+	ProviderID       string  `json:"provider_id,omitempty"`
+	ProviderName     string  `json:"provider_name,omitempty"`
+	ResourceID       string  `json:"resource_id,omitempty"`
+	ResourceName     string  `json:"resource_name,omitempty"`
+	ProviderModel    string  `json:"provider_model,omitempty"`
+	Priority         int     `json:"priority,omitempty"`
+	ResourcePriority int     `json:"resource_priority,omitempty"`
+	Weight           int     `json:"weight,omitempty"`
+	QualityScore     int     `json:"quality_score,omitempty"`
+	CostScore        int     `json:"cost_score,omitempty"`
+	Strategy         string  `json:"strategy,omitempty"`
+	EffectiveWeight  int     `json:"effective_weight,omitempty"`
+	Samples          int64   `json:"samples,omitempty"`
+	SuccessRate      float64 `json:"success_rate,omitempty"`
+	LatencyMS        int64   `json:"latency_ms,omitempty"`
 }
 
 type PlaygroundRouteAttempt struct {
@@ -891,20 +916,34 @@ type RouteSelection struct {
 	Resource      *ProviderResource
 	ProviderModel string
 	Route         ModelRoute
+	Runtime       RouteRuntimeStats
+}
+
+type RouteRuntimeStats struct {
+	Samples         int64   `json:"samples,omitempty"`
+	SuccessRate     float64 `json:"success_rate,omitempty"`
+	LatencyMS       int64   `json:"latency_ms,omitempty"`
+	EffectiveWeight int     `json:"effective_weight,omitempty"`
 }
 
 type RouteExplainStep struct {
-	RouteID          string `json:"route_id"`
-	ProviderID       string `json:"provider_id"`
-	ResourceID       string `json:"resource_id,omitempty"`
-	ProviderModel    string `json:"provider_model"`
-	Priority         int    `json:"priority"`
-	ResourcePriority int    `json:"resource_priority"`
-	Weight           int    `json:"weight"`
-	QualityScore     int    `json:"quality_score,omitempty"`
-	CostScore        int    `json:"cost_score,omitempty"`
-	Strategy         string `json:"strategy"`
-	Status           string `json:"status"`
+	RouteID          string   `json:"route_id"`
+	ProviderID       string   `json:"provider_id"`
+	ResourceID       string   `json:"resource_id,omitempty"`
+	ProviderModel    string   `json:"provider_model"`
+	Priority         int      `json:"priority"`
+	ResourcePriority int      `json:"resource_priority"`
+	Weight           int      `json:"weight"`
+	QualityScore     int      `json:"quality_score,omitempty"`
+	CostScore        int      `json:"cost_score,omitempty"`
+	Strategy         string   `json:"strategy"`
+	ProjectScope     string   `json:"project_scope"`
+	ProjectIDs       []string `json:"project_ids,omitempty"`
+	EffectiveWeight  int      `json:"effective_weight"`
+	Samples          int64    `json:"samples,omitempty"`
+	SuccessRate      float64  `json:"success_rate,omitempty"`
+	LatencyMS        int64    `json:"latency_ms,omitempty"`
+	Status           string   `json:"status"`
 }
 
 type RouteAttempt struct {
@@ -912,6 +951,8 @@ type RouteAttempt struct {
 	Status    int            `json:"status"`
 	ErrorCode string         `json:"error_code,omitempty"`
 	Error     string         `json:"error,omitempty"`
+	Invoked   bool           `json:"invoked"`
+	LatencyMS int64          `json:"latency_ms,omitempty"`
 }
 
 type RoutedCall struct {

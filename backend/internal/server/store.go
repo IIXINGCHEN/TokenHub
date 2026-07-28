@@ -34,7 +34,10 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 )
 
-const defaultSQLiteDatabaseURL = "sqlite://data/tokenhub.db"
+const (
+	defaultSQLiteDatabaseURL = "sqlite://data/tokenhub.db"
+	adaptiveRoutingWindow    = 15 * time.Minute
+)
 
 type QuotaBucket struct {
 	KeyID  string `gorm:"primaryKey;index"`
@@ -166,6 +169,7 @@ type Store interface {
 	AddRoute(route ModelRoute) ModelRoute
 	ListRoutes() []ModelRoute
 	UpdateRoute(id string, patch ModelRoute) (ModelRoute, error)
+	UpdateModelRoutePolicy(modelName string, policy ModelRoutePolicy) ([]ModelRoute, error)
 	DeleteRoute(id string) error
 	SelectRoute(modelName string) (RouteSelection, error)
 	SelectRouteCandidates(modelName string) ([]RouteSelection, error)
@@ -2358,6 +2362,7 @@ func (s *GormStore) AddRoute(route ModelRoute) ModelRoute {
 	if route.Strategy == "" {
 		route.Strategy = RouteStrategyBalanced
 	}
+	route.ProjectScope, route.ProjectIDs = normalizeRouteProjectScope(route.ProjectScope, route.ProjectIDs)
 	if route.CreatedAt.IsZero() {
 		route.CreatedAt = time.Now().UTC()
 	}
@@ -2368,6 +2373,9 @@ func (s *GormStore) AddRoute(route ModelRoute) ModelRoute {
 func (s *GormStore) ListRoutes() []ModelRoute {
 	var items []ModelRoute
 	_ = s.db.Order("model_name asc, priority asc").Find(&items).Error
+	for index := range items {
+		items[index].ProjectScope, items[index].ProjectIDs = normalizeRouteProjectScope(items[index].ProjectScope, items[index].ProjectIDs)
+	}
 	return items
 }
 
@@ -2409,7 +2417,65 @@ func (s *GormStore) UpdateRoute(id string, patch ModelRoute) (ModelRoute, error)
 	if patch.Strategy != "" {
 		route.Strategy = patch.Strategy
 	}
+	if patch.ProjectScope != "" || patch.ProjectIDs != nil {
+		route.ProjectScope, route.ProjectIDs = normalizeRouteProjectScope(patch.ProjectScope, patch.ProjectIDs)
+	}
 	return route, s.db.Save(&route).Error
+}
+
+func (s *GormStore) UpdateModelRoutePolicy(modelName string, policy ModelRoutePolicy) ([]ModelRoute, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	modelName = strings.TrimSpace(modelName)
+	var updated []ModelRoute
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var routes []ModelRoute
+		if err := tx.Where("model_name = ?", modelName).Order("priority asc, created_at asc, id asc").Find(&routes).Error; err != nil {
+			return err
+		}
+		if len(routes) == 0 {
+			return NewHTTPError(http.StatusNotFound, "model_routes_not_found", "Model has no routing rules")
+		}
+		if len(policy.Routes) != len(routes) {
+			return NewHTTPError(http.StatusBadRequest, "invalid_model_route_policy", "Routing policy must include every route for the model")
+		}
+
+		routeByID := make(map[string]*ModelRoute, len(routes))
+		for index := range routes {
+			routeByID[routes[index].ID] = &routes[index]
+		}
+		seen := make(map[string]bool, len(policy.Routes))
+		for _, patch := range policy.Routes {
+			if seen[patch.RouteID] || routeByID[patch.RouteID] == nil {
+				return NewHTTPError(http.StatusBadRequest, "invalid_model_route_policy", "Routing policy contains an unknown or duplicate route")
+			}
+			if patch.Weight <= 0 || patch.QualityScore < 1 || patch.QualityScore > 100 || patch.CostScore < 1 || patch.CostScore > 100 {
+				return NewHTTPError(http.StatusBadRequest, "invalid_model_route_parameters", "Weight must be positive and route scores must be between 1 and 100")
+			}
+			seen[patch.RouteID] = true
+		}
+
+		updated = make([]ModelRoute, 0, len(routes))
+		for index, patch := range policy.Routes {
+			route := routeByID[patch.RouteID]
+			route.Strategy = policy.Strategy
+			route.Weight = patch.Weight
+			route.QualityScore = patch.QualityScore
+			route.CostScore = patch.CostScore
+			if policy.Strategy == RouteStrategyPriorityOnly {
+				route.Priority = index + 1
+			} else {
+				route.Priority = 1
+			}
+			if err := tx.Save(route).Error; err != nil {
+				return err
+			}
+			updated = append(updated, *route)
+		}
+		return nil
+	})
+	return updated, err
 }
 
 func (s *GormStore) DeleteRoute(id string) error {
@@ -2493,10 +2559,67 @@ func (s *GormStore) SelectRouteCandidates(modelName string) ([]RouteSelection, e
 			selections = append(selections, s.routeSelection(provider, &resource, resourceRoute))
 		}
 	}
+	s.attachRouteRuntimeStats(selections, now)
 	if len(selections) == 0 {
 		return nil, ErrProviderMissing
 	}
 	return selections, nil
+}
+
+type routeRuntimeStatsRow struct {
+	RouteID            string
+	ProviderResourceID string
+	Samples            int64
+	Successes          int64
+	LatencyMS          float64
+}
+
+func (s *GormStore) attachRouteRuntimeStats(selections []RouteSelection, now time.Time) {
+	routeIDs := make([]string, 0, len(selections))
+	seen := map[string]bool{}
+	for _, selection := range selections {
+		if routeStrategy(selection.Route) != RouteStrategyAdaptive || seen[selection.Route.ID] {
+			continue
+		}
+		seen[selection.Route.ID] = true
+		routeIDs = append(routeIDs, selection.Route.ID)
+	}
+	if len(routeIDs) == 0 {
+		return
+	}
+
+	var rows []routeRuntimeStatsRow
+	err := s.db.Model(&RouteAttemptLog{}).
+		Select(`route_id, provider_resource_id, COUNT(*) AS samples,
+			SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN 1 ELSE 0 END) AS successes,
+			COALESCE(AVG(CASE WHEN status_code >= 200 AND status_code < 400 THEN latency_ms ELSE NULL END), 0) AS latency_ms`).
+		Where("invoked = ? AND created_at >= ? AND route_id IN ?", true, now.Add(-adaptiveRoutingWindow), routeIDs).
+		Group("route_id, provider_resource_id").
+		Scan(&rows).Error
+	if err != nil {
+		log.Printf("[tokenhub] failed to load adaptive routing observations: %v", err)
+		return
+	}
+	stats := make(map[string]RouteRuntimeStats, len(rows))
+	for _, row := range rows {
+		successRate := float64(0)
+		if row.Samples > 0 {
+			successRate = float64(row.Successes) / float64(row.Samples)
+		}
+		stats[routeRuntimeStatsKey(row.RouteID, row.ProviderResourceID)] = RouteRuntimeStats{
+			Samples:     row.Samples,
+			SuccessRate: successRate,
+			LatencyMS:   int64(math.Round(row.LatencyMS)),
+		}
+	}
+	for index := range selections {
+		selection := &selections[index]
+		selection.Runtime = stats[routeRuntimeStatsKey(selection.Route.ID, routeResourceID(*selection))]
+	}
+}
+
+func routeRuntimeStatsKey(routeID string, resourceID string) string {
+	return routeID + "\x00" + resourceID
 }
 
 func (s *GormStore) routeSelection(provider Provider, resource *ProviderResource, route ModelRoute) RouteSelection {
@@ -2839,6 +2962,8 @@ func (s *GormStore) RecordRouteAttempts(requestID string, attempts []RouteAttemp
 			StatusCode:         attempt.Status,
 			ErrorCode:          attempt.ErrorCode,
 			ErrorMessage:       attempt.Error,
+			Invoked:            attempt.Invoked,
+			LatencyMS:          attempt.LatencyMS,
 			CreatedAt:          now,
 		})
 	}
@@ -4316,12 +4441,22 @@ func (s *GormStore) AccessibleModels(key APIKey) []Model {
 		return nil
 	}
 	hydrateAPIKey(&privateKey)
+	var routes []ModelRoute
+	if err := s.db.Where("status = ?", StatusActive).Find(&routes).Error; err != nil {
+		return nil
+	}
+	publishedModelNames := make([]string, 0, len(routes))
+	seenModelNames := map[string]bool{}
+	for _, route := range routes {
+		if !routeMatchesProject(route, privateKey.ProjectID) || seenModelNames[route.ModelName] {
+			continue
+		}
+		seenModelNames[route.ModelName] = true
+		publishedModelNames = append(publishedModelNames, route.ModelName)
+	}
 	var models []Model
-	publishedModelNames := s.db.Model(&ModelRoute{}).
-		Select("model_name").
-		Where("status = ?", StatusActive)
 	if err := s.db.Where("status = ?", StatusActive).
-		Where("name IN (?) OR name = ?", publishedModelNames, codexImageModelName).
+		Where("name IN ? OR name = ?", publishedModelNames, codexImageModelName).
 		Order("name asc").
 		Find(&models).Error; err != nil {
 		return nil
@@ -5157,6 +5292,16 @@ func uniqueStrings(values []string) []string {
 		result = append(result, value)
 	}
 	return result
+}
+
+func normalizeRouteProjectScope(scope string, projectIDs []string) (string, []string) {
+	scope = strings.ToLower(strings.TrimSpace(scope))
+	if scope != RouteProjectScopeInclude && scope != RouteProjectScopeExclude {
+		return RouteProjectScopeAll, nil
+	}
+	projectIDs = uniqueStrings(projectIDs)
+	sort.Strings(projectIDs)
+	return scope, projectIDs
 }
 
 func cloneFields(fields map[string]any) map[string]any {

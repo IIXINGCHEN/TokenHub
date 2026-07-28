@@ -67,7 +67,8 @@ export function firstIssueableProject(data: AppData, currentUser?: AdminUser | n
 }
 
 export function firstActiveModel(data: AppData) {
-  return data.models.find((model) => model.status === "active") ?? data.models[0];
+  const directoryModels = data.models.filter((model) => modelIsInDirectory(model, data));
+  return directoryModels.find((model) => model.status === "active") ?? directoryModels[0];
 }
 
 export function firstActiveProvider(data: AppData) {
@@ -124,6 +125,7 @@ export function oauthDefaultProjectRoleOptions() {
 
 export function modelSelectOptions(data: AppData) {
   return data.models
+    .filter((model) => modelIsInDirectory(model, data))
     .slice()
     .sort((left, right) => modelCategoryRank(left) - modelCategoryRank(right) || left.name.localeCompare(right.name))
     .map((model) => ({
@@ -153,7 +155,12 @@ export function providerModelSelectOptions(data: AppData, _currentUser?: AdminUs
       seen.add(model.upstream_model);
       return true;
     })
-    .map((model) => ({ value: model.upstream_model, label: model.upstream_model }))
+    .map((model) => ({
+      value: model.upstream_model,
+      label: model.display_name && model.display_name !== model.upstream_model
+        ? `${model.upstream_model} / ${model.display_name}`
+        : model.upstream_model,
+    }))
     .sort((left, right) => left.label.localeCompare(right.label));
 }
 
@@ -389,6 +396,13 @@ export function modelRoutesFor(model: Model, data: AppData) {
     .sort((left, right) => (left.priority - right.priority) || (right.weight - left.weight));
 }
 
+export function modelIsInDirectory(model: Model, data: AppData) {
+  if (model.metadata?.directory_role === "external") return true;
+  if (modelRoutesFor(model, data).length > 0) return true;
+  const source = model.metadata?.source ?? "";
+  return source !== "tokenhub-standard-catalog" && source !== "public-provider-conf";
+}
+
 export const codexImageModelName = "codex-gpt-image-2";
 
 export function isCodexSubscriptionImageModel(model: Model | undefined) {
@@ -412,8 +426,7 @@ export function codexImageCapableResources(data: AppData) {
 
 export function routeModelCategories(data: AppData) {
   const counts = new Map<string, number>();
-  for (const model of data.models) {
-    if (modelRoutesFor(model, data).length === 0) continue;
+  for (const model of data.models.filter((item) => modelIsInDirectory(item, data))) {
     const category = modelCategory(model);
     counts.set(category, (counts.get(category) ?? 0) + 1);
   }
@@ -427,6 +440,7 @@ export function routeModelCategories(data: AppData) {
 export function filterRouteModels(data: AppData, category: string, scope: "configured" | "all", query: string) {
   const normalizedQuery = query.trim().toLowerCase();
   return data.models
+    .filter((model) => modelIsInDirectory(model, data))
     .filter((model) => {
       const routes = modelRoutesFor(model, data);
       if (scope === "configured" && routes.length === 0) return false;
@@ -565,15 +579,21 @@ export function apiKeyAuditLabel(data: AppData, apiKeyID?: string) {
 
 export function providerRouteDefaults(provider: Provider, data: AppData) {
   const firstModel = firstActiveModel(data);
+  const matchingProviderModel = data.providerModels.find((providerModel) =>
+    providerModel.provider_id === provider.id
+      && (providerModel.upstream_model === firstModel?.name || providerModel.canonical_name === firstModel?.name),
+  );
   return {
     model_name: firstModel?.name ?? "",
     provider_id: provider.id,
-    provider_model: firstModel?.name ?? "",
+    provider_model: matchingProviderModel?.upstream_model ?? "",
     priority: "1",
     weight: "100",
     quality_score: "50",
     cost_score: "50",
-    strategy: "balanced",
+    strategy: "priority_weighted",
+    project_scope: "all",
+    project_ids: "",
     sticky_session: "false",
     status: "active",
   };
@@ -581,15 +601,21 @@ export function providerRouteDefaults(provider: Provider, data: AppData) {
 
 export function modelRouteDefaults(model: Model, data: AppData) {
   const firstProvider = firstActiveProvider(data);
+  const matchingProviderModel = data.providerModels.find((providerModel) =>
+    providerModel.provider_id === firstProvider?.id
+      && (providerModel.upstream_model === model.name || providerModel.canonical_name === model.name),
+  );
   return {
     model_name: model.name,
     provider_id: firstProvider?.id ?? "",
-    provider_model: model.name,
+    provider_model: matchingProviderModel?.upstream_model ?? "",
     priority: "1",
     weight: "100",
     quality_score: "50",
     cost_score: "50",
-    strategy: "balanced",
+    strategy: "priority_weighted",
+    project_scope: "all",
+    project_ids: "",
     sticky_session: "false",
     status: "active",
   };
@@ -597,6 +623,14 @@ export function modelRouteDefaults(model: Model, data: AppData) {
 
 export function routeScoreSummary(route: ModelRoute) {
   return `质量 ${route.quality_score ?? 50} / 成本 ${route.cost_score ?? 50}`;
+}
+
+export function routeProjectScopeSummary(route: ModelRoute, data: AppData) {
+  const scope = route.project_scope || "all";
+  if (scope === "all") return tx("所有项目");
+  const names = (route.project_ids ?? []).map((projectID) => findProject(data, projectID)?.name || projectID);
+  const prefix = scope === "include" ? tx("仅指定项目") : tx("排除指定项目");
+  return `${prefix}: ${compactList(names) || "-"}`;
 }
 
 export function modelCapabilitySummary(model: Model) {

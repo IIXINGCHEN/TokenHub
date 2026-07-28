@@ -521,8 +521,6 @@ export const enTranslations: Record<string, string> = {
     "没有匹配的模型": "No matching models",
     "模型路由器": "Model Router",
     "模型路由规则": "Model Routing Rules",
-    "参考模型路由器思路，按平衡、质量优先或成本优先模式选择候选 Provider 线路，并在失败时自动回退。": "Choose candidate Provider routes by balanced, quality-first, or cost-first strategy, and automatically fail over in order.",
-    "平衡模式综合权重、质量和成本；质量优先会先选高质量线路；成本优先会先选低成本线路。调用失败时会按候选顺序自动回退。": "Balanced mode combines weight, quality, and cost. Quality-first prefers higher-quality routes, cost-first prefers lower-cost routes, and failures fall back in candidate order.",
     "条启用线路": "active routes",
     "个已配置路由": "configured routes",
     "统一模型": "Unified Model",
