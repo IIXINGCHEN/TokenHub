@@ -18,6 +18,8 @@ TEMP_DIR=""
 DOWNLOADED_ARCHIVE=""
 GENERATED_ADMIN_PASSWORD=""
 CREATED_SERVICE_USER=false
+RESOLVED_PUBLIC_HOST=""
+RESOLVED_PUBLIC_HOST_SOURCE=""
 MAX_NATIVE_ARCHIVE_BYTES=$((600 * 1024 * 1024))
 MAX_NATIVE_CHECKSUM_BYTES=$((1024 * 1024))
 MAX_NATIVE_EXTRACTED_BYTES=$((2 * 1024 * 1024 * 1024))
@@ -56,6 +58,10 @@ fail() {
 
 info() {
   printf '[TokenHub] %s\n' "$*"
+}
+
+warn() {
+  printf '[TokenHub] Warning: %s\n' "$*" >&2
 }
 
 cleanup() {
@@ -390,13 +396,75 @@ show_initial_admin_credentials() {
   GENERATED_ADMIN_PASSWORD=""
 }
 
-default_public_host() {
-  local host
-  host="${TOKENHUB_PUBLIC_HOST:-}"
-  if [ -z "$host" ] && command -v hostname >/dev/null 2>&1; then
-    host="$(hostname -I 2>/dev/null | awk '{print $1}')"
+is_ipv4_address() {
+  local value="$1"
+  local first
+  local second
+  local third
+  local fourth
+  local octet
+  [[ "$value" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] ||
+    return 1
+  IFS=. read -r first second third fourth <<<"$value"
+  for octet in "$first" "$second" "$third" "$fourth"; do
+    [ "$((10#$octet))" -le 255 ] || return 1
+  done
+}
+
+is_ip_address() {
+  local value="$1"
+  if is_ipv4_address "$value"; then
+    return 0
   fi
-  printf '%s\n' "${host:-127.0.0.1}"
+  [[ "$value" == *:* && "$value" =~ ^[0-9A-Fa-f:]+$ ]]
+}
+
+detect_ipinfo_public_address() {
+  local response
+  local host
+  command -v curl >/dev/null 2>&1 || return 1
+  response="$(
+    curl --connect-timeout 5 --max-time 10 -fsS \
+      --proto '=https' \
+      'https://ipinfo.io/json' 2>/dev/null
+  )" || return 1
+  host="$(
+    printf '%s\n' "$response" |
+      sed -n 's/.*"ip"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' |
+      head -n 1
+  )"
+  [ -n "$host" ] || return 1
+  is_ip_address "$host" || return 1
+  printf '%s\n' "$host"
+}
+
+resolve_public_host() {
+  local addresses
+  local host
+  if [ -n "$RESOLVED_PUBLIC_HOST" ]; then
+    return
+  fi
+  if [ -n "${TOKENHUB_PUBLIC_HOST:-}" ]; then
+    RESOLVED_PUBLIC_HOST="$TOKENHUB_PUBLIC_HOST"
+    RESOLVED_PUBLIC_HOST_SOURCE="explicit"
+    return
+  fi
+  if host="$(detect_ipinfo_public_address)"; then
+    RESOLVED_PUBLIC_HOST="$host"
+    RESOLVED_PUBLIC_HOST_SOURCE="ipinfo"
+    return
+  fi
+  if command -v hostname >/dev/null 2>&1; then
+    addresses="$(hostname -I 2>/dev/null || true)"
+    host="$(printf '%s\n' "$addresses" | awk '{print $1}')"
+    if [ -n "$host" ]; then
+      RESOLVED_PUBLIC_HOST="$host"
+      RESOLVED_PUBLIC_HOST_SOURCE="hostname"
+      return
+    fi
+  fi
+  RESOLVED_PUBLIC_HOST="127.0.0.1"
+  RESOLVED_PUBLIC_HOST_SOURCE="loopback"
 }
 
 url_host() {
@@ -433,7 +501,12 @@ write_initial_config() {
   local public_url_host
   local admin_token
   local secret_key
-  public_host="$(default_public_host)"
+  resolve_public_host
+  public_host="$RESOLVED_PUBLIC_HOST"
+  if [ "$RESOLVED_PUBLIC_HOST_SOURCE" = "hostname" ] ||
+    [ "$RESOLVED_PUBLIC_HOST_SOURCE" = "loopback" ]; then
+    warn "Public IP lookup failed; generated URLs use $public_host. Set TOKENHUB_PUBLIC_HOST when clients connect through a different public IP or hostname."
+  fi
   public_url_host="$(url_host "$public_host")"
   public_base_url="${TOKENHUB_PUBLIC_BASE_URL:-http://${public_url_host}:${BACKEND_PORT}}"
   frontend_url="http://${public_url_host}:${FRONTEND_PORT}"
@@ -870,8 +943,9 @@ install_or_upgrade() {
   restart_service
 
   admin_console_port="$(configured_frontend_port)"
+  resolve_public_host
   info "TokenHub v$target_version is running"
-  info "Admin console: http://$(url_host "$(default_public_host)"):${admin_console_port}"
+  info "Admin console: http://$(url_host "$RESOLVED_PUBLIC_HOST"):${admin_console_port}"
   show_initial_admin_credentials
   info "Configuration: $CONFIG_DIR/tokenhub.env"
   info "Logs: journalctl -u ${SERVICE_NAME} -f"

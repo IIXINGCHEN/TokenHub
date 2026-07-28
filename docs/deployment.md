@@ -100,7 +100,7 @@ curl -fsSL https://raw.githubusercontent.com/astaxie/TokenHub/main/deploy/native
 sudo bash /tmp/tokenhub-install.sh install
 ```
 
-Set `TOKENHUB_PUBLIC_HOST` when the server's first detected IP is not the address users will open. IPv6 literals are automatically bracketed when URLs are generated:
+When `TOKENHUB_PUBLIC_HOST` is not set, the installer requests `https://ipinfo.io/json` and uses its validated IP response. If that lookup fails, it falls back to the first address from `hostname -I`, then `127.0.0.1`. The detected egress IP might not be the inbound address when the server is behind NAT, a proxy, or a load balancer, so set `TOKENHUB_PUBLIC_HOST` when users open a different IP address or hostname. IPv6 literals are automatically bracketed when URLs are generated:
 
 ```bash
 sudo env TOKENHUB_PUBLIC_HOST=tokenhub.example.com \

@@ -100,7 +100,7 @@ curl -fsSL https://raw.githubusercontent.com/astaxie/TokenHub/main/deploy/native
 sudo bash /tmp/tokenhub-install.sh install
 ```
 
-如果服务器自动识别的第一个 IP 不是用户实际访问的地址，请设置 `TOKENHUB_PUBLIC_HOST`。使用 IPv6 字面地址时，安装脚本会在生成 URL 时自动添加方括号：
+未设置 `TOKENHUB_PUBLIC_HOST` 时，安装器会请求 `https://ipinfo.io/json` 并使用其中通过校验的 IP；查询失败后依次回退到 `hostname -I` 返回的第一个地址和 `127.0.0.1`。如果服务器位于 NAT、代理或负载均衡器之后，检测到的出口 IP 可能不是用户访问的入口地址，此时应显式设置 `TOKENHUB_PUBLIC_HOST`。使用 IPv6 字面地址时，安装脚本会在生成 URL 时自动添加方括号：
 
 ```bash
 sudo env TOKENHUB_PUBLIC_HOST=tokenhub.example.com \

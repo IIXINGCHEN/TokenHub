@@ -45,6 +45,67 @@ assert_fails normalize_version "v0.3.3-01"
 [ "$(url_host "127.0.0.1")" = "127.0.0.1" ] || fail_test "IPv4 URL host normalization failed"
 [ "$(url_host "2001:db8::1")" = "[2001:db8::1]" ] || fail_test "IPv6 URL host normalization failed"
 [ "$(url_host "[2001:db8::1]")" = "[2001:db8::1]" ] || fail_test "bracketed IPv6 URL host normalization failed"
+is_ip_address "18.138.123.53" || fail_test "IPv4 address was rejected"
+is_ip_address "2606:4700:4700::1111" || fail_test "IPv6 address was rejected"
+assert_fails is_ip_address "999.1.1.1"
+assert_fails is_ip_address '1.2.3.4$(touch /tmp/tokenhub-test)'
+
+RESOLVED_PUBLIC_HOST=""
+RESOLVED_PUBLIC_HOST_SOURCE=""
+TOKENHUB_PUBLIC_HOST="tokenhub.example.com"
+resolve_public_host
+[ "$RESOLVED_PUBLIC_HOST" = "tokenhub.example.com" ] ||
+  fail_test "explicit public host was not preserved"
+[ "$RESOLVED_PUBLIC_HOST_SOURCE" = "explicit" ] ||
+  fail_test "explicit public host source was not recorded"
+unset TOKENHUB_PUBLIC_HOST
+
+curl() {
+  case "$*" in
+    *ipinfo.io/json*)
+      printf '{"ip":"8.8.8.8","city":"test"}\n'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+hostname() {
+  printf '10.0.0.2\n'
+}
+RESOLVED_PUBLIC_HOST=""
+RESOLVED_PUBLIC_HOST_SOURCE=""
+resolve_public_host
+[ "$RESOLVED_PUBLIC_HOST" = "8.8.8.8" ] ||
+  fail_test "ipinfo public address was not detected"
+[ "$RESOLVED_PUBLIC_HOST_SOURCE" = "ipinfo" ] ||
+  fail_test "ipinfo source was not recorded"
+unset -f curl hostname
+
+curl() {
+  case "$*" in
+    *ipinfo.io/json*)
+      printf '{"ip":"not-an-ip"}\n'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+hostname() {
+  printf '10.0.0.2 1.1.1.1\n'
+}
+RESOLVED_PUBLIC_HOST=""
+RESOLVED_PUBLIC_HOST_SOURCE=""
+resolve_public_host
+[ "$RESOLVED_PUBLIC_HOST" = "10.0.0.2" ] ||
+  fail_test "first hostname address was not used as the fallback"
+[ "$RESOLVED_PUBLIC_HOST_SOURCE" = "hostname" ] ||
+  fail_test "hostname fallback source was not recorded"
+unset -f curl hostname
+RESOLVED_PUBLIC_HOST=""
+RESOLVED_PUBLIC_HOST_SOURCE=""
+
 validate_port "08" "test port"
 assert_fails validate_port "0" "test port"
 assert_fails validate_safe_path "/opt/../etc" "test path"
