@@ -3307,6 +3307,7 @@ func (s *Server) handleAdminAPIKeyCreate(w http.ResponseWriter, r *http.Request,
 	var req struct {
 		Name          string      `json:"name"`
 		Group         string      `json:"group"`
+		OwnerUserID   string      `json:"owner_user_id"`
 		AllowedModels []string    `json:"allowed_models"`
 		IPAllowlist   []string    `json:"ip_allowlist"`
 		Limits        QuotaLimits `json:"limits"`
@@ -3316,10 +3317,16 @@ func (s *Server) handleAdminAPIKeyCreate(w http.ResponseWriter, r *http.Request,
 		writeError(w, r, NewHTTPError(400, "invalid_request", err.Error()))
 		return
 	}
+	ownerUserID, err := s.resolveAPIKeyOwner(user, req.OwnerUserID)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
 	payload := map[string]any{
 		"project_id":       projectID,
 		"name":             req.Name,
 		"group":            req.Group,
+		"owner_user_id":    ownerUserID,
 		"allowed_models":   req.AllowedModels,
 		"ip_allowlist":     req.IPAllowlist,
 		"limits":           req.Limits,
@@ -3334,6 +3341,7 @@ func (s *Server) handleAdminAPIKeyCreate(w http.ResponseWriter, r *http.Request,
 	key, secret, err := s.store.CreateAPIKey(projectID, APIKey{
 		Name:        req.Name,
 		Group:       req.Group,
+		OwnerUserID: ownerUserID,
 		Allowed:     req.AllowedModels,
 		IPAllowlist: req.IPAllowlist,
 		Limits:      req.Limits,
@@ -3348,12 +3356,13 @@ func (s *Server) handleAdminAPIKeyCreate(w http.ResponseWriter, r *http.Request,
 		writeError(w, r, err)
 		return
 	}
-	s.recordAdminAudit(r, user, "create", "api_key", key.ID, "", map[string]any{"project_id": key.ProjectID, "name": key.Name})
+	s.recordAdminAudit(r, user, "create", "api_key", key.ID, "", map[string]any{"project_id": key.ProjectID, "name": key.Name, "owner_user_id": key.OwnerUserID})
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id":                      key.ID,
 		"api_key":                 secret,
 		"name":                    key.Name,
 		"project_id":              key.ProjectID,
+		"owner_user_id":           key.OwnerUserID,
 		"plain_text_visible_once": true,
 	})
 }
@@ -3402,6 +3411,7 @@ func (s *Server) handleAdminAPIKeyItem(w http.ResponseWriter, r *http.Request) {
 			"api_key":                 secret,
 			"name":                    key.Name,
 			"project_id":              key.ProjectID,
+			"owner_user_id":           key.OwnerUserID,
 			"rotated_from_id":         key.RotatedFromID,
 			"plain_text_visible_once": true,
 		})
@@ -3409,22 +3419,53 @@ func (s *Server) handleAdminAPIKeyItem(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodPatch:
-		var req APIKey
+		var req struct {
+			Name          string      `json:"name"`
+			Group         string      `json:"group"`
+			OwnerUserID   *string     `json:"owner_user_id"`
+			AllowedModels []string    `json:"allowed_models"`
+			IPAllowlist   []string    `json:"ip_allowlist"`
+			Limits        QuotaLimits `json:"limits"`
+			Status        string      `json:"status"`
+			ExpiresAt     *time.Time  `json:"expires_at"`
+		}
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, r, NewHTTPError(400, "invalid_request", err.Error()))
 			return
 		}
-		if approval, required := s.apiKeyUpdateApproval(user, keyID, req); required {
-			s.recordAdminAudit(r, user, "request_approval", "api_key", approval.ID, "", approval)
-			writeJSON(w, http.StatusAccepted, map[string]any{"approval_required": true, "approval": approval})
-			return
+		patch := APIKey{
+			Name:        req.Name,
+			Group:       req.Group,
+			Allowed:     req.AllowedModels,
+			IPAllowlist: req.IPAllowlist,
+			Limits:      req.Limits,
+			Status:      req.Status,
+			ExpiresAt:   req.ExpiresAt,
 		}
-		key, err := s.store.UpdateAPIKey(keyID, req)
+		if req.OwnerUserID != nil {
+			ownerUserID, err := s.resolveAPIKeyOwner(user, *req.OwnerUserID)
+			if err != nil {
+				writeError(w, r, err)
+				return
+			}
+			patch.OwnerUserID = ownerUserID
+		}
+		existing, err := s.findAPIKey(keyID)
 		if err != nil {
 			writeError(w, r, err)
 			return
 		}
-		s.recordAdminAudit(r, user, "update", "api_key", keyID, "", key)
+		if approval, required := s.apiKeyUpdateApproval(user, keyID, patch); required {
+			s.recordAdminAudit(r, user, "request_approval", "api_key", approval.ID, "", approval)
+			writeJSON(w, http.StatusAccepted, map[string]any{"approval_required": true, "approval": approval})
+			return
+		}
+		key, err := s.store.UpdateAPIKey(keyID, patch)
+		if err != nil {
+			writeError(w, r, err)
+			return
+		}
+		s.recordAdminAudit(r, user, "update", "api_key", keyID, existing, key)
 		writeJSON(w, http.StatusOK, key)
 	case http.MethodDelete:
 		if err := s.store.DeleteAPIKey(keyID); err != nil {
@@ -5806,6 +5847,7 @@ func (s *Server) apiKeyUpdateApproval(user AdminUser, keyID string, patch APIKey
 	payload := map[string]any{
 		"api_key_id":       keyID,
 		"requested_action": trigger,
+		"owner_user_id":    patch.OwnerUserID,
 		"allowed_models":   patch.Allowed,
 		"limits":           patch.Limits,
 		"status":           patch.Status,
@@ -6383,13 +6425,36 @@ func (s *Server) applyApprovalRequest(request ApprovalRequest, actor AdminUser) 
 	switch {
 	case request.Trigger == "api_key_create":
 		projectID := stringFromPayload(payload, "project_id")
+		ownerUserID := stringFromPayload(payload, "owner_user_id")
+		if ownerUserID == "" {
+			ownerUserID = request.RequesterID
+		}
+		owner, ok := s.findAdminUser(ownerUserID)
+		syntheticAdminOwner := !ok && ownerUserID == request.RequesterID && actor.ID == request.RequesterID && isPlatformAdminRole(actor.Role)
+		if !ok && !syntheticAdminOwner {
+			return nil, NewHTTPError(404, "api_key_owner_not_found", "API key owner not found")
+		}
+		if ok && owner.Status != "" && owner.Status != StatusActive {
+			return nil, NewHTTPError(400, "api_key_owner_inactive", "API key owner must be active")
+		}
+		requesterRole := ""
+		if requester, ok := s.findAdminUser(request.RequesterID); ok {
+			requesterRole = normalizeAdminRole(requester.Role)
+		} else if actor.ID == request.RequesterID {
+			requesterRole = normalizeAdminRole(actor.Role)
+		}
 		key, secret, err := s.store.CreateAPIKey(projectID, APIKey{
 			Name:        stringFromPayload(payload, "name"),
 			Group:       stringFromPayload(payload, "group"),
+			OwnerUserID: ownerUserID,
 			Allowed:     stringSliceFromPayload(payload["allowed_models"]),
 			IPAllowlist: stringSliceFromPayload(payload["ip_allowlist"]),
 			Limits:      quotaLimitsFromPayload(payload["limits"]),
 			Status:      StatusActive,
+			Metadata: map[string]string{
+				"created_by":      request.RequesterID,
+				"created_by_role": requesterRole,
+			},
 		}, "")
 		if err != nil {
 			return nil, err
@@ -6399,10 +6464,12 @@ func (s *Server) applyApprovalRequest(request ApprovalRequest, actor AdminUser) 
 			"api_key":                 secret,
 			"name":                    key.Name,
 			"project_id":              key.ProjectID,
+			"owner_user_id":           key.OwnerUserID,
 			"plain_text_visible_once": true,
 		}, nil
 	case request.ResourceType == "api_key":
 		key, err := s.store.UpdateAPIKey(request.ResourceID, APIKey{
+			OwnerUserID: stringFromPayload(payload, "owner_user_id"),
 			Allowed:     stringSliceFromPayload(payload["allowed_models"]),
 			IPAllowlist: stringSliceFromPayload(payload["ip_allowlist"]),
 			Limits:      quotaLimitsFromPayload(payload["limits"]),
@@ -6902,21 +6969,92 @@ func (s *Server) aggregateUsageByMember(user AdminUser, records []UsageRecord) [
 	for _, item := range s.store.ListAdminUsers() {
 		usersByID[item.ID] = item
 	}
-	return aggregateUsage(records, func(record UsageRecord) string {
-		if key, ok := keysByID[record.APIKeyID]; ok {
-			if owner := strings.TrimSpace(key.Metadata["created_by"]); owner != "" {
-				if canAttributeUsageToMember(user, usersByID, owner) {
-					return owner
+
+	type bucket struct {
+		Key               string
+		Requests          int64
+		InputTokens       int64
+		CachedInputTokens int64
+		OutputTokens      int64
+		TotalTokens       int64
+		CostUSD           float64
+		UsedKeyIDs        map[string]bool
+	}
+	buckets := map[string]*bucket{}
+	ownedKeyCount := map[string]int{}
+	for _, key := range keysByID {
+		if key.Status == StatusRevoked {
+			continue
+		}
+		ownerUserID := usageAttributionUserID(key, projectsByID[key.ProjectID])
+		if canAttributeUsageToMember(user, usersByID, ownerUserID) {
+			ownedKeyCount[ownerUserID]++
+		}
+	}
+	for _, record := range records {
+		memberID := strings.TrimSpace(record.AttributedUserID)
+		if !canAttributeUsageToMember(user, usersByID, memberID) {
+			memberID = ""
+		}
+		if memberID == "" {
+			if key, ok := keysByID[record.APIKeyID]; ok {
+				candidate := usageAttributionUserID(key, projectsByID[key.ProjectID])
+				if canAttributeUsageToMember(user, usersByID, candidate) {
+					memberID = candidate
 				}
 			}
 		}
-		if project, ok := projectsByID[record.ProjectID]; ok {
-			if canAttributeUsageToMember(user, usersByID, project.OwnerUserID) {
-				return project.OwnerUserID
+		if memberID == "" {
+			if project, ok := projectsByID[record.ProjectID]; ok && canAttributeUsageToMember(user, usersByID, project.OwnerUserID) {
+				memberID = project.OwnerUserID
 			}
 		}
-		return "unknown"
+		if memberID == "" {
+			memberID = "unknown"
+		}
+		item, ok := buckets[memberID]
+		if !ok {
+			item = &bucket{Key: memberID, UsedKeyIDs: map[string]bool{}}
+			buckets[memberID] = item
+		}
+		item.Requests++
+		item.InputTokens += record.InputTokens
+		item.CachedInputTokens += record.CachedInputTokens
+		item.OutputTokens += record.OutputTokens
+		item.TotalTokens += record.TotalTokens
+		item.CostUSD += record.CostUSD
+		if record.APIKeyID != "" {
+			item.UsedKeyIDs[record.APIKeyID] = true
+		}
+	}
+	items := make([]bucket, 0, len(buckets))
+	for _, item := range buckets {
+		items = append(items, *item)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].TotalTokens != items[j].TotalTokens {
+			return items[i].TotalTokens > items[j].TotalTokens
+		}
+		if items[i].Requests != items[j].Requests {
+			return items[i].Requests > items[j].Requests
+		}
+		return items[i].CostUSD > items[j].CostUSD
 	})
+	result := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		result = append(result, map[string]any{
+			"id":                  item.Key,
+			"request_count":       item.Requests,
+			"input_tokens":        item.InputTokens,
+			"cached_input_tokens": item.CachedInputTokens,
+			"output_tokens":       item.OutputTokens,
+			"total_tokens":        item.TotalTokens,
+			"estimated_cost_usd":  item.CostUSD,
+			"owned_key_count":     ownedKeyCount[item.Key],
+			"used_key_count":      len(item.UsedKeyIDs),
+		})
+	}
+	return result
 }
 
 func canAttributeUsageToMember(user AdminUser, usersByID map[string]AdminUser, memberID string) bool {
@@ -6987,8 +7125,16 @@ func (s *Server) filterUsageRecordsForUser(user AdminUser, records []UsageRecord
 	}
 	visibleProjects := s.visibleProjectIDSet(user)
 	visibleKeys := s.visibleAPIKeyIDSet(user)
+	usersByID := map[string]AdminUser{}
+	for _, item := range s.store.ListAdminUsers() {
+		usersByID[item.ID] = item
+	}
 	out := make([]UsageRecord, 0, len(records))
 	for _, record := range records {
+		if record.AttributedUserID != "" && canAttributeUsageToMember(user, usersByID, record.AttributedUserID) {
+			out = append(out, record)
+			continue
+		}
 		if normalizeAdminRole(user.Role) == "team_leader" && visibleProjects[record.ProjectID] {
 			out = append(out, record)
 			continue
@@ -7134,12 +7280,52 @@ func (s *Server) canManageAPIKey(user AdminUser, keyID string) bool {
 	return false
 }
 
+func (s *Server) findAPIKey(keyID string) (APIKey, error) {
+	for _, key := range s.store.ListAPIKeys() {
+		if key.ID == keyID {
+			return key, nil
+		}
+	}
+	return APIKey{}, NewHTTPError(404, "api_key_not_found", "API key not found")
+}
+
+func (s *Server) resolveAPIKeyOwner(actor AdminUser, requestedUserID string) (string, error) {
+	ownerUserID := strings.TrimSpace(requestedUserID)
+	if ownerUserID == "" {
+		return actor.ID, nil
+	}
+	if ownerUserID == actor.ID {
+		return actor.ID, nil
+	}
+	owner, ok := s.findAdminUser(ownerUserID)
+	if !ok {
+		return "", NewHTTPError(404, "api_key_owner_not_found", "API key owner not found")
+	}
+	if owner.Status != "" && owner.Status != StatusActive {
+		return "", NewHTTPError(400, "api_key_owner_inactive", "API key owner must be active")
+	}
+	role := normalizeAdminRole(actor.Role)
+	if isPlatformAdminRole(role) {
+		return owner.ID, nil
+	}
+	if role == "team_leader" && actor.TeamID != "" && owner.TeamID == actor.TeamID {
+		ownerRole := normalizeAdminRole(owner.Role)
+		if ownerRole == "user" || ownerRole == "team_leader" {
+			return owner.ID, nil
+		}
+	}
+	return "", NewHTTPError(403, "api_key_owner_forbidden", "API key owner is not available for this user")
+}
+
 func (s *Server) canAccessAPIKey(user AdminUser, key APIKey) bool {
 	role := normalizeAdminRole(user.Role)
 	if isPlatformAdminRole(role) {
 		return true
 	}
-	if key.Metadata != nil && key.Metadata["created_by"] == user.ID {
+	if strings.TrimSpace(key.OwnerUserID) != "" && key.OwnerUserID == user.ID {
+		return true
+	}
+	if strings.TrimSpace(key.OwnerUserID) == "" && key.Metadata != nil && key.Metadata["created_by"] == user.ID {
 		return true
 	}
 	for _, project := range s.store.ListProjects() {

@@ -102,6 +102,7 @@ type Project struct {
 type APIKey struct {
 	ID            string            `json:"id" gorm:"primaryKey"`
 	ProjectID     string            `json:"project_id" gorm:"index"`
+	OwnerUserID   string            `json:"owner_user_id,omitempty" gorm:"index"`
 	Name          string            `json:"name"`
 	Group         string            `json:"group,omitempty" gorm:"index"`
 	KeyHash       string            `json:"-" gorm:"uniqueIndex"`
@@ -394,6 +395,7 @@ type UsageRecord struct {
 	RequestID          string    `json:"request_id" gorm:"index"`
 	ProjectID          string    `json:"project_id" gorm:"index"`
 	APIKeyID           string    `json:"api_key_id" gorm:"index"`
+	AttributedUserID   string    `json:"attributed_user_id,omitempty" gorm:"index"`
 	ModelName          string    `json:"model" gorm:"index"`
 	ProviderID         string    `json:"provider_id" gorm:"index"`
 	ProviderResourceID string    `json:"provider_resource_id,omitempty" gorm:"index"`

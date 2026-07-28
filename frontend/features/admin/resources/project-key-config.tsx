@@ -2,7 +2,7 @@ import { ChevronDown, Download } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { type AdminResource, type APIKey, type AppData, type FieldConfig, type Project, type ResourceAction, type ResourceConfig } from "../core/types";
-import { costCenterLabel, costCenterSelectOptions, ownerUserLabel, projectMemberCanIssueLabel, projectMemberProjectSelectOptions, projectMemberRoleLabel, projectMemberRoleOptions, projectName, projectOwnerLabel, projectSelectOptions, projectTeamLabel, stringifyForm, stringifyValue, teamLabel, teamSelectOptions, truthyValue, userSelectOptions } from "../domain/entities";
+import { apiKeyOwnerSelectOptions, apiKeyOwnerUserID, costCenterLabel, costCenterSelectOptions, ownerUserLabel, projectMemberCanIssueLabel, projectMemberProjectSelectOptions, projectMemberRoleLabel, projectMemberRoleOptions, projectName, projectOwnerLabel, projectSelectOptions, projectTeamLabel, stringifyForm, stringifyValue, teamLabel, teamSelectOptions, truthyValue, userSelectOptions } from "../domain/entities";
 import { apiGatewayBaseURL } from "../domain/formatting";
 import { tx } from "../i18n/runtime";
 import { adminDelete, adminFetch, adminMutate, keyPatchPayload, projectQuotaSummary, updateAPIKeyStatus } from "./payloads";
@@ -146,7 +146,8 @@ export function apiKeyConfig(): ResourceConfig<APIKey> {
     columns: [
       { key: "name", label: "名称" },
       { key: "project_id", label: "归属项目", render: (item, ctx) => projectName(ctx, item.project_id) },
-      { key: "project_owner", label: "负责人", render: (item, ctx) => projectOwnerLabel(ctx, item.project_id) },
+      { key: "owner_user_id", label: "归属用户", render: (item, ctx) => ownerUserLabel(ctx, apiKeyOwnerUserID(ctx, item)) },
+      { key: "project_owner", label: "项目负责人", render: (item, ctx) => projectOwnerLabel(ctx, item.project_id) },
       { key: "project_team", label: "团队", render: (item, ctx) => projectTeamLabel(ctx, item.project_id) },
       { key: "key_prefix", label: "Key", render: (item) => `${item.key_prefix}...${item.key_suffix}` },
       { key: "allowed_models", label: "模型", render: (item) => (item.allowed_models ?? []).join(", ") || tx("全部") },
@@ -163,6 +164,14 @@ export function apiKeyConfig(): ResourceConfig<APIKey> {
         optionsFromData: projectSelectOptions,
         help: "只显示当前账号拥有发 Key 权限的项目；一个人可以被分配到多个项目。",
         readOnlyOnEdit: true,
+      },
+      {
+        key: "owner_user_id",
+        label: "归属用户",
+        type: "select",
+        required: true,
+        optionsFromData: apiKeyOwnerSelectOptions,
+        help: "Key 的用量会计入该用户；平台管理员发放时请明确选择实际使用人。",
       },
       { key: "name", label: "Key 名称", required: true },
       { key: "group", label: "用途/环境", placeholder: "prod、dev、backend-service" },
@@ -199,6 +208,7 @@ export function apiKeyConfig(): ResourceConfig<APIKey> {
     ],
     toForm: (item) => ({
       project_id: item.project_id,
+      owner_user_id: item.owner_user_id || item.metadata?.created_by || "",
       name: item.name,
       group: item.group ?? "default",
       allowed_models: (item.allowed_models ?? []).join(", "),

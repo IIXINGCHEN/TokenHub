@@ -108,6 +108,7 @@ func TestFinishCallPersistsCachedInputTokensInUsageAggregates(t *testing.T) {
 	call := CallContext{
 		RequestID: "req_cached_usage",
 		Project:   Project{ID: "project_cached_usage"},
+		Key:       APIKey{ID: "key_cached_usage", OwnerUserID: "user_cached_usage"},
 		Model: Model{
 			Name:                   "cached-chat",
 			Modality:               "chat",
@@ -131,6 +132,9 @@ func TestFinishCallPersistsCachedInputTokensInUsageAggregates(t *testing.T) {
 	}
 	if records[0].CachedInputTokens != 400 {
 		t.Fatalf("persisted cached input tokens = %d, want 400", records[0].CachedInputTokens)
+	}
+	if records[0].AttributedUserID != "user_cached_usage" {
+		t.Fatalf("persisted attributed user = %q, want user_cached_usage", records[0].AttributedUserID)
 	}
 	if math.Abs(records[0].CostUSD-0.0022) > 1e-12 {
 		t.Fatalf("persisted cost = %.12f, want 0.0022", records[0].CostUSD)
