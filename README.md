@@ -49,12 +49,22 @@ TokenHub separates everyday model usage, team governance, and platform administr
 - Usage analytics and request logs attributed to user, project, team, model, and cost center.
 - Identity source configuration for OAuth/OIDC enterprise sign-in, plus RBAC and audit trails.
 - Clean console with compact role-aware navigation, global search, light/dark mode, and split-view API documentation.
-- SQLite-first private deployment with Docker Compose support.
-- PostgreSQL supports multi-instance deployments: share state through remote PostgreSQL, scale frontend and backend replicas horizontally, and configure connection pools. See the [deployment guide](docs/deployment.md).
+- SQLite-first private deployment with native systemd and Docker Compose options.
+- PostgreSQL supports multi-instance deployments: share state through remote PostgreSQL, scale frontend and backend replicas horizontally, and configure connection pools. See the [deployment guide](docs/deployment.md) and [PostgreSQL setup guide](docs/postgresql-setup.md).
 - Console language switching for English, Chinese, and Japanese.
 - TokenHub can also connect OpenAI Codex subscription resources and route selected local Codex CLI or desktop sessions through an isolated, recoverable Codex profile. See the [Codex integration guides](docs/codex-tokenhub-profile-quick-start.md).
 
 ## Quick Start
+
+Native Release on a Linux systemd host:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/astaxie/TokenHub/main/deploy/native/install.sh \
+  -o /tmp/tokenhub-install.sh
+sudo bash /tmp/tokenhub-install.sh install
+```
+
+Docker Compose from a repository checkout:
 
 ```bash
 cp deploy/.env.example deploy/.env
@@ -71,9 +81,10 @@ Open:
 Initial admin login:
 
 - Username: `admin`
-- Password: the value of `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD`
+- Native install password: printed once by the installer
+- Docker password: the value of `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD`
 
-The deployment script validates production credentials, pulls published images, and starts the containers without building locally. Until the images are publicly available, a failed pull of the default `latest` tag automatically falls back to a local source build; an explicitly selected tag never does. The script reports each unsafe variable without printing secret values. If Compose fails because a backend container created or restarted by that attempt is unhealthy, it automatically shows only that attempt's recent backend logs. Use `./deploy/install.sh --build` to request a local build explicitly.
+The native installer verifies Release checksums, installs a systemd service, and enables direct update, rollback, and restart controls in the version panel. The default Docker deployment runs the backend and console in one managed container and provides the same direct controls without mounting the Docker socket. Release bundles are stored in the `tokenhub-releases` volume so ordinary container restarts and recreations preserve a panel-applied update. Multi-instance Docker deployments keep operator-managed Compose updates so every replica changes version together. See the [deployment guide](docs/deployment.md) for both modes.
 
 ## Documentation
 

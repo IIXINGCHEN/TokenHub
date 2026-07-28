@@ -20,6 +20,7 @@ import { APIKeyWizardModal, UserImportModal } from "../shared/modals";
 import { ConfirmDialog, IssuedKeyModal } from "../shared/ui";
 import { currentOAuthReturnURL, LoginView, ResetPasswordView } from "./auth";
 import { PageHeader, Sidebar, StatusStack, TopNav } from "./navigation-ui";
+import { ResponsiveVersionStatus } from "./version-status";
 import { AuditView } from "../views/audit";
 import { CrudView, ReportsView } from "../views/crud-projects";
 import { DatabaseStatusView } from "../views/database-model-pricing";
@@ -712,9 +713,8 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
         onToggleGroup={(title) =>
           setOpenNavGroups((current) => ({ ...current, [title]: current[title] === false }))
         }
-        baseURL={baseURL}
-        adminToken={adminToken}
       />
+      <ResponsiveVersionStatus api={api} user={currentUser} />
 
       <section className="workspace">
         <TopNav

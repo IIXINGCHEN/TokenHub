@@ -49,12 +49,22 @@ TokenHub は、日常的なモデル利用、チームガバナンス、プラ�
 - ユーザー、プロジェクト、チーム、モデル、コストセンターに紐づく利用分析とリクエストログ。
 - OAuth/OIDC によるエンタープライズサインイン、RBAC、監査証跡に対応する ID ソース設定。
 - クリーンなコンソール: ロール別ナビゲーション、グローバル検索、ライト/ダーク切り替え、左ナビ + 右詳細の API ドキュメント。
-- SQLite-first のプライベートデプロイと Docker Compose サポート。
+- SQLite-first のプライベートデプロイ向けに、ネイティブ systemd と Docker Compose の両方をサポート。
 - PostgreSQL はマルチインスタンス構成に対応します。リモート PostgreSQL で状態を共有し、フロントエンドとバックエンドのレプリカを水平スケールできるほか、コネクションプールも設定できます。[デプロイガイド](docs/ja/deployment.md)を参照してください。
 - 管理コンソールは英語、中国語、日本語の切り替えに対応。
 - TokenHub は OpenAI Codex のサブスクリプションアカウントリソースにも接続できます。分離および復旧が可能な Codex Profile を使用し、指定したローカル Codex CLI またはデスクトップセッションを TokenHub 経由で実行できます。[Codex 接続ガイド](docs/ja/codex-tokenhub-profile-quick-start.md)を参照してください。
 
 ## クイックスタート
+
+Linux systemd ホストでネイティブ Release を使用する場合:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/astaxie/TokenHub/main/deploy/native/install.sh \
+  -o /tmp/tokenhub-install.sh
+sudo bash /tmp/tokenhub-install.sh install
+```
+
+リポジトリのチェックアウトから Docker Compose を使用する場合:
 
 ```bash
 cp deploy/.env.example deploy/.env
@@ -71,9 +81,10 @@ cp deploy/.env.example deploy/.env
 初期管理者ログイン:
 
 - ユーザー名: `admin`
-- パスワード: `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD` の設定値
+- ネイティブインストールのパスワード: インストーラーが一度だけ表示
+- Docker のパスワード: `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD` の設定値
 
-デプロイスクリプトは本番用認証情報を検証し、公開済みイメージを取得して、ローカルではビルドせずにコンテナを起動します。イメージがまだ公開されておらず、デフォルトの `latest` タグの取得に失敗した場合は、ローカルのソースビルドへ自動的に切り替えます。明示したタグでは切り替えません。秘密値を表示せずに安全でない変数を個別に報告します。その試行で作成または再起動したバックエンドコンテナの異常により Compose が失敗した場合に限り、その試行で生成された直近のバックエンドログを自動表示します。現在のチェックアウトから明示的にビルドする場合は `./deploy/install.sh --build` を使用します。
+ネイティブインストーラーは Release のチェックサムを検証し、systemd サービスをインストールして、バージョンパネルから直接更新、ロールバック、再起動できるようにします。デフォルトの Docker デプロイは、バックエンドと管理コンソールを 1 つの管理対象コンテナで実行し、Docker Socket をマウントせずに同じ直接操作を提供します。Release バンドルは `tokenhub-releases` ボリュームへ保存されるため、通常のコンテナ再起動や再作成でも画面から適用した更新は保持されます。マルチインスタンス Docker では、全レプリカを同時に切り替えるため Compose による運用更新を維持します。詳細は[デプロイガイド](docs/ja/deployment.md)を参照してください。
 
 ## ドキュメント
 
