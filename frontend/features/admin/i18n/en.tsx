@@ -1534,4 +1534,6 @@ export const enTranslations: Record<string, string> = {
     "故障备用": "Failover",
     "能力与计价口径": "Capabilities and Pricing Contract",
     "自定义别名映射时，这些是 TokenHub 的对外声明；真实上游成本应以命中线路为准。": "For custom aliases, these are TokenHub's external declarations; actual upstream cost follows the selected route.",
+    "关联团队": "Linked Teams", "默认团队": "Primary Team", "团队项目角色": "Team Project Role", "只读成员": "Viewer", "开发成员": "Developer", "项目维护者": "Maintainer", "添加团队": "Add Team", "暂无关联团队": "No linked teams", "默认责任团队": "Primary accountable team", "仅团队负责人（兼容）": "Team leaders only (legacy)", "请先在项目编辑中更换默认团队": "Change the primary team in project settings first", "移除团队": "Remove Team", "其他团队": "Additional Teams", "主团队": "Primary Team",
+    "主团队用于默认责任和成本归属。": "The primary team remains responsible for default ownership and cost attribution.", "用户可通过任一团队关联获得项目权限；多条权限按最高项目角色合并。": "Users can gain project access through any team membership; multiple grants merge to the highest project role.", "默认团队继续承担成本、审批和责任归属；保存项目后可在详情中关联更多团队。": "The primary team remains accountable for cost and approvals. Link additional teams from project details after saving.",
     };

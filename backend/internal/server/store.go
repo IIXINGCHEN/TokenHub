@@ -131,10 +131,15 @@ type ProviderObservation struct {
 
 type Store interface {
 	CreateProject(project Project) Project
+	CreateProjectChecked(project Project) (Project, error)
 	ListProjects() []Project
 	UpdateProject(id string, patch Project) (Project, error)
 	DeleteProject(id string) error
 	GetProject(id string) (Project, bool)
+	ListProjectTeams(projectID string, offset int, limit int) ([]ProjectTeam, int64, error)
+	AddProjectTeam(link ProjectTeam) (ProjectTeam, error)
+	UpdateProjectTeam(projectID string, teamID string, role string) (ProjectTeam, error)
+	RemoveProjectTeam(projectID string, teamID string) error
 	CreateAPIKey(projectID string, key APIKey, rawSecret string) (APIKey, string, error)
 	ListProjectKeys(projectID string) []APIKey
 	ListAPIKeys() []APIKey
@@ -213,6 +218,7 @@ type Store interface {
 	ListResources(kind string) []AdminResource
 	UpdateResource(kind string, id string, patch AdminResource) (AdminResource, error)
 	DeleteResource(kind string, id string) error
+	DeleteTeam(id string) error
 	RunMonitor(id string) (MonitorRunResult, error)
 	CreateApprovalRequest(request ApprovalRequest) ApprovalRequest
 	ListApprovalRequests() []ApprovalRequest
@@ -467,8 +473,9 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 	}
 
 	migrate := func() error {
-		return db.AutoMigrate(
+		if err := db.AutoMigrate(
 			&Project{},
+			&ProjectTeam{},
 			&APIKey{},
 			&Provider{},
 			&ProviderResource{},
@@ -500,7 +507,10 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 			&AdminSession{},
 			&AdminPasswordResetToken{},
 			&SQLiteBackupRecord{},
-		)
+		); err != nil {
+			return err
+		}
+		return backfillTeamRelationships(db)
 	}
 	if err := runSchemaMigrationLocked(sqlDB, driver, migrate); err != nil {
 		return nil, err
@@ -524,6 +534,60 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 		clusterLockTTL:       time.Duration(defaultInt(config.ClusterLockTTLSeconds, 180)) * time.Second,
 		imageCapabilityRetry: time.Duration(defaultInt(config.ImageCapabilityRetrySecs, 86400)) * time.Second,
 	}, nil
+}
+
+func backfillTeamRelationships(db *gorm.DB) error {
+	var projects []Project
+	if err := db.Select("id", "team_id", "created_at", "updated_at").Where("team_id <> ''").Find(&projects).Error; err != nil {
+		return err
+	}
+	for _, project := range projects {
+		createdAt := project.CreatedAt
+		if createdAt.IsZero() {
+			createdAt = time.Now().UTC()
+		}
+		updatedAt := project.UpdatedAt
+		if updatedAt.IsZero() {
+			updatedAt = createdAt
+		}
+		link := ProjectTeam{
+			ProjectID: project.ID,
+			TeamID:    strings.TrimSpace(project.TeamID),
+			Role:      "team_leader",
+			CreatedAt: createdAt,
+			UpdatedAt: updatedAt,
+		}
+		if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&AdminResource{
+			ID:          link.TeamID,
+			Kind:        "teams",
+			Name:        link.TeamID,
+			Description: "Compatibility team migrated from a legacy project assignment.",
+			Status:      StatusActive,
+			Fields:      map[string]any{},
+			CreatedAt:   createdAt,
+			UpdatedAt:   updatedAt,
+		}).Error; err != nil {
+			return err
+		}
+		if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&link).Error; err != nil {
+			return err
+		}
+	}
+
+	var users []AdminUser
+	if err := db.Find(&users).Error; err != nil {
+		return err
+	}
+	for _, user := range users {
+		teamIDs := normalizedTeamIDs(user.TeamID, user.TeamIDs)
+		if equalStringSlices(teamIDs, user.TeamIDs) {
+			continue
+		}
+		if err := db.Model(&AdminUser{}).Where("id = ?", user.ID).Update("team_ids", teamIDs).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // WithContext returns a store view whose database operations inherit ctx.
@@ -899,7 +963,17 @@ func prepareSQLitePath(dsn string) (string, error) {
 func (s *GormStore) CreateProject(project Project) Project {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	project, _ = s.createProject(project, false)
+	return project
+}
 
+func (s *GormStore) CreateProjectChecked(project Project) (Project, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.createProject(project, true)
+}
+
+func (s *GormStore) createProject(project Project, requireActiveTeam bool) (Project, error) {
 	now := time.Now().UTC()
 	if project.ID == "" {
 		project.ID = NewID("prj")
@@ -911,13 +985,42 @@ func (s *GormStore) CreateProject(project Project) Project {
 		project.CreatedAt = now
 	}
 	project.UpdatedAt = now
-	_ = s.db.Clauses(clause.OnConflict{UpdateAll: true}).Create(&project).Error
-	return project
+	project.Teams = nil
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if strings.TrimSpace(project.TeamID) != "" {
+			team, err := lockTeamForMutation(tx, project.TeamID)
+			if err != nil {
+				return err
+			}
+			if requireActiveTeam && team.Status != "" && team.Status != StatusActive {
+				return NewHTTPError(http.StatusBadRequest, "team_inactive", "Only an active team can be assigned to a project")
+			}
+		}
+		if err := tx.Clauses(clause.OnConflict{UpdateAll: true}).Create(&project).Error; err != nil {
+			return err
+		}
+		if strings.TrimSpace(project.TeamID) == "" {
+			return nil
+		}
+		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&ProjectTeam{
+			ProjectID: project.ID,
+			TeamID:    strings.TrimSpace(project.TeamID),
+			Role:      "team_leader",
+			CreatedAt: now,
+			UpdatedAt: now,
+		}).Error
+	})
+	if err != nil {
+		return Project{}, err
+	}
+	_ = s.loadProjectTeams(&project)
+	return project, nil
 }
 
 func (s *GormStore) ListProjects() []Project {
 	var items []Project
 	_ = s.db.Order("created_at asc").Find(&items).Error
+	_ = s.loadProjectTeamsFor(items)
 	return items
 }
 
@@ -926,21 +1029,52 @@ func (s *GormStore) UpdateProject(id string, patch Project) (Project, error) {
 	defer s.mu.Unlock()
 
 	var project Project
-	if err := s.db.First(&project, "id = ?", id).Error; err != nil {
-		return Project{}, notFound(err, "project_not_found", "Project not found")
+	nextTeamID := strings.TrimSpace(patch.TeamID)
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var nextTeam AdminResource
+		if nextTeamID != "" {
+			var err error
+			nextTeam, err = lockTeamForMutation(tx, nextTeamID)
+			if err != nil {
+				return err
+			}
+		}
+		if err := tx.First(&project, "id = ?", id).Error; err != nil {
+			return notFound(err, "project_not_found", "Project not found")
+		}
+		if nextTeamID != strings.TrimSpace(project.TeamID) && nextTeam.Status != "" && nextTeam.Status != StatusActive {
+			return NewHTTPError(http.StatusBadRequest, "team_inactive", "Only an active team can be assigned to a project")
+		}
+		if patch.Name != "" {
+			project.Name = patch.Name
+		}
+		project.TeamID = nextTeamID
+		project.OwnerUserID = patch.OwnerUserID
+		project.CostCenter = patch.CostCenter
+		if patch.Status != "" {
+			project.Status = patch.Status
+		}
+		project.DefaultQuotaRef = patch.DefaultQuotaRef
+		project.UpdatedAt = time.Now().UTC()
+		if err := tx.Save(&project).Error; err != nil {
+			return err
+		}
+		if project.TeamID == "" {
+			return nil
+		}
+		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&ProjectTeam{
+			ProjectID: project.ID,
+			TeamID:    project.TeamID,
+			Role:      "team_leader",
+			CreatedAt: project.UpdatedAt,
+			UpdatedAt: project.UpdatedAt,
+		}).Error
+	})
+	if err != nil {
+		return Project{}, err
 	}
-	if patch.Name != "" {
-		project.Name = patch.Name
-	}
-	project.TeamID = patch.TeamID
-	project.OwnerUserID = patch.OwnerUserID
-	project.CostCenter = patch.CostCenter
-	if patch.Status != "" {
-		project.Status = patch.Status
-	}
-	project.DefaultQuotaRef = patch.DefaultQuotaRef
-	project.UpdatedAt = time.Now().UTC()
-	return project, s.db.Save(&project).Error
+	_ = s.loadProjectTeams(&project)
+	return project, nil
 }
 
 func (s *GormStore) DeleteProject(id string) error {
@@ -971,6 +1105,9 @@ func (s *GormStore) DeleteProject(id string) error {
 				return err
 			}
 		}
+		if err := tx.Where("project_id = ?", id).Delete(&ProjectTeam{}).Error; err != nil {
+			return err
+		}
 		return tx.Delete(&project).Error
 	})
 }
@@ -980,7 +1117,216 @@ func (s *GormStore) GetProject(id string) (Project, bool) {
 	if err := s.db.First(&project, "id = ?", id).Error; err != nil {
 		return Project{}, false
 	}
+	_ = s.loadProjectTeams(&project)
 	return project, true
+}
+
+func (s *GormStore) loadProjectTeams(project *Project) error {
+	if project == nil || strings.TrimSpace(project.ID) == "" {
+		return nil
+	}
+	var links []ProjectTeam
+	if err := s.db.Where("project_id = ?", project.ID).Order("created_at asc, team_id asc").Find(&links).Error; err != nil {
+		return err
+	}
+	for index := range links {
+		links[index].IsPrimary = links[index].TeamID == project.TeamID
+	}
+	project.Teams = links
+	return nil
+}
+
+func (s *GormStore) loadProjectTeamsFor(projects []Project) error {
+	if len(projects) == 0 {
+		return nil
+	}
+	projectIDs := make([]string, 0, len(projects))
+	projectIndex := make(map[string]int, len(projects))
+	for index := range projects {
+		projects[index].Teams = nil
+		projectIDs = append(projectIDs, projects[index].ID)
+		projectIndex[projects[index].ID] = index
+	}
+	var links []ProjectTeam
+	if err := s.db.Where("project_id IN ?", projectIDs).Order("created_at asc, team_id asc").Find(&links).Error; err != nil {
+		return err
+	}
+	for _, link := range links {
+		index, ok := projectIndex[link.ProjectID]
+		if !ok {
+			continue
+		}
+		link.IsPrimary = link.TeamID == projects[index].TeamID
+		projects[index].Teams = append(projects[index].Teams, link)
+	}
+	return nil
+}
+
+func (s *GormStore) ListProjectTeams(projectID string, offset int, limit int) ([]ProjectTeam, int64, error) {
+	var project Project
+	if err := s.db.First(&project, "id = ?", projectID).Error; err != nil {
+		return nil, 0, notFound(err, "project_not_found", "Project not found")
+	}
+	query := s.db.Model(&ProjectTeam{}).Where("project_id = ?", projectID)
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var links []ProjectTeam
+	if err := query.Order("created_at asc, team_id asc").Offset(offset).Limit(limit).Find(&links).Error; err != nil {
+		return nil, 0, err
+	}
+	for index := range links {
+		links[index].IsPrimary = links[index].TeamID == project.TeamID
+	}
+	return links, total, nil
+}
+
+func (s *GormStore) AddProjectTeam(link ProjectTeam) (ProjectTeam, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	link.ProjectID = strings.TrimSpace(link.ProjectID)
+	link.TeamID = strings.TrimSpace(link.TeamID)
+	now := time.Now().UTC()
+	if link.CreatedAt.IsZero() {
+		link.CreatedAt = now
+	}
+	link.UpdatedAt = now
+	var project Project
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := lockActiveTeamForMutation(tx, link.TeamID); err != nil {
+			return err
+		}
+		if err := tx.First(&project, "id = ?", link.ProjectID).Error; err != nil {
+			return notFound(err, "project_not_found", "Project not found")
+		}
+		if err := tx.Create(&link).Error; err != nil {
+			return writeConflict(err, "project_team_conflict", "Team is already linked to this project")
+		}
+		return nil
+	})
+	if err != nil {
+		return ProjectTeam{}, err
+	}
+	link.IsPrimary = link.TeamID == project.TeamID
+	return link, nil
+}
+
+func (s *GormStore) UpdateProjectTeam(projectID string, teamID string, role string) (ProjectTeam, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var link ProjectTeam
+	if err := s.db.First(&link, "project_id = ? AND team_id = ?", projectID, teamID).Error; err != nil {
+		return ProjectTeam{}, notFound(err, "project_team_not_found", "Project team link not found")
+	}
+	link.Role = role
+	link.UpdatedAt = time.Now().UTC()
+	if err := s.db.Save(&link).Error; err != nil {
+		return ProjectTeam{}, err
+	}
+	var project Project
+	_ = s.db.First(&project, "id = ?", projectID).Error
+	link.IsPrimary = link.TeamID == project.TeamID
+	return link, nil
+}
+
+func (s *GormStore) RemoveProjectTeam(projectID string, teamID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		project, err := lockProjectForTeamMutation(tx, projectID)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(project.TeamID) == strings.TrimSpace(teamID) {
+			return NewHTTPError(http.StatusConflict, "project_primary_team", "The primary team cannot be removed; assign another primary team first")
+		}
+		var count int64
+		if err := tx.Model(&ProjectTeam{}).Where("project_id = ?", projectID).Count(&count).Error; err != nil {
+			return err
+		}
+		if count <= 1 {
+			return NewHTTPError(http.StatusConflict, "project_last_team", "The last project team cannot be removed")
+		}
+		result := tx.Where("project_id = ? AND team_id = ?", projectID, teamID).Delete(&ProjectTeam{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return NewHTTPError(http.StatusNotFound, "project_team_not_found", "Project team link not found")
+		}
+		return nil
+	})
+}
+
+func lockProjectForTeamMutation(tx *gorm.DB, projectID string) (Project, error) {
+	result := tx.Model(&Project{}).Where("id = ?", projectID).UpdateColumn("updated_at", gorm.Expr("updated_at"))
+	if result.Error != nil {
+		return Project{}, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return Project{}, NewHTTPError(http.StatusNotFound, "project_not_found", "Project not found")
+	}
+	var project Project
+	if err := tx.First(&project, "id = ?", projectID).Error; err != nil {
+		return Project{}, notFound(err, "project_not_found", "Project not found")
+	}
+	return project, nil
+}
+
+func lockAdminResourceForMutation(tx *gorm.DB, kind string, id string) (AdminResource, error) {
+	result := tx.Model(&AdminResource{}).Where("kind = ? AND id = ?", kind, id).UpdateColumn("updated_at", gorm.Expr("updated_at"))
+	if result.Error != nil {
+		return AdminResource{}, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return AdminResource{}, NewHTTPError(http.StatusNotFound, "resource_not_found", "Resource not found")
+	}
+	var resource AdminResource
+	if err := tx.First(&resource, "kind = ? AND id = ?", kind, id).Error; err != nil {
+		return AdminResource{}, notFound(err, "resource_not_found", "Resource not found")
+	}
+	return resource, nil
+}
+
+func lockActiveTeamForMutation(tx *gorm.DB, teamID string) error {
+	team, err := lockTeamForMutation(tx, teamID)
+	if err != nil {
+		return err
+	}
+	if team.Status != "" && team.Status != StatusActive {
+		return NewHTTPError(http.StatusBadRequest, "team_inactive", "Only an active team can be assigned to a project")
+	}
+	return nil
+}
+
+func lockTeamForMutation(tx *gorm.DB, teamID string) (AdminResource, error) {
+	team, err := lockAdminResourceForMutation(tx, "teams", strings.TrimSpace(teamID))
+	if err != nil {
+		if AsHTTPError(err).Status == http.StatusNotFound {
+			return AdminResource{}, NewHTTPError(http.StatusNotFound, "team_not_found", "Team not found")
+		}
+		return AdminResource{}, err
+	}
+	return team, nil
+}
+
+func lockUserTeamsForMutation(tx *gorm.DB, primaryTeamID string, teamIDs []string) error {
+	ids := normalizedTeamIDs(primaryTeamID, teamIDs)
+	sort.Strings(ids)
+	for _, teamID := range ids {
+		team, err := lockTeamForMutation(tx, teamID)
+		if err != nil {
+			return err
+		}
+		if team.Status != "" && team.Status != StatusActive {
+			return NewHTTPError(http.StatusBadRequest, "team_inactive", "Only an active team can be assigned to a user")
+		}
+	}
+	return nil
 }
 
 func (s *GormStore) CreateAPIKey(projectID string, key APIKey, rawSecret string) (APIKey, string, error) {
@@ -3747,6 +4093,39 @@ func (s *GormStore) DeleteResource(kind string, id string) error {
 	return s.db.Delete(&resource).Error
 }
 
+func (s *GormStore) DeleteTeam(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		team, err := lockAdminResourceForMutation(tx, "teams", id)
+		if err != nil {
+			return err
+		}
+		var projectLinkCount int64
+		if err := tx.Model(&ProjectTeam{}).Where("team_id = ?", id).Count(&projectLinkCount).Error; err != nil {
+			return err
+		}
+		var primaryProjectCount int64
+		if err := tx.Model(&Project{}).Where("team_id = ?", id).Count(&primaryProjectCount).Error; err != nil {
+			return err
+		}
+		if projectLinkCount > 0 || primaryProjectCount > 0 {
+			return NewHTTPError(http.StatusConflict, "team_has_projects", "Team is linked to one or more projects; unlink or transfer those projects first")
+		}
+		var users []AdminUser
+		if err := tx.Find(&users).Error; err != nil {
+			return err
+		}
+		for _, user := range users {
+			if userHasTeam(user, id) {
+				return NewHTTPError(http.StatusConflict, "team_has_users", "Team still has users; reassign them before deleting the team")
+			}
+		}
+		return tx.Delete(&team).Error
+	})
+}
+
 func (s *GormStore) RunMonitor(id string) (MonitorRunResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -3921,7 +4300,17 @@ func (s *GormStore) UpdateApprovalRequestStatus(id string, status string, decide
 func (s *GormStore) CreateAdminUser(user AdminUser, password string) (AdminUser, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return createAdminUser(s.db, user, password)
+
+	var created AdminUser
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := lockUserTeamsForMutation(tx, user.TeamID, user.TeamIDs); err != nil {
+			return err
+		}
+		var err error
+		created, err = createAdminUser(tx, user, password)
+		return err
+	})
+	return created, err
 }
 
 func (s *GormStore) ListAdminUsers() []AdminUser {
@@ -3937,14 +4326,27 @@ func (s *GormStore) UpdateAdminUser(id string, patch AdminUser, password string)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	var updated AdminUser
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := lockUserTeamsForMutation(tx, patch.TeamID, patch.TeamIDs); err != nil {
+			return err
+		}
+		var err error
+		updated, err = updateAdminUser(tx, id, patch, password)
+		return err
+	})
+	return updated, err
+}
+
+func updateAdminUser(db *gorm.DB, id string, patch AdminUser, password string) (AdminUser, error) {
 	var user AdminUser
-	if err := s.db.First(&user, "id = ?", id).Error; err != nil {
+	if err := db.First(&user, "id = ?", id).Error; err != nil {
 		return AdminUser{}, notFound(err, "admin_user_not_found", "Admin user not found")
 	}
 	wasActivePlatformAdmin := activePlatformAdmin(user)
 	if patch.Username != "" {
 		var count int64
-		if err := s.db.Model(&AdminUser{}).Where("id <> ? AND username = ?", id, patch.Username).Count(&count).Error; err != nil {
+		if err := db.Model(&AdminUser{}).Where("id <> ? AND username = ?", id, patch.Username).Count(&count).Error; err != nil {
 			return AdminUser{}, err
 		}
 		if count > 0 {
@@ -3957,7 +4359,7 @@ func (s *GormStore) UpdateAdminUser(id string, patch AdminUser, password string)
 	}
 	if patch.Email != "" {
 		var count int64
-		if err := s.db.Model(&AdminUser{}).Where("id <> ? AND email = ?", id, patch.Email).Count(&count).Error; err != nil {
+		if err := db.Model(&AdminUser{}).Where("id <> ? AND email = ?", id, patch.Email).Count(&count).Error; err != nil {
 			return AdminUser{}, err
 		}
 		if count > 0 {
@@ -3969,6 +4371,7 @@ func (s *GormStore) UpdateAdminUser(id string, patch AdminUser, password string)
 		user.Role = patch.Role
 	}
 	user.TeamID = patch.TeamID
+	user.TeamIDs = normalizedTeamIDs(patch.TeamID, patch.TeamIDs)
 	if patch.Status != "" {
 		user.Status = patch.Status
 	}
@@ -3980,12 +4383,12 @@ func (s *GormStore) UpdateAdminUser(id string, patch AdminUser, password string)
 		user.PasswordHash = passwordHash
 	}
 	if wasActivePlatformAdmin && !activePlatformAdmin(user) {
-		if err := ensureAnotherActivePlatformAdmin(s.db, user.ID); err != nil {
+		if err := ensureAnotherActivePlatformAdmin(db, user.ID); err != nil {
 			return AdminUser{}, err
 		}
 	}
 	user.UpdatedAt = time.Now().UTC()
-	if err := s.db.Save(&user).Error; err != nil {
+	if err := db.Save(&user).Error; err != nil {
 		return AdminUser{}, err
 	}
 	return publicAdminUser(user), nil
@@ -5123,6 +5526,7 @@ func createAdminUser(db *gorm.DB, user AdminUser, password string) (AdminUser, e
 	if user.Status == "" {
 		user.Status = StatusActive
 	}
+	user.TeamIDs = normalizedTeamIDs(user.TeamID, user.TeamIDs)
 	if password == "" && user.PasswordHash == "" {
 		return AdminUser{}, NewHTTPError(400, "invalid_admin_user", "password is required")
 	}

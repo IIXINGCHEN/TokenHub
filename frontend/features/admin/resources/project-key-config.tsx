@@ -2,7 +2,7 @@ import { ChevronDown, Download } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { type AdminResource, type APIKey, type AppData, type FieldConfig, type Project, type ResourceAction, type ResourceConfig } from "../core/types";
-import { apiKeyOwnerSelectOptions, apiKeyOwnerUserID, costCenterLabel, costCenterSelectOptions, ownerUserLabel, projectMemberCanIssueLabel, projectMemberProjectSelectOptions, projectMemberRoleLabel, projectMemberRoleOptions, projectName, projectOwnerLabel, projectSelectOptions, projectTeamLabel, stringifyForm, stringifyValue, teamLabel, teamSelectOptions, truthyValue, userSelectOptions } from "../domain/entities";
+import { apiKeyOwnerSelectOptions, apiKeyOwnerUserID, costCenterLabel, costCenterSelectOptions, ownerUserLabel, projectMemberCanIssueLabel, projectMemberProjectSelectOptions, projectMemberRoleLabel, projectMemberRoleOptions, projectName, projectOwnerLabel, projectSelectOptions, projectTeamLabel, projectTeamLabels, stringifyForm, stringifyValue, teamSelectOptions, truthyValue, userSelectOptions } from "../domain/entities";
 import { apiGatewayBaseURL } from "../domain/formatting";
 import { tx } from "../i18n/runtime";
 import { adminDelete, adminFetch, adminMutate, keyPatchPayload, projectQuotaSummary, updateAPIKeyStatus } from "./payloads";
@@ -17,7 +17,7 @@ export function projectConfig(): ResourceConfig<Project> {
     createLabel: "新增项目",
     columns: [
       { key: "name", label: "项目" },
-      { key: "team_id", label: "团队", render: (item, ctx) => teamLabel(ctx, item.team_id ?? "") },
+      { key: "team_id", label: "关联团队", render: (item, ctx) => projectTeamLabels(ctx, item) },
       { key: "owner_user_id", label: "负责人", render: (item, ctx) => ownerUserLabel(ctx, item.owner_user_id ?? "") },
       { key: "cost_center", label: "成本中心", render: (item, ctx) => costCenterLabel(ctx, item.cost_center ?? "") },
       { key: "quota", label: "额度", render: (item, ctx) => projectQuotaSummary(ctx, item) },
@@ -25,7 +25,7 @@ export function projectConfig(): ResourceConfig<Project> {
     ],
     fields: [
       { key: "name", label: "项目名称", required: true },
-      { key: "team_id", label: "所属团队", type: "select", optionsFromData: teamSelectOptions, help: "管理员分配项目归属团队；团队 Leader 创建时会自动固定为自己的团队。" },
+      { key: "team_id", label: "默认团队", type: "select", optionsFromData: teamSelectOptions, help: "默认团队继续承担成本、审批和责任归属；保存项目后可在详情中关联更多团队。" },
       { key: "owner_user_id", label: "项目负责人", type: "select", optionsFromData: userSelectOptions, help: "负责人默认拥有该项目的 Key 管理权限。" },
       { key: "cost_center", label: "成本中心", type: "select", optionsFromData: costCenterSelectOptions },
       { key: "status", label: "状态", type: "select", options: ["active", "disabled"], required: true },

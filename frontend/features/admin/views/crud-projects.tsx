@@ -2,14 +2,14 @@ import { Plus, RefreshCw, Search, Trash2, UserRoundCheck, X } from "lucide-react
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { appRole } from "../core/navigation";
-import { type AdminResource, type AdminUser, type ApiContext, type AppData, type AuditEvent, type OpenAIAccountQuota, type OpenAIQuotaWindow, type Project, type Provider, type ProviderMonitoringSnapshot, type ProviderQuotaSummary, type ProviderResource, type ReportExportHistoryItem, type RequestLog, type ResourceAction, type ResourceConfig, type ToolbarAction } from "../core/types";
+import { type AdminResource, type AdminUser, type ApiContext, type AppData, type AuditEvent, type OpenAIAccountQuota, type OpenAIQuotaWindow, type Project, type ProjectTeam, type Provider, type ProviderMonitoringSnapshot, type ProviderQuotaSummary, type ProviderResource, type ReportExportHistoryItem, type RequestLog, type ResourceAction, type ResourceConfig, type ToolbarAction } from "../core/types";
 import { notificationChannelLabel } from "../domain/catalog";
-import { projectMembersForProject, providerDisplayBaseURL, providerDisplayName, providerDisplayType, providerRoutesFor, providerRouteSummary, stringifyValue } from "../domain/entities";
+import { projectMembersForProject, providerDisplayBaseURL, providerDisplayName, providerDisplayType, providerRoutesFor, providerRouteSummary, stringifyValue, teamLabel, teamSelectOptions } from "../domain/entities";
 import { activeRouteCount, formatNumber, formatTime } from "../domain/formatting";
 import { approvalTriggerLabel, enumValueLabel, providerTypeLabel, reportDatasetLabel, roleLabel } from "../domain/labels";
 import { countWithUnit, languageLocale, tx } from "../i18n/runtime";
 import { reportExportDefinitions } from "../resources/governance-config";
-import { adminFetch, pendingProjectQuotaApproval, projectQuotaIssue, projectQuotaPolicy, projectQuotaValues, readAdminError, requestProjectQuotaIncrease, saveProjectQuota } from "../resources/payloads";
+import { adminDelete, adminFetch, adminMutate, pendingProjectQuotaApproval, projectQuotaIssue, projectQuotaPolicy, projectQuotaValues, readAdminError, requestProjectQuotaIncrease, saveProjectQuota } from "../resources/payloads";
 import { DataSection, SimpleTable, StatusPill } from "../shared/ui";
 import { APIKeyEmptyState } from "./api-key-empty-state";
 import { ModelCategoryTabs, NotificationChannelTabs } from "./model-catalog";
@@ -1022,15 +1022,22 @@ export function ProjectQuotaPanel({
 }) {
   const quota = projectQuotaPolicy(data, project);
   const [values, setValues] = useState<ProjectQuotaValues>(() => projectQuotaValues(quota));
+  const [teamID, setTeamID] = useState("");
+  const [teamRole, setTeamRole] = useState("viewer");
 
   useEffect(() => {
     setValues(projectQuotaValues(quota));
+    setTeamID("");
+    setTeamRole("viewer");
   }, [project.id, quota?.id]);
 
   const hasQuota = Boolean(quota);
   const quotaIssue = projectQuotaIssue(data, project);
   const pendingApproval = pendingProjectQuotaApproval(data, project);
   const members = projectMembersForProject(data, project.id);
+  const teams = project.teams ?? [];
+  const linkedTeamIDs = new Set(teams.map((link) => link.team_id));
+  const availableTeams = teamSelectOptions(data).filter((option) => !linkedTeamIDs.has(option.value));
   return (
     <div className="project-quota-panel project-detail-panel">
       <div className="project-quota-head">
@@ -1043,6 +1050,51 @@ export function ProjectQuotaPanel({
         </button>
       </div>
       <div className="project-quota-body">
+        <div className="project-panel-section-head">
+          <div>
+            <strong>{tx("关联团队")}</strong>
+            <span>{countWithUnit(teams.length, "个", "team", "チーム")}</span>
+          </div>
+        </div>
+        <div className="project-team-link-form">
+          <label className="field">
+            <span>{tx("团队")}</span>
+            <select value={teamID} onChange={(event) => setTeamID(event.target.value)}>
+              <option value="">{tx("请选择")}</option>
+              {availableTeams.map((option) => <option key={option.value} value={option.value}>{tx(option.label)}</option>)}
+            </select>
+          </label>
+          <label className="field">
+            <span>{tx("团队项目角色")}</span>
+            <select value={teamRole} onChange={(event) => setTeamRole(event.target.value)}>
+              <option value="viewer">{tx("只读成员")}</option>
+              <option value="developer">{tx("开发成员")}</option>
+              <option value="maintainer">{tx("项目维护者")}</option>
+            </select>
+          </label>
+          <button
+            className="secondary-button compact-button"
+            disabled={!teamID}
+            onClick={() => onAction({
+              label: "关联团队",
+              title: "关联项目团队",
+              run: (ctx) => adminMutate(ctx, `/api/admin/projects/${project.id}/teams`, "POST", { team_id: teamID, role: teamRole }),
+              doneMessage: () => `${project.name || project.id} 已关联团队`,
+            })}
+            type="button"
+          >
+            <Plus size={15} />
+            {tx("添加团队")}
+          </button>
+        </div>
+        <div className="project-member-list">
+          {teams.length === 0 ? (
+            <div className="empty compact-empty">{tx("暂无关联团队")}</div>
+          ) : teams.map((link) => (
+            <ProjectTeamRow key={link.team_id} data={data} link={link} project={project} onAction={onAction} />
+          ))}
+        </div>
+
         <div className="project-panel-section-head">
           <div>
             <strong>{tx("项目成员")}</strong>
@@ -1150,6 +1202,63 @@ export function ProjectQuotaPanel({
             {tx("保存额度")}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+export function ProjectTeamRow({
+  data,
+  link,
+  project,
+  onAction,
+}: {
+  data: AppData;
+  link: ProjectTeam;
+  project: Project;
+  onAction: (action: ResourceAction<Project>) => void;
+}) {
+  return (
+    <div className="project-member-row project-team-row">
+      <div className="project-member-user">
+        <div>
+          <strong>{teamLabel(data, link.team_id)}</strong>
+          <span>{link.is_primary ? tx("默认责任团队") : link.team_id}</span>
+        </div>
+      </div>
+      <div className="project-member-actions project-team-actions">
+        <select
+          aria-label={tx("团队项目角色")}
+          value={link.role}
+          onChange={(event) => {
+            const role = event.target.value;
+            onAction({
+              label: "更新团队权限",
+              title: "更新项目团队权限",
+              run: (ctx) => adminMutate(ctx, `/api/admin/projects/${project.id}/teams/${link.team_id}`, "PATCH", { role }),
+              doneMessage: () => `${teamLabel(data, link.team_id)} 权限已更新`,
+            });
+          }}
+        >
+          {link.role === "team_leader" ? <option value="team_leader">{tx("仅团队负责人（兼容）")}</option> : null}
+          <option value="viewer">{tx("只读成员")}</option>
+          <option value="developer">{tx("开发成员")}</option>
+          <option value="maintainer">{tx("项目维护者")}</option>
+        </select>
+        <button
+          className="danger-button"
+          disabled={link.is_primary}
+          onClick={() => onAction({
+            label: "移除团队",
+            title: "移除项目团队",
+            run: (ctx) => adminDelete(ctx, `/api/admin/projects/${project.id}/teams/${link.team_id}`),
+            doneMessage: () => `${teamLabel(data, link.team_id)} 已移除`,
+          })}
+          type="button"
+          title={tx(link.is_primary ? "请先在项目编辑中更换默认团队" : "移除团队")}
+        >
+          <Trash2 size={15} />
+        </button>
       </div>
     </div>
   );

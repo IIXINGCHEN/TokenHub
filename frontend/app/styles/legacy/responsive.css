@@ -88,6 +88,10 @@
     grid-template-columns: 1fr;
   }
 
+  .project-team-link-form {
+    grid-template-columns: 1fr;
+  }
+
   .metrics,
   .two-column,
   .modal-body,
