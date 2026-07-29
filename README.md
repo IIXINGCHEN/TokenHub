@@ -23,6 +23,66 @@
   English | <a href="README.zh-CN.md">简体中文</a> | <a href="README.ja.md">日本語</a>
 </p>
 
+## Supported Providers
+
+> [!TIP]
+> **Codex subscription ready:** connect OpenAI Codex subscription accounts to TokenHub and serve their models through the same governed gateway as API-based providers. [Set up Codex access →](docs/codex-tokenhub-profile-quick-start.md)
+
+TokenHub includes native adapters for Codex subscriptions, OpenAI, Azure OpenAI, Anthropic, Gemini, DeepSeek, Qwen, and local models, plus a catalog of 150+ provider templates and custom OpenAI-compatible upstreams. Popular integrations include:
+
+<table>
+  <tr>
+    <td align="center" width="25%" bgcolor="#ffffff"><a href="docs/codex-tokenhub-profile-quick-start.md"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/openai.svg" alt="Codex Subscription" width="42" height="42"><br><strong>Codex Subscription</strong></a></td>
+    <td align="center" width="25%" bgcolor="#ffffff"><a href="https://platform.openai.com/docs/models"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/openai.svg" alt="OpenAI" width="42" height="42"><br><strong>OpenAI</strong></a></td>
+    <td align="center" width="25%" bgcolor="#ffffff"><a href="https://docs.anthropic.com/en/docs/about-claude/models"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/anthropic.svg" alt="Anthropic" width="42" height="42"><br><strong>Anthropic</strong></a></td>
+    <td align="center" width="25%" bgcolor="#ffffff"><a href="https://ai.google.dev/gemini-api/docs/models"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/gemini-color.svg" alt="Google Gemini" width="42" height="42"><br><strong>Google Gemini</strong></a></td>
+  </tr>
+  <tr>
+    <td align="center" bgcolor="#ffffff"><a href="https://learn.microsoft.com/azure/ai-foundry/openai/concepts/models"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/azure-color.svg" alt="Azure OpenAI" width="42" height="42"><br><strong>Azure OpenAI</strong></a></td>
+    <td align="center" bgcolor="#ffffff"><a href="https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/bedrock-color.svg" alt="Amazon Bedrock" width="42" height="42"><br><strong>Amazon Bedrock</strong></a></td>
+    <td align="center" bgcolor="#ffffff"><a href="https://cloud.google.com/vertex-ai/generative-ai/docs/models"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/vertexai-color.svg" alt="Google Vertex AI" width="42" height="42"><br><strong>Google Vertex AI</strong></a></td>
+    <td align="center" bgcolor="#ffffff"><a href="https://docs.x.ai/docs/models"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/grok.svg" alt="xAI Grok" width="42" height="42"><br><strong>xAI / Grok</strong></a></td>
+  </tr>
+  <tr>
+    <td align="center" bgcolor="#ffffff"><a href="https://api-docs.deepseek.com"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/deepseek-color.svg" alt="DeepSeek" width="42" height="42"><br><strong>DeepSeek</strong></a></td>
+    <td align="center" bgcolor="#ffffff"><a href="https://www.alibabacloud.com/help/en/model-studio/models"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/qwen-color.svg" alt="Qwen DashScope" width="42" height="42"><br><strong>Qwen / DashScope</strong></a></td>
+    <td align="center" bgcolor="#ffffff"><a href="https://platform.moonshot.cn/docs/api/chat"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/moonshot.svg" alt="Moonshot AI Kimi" width="42" height="42"><br><strong>Moonshot AI / Kimi</strong></a></td>
+    <td align="center" bgcolor="#ffffff"><a href="https://docs.z.ai"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/zhipu-color.svg" alt="Z.AI GLM" width="42" height="42"><br><strong>Z.AI / GLM</strong></a></td>
+  </tr>
+  <tr>
+    <td align="center" bgcolor="#ffffff"><a href="https://platform.minimax.io/docs"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/minimax-color.svg" alt="MiniMax" width="42" height="42"><br><strong>MiniMax</strong></a></td>
+    <td align="center" bgcolor="#ffffff"><a href="https://www.volcengine.com/docs/82379/1330310"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/doubao-color.svg" alt="Doubao" width="42" height="42"><br><strong>Doubao</strong></a></td>
+    <td align="center" bgcolor="#ffffff"><a href="https://cloud.siliconflow.com/models"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/siliconcloud-color.svg" alt="SiliconFlow" width="42" height="42"><br><strong>SiliconFlow</strong></a></td>
+    <td align="center" bgcolor="#ffffff"><a href="https://modelscope.cn/docs/model-service/API-Inference/intro"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/modelscope-color.svg" alt="ModelScope" width="42" height="42"><br><strong>ModelScope</strong></a></td>
+  </tr>
+  <tr>
+    <td align="center" bgcolor="#ffffff"><a href="https://openrouter.ai/docs"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/openrouter-color.svg" alt="OpenRouter" width="42" height="42"><br><strong>OpenRouter</strong></a></td>
+    <td align="center" bgcolor="#ffffff"><a href="https://console.groq.com/docs/models"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/groq.svg" alt="Groq" width="42" height="42"><br><strong>Groq</strong></a></td>
+    <td align="center" bgcolor="#ffffff"><a href="https://docs.together.ai/docs/serverless-models"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/together-color.svg" alt="Together AI" width="42" height="42"><br><strong>Together AI</strong></a></td>
+    <td align="center" bgcolor="#ffffff"><a href="https://fireworks.ai/docs"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/fireworks-color.svg" alt="Fireworks AI" width="42" height="42"><br><strong>Fireworks AI</strong></a></td>
+  </tr>
+  <tr>
+    <td align="center" bgcolor="#ffffff"><a href="https://docs.mistral.ai/getting-started/models"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/mistral-color.svg" alt="Mistral AI" width="42" height="42"><br><strong>Mistral AI</strong></a></td>
+    <td align="center" bgcolor="#ffffff"><a href="https://docs.cohere.com/docs/models"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/cohere-color.svg" alt="Cohere" width="42" height="42"><br><strong>Cohere</strong></a></td>
+    <td align="center" bgcolor="#ffffff"><a href="https://docs.perplexity.ai"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/perplexity-color.svg" alt="Perplexity" width="42" height="42"><br><strong>Perplexity</strong></a></td>
+    <td align="center" bgcolor="#ffffff"><a href="https://huggingface.co/docs/inference-providers"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/huggingface-color.svg" alt="Hugging Face" width="42" height="42"><br><strong>Hugging Face</strong></a></td>
+  </tr>
+  <tr>
+    <td align="center" bgcolor="#ffffff"><a href="https://docs.api.nvidia.com/nim"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/nvidia-color.svg" alt="NVIDIA NIM" width="42" height="42"><br><strong>NVIDIA NIM</strong></a></td>
+    <td align="center" bgcolor="#ffffff"><a href="https://docs.github.com/en/github-models"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/github.svg" alt="GitHub Models" width="42" height="42"><br><strong>GitHub Models</strong></a></td>
+    <td align="center" bgcolor="#ffffff"><a href="https://docs.github.com/en/copilot"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/githubcopilot.svg" alt="GitHub Copilot" width="42" height="42"><br><strong>GitHub Copilot</strong></a></td>
+    <td align="center" bgcolor="#ffffff"><a href="https://vercel.com/docs/ai-gateway"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/vercel.svg" alt="Vercel AI Gateway" width="42" height="42"><br><strong>Vercel AI Gateway</strong></a></td>
+  </tr>
+  <tr>
+    <td align="center" bgcolor="#ffffff"><a href="https://developers.cloudflare.com/ai-gateway"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/cloudflare-color.svg" alt="Cloudflare AI Gateway" width="42" height="42"><br><strong>Cloudflare AI Gateway</strong></a></td>
+    <td align="center" bgcolor="#ffffff"><a href="https://docs.ollama.com"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/ollama.svg" alt="Ollama" width="42" height="42"><br><strong>Ollama</strong></a></td>
+    <td align="center" bgcolor="#ffffff"><a href="https://lmstudio.ai/docs"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/lmstudio.svg" alt="LM Studio" width="42" height="42"><br><strong>LM Studio</strong></a></td>
+    <td align="center" bgcolor="#ffffff"><a href="https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html"><img src="https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/vllm-color.svg" alt="vLLM and custom providers" width="42" height="42"><br><strong>vLLM / Custom</strong></a></td>
+  </tr>
+</table>
+
+Provider templates use the matching native adapter when available; otherwise they connect through an OpenAI-compatible endpoint. Models and capabilities vary by upstream service and account.
+
 ## Screenshots
 
 <p align="center">
@@ -94,8 +154,6 @@ The native installer verifies Release checksums, installs a systemd service, and
 - [Team Leader Guide](docs/team-leader-guide.md)
 - [Administrator Guide](docs/administrator-guide.md)
 - [Contributing Guide](CONTRIBUTING.md)
-- [简体中文文档](docs/zh-CN/README.md)
-- [日本語ドキュメント](docs/ja/README.md)
 
 ## Contributors
 
