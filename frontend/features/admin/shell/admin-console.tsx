@@ -31,7 +31,6 @@ import { modelRoutePolicyPayload } from "../views/model-routing-policy";
 import { OverviewView } from "../views/overview";
 import { PlaygroundPage } from "../views/playground";
 import { ProviderUpsertModal } from "../views/provider-editor";
-import { QuickAPIKeyModal } from "../views/quick-access";
 import { EditModal, SettingsView, usePagination } from "../views/settings-table";
 import { BillingView, UsageView } from "../views/usage-billing";
 
@@ -62,7 +61,6 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
   const [modal, setModal] = useState<ModalState<any> | null>(null);
   const [providerCreateOpen, setProviderCreateOpen] = useState(false);
   const [providerEditItem, setProviderEditItem] = useState<Provider | null>(null);
-  const [quickAPIKeyOpen, setQuickAPIKeyOpen] = useState(false);
   const [apiKeyWizardOpen, setApiKeyWizardOpen] = useState(false);
   const [apiKeyWizardInitialValues, setApiKeyWizardInitialValues] = useState<Record<string, string>>({});
   const [userImportOpen, setUserImportOpen] = useState(false);
@@ -606,7 +604,8 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
       return;
     }
     setIssuedKey("");
-    setQuickAPIKeyOpen(true);
+    setApiKeyWizardInitialValues({});
+    setApiKeyWizardOpen(true);
   }
 
   function quickCreateAPIKey(values: Record<string, string>, onCreated: () => void) {
@@ -905,18 +904,6 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
           setLoading={setLoading}
           setError={setError}
           setNotice={setNotice}
-        />
-      ) : null}
-
-      {quickAPIKeyOpen ? (
-        <QuickAPIKeyModal
-          data={data}
-          user={currentUser}
-          loading={loading}
-          onClose={() => {
-            if (!loading) setQuickAPIKeyOpen(false);
-          }}
-          onCreate={(values) => quickCreateAPIKey(values, () => setQuickAPIKeyOpen(false))}
         />
       ) : null}
 
