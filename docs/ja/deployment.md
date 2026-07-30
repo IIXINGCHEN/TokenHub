@@ -8,6 +8,8 @@ TokenHub は、Go バックエンド、Next.js 管理コンソール、SQLite �
 
 TokenHub は 2 種類のデータベースバックエンドをサポートしています。
 
+以下のコマンドは Docker Compose を使用します。どちらのバックエンドも Docker なしで同様にサポートされます。[ネイティブ Release + systemd](#ネイティブ-release--systemd)を参照してください。
+
 ### SQLite（デフォルト）
 
 **利点：**
@@ -300,6 +302,30 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 ```
 
 `down -v` は、ローカルデータを削除したい場合にのみ使用してください。
+
+## ローカルで本番ビルドを実行する（Docker なし）
+
+`deploy/local/run-local.sh` は、Docker も root も systemd も使わずに、自分のマシンで本番ビルドからバックエンドとコンソールを実行します。これは開発用の補助手段であり、デプロイ手段ではありません。サーバーに TokenHub をインストールする場合は[ネイティブ Release + systemd](#ネイティブ-release--systemd) または [Docker Compose](#docker-compose) を使用してください。
+
+```bash
+./deploy/local/run-local.sh          # フォアグラウンド。Ctrl-C で両方停止
+./deploy/local/run-local.sh -d       # バックグラウンド。すぐに戻る
+./deploy/local/run-local.sh status
+./deploy/local/run-local.sh logs -f
+./deploy/local/run-local.sh stop
+```
+
+必要に応じて両コンポーネントをビルドし、ループバック上で実行します。バイナリ、コンソールバンドル、データベース、ログ、pid ファイルはすべてリポジトリ内の `.tokenhub/`（gitignore 済み）に置かれ、そのディレクトリを削除すればインスタンスをリセットできます。ビルド時にはフロントエンドの通常の無視対象成果物（`frontend/node_modules`、`frontend/.next`）も更新されることがあります。システム全体へのインストールもサービスアカウントの作成も行いません。
+
+実行されるのは dev サーバーではなく**本番ビルド**（デプロイ時と同じ standalone バンドル）なので、本番ビルドでのみ現れる問題を検出できます。開発用の資格情報（`admin` / `admin123456`）を使用し、ループバックのみにバインドし、データは `.tokenhub/tokenhub.db` の SQLite に保存されます。
+
+`-d` を付けるとサービスは起動元のシェルから切り離され、シェルの終了後もターミナルを閉じた後も動き続けます。ただし再起動後は自動で復帰しません。それが必要な場合は正式なインストール方法を使用してください。どちらのモードでも pid ファイルを記録するため、`status` と `stop` はフォアグラウンドのインスタンスにも有効です。`stop` はシグナルを送る前に記録された pid が本当にこのインスタンスのものかを検証するので、再利用された pid を誤って kill することはありません。また起動前に両方のポートを確保するため、既に他のサービスが応答しているポートを「起動成功」と誤認することもありません。
+
+バックエンドは cgo 経由で SQLite をリンクするため、Go（バージョンは `backend/go.mod` を参照）、Node 22 以上、npm、C コンパイラが必要です。
+
+以上は Linux で検証済みです。macOS には `setsid` がないため、停止時はプロセスツリーをたどる方式にフォールバックします。この経路は実装済みですが macOS 上では未検証です。
+
+オプション: `--rebuild`、`--reset`（ローカルデータベースを破棄）、`--backend-port N`、`--console-port N`、`restart`。
 
 ## バックエンド環境変数
 
