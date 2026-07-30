@@ -572,6 +572,7 @@ export function userPayload(values: Record<string, string>, includePassword: boo
     email: values.email,
     role: values.role || "user",
     team_id: values.team_id,
+    team_ids: Array.from(new Set([values.team_id, ...splitList(values.team_ids)].filter(Boolean))),
     status: values.status || "active",
   };
   if (includePassword || values.password) {
