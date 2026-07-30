@@ -34,9 +34,7 @@ export function CrudView<T>({
   onEdit,
   onDelete,
   onAction,
-  onProjectMemberCreate,
-  onProjectMemberEdit,
-  onProjectMemberDelete,
+  onProjectOpen,
   onToolbarAction,
   currentUser = null,
 }: {
@@ -57,14 +55,11 @@ export function CrudView<T>({
   onEdit: (item: T) => void;
   onDelete: (item: T) => void;
   onAction: (action: ResourceAction<T>, item: T) => void;
-  onProjectMemberCreate?: (project: Project) => void;
-  onProjectMemberEdit?: (member: AdminResource) => void;
-  onProjectMemberDelete?: (member: AdminResource) => void;
+  onProjectOpen?: (project: Project) => void;
   onToolbarAction: (action: ToolbarAction) => void;
   currentUser?: AdminUser | null;
 }) {
   const [selectedTeamID, setSelectedTeamID] = useState("");
-  const [selectedProjectID, setSelectedProjectID] = useState("");
   const isTeamView = config.view === "teams";
   const isProjectView = config.view === "projects";
   const isPersonalKeyView = config.view === "api-keys" && Boolean(user && appRole(user.role) === "user");
@@ -73,9 +68,6 @@ export function CrudView<T>({
     : config;
   const selectedTeam = isTeamView
     ? (items as AdminResource[]).find((item) => item.id === selectedTeamID)
-    : undefined;
-  const selectedProject = isProjectView
-    ? (items as Project[]).find((item) => item.id === selectedProjectID)
     : undefined;
 
   useEffect(() => {
@@ -86,15 +78,7 @@ export function CrudView<T>({
     }
   }, [isTeamView, items, selectedTeamID]);
 
-  useEffect(() => {
-    if (!isProjectView) return;
-    const projectItems = items as Project[];
-    if (!selectedProjectID || !projectItems.some((item) => item.id === selectedProjectID)) {
-      setSelectedProjectID("");
-    }
-  }, [isProjectView, items, selectedProjectID]);
-
-  const detailPanelOpen = (isTeamView && selectedTeam) || (isProjectView && selectedProject);
+  const detailPanelOpen = isTeamView && selectedTeam;
 
   if (config.view === "api-keys" && data.keys.length === 0 && !loading && !query.trim()) {
     return (
@@ -108,6 +92,7 @@ export function CrudView<T>({
     <DataSection title={config.eyebrow}>
       {config.view === "api-keys" && !isPersonalKeyView ? <APIKeyFlowHint data={data} /> : null}
       {config.view === "routes" ? <RouteStrategyHint data={data} /> : null}
+      {isProjectView ? <ProjectTeamFlowHint /> : null}
       {config.view === "providers" || config.view === "models" ? (
         <ModelCategoryTabs
           data={data}
@@ -181,10 +166,11 @@ export function CrudView<T>({
                 isTeamView
                   ? (item) => setSelectedTeamID((item as AdminResource).id)
                   : isProjectView
-                    ? (item) => setSelectedProjectID((item as Project).id)
+                    ? (item) => onProjectOpen?.(item as Project)
                     : undefined
               }
-              selectedRowID={isTeamView ? selectedTeam?.id : isProjectView ? selectedProject?.id : undefined}
+              rowOpenLabel={isProjectView ? "查看与配置" : undefined}
+              selectedRowID={isTeamView ? selectedTeam?.id : undefined}
             />
           )}
           <PaginationControls pagination={pagination} totalItems={totalItems} />
@@ -192,19 +178,23 @@ export function CrudView<T>({
         {isTeamView && selectedTeam ? (
           <TeamMembersPanel data={data} team={selectedTeam} onClose={() => setSelectedTeamID("")} />
         ) : null}
-        {isProjectView && selectedProject ? (
-          <ProjectQuotaPanel
-            data={data}
-            project={selectedProject}
-            onClose={() => setSelectedProjectID("")}
-            onAction={(action) => onAction(action as unknown as ResourceAction<T>, selectedProject as T)}
-            onCreateMember={() => onProjectMemberCreate?.(selectedProject)}
-            onEditMember={(member) => onProjectMemberEdit?.(member)}
-            onDeleteMember={(member) => onProjectMemberDelete?.(member)}
-          />
-        ) : null}
       </div>
     </DataSection>
+  );
+}
+
+export function ProjectTeamFlowHint() {
+  return (
+    <div className="workflow-hint project-team-flow-hint">
+      <div>
+        <strong>{tx("团队配置现在是项目设置的一部分")}</strong>
+        <span>{tx("每个项目有 1 个主团队，还可以添加多个协作团队。主团队负责成本与审批，团队角色决定谁能访问项目。")}</span>
+      </div>
+      <div className="workflow-hint-stats">
+        <span>{tx("主团队 · 责任归属")}</span>
+        <span>{tx("协作团队 · 访问权限")}</span>
+      </div>
+    </div>
   );
 }
 
