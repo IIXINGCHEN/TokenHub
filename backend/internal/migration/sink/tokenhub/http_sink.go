@@ -63,9 +63,18 @@ func (s *HTTPSink) Apply(ctx context.Context, migrationBundle *bundle.CanonicalM
 	}
 
 	result := &ApplyResult{}
+	existingTeams, err := s.client.ListResources(ctx, "teams")
+	if err != nil {
+		return nil, err
+	}
 	for _, team := range migrationBundle.Teams {
-		s.refIndex.teams[team.ExternalRef.ID] = team.ID
-		change := Change{Resource: "team", ID: team.ID, Action: ActionSkip}
+		change, created, err := s.applyTeamHTTP(ctx, existingTeams, team)
+		if err != nil {
+			return partialApplyFailure(result, s.newKeys, err)
+		}
+		if created.ID != "" {
+			existingTeams = append(existingTeams, created)
+		}
 		result.Changes = append(result.Changes, change)
 		result.Checkpoint.Changes = append(result.Checkpoint.Changes, change)
 	}
@@ -218,10 +227,16 @@ func (s *HTTPSink) Plan(ctx context.Context, migrationBundle *bundle.CanonicalMi
 	// a later Apply on the same instance starts from a clean slate.
 	planIndex := newRefIndex()
 	var changes []Change
-	for _, team := range migrationBundle.Teams {
-		planIndex.teams[team.ExternalRef.ID] = team.ID
-		changes = append(changes, Change{Resource: "team", ID: team.ID, Action: ActionSkip})
+	existingTeams, err := s.client.ListResources(ctx, "teams")
+	if err != nil {
+		return nil, err
 	}
+	teamIDs, teamChanges, err := planTeams(existingTeams, migrationBundle.Teams)
+	if err != nil {
+		return nil, err
+	}
+	planIndex.teams = teamIDs
+	changes = append(changes, teamChanges...)
 	for _, item := range migrationBundle.Providers {
 		if existing, found := findProviderByBusinessKey(providers, item.Spec.Name, item.Spec.Type); found {
 			planIndex.providers[item.ExternalRef.ID] = existing.ID
@@ -330,11 +345,18 @@ func (s *HTTPSink) Verify(ctx context.Context, migrationBundle *bundle.Canonical
 	}
 
 	resolved := newRefIndex()
-	for _, item := range migrationBundle.Teams {
-		resolved.teams[item.ExternalRef.ID] = item.ID
+	existingTeams, err := s.client.ListResources(ctx, "teams")
+	if err != nil {
+		return nil, err
 	}
+	teamIDs, teamIssues := verifyTeams(existingTeams, migrationBundle.Teams)
+	resolved.teams = teamIDs
 
 	result := &VerifyResult{OK: true}
+	if len(teamIssues) > 0 {
+		result.OK = false
+		result.Issues = append(result.Issues, teamIssues...)
+	}
 
 	for _, item := range migrationBundle.Providers {
 		existing, found := findProviderByBusinessKey(providers, item.Spec.Name, item.Spec.Type)
@@ -486,6 +508,10 @@ func (s *HTTPSink) Rollback(ctx context.Context, checkpoint Checkpoint) (*Rollba
 			err = s.client.DeleteAPIKey(ctx, change.ID)
 		case "user":
 			err = s.client.DeleteAdminUser(ctx, change.ID)
+		case "team":
+			// Teams are removed last: the Admin API refuses to delete a team
+			// that still has projects or users attached.
+			err = s.client.DeleteResource(ctx, "teams", change.ID)
 		default:
 			continue
 		}
@@ -649,6 +675,11 @@ func (s *HTTPSink) applyUserHTTP(ctx context.Context, existing []server.AdminUse
 		if chooseActionUser(current, spec) == ActionSkip {
 			return Change{Resource: "user", ID: current.ID, Action: ActionSkip}, nil
 		}
+		// The bundle carries a single team ref, so it does not own the user's
+		// full team membership. The server rewrites team_ids from the payload
+		// unconditionally, so existing memberships have to be carried over or
+		// an unrelated field change would drop them.
+		spec.TeamIDs = current.TeamIDs
 		if _, err := s.client.UpdateAdminUser(ctx, current.ID, spec); err != nil {
 			return Change{}, err
 		}
@@ -674,6 +705,26 @@ func (s *HTTPSink) applyUserHTTP(ctx context.Context, existing []server.AdminUse
 	}
 	s.refIndex.users[item.ExternalRef.ID] = created.ID
 	return Change{Resource: "user", ID: created.ID, Action: ActionCreate}, nil
+}
+
+// applyTeamHTTP ensures the bundle team exists on the target before any user
+// or project references it: the Admin API rejects mutations naming a team it
+// does not know.
+func (s *HTTPSink) applyTeamHTTP(ctx context.Context, existing []server.AdminResource, item bundle.TeamRef) (Change, server.AdminResource, error) {
+	resolution, err := resolveTeam(existing, item)
+	if err != nil {
+		return Change{}, server.AdminResource{}, err
+	}
+	if resolution.Exists {
+		s.refIndex.teams[item.ExternalRef.ID] = resolution.ID
+		return Change{Resource: "team", ID: resolution.ID, Action: ActionSkip}, server.AdminResource{}, nil
+	}
+	created, err := s.client.CreateResource(ctx, "teams", desiredTeamResource(item))
+	if err != nil {
+		return Change{}, server.AdminResource{}, err
+	}
+	s.refIndex.teams[item.ExternalRef.ID] = created.ID
+	return Change{Resource: "team", ID: created.ID, Action: ActionCreate}, created, nil
 }
 
 // resolveTeamRef maps a bundle team ref onto the target team ID, falling

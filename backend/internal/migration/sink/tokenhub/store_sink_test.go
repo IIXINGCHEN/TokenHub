@@ -1,6 +1,7 @@
 package tokenhub
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -353,5 +354,111 @@ func TestStoreSinkApplyRejectsQuotaPolicies(t *testing.T) {
 
 	if _, err := sink.Apply(b); err == nil {
 		t.Fatal("expected quota policies to be rejected")
+	}
+}
+
+// TestStoreSinkApplyPreservesExtraTeamMemberships guards against silent data
+// loss: the bundle carries a single team ref, but the store rewrites a user's
+// full team list from every update patch. Applying a drifted user must not
+// drop the team memberships the migration does not own.
+func TestStoreSinkApplyPreservesExtraTeamMemberships(t *testing.T) {
+	store := server.NewMemoryStore()
+	sink := NewStoreSink(store, bundle.StaticResolver{})
+
+	for _, id := range []string{"team-core", "team-extra"} {
+		store.CreateResource("teams", server.AdminResource{ID: id, Name: id, Status: server.StatusActive})
+	}
+	existing, err := store.CreateAdminUser(server.AdminUser{
+		Username: "alice",
+		Name:     "Alice",
+		Email:    "alice@example.com",
+		Role:     "user",
+		Status:   server.StatusActive,
+		TeamID:   "team-core",
+		TeamIDs:  []string{"team-core", "team-extra"},
+	}, "placeholder-password")
+	if err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+
+	b := &bundle.CanonicalMigrationBundle{
+		SchemaVersion: bundle.SchemaVersion,
+		Source:        bundle.Source{Adapter: "litellm", AdapterVersion: "1.60.0"},
+		GeneratedAt:   time.Date(2026, 7, 30, 9, 0, 0, 0, time.UTC),
+		Teams: []bundle.TeamRef{{
+			ExternalRef: bundle.ExternalRef{System: "litellm", ID: "team/core"},
+			ID:          "team-core",
+			Name:        "Core",
+		}},
+		Users: []bundle.UserRef{{
+			ExternalRef: bundle.ExternalRef{System: "litellm", ID: "user/alice"},
+			TeamRef:     "team/core",
+			Spec: server.AdminUser{
+				Username: "alice",
+				// Drifted display name forces an update of the existing user.
+				Name:   "Alice Liddell",
+				Email:  "alice@example.com",
+				Role:   "user",
+				Status: server.StatusActive,
+			},
+		}},
+	}
+
+	if _, err := sink.Apply(b); err != nil {
+		t.Fatalf("apply bundle: %v", err)
+	}
+
+	var updated server.AdminUser
+	for _, user := range store.ListAdminUsers() {
+		if user.ID == existing.ID {
+			updated = user
+		}
+	}
+	if updated.Name != "Alice Liddell" {
+		t.Fatalf("expected the drifted user to be updated, got %+v", updated)
+	}
+	if !slices.Contains(updated.TeamIDs, "team-extra") {
+		t.Fatalf("expected extra team membership to survive the update, got %+v", updated.TeamIDs)
+	}
+}
+
+// TestStoreSinkVerifyReportsMissingTeam guards Plan/Apply/Verify agreement:
+// a bundle whose team is absent from the target is drift, not a converged
+// state, so verification must fail instead of silently passing.
+func TestStoreSinkVerifyReportsMissingTeam(t *testing.T) {
+	store := server.NewMemoryStore()
+	sink := NewStoreSink(store, bundle.StaticResolver{})
+
+	b := &bundle.CanonicalMigrationBundle{
+		SchemaVersion: bundle.SchemaVersion,
+		Source:        bundle.Source{Adapter: "litellm", AdapterVersion: "1.60.0"},
+		GeneratedAt:   time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC),
+		Teams: []bundle.TeamRef{{
+			ExternalRef: bundle.ExternalRef{System: "litellm", ID: "team/core"},
+			ID:          "team-core",
+			Name:        "Core",
+		}},
+	}
+
+	result, err := sink.Verify(b)
+	if err != nil {
+		t.Fatalf("verify bundle: %v", err)
+	}
+	if result.OK {
+		t.Fatal("expected verification to fail for a team that is not on the target")
+	}
+	if len(result.Issues) != 1 || result.Issues[0].Resource != "team" || result.Issues[0].Ref != "team/core" {
+		t.Fatalf("expected a team issue, got %+v", result.Issues)
+	}
+
+	if _, err := sink.Apply(b); err != nil {
+		t.Fatalf("apply bundle: %v", err)
+	}
+	after, err := sink.Verify(b)
+	if err != nil {
+		t.Fatalf("verify after apply: %v", err)
+	}
+	if !after.OK {
+		t.Fatalf("expected verification to pass after apply, got %+v", after.Issues)
 	}
 }

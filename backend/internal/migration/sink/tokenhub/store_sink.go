@@ -3,6 +3,7 @@ package tokenhub
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 
 	"tokenhub/backend/internal/migration/bundle"
@@ -112,8 +113,10 @@ func (s *StoreSink) Apply(b *bundle.CanonicalMigrationBundle) (*ApplyResult, err
 	result := &ApplyResult{}
 
 	for _, item := range b.Teams {
-		s.refIndex.teams[item.ExternalRef.ID] = item.ID
-		change := Change{Resource: "team", ID: item.ID, Action: ActionSkip}
+		change, err := s.applyTeam(item)
+		if err != nil {
+			return nil, err
+		}
 		result.Changes = append(result.Changes, change)
 		result.Checkpoint.Changes = append(result.Checkpoint.Changes, change)
 	}
@@ -184,7 +187,11 @@ func (s *StoreSink) Verify(b *bundle.CanonicalMigrationBundle) (*VerifyResult, e
 		return nil, err
 	}
 	result := &VerifyResult{OK: true}
-	resolved := s.buildResolvedIndex(b)
+	resolved, teamIssues := s.buildResolvedIndex(b)
+	if len(teamIssues) > 0 {
+		result.OK = false
+		result.Issues = append(result.Issues, teamIssues...)
+	}
 
 	for _, item := range b.Providers {
 		if _, found := findProviderByBusinessKey(s.store.ListProviders(), item.Spec.Name, item.Spec.Type); !found {
@@ -237,7 +244,9 @@ func (s *StoreSink) Verify(b *bundle.CanonicalMigrationBundle) (*VerifyResult, e
 	return result, nil
 }
 
-func (s *StoreSink) buildResolvedIndex(b *bundle.CanonicalMigrationBundle) refIndex {
+// buildResolvedIndex maps bundle refs onto the IDs present on the target and
+// reports the teams that could not be resolved, which Verify surfaces as drift.
+func (s *StoreSink) buildResolvedIndex(b *bundle.CanonicalMigrationBundle) (refIndex, []VerifyIssue) {
 	index := refIndex{
 		providers: map[string]string{},
 		resources: map[string]string{},
@@ -248,9 +257,8 @@ func (s *StoreSink) buildResolvedIndex(b *bundle.CanonicalMigrationBundle) refIn
 		routes:    map[string]string{},
 		teams:     map[string]string{},
 	}
-	for _, item := range b.Teams {
-		index.teams[item.ExternalRef.ID] = item.ID
-	}
+	teamIDs, teamIssues := verifyTeams(s.store.ListResources("teams"), b.Teams)
+	index.teams = teamIDs
 	for _, item := range b.Providers {
 		if existing, found := findProviderByBusinessKey(s.store.ListProviders(), item.Spec.Name, item.Spec.Type); found {
 			index.providers[item.ExternalRef.ID] = existing.ID
@@ -306,7 +314,7 @@ func (s *StoreSink) buildResolvedIndex(b *bundle.CanonicalMigrationBundle) refIn
 			index.routes[item.ExternalRef.ID] = existing.ID
 		}
 	}
-	return index
+	return index, teamIssues
 }
 
 func (s *StoreSink) Rollback(checkpoint Checkpoint) (*RollbackResult, error) {
@@ -332,6 +340,12 @@ func (s *StoreSink) Rollback(checkpoint Checkpoint) (*RollbackResult, error) {
 			err = s.store.DeleteProviderResource(change.ID)
 		case "provider":
 			err = s.store.DeleteProvider(change.ID)
+		case "team":
+			// Teams are removed last because the store refuses to delete a
+			// team that still has projects or users attached. A team that
+			// pre-existing resources were moved onto therefore fails here
+			// rather than being silently left behind.
+			err = s.store.DeleteTeam(change.ID)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("rollback %s %s: %w", change.Resource, change.ID, err)
@@ -339,6 +353,24 @@ func (s *StoreSink) Rollback(checkpoint Checkpoint) (*RollbackResult, error) {
 		result.Changes = append(result.Changes, Change{Resource: change.Resource, ID: change.ID, Action: ActionDelete})
 	}
 	return result, nil
+}
+
+// applyTeam ensures the bundle team exists on the target. Teams are not just
+// ID mappings: the store rejects user and project mutations that name a team
+// it does not know, so a team the source owns has to be created before any
+// resource can reference it.
+func (s *StoreSink) applyTeam(item bundle.TeamRef) (Change, error) {
+	resolution, err := resolveTeam(s.store.ListResources("teams"), item)
+	if err != nil {
+		return Change{}, err
+	}
+	if resolution.Exists {
+		s.refIndex.teams[item.ExternalRef.ID] = resolution.ID
+		return Change{Resource: "team", ID: resolution.ID, Action: ActionSkip}, nil
+	}
+	created := s.store.CreateResource("teams", desiredTeamResource(item))
+	s.refIndex.teams[item.ExternalRef.ID] = created.ID
+	return Change{Resource: "team", ID: created.ID, Action: ActionCreate}, nil
 }
 
 func (s *StoreSink) resolveTeamRef(ref string) string {
@@ -385,9 +417,11 @@ func (s *StoreSink) Plan(b *bundle.CanonicalMigrationBundle) (*MigrationReport, 
 	// Build a temporary ref index so we can resolve provider and project refs
 	// for nested resources. This mirrors the ref index built during Apply.
 	planIndex := newRefIndex()
-	for _, item := range b.Teams {
-		planIndex.teams[item.ExternalRef.ID] = item.ID
+	teamIDs, teamChanges, err := planTeams(s.store.ListResources("teams"), b.Teams)
+	if err != nil {
+		return nil, err
 	}
+	planIndex.teams = teamIDs
 	// Resolve project refs for Plan
 	projects := s.store.ListProjects()
 	for _, item := range b.Projects {
@@ -399,8 +433,12 @@ func (s *StoreSink) Plan(b *bundle.CanonicalMigrationBundle) (*MigrationReport, 
 	}
 
 	var report MigrationReport
-	for range b.Teams {
-		report.Skipped++
+	for _, change := range teamChanges {
+		if change.Action == ActionCreate {
+			report.Created++
+		} else {
+			report.Skipped++
+		}
 	}
 	providers := s.store.ListProviders()
 	for _, item := range b.Providers {
@@ -597,6 +635,11 @@ func (s *StoreSink) applyUser(item bundle.UserRef) (Change, error) {
 				s.refIndex.users[item.ExternalRef.ID] = existing.ID
 				return Change{Resource: "user", ID: existing.ID, Action: ActionSkip}, nil
 			}
+			// The bundle carries a single team ref, so it does not own the
+			// user's full team membership. The store rewrites TeamIDs from the
+			// patch unconditionally, so the existing memberships have to be
+			// carried over or an unrelated field change would drop them.
+			spec.TeamIDs = existing.TeamIDs
 			updated, err := s.store.UpdateAdminUser(existing.ID, spec, "")
 			if err != nil {
 				return Change{}, err
@@ -839,16 +882,73 @@ func sameModel(left server.Model, right server.Model) bool {
 	return true
 }
 
-func sameRoute(left server.ModelRoute, right server.ModelRoute) bool {
-	if right.Strategy == "" {
-		right.Strategy = server.RouteStrategyBalanced
+// mergeRouteUpdate mirrors the store's UpdateRoute merge rules: a zero value
+// in the desired spec means "keep the current value", not "reset it".
+func mergeRouteUpdate(existing server.ModelRoute, desired server.ModelRoute) server.ModelRoute {
+	merged := existing
+	if desired.ModelName != "" {
+		merged.ModelName = desired.ModelName
 	}
-	if right.Weight <= 0 {
-		right.Weight = 1
+	if desired.ProviderID != "" {
+		merged.ProviderID = desired.ProviderID
 	}
-	left.CreatedAt = right.CreatedAt
-	left.LastUsedAt = right.LastUsedAt
-	return reflect.DeepEqual(left, right)
+	if desired.ProviderModel != "" {
+		merged.ProviderModel = desired.ProviderModel
+	}
+	if desired.Status != "" {
+		merged.Status = desired.Status
+	}
+	if desired.Strategy != "" {
+		merged.Strategy = desired.Strategy
+	}
+	if desired.Priority != 0 {
+		merged.Priority = desired.Priority
+	}
+	// A non-positive weight is what AddRoute normalizes to 1, so it is treated
+	// as "unspecified" here instead of following UpdateRoute literally, which
+	// would let a negative weight through and make create and update disagree.
+	if desired.Weight > 0 {
+		merged.Weight = desired.Weight
+	}
+	if desired.QualityScore != 0 {
+		merged.QualityScore = desired.QualityScore
+	}
+	if desired.CostScore != 0 {
+		merged.CostScore = desired.CostScore
+	}
+	merged.ProviderResourceID = desired.ProviderResourceID
+	merged.ResourceGroup = desired.ResourceGroup
+	merged.StickySession = desired.StickySession
+	// ProjectScope and ProjectIDs are deliberately left untouched: the bundle
+	// schema does not carry them, so the migration does not own them. Defaulting
+	// an unspecified scope to "all" here would widen project access on any
+	// target route already scoped to include/exclude.
+	return merged
+}
+
+// sameRoute reports whether applying desired onto existing would be a no-op.
+//
+// It compares the merged result field by field rather than deep-equalling the
+// whole struct: ModelRoute carries server-owned fields the bundle never sets
+// (and gains more over time, as ProjectScope/ProjectIDs did), and the store
+// fills those with defaults on create. Deep equality therefore reported drift
+// on every re-apply and broke idempotence.
+func sameRoute(existing server.ModelRoute, desired server.ModelRoute) bool {
+	merged := mergeRouteUpdate(existing, desired)
+	return existing.ModelName == merged.ModelName &&
+		existing.ProviderID == merged.ProviderID &&
+		existing.ProviderResourceID == merged.ProviderResourceID &&
+		existing.ResourceGroup == merged.ResourceGroup &&
+		existing.StickySession == merged.StickySession &&
+		existing.ProviderModel == merged.ProviderModel &&
+		existing.Priority == merged.Priority &&
+		existing.Weight == merged.Weight &&
+		existing.QualityScore == merged.QualityScore &&
+		existing.CostScore == merged.CostScore &&
+		existing.Status == merged.Status &&
+		existing.Strategy == merged.Strategy &&
+		existing.ProjectScope == merged.ProjectScope &&
+		slices.Equal(existing.ProjectIDs, merged.ProjectIDs)
 }
 
 // sameAdminUser reports whether applying desired onto existing would be a

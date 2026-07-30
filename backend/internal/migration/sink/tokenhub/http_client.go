@@ -300,15 +300,17 @@ func (c *AdminAPIClient) ListUsers(ctx context.Context) ([]server.AdminUser, err
 
 // adminUserWriteRequest mirrors the PATCH /api/admin/users/{id} payload.
 // The server keeps current values for empty username/name/email/role/status,
-// but team_id is applied unconditionally: omitting it clears the user's team,
-// so callers must always send the full desired team assignment.
+// but team_id and team_ids are applied unconditionally: omitting them clears
+// the user's team assignment, so callers must always send the full desired
+// membership.
 type adminUserWriteRequest struct {
-	Username string `json:"username,omitempty"`
-	Name     string `json:"name,omitempty"`
-	Email    string `json:"email,omitempty"`
-	Role     string `json:"role,omitempty"`
-	TeamID   string `json:"team_id,omitempty"`
-	Status   string `json:"status,omitempty"`
+	Username string   `json:"username,omitempty"`
+	Name     string   `json:"name,omitempty"`
+	Email    string   `json:"email,omitempty"`
+	Role     string   `json:"role,omitempty"`
+	TeamID   string   `json:"team_id,omitempty"`
+	TeamIDs  []string `json:"team_ids,omitempty"`
+	Status   string   `json:"status,omitempty"`
 }
 
 func (c *AdminAPIClient) UpdateAdminUser(ctx context.Context, id string, req server.AdminUser) (server.AdminUser, error) {
@@ -318,6 +320,7 @@ func (c *AdminAPIClient) UpdateAdminUser(ctx context.Context, id string, req ser
 		Email:    req.Email,
 		Role:     req.Role,
 		TeamID:   req.TeamID,
+		TeamIDs:  req.TeamIDs,
 		Status:   req.Status,
 	}
 	var resp server.AdminUser
@@ -366,6 +369,29 @@ func (c *AdminAPIClient) UpdateProject(ctx context.Context, id string, req serve
 
 func (c *AdminAPIClient) DeleteProject(ctx context.Context, id string) error {
 	return c.doJSON(ctx, http.MethodDelete, c.endpoint("/api/admin/projects", id), nil, nil)
+}
+
+// ListResources, CreateResource and DeleteResource cover the generic admin
+// resource endpoint. The migration uses them for teams, which have no
+// dedicated endpoint of their own.
+func (c *AdminAPIClient) ListResources(ctx context.Context, kind string) ([]server.AdminResource, error) {
+	var resp listResponse[server.AdminResource]
+	if err := c.doJSON(ctx, http.MethodGet, c.endpoint("/api/admin/resources", kind), nil, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Data, nil
+}
+
+func (c *AdminAPIClient) CreateResource(ctx context.Context, kind string, req server.AdminResource) (server.AdminResource, error) {
+	var resp server.AdminResource
+	if err := c.doJSON(ctx, http.MethodPost, c.endpoint("/api/admin/resources", kind), req, &resp); err != nil {
+		return server.AdminResource{}, err
+	}
+	return resp, nil
+}
+
+func (c *AdminAPIClient) DeleteResource(ctx context.Context, kind string, id string) error {
+	return c.doJSON(ctx, http.MethodDelete, c.endpoint("/api/admin/resources", kind, id), nil, nil)
 }
 
 func (c *AdminAPIClient) ListAPIKeys(ctx context.Context) ([]server.APIKey, error) {

@@ -6370,55 +6370,6 @@ type responseBody struct {
 	Body string
 }
 
-// TestAdminProviderResourceActionSuffixRouting guards the nested
-// provider-resource action parsing: /quota and /refresh-token must keep
-// dispatching to their handlers alongside the /health and /test suffixes.
-func TestAdminProviderResourceActionSuffixRouting(t *testing.T) {
-	store := NewMemoryStore()
-	if err := BootstrapBaseData(store); err != nil {
-		t.Fatal(err)
-	}
-	app := New(store).Handler()
-
-	quota := doJSON(t, app, http.MethodGet, "/api/admin/provider-resources/res-missing/quota", nil, "")
-	if !strings.Contains(quota.Body, "provider_resource_not_found") {
-		t.Fatalf("expected quota handler to be reached, got %d: %s", quota.Code, quota.Body)
-	}
-
-	refresh := doJSON(t, app, http.MethodPost, "/api/admin/provider-resources/res-missing/refresh-token", nil, "")
-	if strings.Contains(refresh.Body, `"type":"not_found"`) {
-		t.Fatalf("refresh-token route fell through suffix parsing, got %d: %s", refresh.Code, refresh.Body)
-	}
-}
-
-// TestSplitNestedAdminPath covers the table-driven suffix parsing shared by
-// the nested admin routes: IDs containing slashes must survive intact and
-// only known action suffixes may be split off.
-func TestSplitNestedAdminPath(t *testing.T) {
-	actions := []string{"health", "test", "refresh-token", "quota"}
-	cases := []struct {
-		name      string
-		remainder string
-		want      []string
-	}{
-		{"empty", "", nil},
-		{"plain id", "res-1", []string{"res-1"}},
-		{"id with action", "res-1/health", []string{"res-1", "health"}},
-		{"slashed id with action", "litellm/key/abc/quota", []string{"litellm/key/abc", "quota"}},
-		{"slashed id without action", "litellm/key/abc", []string{"litellm/key/abc"}},
-		{"segment ending in action name", "res-refresh-token", []string{"res-refresh-token"}},
-		{"unknown action stays in id", "res-1/unknown", []string{"res-1/unknown"}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := splitNestedAdminPath(tc.remainder, actions)
-			if !slices.Equal(got, tc.want) {
-				t.Fatalf("splitNestedAdminPath(%q) = %v, want %v", tc.remainder, got, tc.want)
-			}
-		})
-	}
-}
-
 func doJSON(t *testing.T, handler http.Handler, method string, path string, payload any, token string) responseBody {
 	t.Helper()
 	var body io.Reader

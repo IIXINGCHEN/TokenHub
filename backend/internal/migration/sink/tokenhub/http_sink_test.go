@@ -258,8 +258,12 @@ func TestHTTPSinkApplyUserCreatesAndUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rollback imported user: %v", err)
 	}
-	if len(rollbackResult.Changes) != 1 || rollbackResult.Changes[0].Resource != "user" {
-		t.Fatalf("expected rollback to delete the imported user, got %+v", rollbackResult.Changes)
+	// The team was created by this apply too, so rollback removes it as well,
+	// and only after the user that referenced it.
+	if len(rollbackResult.Changes) != 2 ||
+		rollbackResult.Changes[0].Resource != "user" ||
+		rollbackResult.Changes[1].Resource != "team" {
+		t.Fatalf("expected rollback to delete the imported user then the team, got %+v", rollbackResult.Changes)
 	}
 	users, err = client.ListUsers(context.Background())
 	if err != nil {

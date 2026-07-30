@@ -51,7 +51,7 @@ func BuildBundle(config *Config, opts BuildOptions) (*bundle.CanonicalMigrationB
 		},
 	}
 
-	b.Teams = buildTeams(config)
+	b.Teams = buildTeams(config, idStrategy)
 	b.Users = buildUsers(config, b, idStrategy)
 	b.Projects = buildProjects(config, b, idStrategy)
 	b.APIKeys = buildAPIKeys(config, b, idStrategy)
@@ -77,53 +77,33 @@ func BuildBundle(config *Config, opts BuildOptions) (*bundle.CanonicalMigrationB
 	return b, nil
 }
 
-func buildTeams(config *Config) []bundle.TeamRef {
+func buildTeams(config *Config, idStrategy bundle.IDStrategy) []bundle.TeamRef {
 	teams := make([]bundle.TeamRef, 0, len(config.KeyManagement.Teams))
 	seen := map[string]struct{}{}
-	for _, team := range config.KeyManagement.Teams {
-		teamID := strings.TrimSpace(team.TeamID)
+	add := func(teamID string, name string) {
+		teamID = strings.TrimSpace(teamID)
 		if teamID == "" {
-			continue
+			return
 		}
 		if _, ok := seen[teamID]; ok {
-			continue
+			return
 		}
 		seen[teamID] = struct{}{}
+		externalRef := teamExternalRef(teamID)
 		teams = append(teams, bundle.TeamRef{
-			ExternalRef: bundle.ExternalRef{System: AdapterName, ID: teamExternalRef(teamID)},
-			ID:          teamID,
-			Name:        fallback(team.TeamAlias, teamID),
+			ExternalRef: bundle.ExternalRef{System: AdapterName, ID: externalRef},
+			ID:          mustMintID(idStrategy, externalRef),
+			Name:        fallback(name, teamID),
 		})
+	}
+	for _, team := range config.KeyManagement.Teams {
+		add(team.TeamID, team.TeamAlias)
 	}
 	for _, user := range config.KeyManagement.Users {
-		teamID := strings.TrimSpace(user.TeamID)
-		if teamID == "" {
-			continue
-		}
-		if _, ok := seen[teamID]; ok {
-			continue
-		}
-		seen[teamID] = struct{}{}
-		teams = append(teams, bundle.TeamRef{
-			ExternalRef: bundle.ExternalRef{System: AdapterName, ID: teamExternalRef(teamID)},
-			ID:          teamID,
-			Name:        teamID,
-		})
+		add(user.TeamID, "")
 	}
 	for _, key := range config.KeyManagement.VirtualKeys {
-		teamID := strings.TrimSpace(key.TeamID)
-		if teamID == "" {
-			continue
-		}
-		if _, ok := seen[teamID]; ok {
-			continue
-		}
-		seen[teamID] = struct{}{}
-		teams = append(teams, bundle.TeamRef{
-			ExternalRef: bundle.ExternalRef{System: AdapterName, ID: teamExternalRef(teamID)},
-			ID:          teamID,
-			Name:        teamID,
-		})
+		add(key.TeamID, "")
 	}
 	return teams
 }
