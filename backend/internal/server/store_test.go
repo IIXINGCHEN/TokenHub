@@ -257,6 +257,41 @@ func TestLegacyProjectTeamMigrationPreservesAccess(t *testing.T) {
 	}
 }
 
+func TestLegacyUserTeamMigrationPreservesLogin(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "legacy-user.db")
+	store, err := NewSQLiteStore("sqlite://" + databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	passwordHash := HashSecret("legacy-password")
+	if err := store.db.Exec(`INSERT INTO admin_users
+		(id, username, name, email, role, team_id, status, password_hash, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"usr_legacy_login", "legacy-login", "Legacy Login", "legacy-login@example.com", "admin",
+		"team_legacy_login", StatusActive, passwordHash, time.Now().UTC(), time.Now().UTC()).Error; err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := store.db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := NewSQLiteStore("sqlite://" + databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, _, err := reopened.AuthenticateAdminUser("legacy-login", "legacy-password", time.Hour)
+	if err != nil {
+		t.Fatalf("legacy user should still authenticate after team migration: %v", err)
+	}
+	if len(user.TeamIDs) != 1 || user.TeamIDs[0] != "team_legacy_login" {
+		t.Fatalf("legacy user teams were not normalized as JSON: %+v", user.TeamIDs)
+	}
+}
+
 func TestConcurrentProjectTeamLinkIsUnique(t *testing.T) {
 	store := NewMemoryStore()
 	store.CreateResource("teams", AdminResource{ID: "team_primary", Name: "Primary Team", Status: StatusActive})

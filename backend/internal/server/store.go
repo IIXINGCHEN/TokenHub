@@ -574,16 +574,34 @@ func backfillTeamRelationships(db *gorm.DB) error {
 		}
 	}
 
-	var users []AdminUser
-	if err := db.Find(&users).Error; err != nil {
+	type storedAdminUserTeams struct {
+		ID         string
+		TeamID     string
+		TeamIDsRaw sql.NullString `gorm:"column:team_ids"`
+	}
+	var users []storedAdminUserTeams
+	if err := db.Table("admin_users").Select("id", "team_id", "team_ids").Scan(&users).Error; err != nil {
 		return err
 	}
 	for _, user := range users {
-		teamIDs := normalizedTeamIDs(user.TeamID, user.TeamIDs)
-		if equalStringSlices(teamIDs, user.TeamIDs) {
+		additionalTeamIDs := []string{}
+		rawTeamIDs := strings.TrimSpace(user.TeamIDsRaw.String)
+		if rawTeamIDs != "" {
+			if err := json.Unmarshal([]byte(rawTeamIDs), &additionalTeamIDs); err != nil {
+				// A previous migration wrote the primary team as plain text. Treat
+				// other malformed values as untrusted and recover from TeamID only.
+				additionalTeamIDs = nil
+			}
+		}
+		teamIDs := normalizedTeamIDs(user.TeamID, additionalTeamIDs)
+		serializedTeamIDs, err := json.Marshal(teamIDs)
+		if err != nil {
+			return err
+		}
+		if rawTeamIDs == string(serializedTeamIDs) {
 			continue
 		}
-		if err := db.Model(&AdminUser{}).Where("id = ?", user.ID).Update("team_ids", teamIDs).Error; err != nil {
+		if err := db.Model(&AdminUser{}).Where("id = ?", user.ID).UpdateColumn("team_ids", string(serializedTeamIDs)).Error; err != nil {
 			return err
 		}
 	}
