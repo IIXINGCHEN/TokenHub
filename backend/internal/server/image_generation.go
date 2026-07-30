@@ -456,6 +456,11 @@ func (s *Server) enqueueImageJob(work imageJobWork) error {
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
+	if s.billing != nil {
+		if err := s.billing.Shutdown(ctx); err != nil {
+			return err
+		}
+	}
 	s.imageWorkerStop.Do(func() {
 		s.imageCancel()
 	})

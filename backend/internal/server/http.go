@@ -36,6 +36,7 @@ type Server struct {
 	integrations      *IntegrationService
 	codexSubscription *CodexSubscriptionAdapter
 	providerCatalog   *providerCatalogService
+	billing           *BillingService
 	mux               *http.ServeMux
 	config            Config
 	metrics           *GatewayMetrics
@@ -55,7 +56,6 @@ type Server struct {
 func New(store Store) *Server {
 	return NewWithConfig(store, Config{AdminToken: "dev_admin_token"})
 }
-
 func NewWithConfig(store Store, config Config) *Server {
 	if strings.TrimSpace(config.ImageStorageDir) == "" {
 		config.ImageStorageDir = defaultImageStorageDir()
@@ -109,6 +109,7 @@ func NewWithConfig(store Store, config Config) *Server {
 		integrations:      NewIntegrationService(store, registry),
 		codexSubscription: codexSubscription,
 		providerCatalog:   newProviderCatalogService(store, config.ProviderCatalogFile),
+		billing:           newBillingService(store),
 		mux:               http.NewServeMux(),
 		config:            config,
 		imageStorageDir:   config.ImageStorageDir,
@@ -139,11 +140,9 @@ func NewWithConfig(store Store, config Config) *Server {
 	s.routes()
 	return s
 }
-
 func (s *Server) Handler() http.Handler {
 	return s.cors(s.mux)
 }
-
 func (s *Server) routes() {
 	s.mux.HandleFunc("/livez", s.handleLive)
 	s.mux.HandleFunc("/readyz", s.handleHealth)
@@ -206,6 +205,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/admin/sqlite/backups", s.handleAdminSQLiteBackups)
 	s.mux.HandleFunc("/api/admin/sqlite/backups/", s.handleAdminSQLiteBackupItem)
 	s.mux.HandleFunc("/api/admin/billing/generate", s.handleAdminGenerateBilling)
+	s.registerBillingRoutes()
 	s.mux.HandleFunc("/api/admin/export/", s.handleAdminExport)
 	s.mux.HandleFunc("/api/admin/usage/summary", s.handleAdminUsageSummary)
 	s.mux.HandleFunc("/api/admin/usage/breakdown", s.handleAdminUsageBreakdown)
@@ -8356,7 +8356,7 @@ func redactAuditValue(value any) any {
 func isSensitiveAuditKey(key string) bool {
 	normalized := strings.NewReplacer("_", "", "-", "", ".", "").Replace(strings.ToLower(key))
 	switch normalized {
-	case "authorization", "apikey", "accesstoken", "refreshtoken", "clientsecret", "secretkey", "password", "token", "secret":
+	case "authorization", "apikey", "apitoken", "accesstoken", "refreshtoken", "clientsecret", "secretkey", "password", "token", "secret":
 		return true
 	default:
 		return strings.Contains(normalized, "authorization") || strings.Contains(normalized, "password") || strings.Contains(normalized, "secret")

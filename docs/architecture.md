@@ -148,13 +148,14 @@ Inactive or unhealthy providers, resources, and routes are skipped, with one exc
 - `TOKENHUB_TRUSTED_PROXY_CIDRS` defines which proxies may supply `X-Forwarded-For`; `TOKENHUB_CORS_ALLOWED_ORIGINS` controls credentialed browser origins.
 - `/livez` is a process liveness probe. `/readyz` and compatibility `/healthz` check database availability and return `503` when it is unavailable.
 
-Provider credentials are AES-GCM encrypted from `TOKENHUB_SECRET_KEY`; project API keys retain only a SHA-256 digest plus display prefix and suffix. Every replica must use the same stable secret.
+Provider credentials, billing connector credentials, and raw billing snapshots are AES-GCM encrypted from `TOKENHUB_SECRET_KEY`; project API keys retain only a SHA-256 digest plus display prefix and suffix. Every replica must use the same stable secret.
 
 | Category | Key entities | Purpose |
 | --- | --- | --- |
 | Tenancy and credentials | `Project`, `APIKey`, `AdminUser`, `AdminSession` | Project ownership, application access, and admin sessions |
 | Routing | `Provider`, `ProviderResource`, `ProviderModel`, `Model`, `ModelRoute` | Upstream channels, resource pools, upstream inventory, external models, and routes |
 | Governance and metering | `QuotaBucket`, `UsageRecord`, `ProviderResourceBucket`, `InFlightLease` | Quotas, usage/cost, and cross-replica concurrency |
+| External billing | `BillingConnector`, `BillingRecord`, `BillingRawSnapshot`, `BillingSyncRun` | Provider billing collection, normalization, checkpoints, and sync history |
 | Multi-instance coordination | `ClusterLease`, `ClusterTaskState`, `AdapterSessionBinding` | Catalog sync, cluster operations, and Codex session resource bindings |
 | Observability | `RequestLog`, `RequestPayloadLog`, `RouteAttemptLog`, `ProviderObservation`, `AuditEvent` | Request traceability, payload audit, route attempts, provider observations, and admin audit |
 

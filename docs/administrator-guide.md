@@ -116,6 +116,16 @@ The model catalog accepts an optional cache read price in USD per 1 million toke
 
 Deleting an external model removes its database record and routes, but it does not edit `data/model-catalog.yaml` or the file configured by `TOKENHUB_MODEL_CATALOG_FILE`. Backend startup synchronizes the candidate metadata from that file again. Administrators can also use **Restore Candidate Templates** on the **Candidate Templates** tab to refresh that metadata while keeping custom external models. Restoring a template does not import it for a Provider, create a mapping, or publish it in `GET /v1/models`.
 
+## External Billing Connectors
+
+Platform administrators manage external billing sources from **Cost Billing**. TokenHub supports Aliyun `QueryInstanceBill` and OneAPI-compatible log sources. A connector can be tested, synchronized immediately, scheduled at a minute interval, disabled without deleting its history, and re-enabled later.
+
+For Aliyun, configure the billing RPC base URL, AccessKey ID, AccessKey Secret, source time zone, and optional product code. TokenHub signs each RPC request with HMAC-SHA1 and advances across billing cycles. For OneAPI-compatible sources, configure the base URL, API token, log path, currency, and the quota units that equal one currency unit. Both connectors accept a per-second request limit; synchronization uses bounded exponential retries for temporary network, `429`, and `5xx` failures.
+
+Manual synchronization may specify `from` and `to` RFC 3339 timestamps. Without an explicit range, TokenHub continues from the last successful end time. It saves the provider cursor after every page, so a retry resumes the failed range rather than starting over. Normalized records use `(connector_id, external_id)` as the idempotency key and retain currency, source time zone, tax, discount, refund, billing period, and usage timestamps. Recent runs show pages, request attempts, inserted and updated records, and a sanitized failure code.
+
+Connector credentials and raw billing snapshots are AES-GCM encrypted with `TOKENHUB_SECRET_KEY`. They are not returned by admin APIs or written to audit payloads. Keep that key stable across restarts and replicas. The relevant endpoints are `GET/POST /api/admin/billing/connectors`, `PATCH /api/admin/billing/connectors/{id}`, `POST /api/admin/billing/connectors/{id}/test`, `POST /api/admin/billing/connectors/{id}/sync`, `GET /api/admin/billing/records`, and `GET /api/admin/billing/sync-runs`.
+
 ## Security Checklist
 
 | Control | Requirement |
