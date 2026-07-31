@@ -410,11 +410,9 @@ func buildModelArtifacts(config *Config, b *bundle.CanonicalMigrationBundle, idS
 
 func buildQuotaLimits(key VirtualKeyConfig) server.QuotaLimits {
 	limits := server.QuotaLimits{}
-	if key.RPM > 0 || key.TPM > 0 {
-		// LiteLLM rpm/tpm are rate limits, not fixed daily quotas.
-		// Preserve them as metadata warnings elsewhere rather than rewrite
-		// them into different semantics here.
-	}
+	// LiteLLM rpm/tpm are deliberately not mapped here: they are rate limits,
+	// not fixed daily quotas. They are preserved as metadata warnings
+	// elsewhere rather than rewritten into different semantics.
 	if key.MaxBudget > 0 {
 		limits.MonthlyCostUSD = key.MaxBudget
 	}
