@@ -58,6 +58,7 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
   const [modelCategoryFilter, setModelCategoryFilter] = useState("all");
+  const [routeModelQuery, setRouteModelQuery] = useState("");
   const [settingsTab, setSettingsTab] = useState<SettingsTabKey>("settings");
   const [modal, setModal] = useState<ModalState<any> | null>(null);
   const [projectWorkspace, setProjectWorkspace] = useState<{ mode: ProjectWorkspaceMode; projectID?: string } | null>(null);
@@ -85,13 +86,14 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
     setTheme((value) => (value === "light" ? "dark" : "light"));
   }
 
-  function selectView(view: ViewKey, options: { replace?: boolean } = {}) {
+  function selectView(view: ViewKey, options: { replace?: boolean; routeModelQuery?: string } = {}) {
     if (view !== activeView) {
       setNotice("");
       setError("");
       setIssuedKey("");
       setModelCategoryFilter(view === "notification-channels" ? "webhook" : "all");
     }
+    if (view === "routes") setRouteModelQuery(options.routeModelQuery ?? "");
     if (view !== "projects") setProjectWorkspace(null);
     setActiveView(view);
     const nextPath = viewRoutes[view];
@@ -103,6 +105,10 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
     } else {
       router.push(nextURL);
     }
+  }
+
+  function openRoutes(model?: Model) {
+    selectView("routes", { routeModelQuery: model?.name ?? "" });
   }
 
   useEffect(() => {
@@ -816,6 +822,7 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
             <RouteStrategyView
               config={activeConfig as ResourceConfig<ModelRoute>}
               data={data}
+              initialQuery={routeModelQuery}
               loading={loading}
               onCreate={openCreateRoute}
               onEdit={(route) => setModal({ config: activeConfig, item: route })}
@@ -832,11 +839,9 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
               readOnly={!canAccessView(currentUser, "routes")}
               onReload={() => load("models")}
               onCreateModel={() => setModal({ config: activeConfig })}
-              onOpenRoutes={() => selectView("routes")}
+              onOpenRoutes={openRoutes}
               onEditModel={(item) => setModal({ config: activeConfig, item })}
               onDeleteModel={(item) => setConfirmDelete({ config: activeConfig, item })}
-              onEditRoute={(route) => setModal({ config: resourceConfigFor("routes") as ResourceConfig<ModelRoute>, item: route })}
-              onDeleteRoute={(route) => setConfirmDelete({ config: resourceConfigFor("routes") as ResourceConfig<ModelRoute>, item: route })}
             />
           ) : activeView === "reports" && activeConfig ? (
             <ReportsView

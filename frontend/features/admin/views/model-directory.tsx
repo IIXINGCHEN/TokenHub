@@ -1,8 +1,8 @@
 "use client";
 
-import { AlertTriangle, Boxes, ChevronRight, CircleCheck, CircleDashed, Link2, Plus, Search, Settings2, X } from "lucide-react";
-import { type FormEvent, useMemo, useState } from "react";
-import { type ApiContext, type AppData, type Model, type ModelRoute, type ProviderModel, type ResourceConfig } from "../core/types";
+import { AlertTriangle, Boxes, ChevronRight, CircleCheck, CircleDashed, Link2, Plus, Search } from "lucide-react";
+import { useMemo, useState } from "react";
+import { type ApiContext, type AppData, type Model, type ResourceConfig } from "../core/types";
 import { modelCategory, modelCategoryLabel, priceMetric } from "../domain/catalog";
 import { findProvider, modelRoutesFor } from "../domain/entities";
 import { externalModels, filterExternalModels, isCustomModelAlias, modelPublicationState, modelRuntimeState, type ModelPublicationState } from "../domain/model-directory";
@@ -23,8 +23,6 @@ export function ModelDirectoryView({
   onOpenRoutes,
   onEditModel,
   onDeleteModel,
-  onEditRoute,
-  onDeleteRoute,
 }: {
   api: ApiContext;
   config: ResourceConfig<Model>;
@@ -33,17 +31,13 @@ export function ModelDirectoryView({
   readOnly?: boolean;
   onReload: () => Promise<void> | void;
   onCreateModel: () => void;
-  onOpenRoutes: () => void;
+  onOpenRoutes: (model?: Model) => void;
   onEditModel: (model: Model) => void;
   onDeleteModel: (model: Model) => void;
-  onEditRoute: (route: ModelRoute) => void;
-  onDeleteRoute: (route: ModelRoute) => void;
 }) {
   const [publication, setPublication] = useState<"all" | ModelPublicationState>(readOnly ? "all" : "published");
   const [query, setQuery] = useState("");
   const [providerID, setProviderID] = useState("");
-  const [mappingModel, setMappingModel] = useState<Model | null>(null);
-  const [detailModel, setDetailModel] = useState<Model | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -88,9 +82,9 @@ export function ModelDirectoryView({
                 <Plus size={16} />
                 {tx("新建对外模型")}
               </button>
-              <button className="button" onClick={onOpenRoutes} type="button">
+              <button className="button" onClick={() => onOpenRoutes()} type="button">
                 <Link2 size={16} />
-                {tx("配置模型路由")}
+                {tx("路由策略")}
               </button>
             </div>
           ) : null}
@@ -128,36 +122,12 @@ export function ModelDirectoryView({
           models={filteredExternal}
           readOnly={readOnly}
           busy={busy || loading}
-          onDetails={setDetailModel}
+          onOpenRoutes={onOpenRoutes}
           onEdit={onEditModel}
           onDelete={onDeleteModel}
           onPublish={setPublished}
         />
       </div>
-
-      {mappingModel ? (
-        <ModelMappingModal
-          api={api}
-          data={data}
-          model={mappingModel}
-          onClose={() => setMappingModel(null)}
-          onSaved={async (message) => {
-            setMappingModel(null);
-            setNotice(message);
-            await onReload();
-          }}
-        />
-      ) : null}
-      {detailModel ? (
-        <ModelMappingDrawer
-          data={data}
-          model={detailModel}
-          onAdd={() => setMappingModel(detailModel)}
-          onClose={() => setDetailModel(null)}
-          onDeleteRoute={onDeleteRoute}
-          onEditRoute={onEditRoute}
-        />
-      ) : null}
     </DataSection>
   );
 }
@@ -201,12 +171,12 @@ function ModelDirectoryStats({ stats }: { stats: ReturnType<typeof modelDirector
   );
 }
 
-function ExternalModelsTable({ data, models, readOnly, busy, onDetails, onEdit, onDelete, onPublish }: {
+function ExternalModelsTable({ data, models, readOnly, busy, onOpenRoutes, onEdit, onDelete, onPublish }: {
   data: AppData;
   models: Model[];
   readOnly: boolean;
   busy: boolean;
-  onDetails: (model: Model) => void;
+  onOpenRoutes: (model?: Model) => void;
   onEdit: (model: Model) => void;
   onDelete: (model: Model) => void;
   onPublish: (model: Model, published: boolean) => void;
@@ -244,14 +214,14 @@ function ExternalModelsTable({ data, models, readOnly, busy, onDetails, onEdit, 
                 <td><strong>{model.modality || "chat"}</strong><span>{compactNumber(model.context_window || 0)} ctx · {(model.capabilities ?? []).slice(0, 2).join(" / ") || model.family || "-"}</span></td>
                 {!readOnly ? <>
                   <td>
-                    {primary ? <button className="mapping-summary" onClick={() => onDetails(model)} type="button"><span>{provider?.name || primary.provider_id}</span><strong>{primary.provider_model}</strong>{routes.length > 1 ? <em>+{routes.length - 1}</em> : null}<ChevronRight size={14} /></button> : <span className="muted">{tx("尚未映射 Provider")}</span>}
+                    {primary ? <div className="mapping-summary"><span>{provider?.name || primary.provider_id}</span><strong>{primary.provider_model}</strong>{routes.length > 1 ? <em>+{routes.length - 1}</em> : null}</div> : <span className="muted">{tx("尚未映射 Provider")}</span>}
                   </td>
                   <td><StatusPill status={publication === "published" ? "active" : "disabled"} label={tx(publicationLabel(publication))} /></td>
                   <td><RuntimeStatus state={runtime} active={activeRoutes.length} total={routes.length} /></td>
                 </> : <td><StatusPill status="active" label={tx("当前账号可用")} /></td>}
                 <td><strong>{priceMetric(model.input_price_usd_per_1m)}</strong><span>{tx("输入")} · {priceMetric(model.output_price_usd_per_1m)} {tx("输出")}</span></td>
                 {!readOnly ? (
-                  <td><div className="directory-row-actions"><button className="text-button" onClick={() => onDetails(model)} type="button">{tx("管理映射")}</button><button className="text-button" onClick={() => onEdit(model)} type="button">{tx("编辑")}</button><button className="text-button" disabled={busy || (publication !== "published" && activeRoutes.length === 0)} onClick={() => onPublish(model, publication !== "published")} type="button">{tx(publication === "published" ? "下线" : "发布")}</button><button className="danger-button" onClick={() => onDelete(model)} type="button">{tx("删除")}</button></div></td>
+                  <td><div className="directory-row-actions"><button aria-label={`${tx("路由策略")}: ${model.name}`} className="text-button" onClick={() => onOpenRoutes(model)} type="button">{tx("路由策略")}</button><button className="text-button" onClick={() => onEdit(model)} type="button">{tx("编辑")}</button><button className="text-button" disabled={busy || (publication !== "published" && activeRoutes.length === 0)} onClick={() => onPublish(model, publication !== "published")} type="button">{tx(publication === "published" ? "下线" : "发布")}</button><button className="danger-button" onClick={() => onDelete(model)} type="button">{tx("删除")}</button></div></td>
                 ) : null}
               </tr>
             );
@@ -270,62 +240,6 @@ function RuntimeStatus({ state, active, total }: { state: ReturnType<typeof mode
     unmapped: { label: "未映射", status: "disabled" },
   }[state];
   return <div className="runtime-status"><StatusPill status={config.status} label={tx(config.label)} /><span>{active}/{total} {tx("条启用")}</span></div>;
-}
-
-function ModelMappingModal({ api, data, model, onClose, onSaved }: { api: ApiContext; data: AppData; model: Model; onClose: () => void; onSaved: (message: string) => Promise<void> | void }) {
-  const [providerID, setProviderID] = useState(data.providers[0]?.id || "");
-  const [upstreamModel, setUpstreamModel] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const providerModels = data.providerModels.filter((model) => model.provider_id === providerID);
-  const selectedProviderModel = providerModels.find((model) => model.upstream_model === upstreamModel);
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!providerID || !upstreamModel.trim()) {
-      setError(tx("请填写对外模型、Provider 和上游模型。"));
-      return;
-    }
-    if (!selectedProviderModel) {
-      setError(tx("请先从 Provider 引入上游模型，再创建对外映射。"));
-      return;
-    }
-    setBusy(true);
-    setError("");
-    try {
-      const route = { model_name: model.name, provider_id: providerID, provider_model: upstreamModel.trim(), status: "active", priority: 0, weight: 100, quality_score: 60, cost_score: 60, strategy: "balanced" };
-      const resp = await adminFetch(api, "/api/admin/routing-rules", { method: "POST", body: JSON.stringify(route) });
-      if (!resp.ok) throw new Error(await readAdminError(resp, tx("保存模型映射")));
-      await onSaved(tx("已添加新的 Provider 映射"));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : tx("保存失败"));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return <div className="modal-backdrop" role="presentation"><form className="modal model-mapping-modal" onSubmit={submit}>
-    <div className="modal-header"><div><p className="eyebrow">{tx("添加 Provider 映射")}</p><h2>{model.name}</h2></div><button className="icon-button" onClick={onClose} type="button"><X size={18} /></button></div>
-    <div className="modal-body">
-      {error ? <div className="inline-notice error"><AlertTriangle size={15} />{error}</div> : null}
-      <div className="mapping-chain-editor"><div><span>{tx("客户端请求")}</span><strong>{model.name}</strong></div><ChevronRight /><div><span>Provider</span><strong>{findProvider(data, providerID)?.name || tx("请选择")}</strong></div><ChevronRight /><div><span>{tx("上游模型")}</span><strong>{upstreamModel || "provider model"}</strong></div></div>
-      <div className="form-grid two"><label className="field"><span>Provider *</span><select value={providerID} onChange={(event) => { setProviderID(event.target.value); setUpstreamModel(""); }} required>{data.providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label><label className="field"><span>{tx("已引入的上游模型")} *</span><select disabled={providerModels.length === 0} value={upstreamModel} onChange={(event) => setUpstreamModel(event.target.value)} required><option value="">{tx("请选择上游模型")}</option>{providerModels.map((model) => <option key={model.id} value={model.upstream_model}>{model.upstream_model}{model.display_name && model.display_name !== model.upstream_model ? ` · ${model.display_name}` : ""}</option>)}</select><small>{providerModels.length ? tx("这里只能选择已引入当前 Provider 的上游模型。") : tx("该 Provider 暂无已引入模型，请先从 Provider 引入。")}</small></label></div>
-      <div className="mapping-mismatch-warning"><AlertTriangle size={18} /><div><strong>{tx("路由不会改变对外价格")}</strong><span>{tx("Provider 模型价格用于真实成本审计；客户端仍按模型目录中的统一价格计费。")}</span></div></div>
-    </div>
-    <div className="modal-actions"><button className="secondary-button" onClick={onClose} type="button">{tx("取消")}</button><button className="button" disabled={busy || !selectedProviderModel} type="submit">{busy ? tx("保存中") : tx("添加映射")}</button></div>
-  </form></div>;
-}
-
-function ModelMappingDrawer({ data, model, onAdd, onClose, onEditRoute, onDeleteRoute }: { data: AppData; model: Model; onAdd: () => void; onClose: () => void; onEditRoute: (route: ModelRoute) => void; onDeleteRoute: (route: ModelRoute) => void }) {
-  const routes = modelRoutesFor(model, data);
-  return <div className="model-drawer-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }} role="presentation"><aside className="model-mapping-drawer" role="dialog" aria-modal="true">
-    <header><div><p className="eyebrow">{tx("对外模型映射")}</p><h2>{model.name}</h2><span>{tx("客户端模型名保持不变，可以替换或增加真实上游线路。")}</span></div><button className="icon-button" onClick={onClose} type="button"><X size={18} /></button></header>
-    <div className="drawer-state-row"><StatusPill status={modelPublicationState(model, data) === "published" ? "active" : "disabled"} label={tx(publicationLabel(modelPublicationState(model, data)))} /><RuntimeStatus state={modelRuntimeState(model, data)} active={routes.filter((route) => route.status === "active").length} total={routes.length} /></div>
-    <section><div className="drawer-section-head"><div><strong>{tx("上游线路")}</strong><span>{routes.length <= 1 ? tx("单线路保持简单；新增第二条后再配置主备和分流。") : tx("按优先级和权重执行故障转移与分流。")}</span></div><button className="secondary-button" onClick={onAdd} type="button"><Plus size={15} />{tx("添加线路")}</button></div>
-      {routes.length === 0 ? <div className="model-directory-empty compact"><Link2 size={24} /><strong>{tx("尚未配置 Provider 映射")}</strong></div> : <div className="drawer-route-list">{routes.map((route, index) => { const provider = findProvider(data, route.provider_id); return <article key={route.id}><div className="route-role">{index === 0 ? tx("主线路") : route.priority === routes[0]?.priority ? tx("参与分流") : tx("故障备用")}</div><div className="route-chain"><strong>{provider?.name || route.provider_id}</strong><ChevronRight size={14} /><strong>{route.provider_model}</strong></div><div className="route-meta"><StatusPill status={route.status} /><span>P{route.priority} · W{route.weight} · {route.strategy || "balanced"}</span></div><div className="directory-row-actions"><button className="text-button" onClick={() => onEditRoute(route)} type="button">{tx("编辑")}</button><button className="danger-button" onClick={() => onDeleteRoute(route)} type="button">{tx("删除")}</button></div></article>; })}</div>}
-    </section>
-    <section className="drawer-contract"><strong>{tx("能力与计价口径")}</strong><div><span>{tx("能力")}</span><b>{(model.capabilities ?? []).join(" / ") || model.modality || "-"}</b></div><div><span>{tx("上下文")}</span><b>{compactNumber(model.context_window || 0)}</b></div><div><span>{tx("对外统一价")}</span><b>{priceMetric(model.input_price_usd_per_1m)} / {priceMetric(model.output_price_usd_per_1m)}</b></div><small>{tx("对外模型价格对所有路由统一；命中 Provider 的真实成本在请求审计中单独记录。")}</small></section>
-  </aside></div>;
 }
 
 function modelDirectoryStats(models: Model[], data: AppData) {

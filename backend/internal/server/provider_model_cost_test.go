@@ -69,6 +69,32 @@ func TestProviderCreationRequiresValidCatalogModelSelection(t *testing.T) {
 	}
 }
 
+func TestCustomProviderCreationRequiresDiscoveredModelSelection(t *testing.T) {
+	store := NewMemoryStore()
+	if err := SeedDemoData(store); err != nil {
+		t.Fatal(err)
+	}
+	app := New(store).Handler()
+
+	resp := doJSON(t, app, http.MethodPost, "/api/admin/providers", map[string]any{
+		"id":         "prv_custom_inventory_required",
+		"catalog_id": "custom",
+		"name":       "Custom Inventory Required",
+		"type":       ProviderOpenAICompatible,
+		"base_url":   "https://custom.example/v1",
+		"status":     StatusActive,
+		"custom_models": []map[string]any{{
+			"id": "custom-chat-model",
+		}},
+	}, "")
+	if resp.Code != http.StatusBadRequest || !strings.Contains(resp.Body, `"code":"provider_models_required"`) {
+		t.Fatalf("expected custom Provider model selection error, got %d: %s", resp.Code, resp.Body)
+	}
+	if _, ok := store.GetProvider("prv_custom_inventory_required"); ok {
+		t.Fatal("custom Provider was created before discovered model selection validation")
+	}
+}
+
 func TestUsageRecordsExternalChargeAndProviderCostSeparately(t *testing.T) {
 	store := NewMemoryStore()
 	external := store.AddModel(Model{

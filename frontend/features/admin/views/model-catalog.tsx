@@ -441,6 +441,7 @@ export function ModelCatalogPriceTable({
 export function RouteStrategyView({
   config,
   data,
+  initialQuery = "",
   loading,
   onCreate,
   onEdit,
@@ -450,6 +451,7 @@ export function RouteStrategyView({
 }: {
   config: ResourceConfig<ModelRoute>;
   data: AppData;
+  initialQuery?: string;
   loading: boolean;
   onCreate: (model: Model) => void;
   onEdit: (item: ModelRoute) => void;
@@ -459,9 +461,10 @@ export function RouteStrategyView({
 }) {
   const [category, setCategory] = useState("all");
   const [scope, setScope] = useState<"configured" | "all">("all");
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
   const [draggedRouteID, setDraggedRouteID] = useState("");
   const categories = routeModelCategories(data);
+  useEffect(() => setQuery(initialQuery), [initialQuery]);
   const filtered = useMemo(
     () => filterRouteModels(data, category, scope, query),
     [data, category, scope, query],

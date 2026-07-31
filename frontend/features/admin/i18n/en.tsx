@@ -1457,7 +1457,6 @@ export const enTranslations: Record<string, string> = {
     "自定义别名": "Custom Alias",
     "同名 1:1": "Same-name 1:1",
     "尚未映射 Provider": "No Provider mapping",
-    "管理映射": "Manage Mappings",
     "下线": "Unpublish",
     "模型已发布": "Model published",
     "模型已下线，映射线路已保留": "Model unpublished; mappings were retained",

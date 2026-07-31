@@ -1005,7 +1005,7 @@ export function ProviderUpsertModal({
       setError(tx("请填写 API Key。"));
       return false;
     }
-    if (targetStep === lastCreateStep && catalogID !== "custom" && models.length > 0 && selectedModelIDs.length === 0) {
+    if (targetStep === lastCreateStep && models.length > 0 && selectedModelIDs.length === 0) {
       if (quickAPIFlow) setQuickAPITab("models");
       setError(tx("请至少选择一个要引入 Provider 的上游模型。"));
       return false;
@@ -1038,7 +1038,7 @@ export function ProviderUpsertModal({
       return;
     }
     if (quickAPIConnect && !validateCreateStep(createStep)) return;
-    if (mode === "create" && catalogID !== "custom" && models.length > 0 && selectedModelIDs.length === 0) {
+    if (mode === "create" && models.length > 0 && selectedModelIDs.length === 0) {
       setError(tx("请至少选择一个要引入 Provider 的上游模型。"));
       return;
     }

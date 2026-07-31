@@ -32,7 +32,7 @@ func validateProviderRouteCreation(req ProviderCreateRequest) error {
 }
 
 func validateProviderModelSelection(catalog ProviderCatalogEntry, selectedModels []string) error {
-	if catalog.ID == "" || catalog.ID == "custom" || len(catalog.Models) == 0 {
+	if catalog.ID == "" || len(catalog.Models) == 0 {
 		return nil
 	}
 	available := make(map[string]bool, len(catalog.Models))
