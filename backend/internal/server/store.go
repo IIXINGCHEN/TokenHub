@@ -130,6 +130,7 @@ type ProviderObservation struct {
 }
 
 type Store interface {
+	BillingStore
 	CreateProject(project Project) Project
 	CreateProjectChecked(project Project) (Project, error)
 	ListProjects() []Project
@@ -258,7 +259,6 @@ type Store interface {
 	GetDatabaseStatus() (map[string]interface{}, error)
 	Ping(ctx context.Context) error
 }
-
 type GormStore struct {
 	db                   *gorm.DB
 	mu                   *sync.Mutex
@@ -275,7 +275,6 @@ type GormStore struct {
 	clusterLockTTL       time.Duration
 	imageCapabilityRetry time.Duration
 }
-
 type leaseHeartbeat struct {
 	ctx    context.Context
 	cancel context.CancelCauseFunc
@@ -475,6 +474,7 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 
 	migrate := func() error {
 		if err := db.AutoMigrate(
+			&BillingConnector{}, &BillingRecord{}, &BillingRawSnapshot{}, &BillingSyncRun{},
 			&Project{},
 			&ProjectTeam{},
 			&APIKey{},

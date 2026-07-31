@@ -28,6 +28,9 @@ export function emptyData(): AppData {
     resources: {},
     providerCatalog: [],
     providerMonitoring: [],
+		billingConnectors: [],
+		billingRecords: [],
+		billingSyncRuns: [],
   };
 }
 

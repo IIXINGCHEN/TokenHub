@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { type LoadedData, loadPlanForView, mergeLoadedData } from "../core/data-loading";
 import { allNavGroupTitles, canAccessView, defaultViewForRole, rememberRecentView, standaloneViewMeta } from "../core/navigation";
 import { clearOAuthLoginResult, clearPendingOAuthBaseURL, clearProviderAccountOAuthResultFromLocation, clearSavedSession, forwardOAuthAuthorizationResponse, hasPendingProviderAccountOAuthResult, isOAuthAuthorizationResponse, readOAuthLoginResult, readPendingOAuthBaseURL, readProviderAccountOAuthResultFromLocation, readSavedSession, savePendingProviderAccountOAuthResult, saveSession } from "../core/session";
-import { type AdminResource, type AdminUser, type AlertDelivery, type AlertEvent, type APIKey, type AppData, type ApprovalRequest, type AuditEvent, authExpiredEventName, type ConfirmState, languageStorageKey, type LoginIdentityProvider, type ModalState, type Model, type ModelRoute, type ModelRoutePolicy, notificationChannelTypes, type Project, type Provider, type ProviderCatalogEntry, type ProviderModel, type ProviderMonitoringSnapshot, type ProviderResource, type ReportExportHistoryItem, type RequestLog, type ResourceAction, type ResourceConfig, type SettingsTabKey, type SQLiteBackup, type ToolbarAction, type UsageBreakdown, type UsagePoint, type ViewKey, viewRoutes } from "../core/types";
+import { type AdminResource, type AdminUser, type AlertDelivery, type AlertEvent, type APIKey, type AppData, type ApprovalRequest, type AuditEvent, authExpiredEventName, type BillingConnector, type BillingRecord, type BillingSyncRun, type ConfirmState, languageStorageKey, type LoginIdentityProvider, type ModalState, type Model, type ModelRoute, type ModelRoutePolicy, notificationChannelTypes, type Project, type Provider, type ProviderCatalogEntry, type ProviderModel, type ProviderMonitoringSnapshot, type ProviderResource, type ReportExportHistoryItem, type RequestLog, type ResourceAction, type ResourceConfig, type SettingsTabKey, type SQLiteBackup, type ToolbarAction, type UsageBreakdown, type UsagePoint, type ViewKey, viewRoutes } from "../core/types";
 import { emptyData, emptySummary, filterByModelCategory, filterRows } from "../domain/catalog";
 import { modelRouteDefaults, rowTitle } from "../domain/entities";
 import { uniqueUIID, viewFromPath } from "../domain/formatting";
@@ -322,6 +322,9 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
       queue(plan.users, "users", "/api/admin/users");
       queue(plan.providerCatalog, "provider-catalog", "/api/admin/provider-catalog");
       queue(plan.providerMonitoring, "provider-monitoring", "/api/admin/providers/monitoring");
+			queue(plan.billingConnectors, "billing-connectors", "/api/admin/billing/connectors");
+			queue(plan.billingRecords, "billing-records", "/api/admin/billing/records");
+			queue(plan.billingSyncRuns, "billing-sync-runs", "/api/admin/billing/sync-runs");
       for (const kind of plan.resources) {
         requests.push({ name: `resource:${kind}`, request: adminFetch(api, `/api/admin/resources/${kind}`), optional: true });
       }
@@ -399,6 +402,15 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
         } else if (name === "provider-monitoring") {
           const payload = (await resp.json()) as { data: ProviderMonitoringSnapshot[] };
           loaded.providerMonitoring = payload.data ?? [];
+				} else if (name === "billing-connectors") {
+					const payload = (await resp.json()) as { data: BillingConnector[] };
+					loaded.billingConnectors = payload.data ?? [];
+				} else if (name === "billing-records") {
+					const payload = (await resp.json()) as { data: BillingRecord[] };
+					loaded.billingRecords = payload.data ?? [];
+				} else if (name === "billing-sync-runs") {
+					const payload = (await resp.json()) as { data: BillingSyncRun[] };
+					loaded.billingSyncRuns = payload.data ?? [];
         } else if (name.startsWith("resource:")) {
           const kind = name.slice("resource:".length);
           const payload = (await resp.json()) as { data: AdminResource[] };
@@ -799,7 +811,7 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
           ) : activeView === "usage" ? (
             <UsageView data={data} user={currentUser} />
           ) : activeView === "billing" ? (
-            <BillingView data={data} user={currentUser} />
+            <BillingView api={api} data={data} user={currentUser} loading={loading} onReload={() => load("billing")} />
           ) : activeView === "audit" ? (
             <AuditView api={api} data={data} user={currentUser} />
           ) : activeView === "database-status" ? (

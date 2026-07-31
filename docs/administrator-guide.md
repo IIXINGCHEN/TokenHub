@@ -124,6 +124,16 @@ The model catalog accepts an optional cache read price in USD per 1 million toke
 
 Deleting an external model removes its database record and routes, but it does not edit `data/model-catalog.yaml` or the file configured by `TOKENHUB_MODEL_CATALOG_FILE`. Backend startup synchronizes tracked catalog metadata from that file again; administrators can trigger the same synchronization without a restart from **Settings → Base Settings → Sync Model Reference Catalog**. This synchronization does not import a model for a Provider, create a route, or publish it in `GET /v1/models`; those remain explicit administrative actions in their respective control areas.
 
+## External Billing Connectors
+
+Platform administrators manage external billing sources from **Cost Billing**. TokenHub supports Aliyun `QueryInstanceBill`, NewAPI quota data, and OneAPI-compatible log sources. A connector can be tested, synchronized immediately, scheduled at a minute interval, disabled without deleting its history, and re-enabled later.
+
+For Aliyun, configure the billing RPC base URL, AccessKey ID, AccessKey Secret, source time zone, and optional product code. TokenHub signs each RPC request with HMAC-SHA1 and advances across billing cycles. For NewAPI, configure the base URL, access token, `New-Api-User` ID, currency, and the quota units that equal one currency unit. TokenHub calls `GET /api/data/self` with the documented authentication headers and automatically splits ranges into windows of at most 30 days. For OneAPI-compatible sources, configure the base URL, API token, log path, currency, and quota conversion. All connectors accept a per-second request limit; synchronization uses bounded exponential retries for temporary network, `429`, and `5xx` failures.
+
+Manual synchronization may specify `from` and `to` RFC 3339 timestamps. Without an explicit range, TokenHub continues from the last successful end time. It saves the provider cursor after every page, so a retry resumes the failed range rather than starting over. Normalized records use `(connector_id, external_id)` as the idempotency key and retain currency, source time zone, tax, discount, refund, billing period, and usage timestamps. Recent runs show pages, request attempts, inserted and updated records, and a sanitized failure code.
+
+Connector credentials and raw billing snapshots are AES-GCM encrypted with `TOKENHUB_SECRET_KEY`. They are not returned by admin APIs or written to audit payloads. Keep that key stable across restarts and replicas. The relevant endpoints are `GET/POST /api/admin/billing/connectors`, `PATCH /api/admin/billing/connectors/{id}`, `POST /api/admin/billing/connectors/{id}/test`, `POST /api/admin/billing/connectors/{id}/sync`, `GET /api/admin/billing/records`, and `GET /api/admin/billing/sync-runs`.
+
 ## Security Checklist
 
 | Control | Requirement |

@@ -148,13 +148,14 @@ sequenceDiagram
 - `TOKENHUB_TRUSTED_PROXY_CIDRS` は `X-Forwarded-For` を提供できるプロキシを限定し、`TOKENHUB_CORS_ALLOWED_ORIGINS` は資格情報を伴うブラウザ Origin を制御します。
 - `/livez` はプロセス生存確認用です。`/readyz` と互換用の `/healthz` はデータベース可用性を確認し、利用不可時には `503` を返します。
 
-Provider 認証情報は `TOKENHUB_SECRET_KEY` から導出した AES-GCM で暗号化されます。Project API Key は SHA-256 ダイジェストと表示用のプレフィックス/サフィックスだけを保持します。すべてのレプリカは同じ安定したシークレットを使用する必要があります。
+Provider 認証情報、請求コネクター認証情報、生の請求スナップショットは `TOKENHUB_SECRET_KEY` から導出した AES-GCM で暗号化されます。Project API Key は SHA-256 ダイジェストと表示用のプレフィックス/サフィックスだけを保持します。すべてのレプリカは同じ安定したシークレットを使用する必要があります。
 
 | カテゴリー | 主なエンティティ | 用途 |
 | --- | --- | --- |
 | テナントと認証情報 | `Project`、`APIKey`、`AdminUser`、`AdminSession` | Project 所有、アプリケーションアクセス、管理セッション |
 | ルーティング | `Provider`、`ProviderResource`、`ProviderModel`、`Model`、`ModelRoute` | 上流チャネル、リソースプール、上流インベントリ、外部モデル、ルート |
 | ガバナンスと計量 | `QuotaBucket`、`UsageRecord`、`ProviderResourceBucket`、`InFlightLease` | クォータ、利用量/コスト、レプリカ間並行数 |
+| 外部請求 | `BillingConnector`、`BillingRecord`、`BillingRawSnapshot`、`BillingSyncRun` | Provider 請求の収集、正規化、チェックポイント、同期履歴 |
 | マルチインスタンス協調 | `ClusterLease`、`ClusterTaskState`、`AdapterSessionBinding` | カタログ同期、クラスタ操作、Codex セッションの Resource バインド |
 | 可観測性 | `RequestLog`、`RequestPayloadLog`、`RouteAttemptLog`、`ProviderObservation`、`AuditEvent` | リクエスト追跡、ペイロード監査、ルート試行、Provider 観測、管理監査 |
 

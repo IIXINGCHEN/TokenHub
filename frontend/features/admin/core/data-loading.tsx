@@ -19,6 +19,9 @@ export type LoadPlan = {
   users: boolean;
   providerCatalog: boolean;
   providerMonitoring: boolean;
+	billingConnectors: boolean;
+	billingRecords: boolean;
+	billingSyncRuns: boolean;
   resources: string[];
 };
 
@@ -45,6 +48,9 @@ export function emptyLoadPlan(): LoadPlan {
     users: false,
     providerCatalog: false,
     providerMonitoring: false,
+		billingConnectors: false,
+		billingRecords: false,
+		billingSyncRuns: false,
     resources: [],
   };
 }
@@ -97,6 +103,11 @@ export function loadPlanForView(user: AdminUser, view: ViewKey): LoadPlan {
     case "billing":
       plan.breakdown = true;
       plan.users = appRole(user.role) === "team_leader";
+		if (appRole(user.role) === "admin") {
+			plan.billingConnectors = true;
+			plan.billingRecords = true;
+			plan.billingSyncRuns = true;
+		}
       break;
     case "audit":
       plan.overview = true;
@@ -224,6 +235,9 @@ export function mergeLoadedData(current: AppData, loaded: LoadedData): AppData {
     keys: loaded.keys ?? current.keys,
     providerCatalog: loaded.providerCatalog ?? current.providerCatalog,
     providerMonitoring: loaded.providerMonitoring ?? current.providerMonitoring,
+		billingConnectors: loaded.billingConnectors ?? current.billingConnectors,
+		billingRecords: loaded.billingRecords ?? current.billingRecords,
+		billingSyncRuns: loaded.billingSyncRuns ?? current.billingSyncRuns,
     resources: loaded.resources ? { ...current.resources, ...loaded.resources } : current.resources,
   };
 }
