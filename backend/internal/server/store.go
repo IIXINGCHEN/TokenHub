@@ -168,6 +168,7 @@ type Store interface {
 	BulkOperateProviderResources(action string, ids []string) (ProviderResourceBulkResult, error)
 	ImportProviderResources(resources []ProviderResource) (ProviderResourceImportResult, error)
 	AddModel(model Model) Model
+	CreateModelWithRoutes(model Model, routes []ModelRoute) (Model, error)
 	ListModels() []Model
 	UpdateModel(name string, patch Model) (Model, error)
 	DeleteModel(name string) error
@@ -2593,34 +2594,6 @@ func (s *GormStore) TestProviderResource(id string) (ProviderResource, error) {
 	return resource, nil
 }
 
-func (s *GormStore) AddModel(model Model) Model {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var existing Model
-	if err := s.db.First(&existing, "name = ?", model.Name).Error; err == nil &&
-		existing.Metadata[modelDirectoryRoleKey] == modelDirectoryRoleExternal &&
-		model.Metadata[modelDirectoryRoleKey] != modelDirectoryRoleExternal {
-		model = withExternalModelRole(model)
-		model.Status = existing.Status
-		model.CreatedAt = existing.CreatedAt
-	}
-
-	if model.Modality == "embedding" {
-		model.CacheReadPriceUSDPer1M = 0
-	}
-	if model.ID == "" {
-		model.ID = model.Name
-	}
-	if model.Status == "" {
-		model.Status = StatusActive
-	}
-	if model.CreatedAt.IsZero() {
-		model.CreatedAt = time.Now().UTC()
-	}
-	_ = s.db.Clauses(clause.OnConflict{UpdateAll: true}).Create(&model).Error
-	return model
-}
-
 func (s *GormStore) ListModels() []Model {
 	var items []Model
 	_ = s.db.Order("name asc").Find(&items).Error
@@ -2711,30 +2684,6 @@ func (s *GormStore) DeleteModel(name string) error {
 		}
 		return tx.Delete(&model).Error
 	})
-}
-
-func (s *GormStore) AddRoute(route ModelRoute) ModelRoute {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if route.ID == "" {
-		route.ID = NewID("route")
-	}
-	if route.Status == "" {
-		route.Status = StatusActive
-	}
-	if route.Weight <= 0 {
-		route.Weight = 1
-	}
-	if route.Strategy == "" {
-		route.Strategy = RouteStrategyBalanced
-	}
-	route.ProjectScope, route.ProjectIDs = normalizeRouteProjectScope(route.ProjectScope, route.ProjectIDs)
-	if route.CreatedAt.IsZero() {
-		route.CreatedAt = time.Now().UTC()
-	}
-	_ = s.db.Clauses(clause.OnConflict{UpdateAll: true}).Create(&route).Error
-	return route
 }
 
 func (s *GormStore) ListRoutes() []ModelRoute {

@@ -4402,9 +4402,10 @@ func (s *Server) handleAdminModels(w http.ResponseWriter, r *http.Request) {
 			preparedRoutes = append(preparedRoutes, route)
 		}
 		req.Model = withExternalModelRole(req.Model)
-		model := s.store.AddModel(req.Model)
-		for _, route := range preparedRoutes {
-			s.store.AddRoute(route)
+		model, err := s.store.CreateModelWithRoutes(req.Model, preparedRoutes)
+		if err != nil {
+			writeError(w, r, NewHTTPError(http.StatusInternalServerError, "model_create_failed", "Failed to create model and initial routes"))
+			return
 		}
 		s.recordAdminAudit(r, user, "create", "model", model.Name, "", model)
 		writeJSON(w, http.StatusCreated, model)

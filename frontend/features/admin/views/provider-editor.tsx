@@ -1822,7 +1822,7 @@ export function ProviderUpsertModal({
             </div>
             <p className="provider-import-hint">
               {selectedModelCount > 0
-                ? `${tx("保存后会引入")} ${selectedModelCount} ${tx("个上游模型；请前往模型目录设置对外价格，再到路由策略建立映射。")}`
+                ? `${tx("保存后会引入")} ${selectedModelCount} ${tx("个上游模型；请前往模型目录创建对外模型、设置统一价格并选择初始线路。")}`
                 : tx("当前没有选择新模型，保存后不会改变 Provider 模型库存。")}
             </p>
               </>

@@ -699,6 +699,9 @@ export type FieldConfig = {
   help?: string;
   readOnlyOnEdit?: boolean;
   multiSelectOnEdit?: boolean;
+  createOnly?: boolean;
+  emptyOptionsText?: string;
+  emptySelectionText?: string;
   visible?: (values: Record<string, string>) => boolean;
 };
 

@@ -9,8 +9,8 @@ This guide is for platform administrators, security operators, and infrastructur
 | Area | Responsibility |
 | --- | --- |
 | Provider Channels | Configure upstream connections, import model inventory, and maintain actual Provider costs |
-| Model Directory | Publish external API model names, capabilities, and unified client-facing prices |
-| Routing Policies | Map external models to imported Provider models with priority, weight, and failover strategy |
+| Model Directory | Create external API models, choose initial Provider routes, and set unified client-facing prices |
+| Routing Policies | Fine-tune Provider mappings, priority, weight, project scope, and failover strategy |
 | Projects and Teams | Define ownership boundaries for keys, quota, and cost attribution |
 | Identity Sources | Configure OAuth or OIDC login providers for enterprise sign-in |
 | Security and Audit | Review request logs, admin events, key rotation, and policy changes |
@@ -43,10 +43,10 @@ TokenHub separates the model lifecycle into three control areas:
 | Control area | Meaning |
 | --- | --- |
 | **Provider Channels** | Upstream connections and their imported model inventory. Creating a catalog-based Provider requires selecting at least one model, but importing inventory alone never exposes it to clients. Custom Providers can be created empty and populated after the upstream connection is available. |
-| **Model Directory** | Only the external models that form the API contract for applications. Their prices are the unified client-facing prices, independent of which Provider route serves a request. |
-| **Routing Policies** | Explicit mappings from an external model to models already imported by one or more Providers, plus traffic and failover strategy. |
+| **Model Directory** | Only the external models that form the API contract for applications. When creating one, select zero or more available imported Provider models to create its initial routes. Its prices are the unified client-facing prices, independent of which Provider route serves a request. |
+| **Routing Policies** | Manage an external model's Provider mappings and fine-tune priority, weight, project scope, traffic allocation, and failover strategy. |
 
-The steps are deliberately separate: add a Provider and import inventory, create an external model, then configure its routes. For example, an administrator can expose the external model `DeepSeek` while routing it to `OpenAI Production / gpt-4.5`. The same Provider model may back several external aliases, and one external model may route to several Providers.
+The responsibilities remain separate: add a Provider and import inventory first; then create an external model, select its initial Provider routes, and set its unified external price in one operation. Use Routing Policies afterward for advanced traffic configuration. An external model can also be saved without an initial route as a draft awaiting mapping. For example, an administrator can expose the external model `DeepSeek` while routing it to `OpenAI Production / gpt-4.5`. The same Provider model may back several external aliases, and one external model may route to several Providers.
 
 Provider-model prices represent actual upstream cost and are used for internal audit. Model Directory prices represent the unified external charge used for client billing estimates, quota accounting, metrics, and usage reports. A route selects the upstream implementation but does not change the external price.
 

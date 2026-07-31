@@ -5,6 +5,7 @@ import { inferModelCategoryText, normalizeNotificationChannelType, notificationC
 import { firstActiveModel, firstActiveProject, firstActiveProvider, firstActiveTeam, firstActiveUser, firstCostCenterCode, firstIssueableProject, projectMemberProjectSelectOptions, stringifyValue } from "../domain/entities";
 import { compactNumber } from "../domain/formatting";
 import { enumValueLabel, numberFromUnknown, numberOr, parseLooseValue, splitList } from "../domain/labels";
+import { initialModelRoutes } from "../domain/provider-model-selection";
 import { activeLanguage, tx } from "../i18n/runtime";
 import { handleApprovalOrJSON } from "./governance-config";
 import { projectQuotaFields, type ProjectQuotaValues } from "../views/crud-projects";
@@ -158,6 +159,8 @@ export function modelPayload(values: Record<string, string>) {
   payload.supported_parameters = splitList(values.supported_parameters);
   payload.input_modalities = splitList(values.input_modalities);
   payload.output_modalities = splitList(values.output_modalities);
+  const routes = initialModelRoutes(values.initial_provider_models);
+  if (routes.length > 0) payload.routes = routes;
   return payload;
 }
 

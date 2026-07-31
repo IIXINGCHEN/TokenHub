@@ -4743,6 +4743,51 @@ func TestAdminCreatesExternalModelWithValidatedImportedRoute(t *testing.T) {
 	}
 }
 
+func TestAdminExternalModelCreationRollsBackWhenRouteWriteFails(t *testing.T) {
+	store := NewMemoryStore()
+	if err := SeedDemoData(store); err != nil {
+		t.Fatal(err)
+	}
+	store.AddProviderModel(ProviderModel{
+		ProviderID:    "prv_mock",
+		UpstreamModel: "atomic-upstream",
+		DisplayName:   "Atomic Upstream",
+		Status:        StatusActive,
+	})
+	if err := store.db.Exec(`
+		CREATE TRIGGER fail_atomic_route_insert
+		BEFORE INSERT ON model_routes
+		WHEN NEW.model_name = 'atomic-route-failure'
+		BEGIN
+			SELECT RAISE(FAIL, 'forced route write failure');
+		END;
+	`).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	created := doJSON(t, New(store).Handler(), http.MethodPost, "/api/admin/models", map[string]any{
+		"name":     "atomic-route-failure",
+		"modality": "chat",
+		"status":   StatusActive,
+		"routes": []map[string]any{{
+			"provider_id":    "prv_mock",
+			"provider_model": "atomic-upstream",
+			"status":         StatusActive,
+		}},
+	}, "")
+	if created.Code != http.StatusInternalServerError {
+		t.Fatalf("expected route write failure 500, got %d: %s", created.Code, created.Body)
+	}
+	if _, ok := modelByNameForTest(store.ListModels(), "atomic-route-failure"); ok {
+		t.Fatal("route write failure must roll back the external model")
+	}
+	for _, route := range store.ListRoutes() {
+		if route.ModelName == "atomic-route-failure" {
+			t.Fatalf("route write failure must roll back every route: %+v", route)
+		}
+	}
+}
+
 func TestAdminRejectsUnimportedAndDuplicateProviderModelRoutes(t *testing.T) {
 	store := NewMemoryStore()
 	if err := SeedDemoData(store); err != nil {

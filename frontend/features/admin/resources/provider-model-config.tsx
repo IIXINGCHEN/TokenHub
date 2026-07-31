@@ -3,6 +3,7 @@ import { modelCategory, modelCategoryFormOptions, modelCategoryLabel } from "../
 import { codexImageCapableResources, findProvider, isCodexSubscriptionImageModel, modelCapabilitySummary, modelPriceSummary, modelRouteDefaults, modelRoutesFor, modelSelectOptions, projectMemberProjectSelectOptions, providerAccountResourceSummary, providerDisplayBaseURL, providerDisplayName, providerDisplayType, providerModelSelectOptions, providerRouteDefaults, providerRouteSummary, providerSelectOptions, routeProjectScopeSummary, routeScoreSummary, stringifyForm } from "../domain/entities";
 import { formatTime, modelToForm, routeStrategyLabel } from "../domain/formatting";
 import { providerTypeLabel, resourceTypeLabel } from "../domain/labels";
+import { availableProviderModelSelectOptions } from "../domain/provider-model-selection";
 import { tx } from "../i18n/runtime";
 import { adminDelete, adminMutate, createModelRoutes, modelPayload, providerPayload, providerResourcePayload, providerResourceToForm, providerResourceUpdatePayload, providerUpdatePayload, routePayload, testProviderAvailability } from "./payloads";
 import { ModelNameCell, ModelRouteProviders, providerTypeOptions, StatusPill } from "../shared/ui";
@@ -218,6 +219,17 @@ export function modelConfig(): ResourceConfig<Model> {
     ],
     fields: [
       { key: "name", label: "模型名", required: true },
+      {
+        key: "initial_provider_models",
+        label: "可用 Provider 模型（可选）",
+        type: "multi-select",
+        optionsFromData: availableProviderModelSelectOptions,
+        placeholder: "搜索 Provider 或上游模型",
+        createOnly: true,
+        emptyOptionsText: "暂无可用 Provider 模型，请先到 Provider 渠道引入。",
+        emptySelectionText: "可选：暂不选择时，将创建为待映射模型。",
+        help: "选中的已引入模型会在保存时同步生成初始路由；优先级、权重和流量策略可稍后在路由策略中调整。",
+      },
       { key: "category", label: "模型类型", type: "select", options: modelCategoryFormOptions(), required: true },
       { key: "family", label: "系列", required: true },
       { key: "modality", label: "能力", type: "select", options: ["chat", "embedding", "image", "video", "audio", "ocr", "rerank"], required: true },

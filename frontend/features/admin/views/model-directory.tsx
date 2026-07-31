@@ -165,8 +165,8 @@ export function ModelDirectoryView({
 function GovernanceFlow() {
   const steps = [
     { index: "1", title: "Provider 渠道", detail: "引入上游模型 · 维护真实成本" },
-    { index: "2", title: "模型目录", detail: "定义对外名称 · 设置统一价格" },
-    { index: "3", title: "路由策略", detail: "选择 Provider 模型 · 配置流量策略" },
+    { index: "2", title: "模型目录", detail: "定义对外名称 · 选择初始线路 · 设置统一价格" },
+    { index: "3", title: "路由策略", detail: "调整优先级、权重与流量策略" },
   ];
   return (
     <div className="model-governance-flow" aria-label={tx("模型治理流程")}>
@@ -216,7 +216,7 @@ function ExternalModelsTable({ data, models, readOnly, busy, onDetails, onEdit, 
       <div className="model-directory-empty">
         <Boxes size={28} />
         <strong>{tx(readOnly ? "当前没有可见模型" : "当前范围没有对外模型")}</strong>
-        <span>{tx(readOnly ? "请联系管理员发布模型并授予 API Key 访问范围。" : "请先创建对外模型并设置统一价格，再前往路由策略关联 Provider 上游模型。")}</span>
+        <span>{tx(readOnly ? "请联系管理员发布模型并授予 API Key 访问范围。" : "请创建对外模型、选择已引入的 Provider 模型并设置统一价格；创建后可在路由策略中细调流量。")}</span>
       </div>
     );
   }
