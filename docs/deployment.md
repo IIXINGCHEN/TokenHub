@@ -410,11 +410,11 @@ To mount a custom catalog explicitly:
 ./deploy/install.sh --model-catalog /absolute/path/to/model-catalog.yaml
 ```
 
-After editing the configured catalog file, restart the backend or use **Restore Candidate Templates** on the Model Directory's **Candidate Templates** tab. This refreshes reference metadata without removing custom external models and does not publish any template.
+After editing the configured catalog file, restart the backend or choose **Settings → Base Settings → Sync Model Reference Catalog**. Either path synchronizes the reference metadata without removing custom external models and does not publish any model.
 
-The custom mount intentionally overrides the image catalog and is therefore managed separately from `TOKENHUB_IMAGE_TAG`. After updating that file, restart the backend container and confirm the entries on the **Candidate Templates** tab.
+The custom mount intentionally overrides the image catalog and is therefore managed separately from `TOKENHUB_IMAGE_TAG`. After updating that file, restart the backend container or run the settings synchronization action, and confirm that the operation completes without a model-catalog error.
 
-`data/model-catalog.yaml` provides reference metadata for candidate templates; it is not a route allowlist and does not publish models. `data/provider-catalog.json` provides Provider templates and the candidate upstream models that can be selected during Provider setup. Importing a selection creates persisted Provider-model inventory. Publishing additionally creates or reuses an external model and adds an enabled mapping. `GET /v1/models` lists only active external models with at least one active route, filtered by the API Key model allowlist when configured. To use a custom Provider catalog, set `TOKENHUB_PROVIDER_CATALOG_FILE` to a local JSON file using the same `providers` structure.
+`data/model-catalog.yaml` provides tracked reference metadata; it is not a route allowlist and does not publish models. `data/provider-catalog.json` provides Provider templates and the upstream models that can be selected during Provider setup. Importing a selection creates persisted Provider-model inventory only. External models and their unified client-facing prices are created separately in Model Directory, then mapped to imported Provider models under Routing Policies. `GET /v1/models` lists only active external models with at least one active route, filtered by the API Key model allowlist when configured. To use a custom Provider catalog, set `TOKENHUB_PROVIDER_CATALOG_FILE` to a local JSON file using the same `providers` structure.
 
 ## Reverse Proxy
 

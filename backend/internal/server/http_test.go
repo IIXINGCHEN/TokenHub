@@ -4085,7 +4085,7 @@ func TestAdminProviderConfigurationFailsEarlyAndPatchPreservesFields(t *testing.
 	}
 }
 
-func TestAdminProviderCatalogAndTemplateRouteMapping(t *testing.T) {
+func TestAdminProviderCatalogAndInventoryImport(t *testing.T) {
 	app := newTestServer()
 
 	catalogResp := doJSON(t, app, http.MethodGet, "/api/admin/provider-catalog/openai", nil, "")
@@ -4103,7 +4103,6 @@ func TestAdminProviderCatalogAndTemplateRouteMapping(t *testing.T) {
 		"base_url":        "https://api.openai.com/v1",
 		"status":          "active",
 		"healthy":         true,
-		"create_routes":   true,
 		"selected_models": []string{"gpt-5"},
 	}, "")
 	if createResp.Code != http.StatusCreated {
@@ -4113,8 +4112,8 @@ func TestAdminProviderCatalogAndTemplateRouteMapping(t *testing.T) {
 	if err := json.Unmarshal([]byte(createResp.Body), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Provider.ID != "prv_openai_test" || result.CreatedRoutes != 1 {
-		t.Fatalf("unexpected route result: %s", createResp.Body)
+	if result.Provider.ID != "prv_openai_test" || result.ImportedModels != 1 {
+		t.Fatalf("unexpected inventory import result: %s", createResp.Body)
 	}
 
 	models := doJSON(t, app, http.MethodGet, "/api/admin/models", nil, "")
@@ -4125,108 +4124,60 @@ func TestAdminProviderCatalogAndTemplateRouteMapping(t *testing.T) {
 		t.Fatalf("expected default model catalog: %s", models.Body)
 	}
 
-	routes := doJSON(t, app, http.MethodGet, "/api/admin/routing-rules", nil, "")
-	if routes.Code != http.StatusOK {
-		t.Fatalf("expected routes list, got %d: %s", routes.Code, routes.Body)
-	}
-	if !strings.Contains(routes.Body, `"provider_id":"prv_openai_test"`) || !strings.Contains(routes.Body, `"model_name":"gpt-5"`) || !strings.Contains(routes.Body, `"provider_model":"gpt-5"`) {
-		t.Fatalf("expected mapped route: %s", routes.Body)
-	}
-
-	autoResp := doJSON(t, app, http.MethodPost, "/api/admin/providers", map[string]any{
-		"catalog_id":     "openai",
-		"id":             "prv_openai_auto",
-		"name":           "OpenAI Auto",
-		"base_url":       "https://api.openai.com/v1",
-		"status":         "active",
-		"healthy":        true,
-		"model_category": "openai",
-	}, "")
-	if autoResp.Code != http.StatusCreated {
-		t.Fatalf("expected auto provider created, got %d: %s", autoResp.Code, autoResp.Body)
-	}
-	var autoResult ProviderCreateResult
-	if err := json.Unmarshal([]byte(autoResp.Body), &autoResult); err != nil {
-		t.Fatal(err)
-	}
-	if autoResult.CreatedRoutes < 2 {
-		t.Fatalf("expected default openai routes, got %d: %s", autoResult.CreatedRoutes, autoResp.Body)
-	}
-	hasGPT5 := false
-	for _, modelName := range autoResult.ModelNames {
-		if modelName == "gpt-5" {
-			hasGPT5 = true
-			break
-		}
-	}
-	if !hasGPT5 {
-		t.Fatalf("expected auto-created gpt-5 route: %s", autoResp.Body)
-	}
-	routesAfterAuto := doJSON(t, app, http.MethodGet, "/api/admin/routing-rules", nil, "")
-	if routesAfterAuto.Code != http.StatusOK {
-		t.Fatalf("expected routes list after auto provider, got %d: %s", routesAfterAuto.Code, routesAfterAuto.Body)
-	}
-	var routeList struct {
-		Data []ModelRoute `json:"data"`
-	}
-	if err := json.Unmarshal([]byte(routesAfterAuto.Body), &routeList); err != nil {
-		t.Fatal(err)
-	}
-	gpt5Priorities := map[string]int{}
-	for _, route := range routeList.Data {
-		if route.ModelName == "gpt-5" {
-			gpt5Priorities[route.ProviderID] = route.Priority
-		}
-	}
-	if gpt5Priorities["prv_openai_test"] != 1 || gpt5Priorities["prv_openai_auto"] != 2 {
-		t.Fatalf("expected gpt-5 provider routes to append by priority, got %#v", gpt5Priorities)
-	}
-
-	autoAgainResp := doJSON(t, app, http.MethodPost, "/api/admin/providers", map[string]any{
-		"catalog_id":     "openai",
-		"id":             "prv_openai_auto",
-		"name":           "OpenAI Auto",
-		"base_url":       "https://api.openai.com/v1",
-		"status":         "active",
-		"healthy":        true,
-		"model_category": "openai",
-	}, "")
-	if autoAgainResp.Code != http.StatusCreated {
-		t.Fatalf("expected idempotent auto provider create, got %d: %s", autoAgainResp.Code, autoAgainResp.Body)
-	}
-	var autoAgainResult ProviderCreateResult
-	if err := json.Unmarshal([]byte(autoAgainResp.Body), &autoAgainResult); err != nil {
-		t.Fatal(err)
-	}
-	if autoAgainResult.CreatedRoutes != 0 {
-		t.Fatalf("expected existing routes to be preserved, got %d: %s", autoAgainResult.CreatedRoutes, autoAgainResp.Body)
-	}
-
-	off := false
-	disabledReq := map[string]any{
-		"catalog_id":     "openai",
-		"id":             "prv_openai_no_routes",
-		"name":           "OpenAI No Routes",
-		"base_url":       "https://api.openai.com/v1",
-		"status":         "active",
-		"healthy":        true,
-		"model_category": "openai",
-		"create_routes":  off,
-	}
-	disabledResp := doJSON(t, app, http.MethodPost, "/api/admin/providers", disabledReq, "")
-	if disabledResp.Code != http.StatusCreated {
-		t.Fatalf("expected disabled auto provider created, got %d: %s", disabledResp.Code, disabledResp.Body)
-	}
-	var disabledResult ProviderCreateResult
-	if err := json.Unmarshal([]byte(disabledResp.Body), &disabledResult); err != nil {
-		t.Fatal(err)
-	}
-	if disabledResult.CreatedRoutes != 0 {
-		t.Fatalf("expected no routes when create_routes is false: %s", disabledResp.Body)
+	providerModels := doJSON(t, app, http.MethodGet, "/api/admin/provider-models?provider_id=prv_openai_test", nil, "")
+	if providerModels.Code != http.StatusOK || !strings.Contains(providerModels.Body, `"upstream_model":"gpt-5"`) {
+		t.Fatalf("expected imported Provider model inventory, got %d: %s", providerModels.Code, providerModels.Body)
 	}
 }
 
-func TestAdminKimiCodingTemplateMapsOfficialModels(t *testing.T) {
+func TestAdminProviderCreationRejectsAutomaticRouteCreation(t *testing.T) {
+	store := NewMemoryStore()
+	if err := SeedDemoData(store); err != nil {
+		t.Fatal(err)
+	}
+	app := New(store).Handler()
+
+	created := doJSON(t, app, http.MethodPost, "/api/admin/providers", map[string]any{
+		"catalog_id":      "openai",
+		"id":              "prv_no_automatic_routes",
+		"name":            "No Automatic Routes",
+		"type":            ProviderOpenAI,
+		"base_url":        "https://api.openai.com/v1",
+		"status":          StatusActive,
+		"create_routes":   true,
+		"selected_models": []string{"gpt-4.1-mini"},
+	}, "")
+
+	if created.Code != http.StatusBadRequest || !strings.Contains(created.Body, "provider_routes_must_be_configured_separately") {
+		t.Fatalf("expected automatic route creation to be rejected, got %d: %s", created.Code, created.Body)
+	}
+	if _, ok := store.GetProvider("prv_no_automatic_routes"); ok {
+		t.Fatal("rejected provider creation must not persist a provider")
+	}
+}
+
+func TestAdminProviderUpdateRejectsAutomaticRouteCreation(t *testing.T) {
+	store := NewMemoryStore()
+	if err := SeedDemoData(store); err != nil {
+		t.Fatal(err)
+	}
+	app := New(store).Handler()
+
+	updated := doJSON(t, app, http.MethodPatch, "/api/admin/providers/prv_mock", map[string]any{
+		"name":          "Must Not Change",
+		"create_routes": true,
+	}, "")
+
+	if updated.Code != http.StatusBadRequest || !strings.Contains(updated.Body, "provider_routes_must_be_configured_separately") {
+		t.Fatalf("expected automatic route creation to be rejected, got %d: %s", updated.Code, updated.Body)
+	}
+	provider, ok := store.GetProvider("prv_mock")
+	if !ok || provider.Name == "Must Not Change" {
+		t.Fatalf("rejected provider update must not persist changes: %+v", provider)
+	}
+}
+
+func TestAdminKimiCodingTemplateImportsOfficialModels(t *testing.T) {
 	store := NewMemoryStore()
 	config := Config{
 		AdminToken:             "dev_admin_token",
@@ -4277,30 +4228,34 @@ func TestAdminKimiCodingTemplateMapsOfficialModels(t *testing.T) {
 		"status":          "active",
 		"healthy":         true,
 		"model_category":  "kimi",
-		"create_routes":   true,
 		"selected_models": []string{"k3", "k3-256k", "kimi-for-coding", "kimi-for-coding-highspeed"},
 	}, "")
 	if createResp.Code != http.StatusCreated {
 		t.Fatalf("expected Kimi provider creation, got %d: %s", createResp.Code, createResp.Body)
 	}
-
-	expectedRoutes := map[string]string{
-		"kimi-k3":                  "k3",
-		"kimi-k3-256k":             "k3-256k",
-		"kimi-k2.7-code":           "kimi-for-coding",
-		"kimi-k2.7-code-highspeed": "kimi-for-coding-highspeed",
+	var result ProviderCreateResult
+	if err := json.Unmarshal([]byte(createResp.Body), &result); err != nil {
+		t.Fatal(err)
 	}
-	for _, route := range store.ListRoutes() {
-		if route.ProviderID != "prv_kimi_coding" {
+	if result.ImportedModels != len(expectedModels) {
+		t.Fatalf("expected all Kimi models to be imported, got %s", createResp.Body)
+	}
+	for _, model := range store.ListProviderModels() {
+		if model.ProviderID != "prv_kimi_coding" {
 			continue
 		}
-		if upstream, ok := expectedRoutes[route.ModelName]; !ok || upstream != route.ProviderModel {
-			t.Fatalf("unexpected Kimi route: %+v", route)
+		if canonical, ok := expectedModels[model.UpstreamModel]; !ok || canonical != model.CanonicalName {
+			t.Fatalf("unexpected Kimi Provider model: %+v", model)
 		}
-		delete(expectedRoutes, route.ModelName)
+		delete(expectedModels, model.UpstreamModel)
 	}
-	if len(expectedRoutes) != 0 {
-		t.Fatalf("missing Kimi routes: %+v", expectedRoutes)
+	if len(expectedModels) != 0 {
+		t.Fatalf("missing Kimi Provider models: %+v", expectedModels)
+	}
+	for _, route := range store.ListRoutes() {
+		if route.ProviderID == "prv_kimi_coding" {
+			t.Fatalf("Provider creation must not publish Kimi routes: %+v", route)
+		}
 	}
 }
 
@@ -4356,7 +4311,6 @@ func TestAdminCustomProviderCatalogLoadsUpstreamModels(t *testing.T) {
 		"api_key":         "upstream-secret",
 		"status":          "active",
 		"healthy":         true,
-		"create_routes":   true,
 		"selected_models": []string{"gpt-4.1-mini"},
 		"custom_models":   catalogPayload.Data.Models,
 	}, "")
@@ -4367,8 +4321,12 @@ func TestAdminCustomProviderCatalogLoadsUpstreamModels(t *testing.T) {
 	if err := json.Unmarshal([]byte(createResp.Body), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.CreatedRoutes != 1 || result.ModelNames[0] != "gpt-4.1-mini" {
-		t.Fatalf("expected one custom upstream route, got %s", createResp.Body)
+	if result.ImportedModels != 1 {
+		t.Fatalf("expected one custom upstream model import, got %s", createResp.Body)
+	}
+	routesResp := doJSON(t, app, http.MethodGet, "/api/admin/routing-rules", nil, "")
+	if routesResp.Code != http.StatusOK || strings.Contains(routesResp.Body, `"provider_id":"prv_agnes"`) {
+		t.Fatalf("custom Provider creation must not publish a route: %d %s", routesResp.Code, routesResp.Body)
 	}
 
 	seenAuth = ""
@@ -4426,7 +4384,6 @@ func TestAdminImportsProviderModelWithoutPublishing(t *testing.T) {
 
 	imported := doJSON(t, app, http.MethodPost, "/api/admin/provider-models/import", map[string]any{
 		"provider_id": "prv_mock",
-		"publish":     false,
 		"models": []map[string]any{
 			{
 				"id":             "vendor/private-alpha",
@@ -4456,13 +4413,9 @@ func TestAdminImportsProviderModelWithoutPublishing(t *testing.T) {
 	}
 }
 
-func TestAdminPublishesProviderModelWithCustomExternalName(t *testing.T) {
+func TestAdminRejectsProviderModelImportPublication(t *testing.T) {
 	store := NewMemoryStore()
 	if err := SeedDemoData(store); err != nil {
-		t.Fatal(err)
-	}
-	project := store.CreateProject(Project{Name: "Alias Mapping Test", Status: StatusActive})
-	if _, _, err := store.CreateAPIKey(project.ID, APIKey{Name: "Alias Test Key"}, "thk_alias_models"); err != nil {
 		t.Fatal(err)
 	}
 	app := New(store).Handler()
@@ -4470,137 +4423,23 @@ func TestAdminPublishesProviderModelWithCustomExternalName(t *testing.T) {
 	imported := doJSON(t, app, http.MethodPost, "/api/admin/provider-models/import", map[string]any{
 		"provider_id": "prv_mock",
 		"publish":     true,
-		"external_names": map[string]string{
-			"vendor/gpt-4.5": "DeepSeek",
-		},
-		"models": []map[string]any{
-			{
-				"id":             "vendor/gpt-4.5",
-				"display_name":   "GPT 4.5",
-				"category":       "openai",
-				"type":           "chat",
-				"context_window": 128000,
-				"capabilities":   []string{"chat", "tools"},
-			},
-		},
-	}, "")
-	if imported.Code != http.StatusCreated {
-		t.Fatalf("expected published provider model import 201, got %d: %s", imported.Code, imported.Body)
-	}
-	if !strings.Contains(imported.Body, `"created_models":1`) || !strings.Contains(imported.Body, `"created_routes":1`) {
-		t.Fatalf("expected one external model and mapping: %s", imported.Body)
-	}
-
-	models := doJSON(t, app, http.MethodGet, "/v1/models", nil, "thk_alias_models")
-	if models.Code != http.StatusOK || !strings.Contains(models.Body, `"id":"DeepSeek"`) {
-		t.Fatalf("expected custom external model to be published: %d %s", models.Code, models.Body)
-	}
-	routes := store.ListRoutes()
-	found := false
-	for _, route := range routes {
-		if route.ModelName == "DeepSeek" && route.ProviderID == "prv_mock" && route.ProviderModel == "vendor/gpt-4.5" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("expected DeepSeek to map to provider model vendor/gpt-4.5: %+v", routes)
-	}
-}
-
-func TestAdminProviderImportUsesExactExternalModelIdentity(t *testing.T) {
-	store := NewMemoryStore()
-	if err := SeedDemoData(store); err != nil {
-		t.Fatal(err)
-	}
-	project := store.CreateProject(Project{Name: "Exact Alias Test", Status: StatusActive})
-	if _, _, err := store.CreateAPIKey(project.ID, APIKey{Name: "Exact Alias Key"}, "thk_exact_alias"); err != nil {
-		t.Fatal(err)
-	}
-	app := New(store).Handler()
-
-	imported := doJSON(t, app, http.MethodPost, "/api/admin/provider-models/import", map[string]any{
-		"provider_id": "prv_mock",
-		"publish":     true,
-		"external_names": map[string]string{
-			"vendor/gpt-4.1-mini": "openai/gpt-4.1-mini",
-		},
 		"models": []map[string]any{{
-			"id":           "vendor/gpt-4.1-mini",
-			"display_name": "GPT 4.1 Mini Vendor Deployment",
-			"type":         "chat",
+			"id":                     "vendor/retired-publication",
+			"input_price_usd_per_1m": 1,
 		}},
 	}, "")
-	if imported.Code != http.StatusCreated {
-		t.Fatalf("expected exact alias import 201, got %d: %s", imported.Code, imported.Body)
+	if imported.Code != http.StatusBadRequest || !strings.Contains(imported.Body, "provider_model_publication_must_be_configured_separately") {
+		t.Fatalf("expected retired publication workflow to be rejected, got %d: %s", imported.Code, imported.Body)
 	}
-	if _, ok := modelByNameForTest(store.ListModels(), "openai/gpt-4.1-mini"); !ok {
-		t.Fatalf("external aliases must use exact API identity even when their canonical name already exists: %+v", store.ListModels())
-	}
-	models := doJSON(t, app, http.MethodGet, "/v1/models", nil, "thk_exact_alias")
-	if models.Code != http.StatusOK || !strings.Contains(models.Body, `"id":"openai/gpt-4.1-mini"`) {
-		t.Fatalf("expected exact slash-qualified external alias in /v1/models: %d %s", models.Code, models.Body)
-	}
-}
-
-func TestAdminProviderImportKeepsDistinctExactAliases(t *testing.T) {
-	store := NewMemoryStore()
-	if err := SeedDemoData(store); err != nil {
-		t.Fatal(err)
-	}
-	app := New(store).Handler()
-
-	for _, externalName := range []string{"gpt-4.1-mini", "openai/gpt-4.1-mini"} {
-		imported := doJSON(t, app, http.MethodPost, "/api/admin/provider-models/import", map[string]any{
-			"provider_id": "prv_mock",
-			"publish":     true,
-			"external_names": map[string]string{
-				"vendor/gpt-4.1-mini": externalName,
-			},
-			"models": []map[string]any{{
-				"id":           "vendor/gpt-4.1-mini",
-				"display_name": "GPT 4.1 Mini Vendor Deployment",
-				"type":         "chat",
-			}},
-		}, "")
-		if imported.Code != http.StatusCreated {
-			t.Fatalf("expected exact alias import 201 for %q, got %d: %s", externalName, imported.Code, imported.Body)
+	for _, model := range store.ListProviderModels() {
+		if model.ProviderID == "prv_mock" && model.UpstreamModel == "vendor/retired-publication" {
+			t.Fatalf("rejected publication imported Provider inventory: %+v", model)
 		}
 	}
-
-	found := map[string]bool{}
 	for _, route := range store.ListRoutes() {
-		if route.ProviderID == "prv_mock" && route.ProviderModel == "vendor/gpt-4.1-mini" {
-			found[route.ModelName] = true
+		if route.ProviderID == "prv_mock" && route.ProviderModel == "vendor/retired-publication" {
+			t.Fatalf("rejected publication created a route: %+v", route)
 		}
-	}
-	if !found["gpt-4.1-mini"] || !found["openai/gpt-4.1-mini"] {
-		t.Fatalf("exact external aliases must keep distinct routes: %+v", store.ListRoutes())
-	}
-}
-
-func TestAdminProviderImportRepublishesExistingExternalModel(t *testing.T) {
-	store := NewMemoryStore()
-	if err := SeedDemoData(store); err != nil {
-		t.Fatal(err)
-	}
-	store.AddModel(Model{Name: "DeepSeek", Modality: "chat", Status: StatusDisabled})
-	app := New(store).Handler()
-
-	imported := doJSON(t, app, http.MethodPost, "/api/admin/provider-models/import", map[string]any{
-		"provider_id": "prv_mock",
-		"publish":     true,
-		"external_names": map[string]string{
-			"vendor/gpt-4.5": "DeepSeek",
-		},
-		"models": []map[string]any{{"id": "vendor/gpt-4.5", "type": "chat"}},
-	}, "")
-	if imported.Code != http.StatusCreated {
-		t.Fatalf("expected existing external model publication 201, got %d: %s", imported.Code, imported.Body)
-	}
-	model, ok := modelByNameForTest(store.ListModels(), "DeepSeek")
-	if !ok || model.Status != StatusActive {
-		t.Fatalf("publish import must reactivate an existing external model: %+v", model)
 	}
 }
 
@@ -4618,7 +4457,6 @@ func TestAdminProviderCreationImportsSelectedModelsWithoutPublishing(t *testing.
 		"type":            ProviderOpenAI,
 		"base_url":        "https://api.openai.com/v1",
 		"status":          StatusActive,
-		"create_routes":   false,
 		"selected_models": []string{"gpt-4.1-mini"},
 	}, "")
 	if created.Code != http.StatusCreated {
@@ -4628,7 +4466,7 @@ func TestAdminProviderCreationImportsSelectedModelsWithoutPublishing(t *testing.
 	if err := json.Unmarshal([]byte(created.Body), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.ImportedModels != 1 || result.CreatedRoutes != 0 {
+	if result.ImportedModels != 1 {
 		t.Fatalf("expected inventory import without publication, got %+v", result)
 	}
 	for _, route := range store.ListRoutes() {
@@ -4645,6 +4483,47 @@ func TestAdminProviderCreationImportsSelectedModelsWithoutPublishing(t *testing.
 	if !found {
 		t.Fatal("expected selected model in provider inventory")
 	}
+}
+
+func TestAdminProviderCreationImportsSelectedCodexModels(t *testing.T) {
+	store := NewMemoryStore()
+	if err := SeedDemoData(store); err != nil {
+		t.Fatal(err)
+	}
+	app := New(store).Handler()
+
+	created := doJSON(t, app, http.MethodPost, "/api/admin/providers", map[string]any{
+		"id":              "prv_codex_selected",
+		"catalog_id":      codexProviderCatalogID,
+		"name":            "Selected Codex Models",
+		"type":            ProviderOpenAICodex,
+		"base_url":        openAICodexBaseURL,
+		"status":          StatusActive,
+		"selected_models": []string{"gpt-selected-codex"},
+		"custom_models": []map[string]any{{
+			"id":             "gpt-selected-codex",
+			"display_name":   "GPT Selected Codex",
+			"category":       "codex",
+			"type":           "chat",
+			"context_window": 272000,
+		}},
+	}, "")
+	if created.Code != http.StatusCreated {
+		t.Fatalf("expected selected Codex Provider creation 201, got %d: %s", created.Code, created.Body)
+	}
+	var result ProviderCreateResult
+	if err := json.Unmarshal([]byte(created.Body), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ImportedModels != 1 {
+		t.Fatalf("expected one explicitly selected Codex model import, got %+v", result)
+	}
+	for _, model := range store.ListProviderModels() {
+		if model.ProviderID == "prv_codex_selected" && model.UpstreamModel == "gpt-selected-codex" && model.ContextWindow == 272000 {
+			return
+		}
+	}
+	t.Fatalf("selected Codex model was not imported: %+v", store.ListProviderModels())
 }
 
 func TestAdminRejectsDeletingProviderModelUsedByRoute(t *testing.T) {
@@ -4861,6 +4740,51 @@ func TestAdminCreatesExternalModelWithValidatedImportedRoute(t *testing.T) {
 	}
 	if !foundInventory {
 		t.Fatal("expected manual nested route to retain imported Provider inventory")
+	}
+}
+
+func TestAdminExternalModelCreationRollsBackWhenRouteWriteFails(t *testing.T) {
+	store := NewMemoryStore()
+	if err := SeedDemoData(store); err != nil {
+		t.Fatal(err)
+	}
+	store.AddProviderModel(ProviderModel{
+		ProviderID:    "prv_mock",
+		UpstreamModel: "atomic-upstream",
+		DisplayName:   "Atomic Upstream",
+		Status:        StatusActive,
+	})
+	if err := store.db.Exec(`
+		CREATE TRIGGER fail_atomic_route_insert
+		BEFORE INSERT ON model_routes
+		WHEN NEW.model_name = 'atomic-route-failure'
+		BEGIN
+			SELECT RAISE(FAIL, 'forced route write failure');
+		END;
+	`).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	created := doJSON(t, New(store).Handler(), http.MethodPost, "/api/admin/models", map[string]any{
+		"name":     "atomic-route-failure",
+		"modality": "chat",
+		"status":   StatusActive,
+		"routes": []map[string]any{{
+			"provider_id":    "prv_mock",
+			"provider_model": "atomic-upstream",
+			"status":         StatusActive,
+		}},
+	}, "")
+	if created.Code != http.StatusInternalServerError {
+		t.Fatalf("expected route write failure 500, got %d: %s", created.Code, created.Body)
+	}
+	if _, ok := modelByNameForTest(store.ListModels(), "atomic-route-failure"); ok {
+		t.Fatal("route write failure must roll back the external model")
+	}
+	for _, route := range store.ListRoutes() {
+		if route.ModelName == "atomic-route-failure" {
+			t.Fatalf("route write failure must roll back every route: %+v", route)
+		}
 	}
 }
 

@@ -3645,10 +3645,14 @@ func (s *Server) handleAdminProviders(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		var req ProviderCreateRequest
 		if err := decodeJSON(r, &req); err != nil {
+			if costErr := providerModelCostDecodeError(err); costErr != nil {
+				writeError(w, r, costErr)
+				return
+			}
 			writeError(w, r, NewHTTPError(400, "invalid_request", err.Error()))
 			return
 		}
-		provider, catalog, catalogSource, err := s.providerFromCreateRequest(r.Context(), req)
+		provider, catalog, catalogSource, err := s.providerForCreate(r.Context(), req)
 		if err != nil {
 			writeError(w, r, err)
 			return
@@ -3663,9 +3667,6 @@ func (s *Server) handleAdminProviders(w http.ResponseWriter, r *http.Request) {
 			CatalogSource: catalogSource,
 		}
 		result.ImportedModels = s.importSelectedProviderCatalogModels(created.ID, catalog, req.SelectedModels)
-		if shouldCreateProviderRoutes(req, catalog, true) {
-			result.CreatedRoutes, result.ModelNames, result.RouteIDs = s.createProviderCatalogRoutes(created.ID, catalog, req)
-		}
 		s.recordAdminAudit(r, user, "create", "provider", created.ID, "", result)
 		writeJSON(w, http.StatusCreated, result)
 	default:
@@ -3738,9 +3739,6 @@ func (s *Server) handleAdminProviderCatalogItem(w http.ResponseWriter, r *http.R
 				return
 			}
 			entry, err = s.codexSubscription.ModelsWithCredentials(r.Context(), credentials)
-			if err == nil {
-				s.syncOpenAICodexModels(entry.Models)
-			}
 		default:
 			writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
 			return
@@ -3804,7 +3802,11 @@ func (s *Server) providerFromCreateRequest(ctx context.Context, req ProviderCrea
 	catalogSource := ""
 	catalogID := strings.TrimSpace(req.CatalogID)
 	if catalogID == codexProviderCatalogID {
-		catalog = s.codexProviderCatalogFromStandardModels(req.SelectedModels)
+		if len(req.CustomModels) > 0 {
+			catalog = codexProviderCatalogFromModels(req.CustomModels)
+		} else {
+			catalog = s.codexProviderCatalogFromStandardModels(req.SelectedModels)
+		}
 		catalogSource = catalog.Source
 	} else if catalogID != "" {
 		entry, source, ok, err := s.providerCatalog.Get(ctx, catalogID, false)
@@ -3868,61 +3870,6 @@ func (s *Server) providerFromCreateRequest(ctx context.Context, req ProviderCrea
 	return provider, catalog, catalogSource, nil
 }
 
-func (s *Server) createProviderCatalogRoutes(providerID string, catalog ProviderCatalogEntry, req ProviderCreateRequest) (int, []string, []string) {
-	selected := map[string]bool{}
-	for _, modelID := range req.SelectedModels {
-		modelID = strings.TrimSpace(modelID)
-		if modelID != "" {
-			selected[modelID] = true
-		}
-	}
-	expandModelCatalog := len(selected) > 0
-	modelNames := []string{}
-	routeIDs := []string{}
-	category := strings.TrimSpace(req.ModelCategory)
-	existingModels := s.store.ListModels()
-	standardModelNames := standardModelNameSet(existingModels)
-	exactModelNames := map[string]bool{}
-	for _, model := range existingModels {
-		exactModelNames[model.Name] = true
-	}
-	existingRoutes := s.store.ListRoutes()
-	existingRouteIDs := existingRouteIDSet(existingRoutes)
-	routePriorities := routePriorityByModel(existingRoutes)
-	for _, catalogModel := range catalog.Models {
-		if len(selected) > 0 && !selected[catalogModel.ID] {
-			continue
-		}
-		modelCategory := standardModelCategory(firstNonEmpty(catalogModel.Category, inferModelCategory(catalogModel.ID, catalogModel.DisplayName)))
-		if category != "" && category != "all" && modelCategory != category {
-			continue
-		}
-		route := ProviderCatalogModelRoute(providerID, catalogModel)
-		normalizedModelName := normalizeModelLookupName(route.ModelName)
-		if !exactModelNames[route.ModelName] {
-			if !expandModelCatalog && !standardModelNames[normalizedModelName] {
-				continue
-			}
-			s.store.AddModel(withExternalModelRole(providerCatalogModelRecord(catalogModel, route.ModelName)))
-			exactModelNames[route.ModelName] = true
-			standardModelNames[normalizedModelName] = true
-		}
-		s.store.AddProviderModel(providerModelFromCatalog(providerID, catalogModel))
-		if existingRouteIDs[route.ID] {
-			continue
-		}
-		route.Priority = takeNextRoutePriority(routePriorities, route.ModelName)
-		if err := s.markExternalModel(route.ModelName); err != nil {
-			continue
-		}
-		route = s.store.AddRoute(route)
-		existingRouteIDs[route.ID] = true
-		routeIDs = append(routeIDs, route.ID)
-		modelNames = append(modelNames, route.ModelName)
-	}
-	return len(routeIDs), modelNames, routeIDs
-}
-
 func (s *Server) importSelectedProviderCatalogModels(providerID string, catalog ProviderCatalogEntry, selectedModels []string) int {
 	selected := map[string]bool{}
 	for _, modelID := range selectedModels {
@@ -3942,28 +3889,6 @@ func (s *Server) importSelectedProviderCatalogModels(providerID string, catalog 
 		imported++
 	}
 	return imported
-}
-
-func providerCatalogModelRecord(model ProviderCatalogModel, name string) Model {
-	name = firstNonEmpty(strings.TrimSpace(name), model.CanonicalName, canonicalModelName(model.ID, model.DisplayName), model.ID)
-	category := standardModelCategory(firstNonEmpty(model.Category, inferModelCategory(model.ID, model.DisplayName)))
-	return Model{
-		ID:                     name,
-		Name:                   name,
-		Category:               category,
-		Family:                 firstNonEmpty(model.Family, inferModelFamily(name)),
-		Modality:               normalizeModelModality(firstNonEmpty(model.Type, "chat")),
-		ContextWindow:          model.ContextWindow,
-		InputPriceUSDPer1M:     model.InputPriceUSDPer1M,
-		CacheReadPriceUSDPer1M: model.CacheReadPriceUSDPer1M,
-		OutputPriceUSDPer1M:    model.OutputPriceUSDPer1M,
-		InputModalities:        append([]string(nil), model.InputModalities...),
-		OutputModalities:       append([]string(nil), model.OutputModalities...),
-		Capabilities:           append([]string(nil), model.Capabilities...),
-		SupportedParameters:    append([]string(nil), model.SupportedParameters...),
-		Metadata:               cloneStringMap(model.Metadata),
-		Status:                 StatusActive,
-	}
 }
 
 func (s *Server) customProviderCatalogFromStandardModels(category string) ProviderCatalogEntry {
@@ -4051,40 +3976,6 @@ func customProviderCatalogFromModels(input []ProviderCatalogModel, category stri
 	return entry
 }
 
-func shouldCreateProviderRoutes(req ProviderCreateRequest, catalog ProviderCatalogEntry, isCreate bool) bool {
-	if catalog.ID == "" || len(catalog.Models) == 0 {
-		return false
-	}
-	if req.CreateRoutes != nil {
-		return *req.CreateRoutes
-	}
-	return isCreate
-}
-
-func standardModelNameSet(models []Model) map[string]bool {
-	set := map[string]bool{}
-	for _, model := range models {
-		for _, name := range []string{model.Name, model.ID} {
-			normalized := normalizeModelLookupName(name)
-			if normalized != "" {
-				set[normalized] = true
-			}
-		}
-	}
-	return set
-}
-
-func existingRouteIDSet(routes []ModelRoute) map[string]bool {
-	set := map[string]bool{}
-	for _, route := range routes {
-		id := strings.TrimSpace(route.ID)
-		if id != "" {
-			set[id] = true
-		}
-	}
-	return set
-}
-
 func routePriorityByModel(routes []ModelRoute) map[string]int {
 	priorities := map[string]int{}
 	for _, route := range routes {
@@ -4124,7 +4015,15 @@ func (s *Server) handleAdminProviderNested(w http.ResponseWriter, r *http.Reques
 		case http.MethodPatch:
 			var req ProviderCreateRequest
 			if err := decodeJSON(r, &req); err != nil {
+				if costErr := providerModelCostDecodeError(err); costErr != nil {
+					writeError(w, r, costErr)
+					return
+				}
 				writeError(w, r, NewHTTPError(400, "invalid_request", err.Error()))
+				return
+			}
+			if err := validateProviderRouteCreation(req); err != nil {
+				writeError(w, r, err)
 				return
 			}
 			current, ok := s.store.GetProvider(parts[0])
@@ -4135,6 +4034,10 @@ func (s *Server) handleAdminProviderNested(w http.ResponseWriter, r *http.Reques
 			mergeProviderPatchRequest(&req, current)
 			provider, catalog, catalogSource, err := s.providerFromCreateRequest(r.Context(), req)
 			if err != nil {
+				writeError(w, r, err)
+				return
+			}
+			if err := validateSelectedProviderModelCosts(catalog, req.SelectedModels); err != nil {
 				writeError(w, r, err)
 				return
 			}
@@ -4149,9 +4052,6 @@ func (s *Server) handleAdminProviderNested(w http.ResponseWriter, r *http.Reques
 				CatalogSource: catalogSource,
 			}
 			result.ImportedModels = s.importSelectedProviderCatalogModels(updated.ID, catalog, req.SelectedModels)
-			if shouldCreateProviderRoutes(req, catalog, false) {
-				result.CreatedRoutes, result.ModelNames, result.RouteIDs = s.createProviderCatalogRoutes(updated.ID, catalog, req)
-			}
 			s.recordAdminAudit(r, user, "update", "provider", parts[0], "", result)
 			writeJSON(w, http.StatusOK, result)
 		case http.MethodDelete:
@@ -4502,9 +4402,10 @@ func (s *Server) handleAdminModels(w http.ResponseWriter, r *http.Request) {
 			preparedRoutes = append(preparedRoutes, route)
 		}
 		req.Model = withExternalModelRole(req.Model)
-		model := s.store.AddModel(req.Model)
-		for _, route := range preparedRoutes {
-			s.store.AddRoute(route)
+		model, err := s.store.CreateModelWithRoutes(req.Model, preparedRoutes)
+		if err != nil {
+			writeError(w, r, NewHTTPError(http.StatusInternalServerError, "model_create_failed", "Failed to create model and initial routes"))
+			return
 		}
 		s.recordAdminAudit(r, user, "create", "model", model.Name, "", model)
 		writeJSON(w, http.StatusCreated, model)
@@ -5613,6 +5514,7 @@ func (s *Server) handleAdminRequestDetail(w http.ResponseWriter, r *http.Request
 		writeError(w, r, NewHTTPError(403, "admin_forbidden", "Admin role is not allowed to access this request"))
 		return
 	}
+	s.redactProviderCostsForUser(user, detail)
 	writeJSON(w, http.StatusOK, detail)
 }
 

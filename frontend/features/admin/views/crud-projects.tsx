@@ -13,6 +13,7 @@ import { adminDelete, adminFetch, adminMutate, pendingProjectQuotaApproval, proj
 import { DataSection, SimpleTable, StatusPill } from "../shared/ui";
 import { APIKeyEmptyState } from "./api-key-empty-state";
 import { ModelCategoryTabs, NotificationChannelTabs } from "./model-catalog";
+import { ModelGovernanceEmptyState } from "./model-governance-empty-state";
 import { latencyDisplay, requestLogFailed } from "./overview";
 import { APIKeyFlowHint, EntityTable, PaginationControls, type PaginationState, ResourceEmptyState, resultCountLabel, RouteStrategyHint, TableSkeleton } from "./settings-table";
 
@@ -84,6 +85,20 @@ export function CrudView<T>({
     return (
       <DataSection title={config.eyebrow}>
         <APIKeyEmptyState onCreate={onCreate} />
+      </DataSection>
+    );
+  }
+
+  if (config.view === "providers" && data.providers.length === 0 && !loading && !query.trim()) {
+    return (
+      <DataSection title={config.eyebrow}>
+        <ModelGovernanceEmptyState
+          stage="providers"
+          title="还没有 Provider 渠道"
+          description="先添加一个上游 Provider，并选择要引入的模型。Provider 模型价格用于记录真实成本与审计。"
+          actionLabel={config.createLabel ?? "新增 Provider"}
+          onAction={onCreate}
+        />
       </DataSection>
     );
   }
@@ -328,7 +343,7 @@ export function ProviderChannelTable({
             <tr>
               <th>{tx("服务商 / 通道")}</th>
               <th>{tx("健康与基础监控")}</th>
-              <th>{tx("路由与账号")}</th>
+              <th>{tx("模型、路由与账号")}</th>
               <th>{tx("真实监控 · L3")}</th>
               <th>{tx("性能与质量")}</th>
               <th>{tx("Codex 套餐")}</th>
@@ -339,6 +354,7 @@ export function ProviderChannelTable({
             {rows.map((row) => {
               const routeSummary = tx(providerRouteSummary(row.provider, data));
               const accountDetail = providerChannelAccountDetail(row.resources);
+              const importedModelCount = data.providerModels.filter((model) => model.provider_id === row.provider.id).length;
               return <tr key={row.provider.id}>
                 <td>
                   <div className="provider-monitor-name">
@@ -363,7 +379,8 @@ export function ProviderChannelTable({
                 </td>
                 <td>
                   <div className="provider-channel-routing">
-                    <strong title={routeSummary}>{routeSummary}</strong>
+                    <strong>{importedModelCount} {tx("个已引入模型")}</strong>
+                    <span title={routeSummary}>{routeSummary}</span>
                     <span title={accountDetail || undefined}>
                       {row.resources.length || 0} {tx("账号资源")}{accountDetail ? ` · ${accountDetail}` : ""} · P{formatNumber(row.provider.priority)}
                     </span>

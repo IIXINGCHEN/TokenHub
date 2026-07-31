@@ -470,6 +470,7 @@ export type RequestLog = {
   rejected_prediction_tokens?: number;
   total_tokens?: number;
   estimated_cost_usd?: number;
+  provider_cost_usd?: number;
   usage_record_count?: number;
 };
 
@@ -493,6 +494,7 @@ export type UsageRecord = {
   rejected_prediction_tokens?: number;
   total_tokens: number;
   estimated_cost_usd: number;
+  provider_cost_usd?: number;
   created_at: string;
 };
 
@@ -697,6 +699,9 @@ export type FieldConfig = {
   help?: string;
   readOnlyOnEdit?: boolean;
   multiSelectOnEdit?: boolean;
+  createOnly?: boolean;
+  emptyOptionsText?: string;
+  emptySelectionText?: string;
   visible?: (values: Record<string, string>) => boolean;
 };
 
@@ -730,6 +735,7 @@ export type ResourceAction<T> = {
   label: string;
   title?: string;
   visible?: (item: T) => boolean;
+  navigate?: (item: T) => ViewKey;
   run?: (ctx: ApiContext, item: T) => Promise<void>;
   modal?: (item: T, data: AppData) => ModalState<any>;
   doneMessage?: (item: T) => string;
