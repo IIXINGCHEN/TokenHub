@@ -5582,7 +5582,7 @@ func (s *Server) handleAdminRequestLogs(w http.ResponseWriter, r *http.Request) 
 		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": s.filterRequestLogsForUser(user, s.store.ListRequestLogs())})
+	writeJSON(w, http.StatusOK, map[string]any{"data": s.requestLogsWithUsageForUser(user)})
 }
 
 func (s *Server) handleAdminRequestDetail(w http.ResponseWriter, r *http.Request) {
