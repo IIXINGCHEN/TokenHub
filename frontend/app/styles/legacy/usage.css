@@ -991,6 +991,10 @@
   align-items: start;
 }
 
+.billing-observability-grid > .section + .section {
+  margin-top: 0;
+}
+
 .billing-connector-modal {
   width: min(720px, calc(100vw - 32px));
   overflow: hidden;
