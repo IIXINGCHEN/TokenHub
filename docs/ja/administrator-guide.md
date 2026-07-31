@@ -118,9 +118,9 @@ TokenHub は `GET /metrics` で Prometheus メトリクスを公開できます�
 
 ## 外部請求コネクター
 
-プラットフォーム管理者は「コスト請求」で外部請求ソースを管理できます。TokenHub は Aliyun `QueryInstanceBill` と OneAPI 互換ログソースをサポートします。コネクターは接続テスト、即時同期、分単位の定期同期、履歴を保持したままの無効化、再有効化が可能です。
+プラットフォーム管理者は「コスト請求」で外部請求ソースを管理できます。TokenHub は Aliyun `QueryInstanceBill`、NewAPI の Quota データ、OneAPI 互換ログソースをサポートします。コネクターは接続テスト、即時同期、分単位の定期同期、履歴を保持したままの無効化、再有効化が可能です。
 
-Aliyun では請求 RPC Base URL、AccessKey ID、AccessKey Secret、ソースタイムゾーン、任意の Product Code を設定します。TokenHub は各 RPC リクエストを HMAC-SHA1 で署名し、請求期間を月単位で進めます。OneAPI 互換ソースでは Base URL、API Token、ログパス、通貨、1 通貨単位に相当する Quota を設定します。どちらも 1 秒あたりのリクエスト上限を設定でき、一時的なネットワークエラー、`429`、`5xx` は上限付き指数バックオフで再試行します。
+Aliyun では請求 RPC Base URL、AccessKey ID、AccessKey Secret、ソースタイムゾーン、任意の Product Code を設定します。TokenHub は各 RPC リクエストを HMAC-SHA1 で署名し、請求期間を月単位で進めます。NewAPI では Base URL、アクセストークン、`New-Api-User` ユーザー ID、通貨、1 通貨単位に相当する Quota を設定します。TokenHub は公式仕様の認証ヘッダーで `GET /api/data/self` を呼び出し、同期範囲を最大 30 日のウィンドウに自動分割します。OneAPI 互換ソースでは Base URL、API Token、ログパス、通貨、Quota 換算値を設定します。すべてのコネクターで 1 秒あたりのリクエスト上限を設定でき、一時的なネットワークエラー、`429`、`5xx` は上限付き指数バックオフで再試行します。
 
 手動同期では RFC 3339 の `from` と `to` を指定できます。範囲を省略すると、最後に成功した終了時刻から続行します。各ページの Cursor を保存するため、再試行は同じ範囲のチェックポイントから再開します。正規化レコードは `(connector_id, external_id)` を冪等キーとし、通貨、ソースタイムゾーン、税、割引、返金、請求期間、利用開始・終了時刻を保持します。最近の同期にはページ数、リクエスト試行数、追加・更新件数、サニタイズ済みの失敗コードが表示されます。
 

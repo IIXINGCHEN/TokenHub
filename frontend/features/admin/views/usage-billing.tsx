@@ -552,7 +552,7 @@ function BillingConnectorManager({ api, data, loading, onReload }: { api: ApiCon
           paginationKey="billing-connectors"
           rows={data.billingConnectors.map((connector) => [
             <div className="billing-source-name" key={`${connector.id}:name`}><strong>{connector.name}</strong><span>{connector.base_url}</span></div>,
-            connector.type === "aliyun" ? "Aliyun" : "OneAPI",
+            billingConnectorTypeLabel(connector.type),
             <StatusPill key={`${connector.id}:status`} status={connector.status} />,
             connector.schedule_interval_minutes > 0 ? `${connector.schedule_interval_minutes} min` : tx("手动"),
             <div className="billing-sync-state" key={`${connector.id}:sync`}><StatusPill status={connector.last_sync_status || "pending"} /><span>{formatBillingDate(connector.last_sync_at)}</span></div>,
@@ -638,6 +638,13 @@ function BillingConnectorEditor({ api, connector, onClose, onSaved }: { api: Api
   }
 
   const isAliyun = values.type === "aliyun";
+  const isNewAPI = values.type === "newapi";
+  const updateType = (type: BillingConnector["type"]) => setValues((current) => ({
+    ...current,
+    type,
+    currency: type === "aliyun" ? "CNY" : "USD",
+    endpoint: type === "oneapi" ? "/api/log/self" : current.endpoint,
+  }));
   return (
     <div className="modal-backdrop" role="presentation">
       <form className="modal billing-connector-modal" onSubmit={submit}>
@@ -647,7 +654,7 @@ function BillingConnectorEditor({ api, connector, onClose, onSaved }: { api: Api
         </div>
         <div className="modal-body billing-connector-form">
           <label className="field"><span>{tx("名称")} *</span><input value={values.name} onChange={(event) => update("name", event.target.value)} required /></label>
-          <label className="field"><span>{tx("类型")} *</span><select disabled={Boolean(connector)} value={values.type} onChange={(event) => update("type", event.target.value)}><option value="oneapi">OneAPI</option><option value="aliyun">Aliyun</option></select></label>
+          <label className="field"><span>{tx("类型")} *</span><select disabled={Boolean(connector)} value={values.type} onChange={(event) => updateType(event.target.value as BillingConnector["type"])}><option value="oneapi">OneAPI</option><option value="newapi">NewAPI</option><option value="aliyun">Aliyun</option></select></label>
           <label className="field billing-wide-field"><span>Base URL *</span><input type="url" value={values.base_url} onChange={(event) => update("base_url", event.target.value)} required /></label>
           <label className="field"><span>{tx("同步间隔（分钟）")}</span><input min="0" type="number" value={values.schedule_interval_minutes} onChange={(event) => update("schedule_interval_minutes", event.target.value)} /></label>
           <label className="field"><span>{tx("每秒请求上限")}</span><input min="0" type="number" value={values.rate_limit_per_second} onChange={(event) => update("rate_limit_per_second", event.target.value)} /></label>
@@ -662,7 +669,8 @@ function BillingConnectorEditor({ api, connector, onClose, onSaved }: { api: Api
           ) : (
             <>
               <label className="field billing-wide-field"><span>API Token *</span><input autoComplete="new-password" type="password" value={values.api_token} onChange={(event) => update("api_token", event.target.value)} required={!connector?.credentials_configured} /></label>
-              <label className="field"><span>{tx("日志路径")}</span><input value={values.endpoint} onChange={(event) => update("endpoint", event.target.value)} /></label>
+              {isNewAPI ? <label className="field"><span>{tx("NewAPI 用户 ID")} *</span><input inputMode="numeric" min="1" type="number" value={values.user_id} onChange={(event) => update("user_id", event.target.value)} required /></label> : null}
+              {!isNewAPI ? <label className="field"><span>{tx("日志路径")}</span><input value={values.endpoint} onChange={(event) => update("endpoint", event.target.value)} /></label> : null}
               <label className="field"><span>{tx("每币种单位 Quota")}</span><input min="1" type="number" value={values.quota_per_unit} onChange={(event) => update("quota_per_unit", event.target.value)} /></label>
             </>
           )}
@@ -676,16 +684,18 @@ function BillingConnectorEditor({ api, connector, onClose, onSaved }: { api: Api
 
 function billingConnectorFormValues(connector?: BillingConnector) {
   const config = connector?.config ?? {};
+  const connectorType = connector?.type ?? "oneapi";
   return {
     name: connector?.name ?? "",
-    type: connector?.type ?? "oneapi",
+    type: connectorType,
     base_url: connector?.base_url ?? "",
     schedule_interval_minutes: String(connector?.schedule_interval_minutes ?? 60),
     rate_limit_per_second: config.rate_limit_per_second ?? "5",
-    currency: config.currency ?? (connector?.type === "aliyun" ? "CNY" : "USD"),
+    currency: config.currency ?? (connectorType === "aliyun" ? "CNY" : "USD"),
     api_token: "",
     endpoint: config.endpoint ?? "/api/log/self",
     quota_per_unit: config.quota_per_unit ?? "500000",
+    user_id: config.user_id ?? "",
     access_key_id: "",
     access_key_secret: "",
     source_timezone: config.source_timezone ?? "Asia/Shanghai",
@@ -697,7 +707,9 @@ function billingConnectorPayload(values: ReturnType<typeof billingConnectorFormV
   const commonConfig = { currency: values.currency, rate_limit_per_second: values.rate_limit_per_second };
   const config = values.type === "aliyun"
     ? { ...commonConfig, source_timezone: values.source_timezone, product_code: values.product_code }
-    : { ...commonConfig, endpoint: values.endpoint, quota_per_unit: values.quota_per_unit };
+    : values.type === "newapi"
+      ? { ...commonConfig, quota_per_unit: values.quota_per_unit, user_id: values.user_id }
+      : { ...commonConfig, endpoint: values.endpoint, quota_per_unit: values.quota_per_unit };
   const credentials = values.type === "aliyun"
     ? { access_key_id: values.access_key_id, access_key_secret: values.access_key_secret }
     : { api_token: values.api_token };
@@ -716,4 +728,10 @@ function billingConnectorPayload(values: ReturnType<typeof billingConnectorFormV
 function formatBillingDate(value?: string) {
   if (!value) return "-";
   return new Intl.DateTimeFormat(languageLocale(), { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+}
+
+function billingConnectorTypeLabel(type: BillingConnector["type"]) {
+  if (type === "aliyun") return "Aliyun";
+  if (type === "newapi") return "NewAPI";
+  return "OneAPI";
 }

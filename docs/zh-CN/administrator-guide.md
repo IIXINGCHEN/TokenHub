@@ -118,9 +118,9 @@ TokenHub 可以在 `GET /metrics` 暴露 Prometheus 指标。该功能默认关�
 
 ## 外部账单连接器
 
-平台管理员可在「成本账单」中管理外部账单源。TokenHub 首期支持阿里云 `QueryInstanceBill` 和 OneAPI 兼容日志源。连接器可以测试连接、立即同步、按分钟设置定时同步、停用并保留历史记录，也可以随后重新启用。
+平台管理员可在「成本账单」中管理外部账单源。TokenHub 支持阿里云 `QueryInstanceBill`、NewAPI 额度数据和 OneAPI 兼容日志源。连接器可以测试连接、立即同步、按分钟设置定时同步、停用并保留历史记录，也可以随后重新启用。
 
-阿里云连接器需要账单 RPC Base URL、AccessKey ID、AccessKey Secret、源时区，可选填写 Product Code。TokenHub 使用 HMAC-SHA1 为每个 RPC 请求签名，并按账期逐月推进。OneAPI 兼容连接器需要 Base URL、API Token、日志路径、币种，以及一个币种单位对应的 Quota 数量。两类连接器都可以设置每秒请求上限；临时网络错误、`429` 和 `5xx` 会使用有上限的指数退避重试。
+阿里云连接器需要账单 RPC Base URL、AccessKey ID、AccessKey Secret、源时区，可选填写 Product Code。TokenHub 使用 HMAC-SHA1 为每个 RPC 请求签名，并按账期逐月推进。NewAPI 连接器需要 Base URL、访问令牌、`New-Api-User` 用户 ID、币种，以及一个币种单位对应的 Quota 数量；TokenHub 会按照官方文档携带鉴权请求头调用 `GET /api/data/self`，并自动把同步范围切分为最长 30 天的窗口。OneAPI 兼容连接器需要 Base URL、API Token、日志路径、币种和 Quota 换算值。所有连接器都可以设置每秒请求上限；临时网络错误、`429` 和 `5xx` 会使用有上限的指数退避重试。
 
 手动同步可以传入 RFC 3339 格式的 `from` 和 `to`。未指定时间范围时，从上一次成功同步的结束时间继续。每页保存一次上游 Cursor，因此失败重试会从断点继续当前区间，而不是重新开始。规范化账单以 `(connector_id, external_id)` 作为幂等键，并保留币种、源时区、税费、折扣、退款、账期和用量起止时间。最近同步会展示页数、请求尝试数、新增/更新记录数和经过清理的失败代码。
 

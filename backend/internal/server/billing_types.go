@@ -7,6 +7,7 @@ import (
 
 const (
 	BillingConnectorAliyun = "aliyun"
+	BillingConnectorNewAPI = "newapi"
 	BillingConnectorOneAPI = "oneapi"
 
 	BillingSyncRunning   = "running"

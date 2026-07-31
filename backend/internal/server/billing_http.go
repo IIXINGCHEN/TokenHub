@@ -233,9 +233,9 @@ func validateBillingConnector(connector BillingConnector) error {
 		return NewHTTPError(http.StatusBadRequest, "invalid_billing_connector", "name and base_url are required")
 	}
 	switch connector.Type {
-	case BillingConnectorAliyun, BillingConnectorOneAPI:
+	case BillingConnectorAliyun, BillingConnectorNewAPI, BillingConnectorOneAPI:
 	default:
-		return NewHTTPError(http.StatusBadRequest, "invalid_billing_connector_type", "type must be aliyun or oneapi")
+		return NewHTTPError(http.StatusBadRequest, "invalid_billing_connector_type", "type must be aliyun, newapi, or oneapi")
 	}
 	if connector.Status != StatusActive && connector.Status != StatusDisabled {
 		return NewHTTPError(http.StatusBadRequest, "invalid_billing_connector_status", "status must be active or disabled")
@@ -255,7 +255,13 @@ func validateBillingConnector(connector BillingConnector) error {
 	}
 	if endpoint := strings.TrimSpace(connector.Config["endpoint"]); endpoint != "" {
 		if parsed, parseErr := url.Parse(endpoint); parseErr != nil || parsed.IsAbs() || parsed.Host != "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-			return NewHTTPError(http.StatusBadRequest, "invalid_billing_endpoint", "OneAPI endpoint is invalid")
+			return NewHTTPError(http.StatusBadRequest, "invalid_billing_endpoint", "Billing connector endpoint is invalid")
+		}
+	}
+	if connector.Type == BillingConnectorNewAPI {
+		userID, parseErr := strconv.ParseInt(strings.TrimSpace(connector.Config["user_id"]), 10, 64)
+		if parseErr != nil || userID <= 0 {
+			return NewHTTPError(http.StatusBadRequest, "invalid_billing_config", "NewAPI user_id must be a positive integer")
 		}
 	}
 	return nil
@@ -273,6 +279,9 @@ func billingConnectorAllowedConfig(connectorType string) map[string]struct{} {
 	case BillingConnectorAliyun:
 		allowed["product_code"] = struct{}{}
 		allowed["source_timezone"] = struct{}{}
+	case BillingConnectorNewAPI:
+		allowed["quota_per_unit"] = struct{}{}
+		allowed["user_id"] = struct{}{}
 	case BillingConnectorOneAPI:
 		allowed["endpoint"] = struct{}{}
 		allowed["quota_per_unit"] = struct{}{}

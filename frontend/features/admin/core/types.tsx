@@ -81,7 +81,7 @@ export type Provider = {
 export type BillingConnector = {
 	id: string;
 	name: string;
-	type: "aliyun" | "oneapi";
+	type: "aliyun" | "newapi" | "oneapi";
 	base_url: string;
 	status: string;
 	schedule_interval_minutes: number;

@@ -98,6 +98,7 @@ func newBillingService(store BillingStore) *BillingService {
 		store: store,
 		adapters: map[string]BillingAdapter{
 			BillingConnectorAliyun: AliyunBillingAdapter{Client: client},
+			BillingConnectorNewAPI: NewAPIBillingAdapter{Client: client},
 			BillingConnectorOneAPI: OneAPIBillingAdapter{Client: client},
 		},
 		active: map[string]bool{},

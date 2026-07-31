@@ -123,6 +123,15 @@ func TestOneAPIBillingSyncRetriesPaginatesAndIsIdempotent(t *testing.T) {
 	store := NewMemoryStore()
 	server := NewWithConfig(store, Config{AdminToken: "dev_admin_token", SecretKey: "billing-test-secret"})
 	app := server.Handler()
+	invalid := doJSON(t, app, http.MethodPost, "/api/admin/billing/connectors", map[string]any{
+		"name":     "Invalid NewAPI",
+		"type":     BillingConnectorNewAPI,
+		"base_url": upstream.URL,
+		"config":   map[string]string{"user_id": "0"},
+	}, "")
+	if invalid.Code != http.StatusBadRequest || !strings.Contains(invalid.Body, "invalid_billing_config") {
+		t.Fatalf("expected invalid NewAPI user id to be rejected: %d %s", invalid.Code, invalid.Body)
+	}
 	created := doJSON(t, app, http.MethodPost, "/api/admin/billing/connectors", map[string]any{
 		"name":     "Finance OneAPI",
 		"type":     BillingConnectorOneAPI,
@@ -211,6 +220,141 @@ func TestOneAPIBillingSyncRetriesPaginatesAndIsIdempotent(t *testing.T) {
 	}
 	if snapshotCount != 2 {
 		t.Fatalf("deleting connector removed raw snapshots: %d", snapshotCount)
+	}
+}
+
+func TestNewAPIBillingSyncUsesQuotaEndpointAndChunksRange(t *testing.T) {
+	from := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	to := from.Add(45 * 24 * time.Hour)
+	type requestedRange struct {
+		from int64
+		to   int64
+	}
+	var ranges []requestedRange
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/data/self" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("authorization") != "Bearer newapi-token" {
+			t.Fatalf("missing NewAPI bearer credential: %q", r.Header.Get("authorization"))
+		}
+		if r.Header.Get("New-Api-User") != "42" {
+			t.Fatalf("missing NewAPI user header: %q", r.Header.Get("New-Api-User"))
+		}
+		start, startErr := strconv.ParseInt(r.URL.Query().Get("start_timestamp"), 10, 64)
+		end, endErr := strconv.ParseInt(r.URL.Query().Get("end_timestamp"), 10, 64)
+		if startErr != nil || endErr != nil {
+			t.Fatalf("invalid NewAPI time range: %s", r.URL.RawQuery)
+		}
+		if end-start > int64((30*24*time.Hour)/time.Second) {
+			t.Fatalf("NewAPI request exceeded the 30-day limit: %d", end-start)
+		}
+		ranges = append(ranges, requestedRange{from: start, to: end})
+		model := "newapi-first"
+		if start != from.Unix() {
+			model = "newapi-second"
+		}
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":[` +
+			`{"user_id":42,"username":"finance","model_name":"` + model + `","created_at":` + strconv.FormatInt(start+3600, 10) +
+			`,"token_used":150,"count":2,"quota":500000}]}`))
+	}))
+	defer upstream.Close()
+
+	store := NewMemoryStore()
+	server := NewWithConfig(store, Config{AdminToken: "dev_admin_token", SecretKey: "billing-test-secret"})
+	app := server.Handler()
+	created := doJSON(t, app, http.MethodPost, "/api/admin/billing/connectors", map[string]any{
+		"name":     "Finance NewAPI",
+		"type":     BillingConnectorNewAPI,
+		"base_url": upstream.URL,
+		"config": map[string]string{
+			"currency":       "USD",
+			"quota_per_unit": "500000",
+			"user_id":        "42",
+		},
+		"credentials": map[string]string{"api_token": "newapi-token"},
+	}, "")
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create NewAPI connector: %d %s", created.Code, created.Body)
+	}
+	var connector BillingConnector
+	if err := json.Unmarshal([]byte(created.Body), &connector); err != nil {
+		t.Fatal(err)
+	}
+
+	syncPath := "/api/admin/billing/connectors/" + connector.ID + "/sync"
+	first := doJSON(t, app, http.MethodPost, syncPath, map[string]any{
+		"from": from.Format(time.RFC3339),
+		"to":   to.Format(time.RFC3339),
+	}, "")
+	if first.Code != http.StatusOK {
+		t.Fatalf("sync NewAPI connector: %d %s", first.Code, first.Body)
+	}
+	var firstRun BillingSyncRun
+	if err := json.Unmarshal([]byte(first.Body), &firstRun); err != nil {
+		t.Fatal(err)
+	}
+	if firstRun.Status != BillingSyncSucceeded || firstRun.RecordsInserted != 2 || firstRun.PagesFetched != 2 {
+		t.Fatalf("unexpected NewAPI sync result: %#v", firstRun)
+	}
+	if len(ranges) != 2 || ranges[0].from != from.Unix() || ranges[0].to != from.Add(30*24*time.Hour).Unix() ||
+		ranges[1].from != ranges[0].to+1 || ranges[1].to != to.Unix() {
+		t.Fatalf("unexpected NewAPI request ranges: %#v", ranges)
+	}
+
+	records := store.ListBillingRecords(connector.ID, 10)
+	if len(records) != 2 {
+		t.Fatalf("expected two normalized NewAPI records, got %#v", records)
+	}
+	for _, record := range records {
+		if record.SourceType != BillingConnectorNewAPI || record.Service != "newapi" || record.AccountID != "42" ||
+			record.Currency != "USD" || record.NetAmount != "1" || record.UsageQuantity != 150 || record.Metadata["request_count"] != "2" {
+			t.Fatalf("NewAPI record was not normalized: %#v", record)
+		}
+	}
+
+	second := doJSON(t, app, http.MethodPost, syncPath, map[string]any{
+		"from": from.Format(time.RFC3339),
+		"to":   to.Format(time.RFC3339),
+	}, "")
+	if second.Code != http.StatusOK {
+		t.Fatalf("repeat NewAPI sync: %d %s", second.Code, second.Body)
+	}
+	var secondRun BillingSyncRun
+	if err := json.Unmarshal([]byte(second.Body), &secondRun); err != nil {
+		t.Fatal(err)
+	}
+	if secondRun.RecordsInserted != 0 || secondRun.RecordsUpdated != 2 || len(store.ListBillingRecords(connector.ID, 10)) != 2 {
+		t.Fatalf("repeat NewAPI sync was not idempotent: %#v", secondRun)
+	}
+}
+
+func TestNewAPIBillingRejectsContractDrift(t *testing.T) {
+	for name, payload := range map[string]string{
+		"missing success envelope":   `{"data":[]}`,
+		"missing required row field": `{"success":true,"data":[{"user_id":42,"username":"finance","created_at":1767229200,"token_used":1,"count":1,"quota":1}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("content-type", "application/json")
+				_, _ = w.Write([]byte(payload))
+			}))
+			defer upstream.Close()
+			adapter := NewAPIBillingAdapter{Client: upstream.Client()}
+			_, err := adapter.Fetch(t.Context(), BillingConnector{
+				BaseURL:     upstream.URL,
+				Config:      map[string]string{"user_id": "42"},
+				Credentials: map[string]string{"api_token": "newapi-token"},
+			}, BillingFetchRequest{
+				From: time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC),
+				To:   time.Date(2026, time.January, 2, 0, 0, 0, 0, time.UTC),
+			})
+			if err == nil {
+				t.Fatal("expected contract-incompatible NewAPI response to be rejected")
+			}
+		})
 	}
 }
 
