@@ -131,14 +131,18 @@ Chat Completions 请求路由到原生 Anthropic 或 Gemini 供应商时，会�
 
 流式按上游事件到达顺序逐条转发，因此首字延迟取决于供应商而非完整响应。这些路由无法表达的内容类型（例如音频块）返回 `400 unsupported_content_block`，不会被静默丢弃。
 
+Chat Completions 路由到 Codex Subscription 账号时，内部使用 Responses 协议，并提供相同的文本、图片、函数工具、并行工具、推理连续性和流式能力。
+
+Codex 订阅上游不接受客户端的采样、输出 Token 上限和停止条件字段。TokenHub 会在兼容端点接收这些字段，但不会将它们转发给订阅上游，因此 Codex 路由无法保证执行 `max_tokens`、`max_completion_tokens`、`temperature`、`top_p` 和停止条件。业务必须严格执行这些控制项时，请使用标准 API Provider。
+
 ### 推理连续性
 
 Anthropic 与 Gemini 要求在多轮工具调用的下一轮中，原样回传推理步骤附带的 opaque 签名。OpenAI Chat Completions 规范没有对应字段，因此 TokenHub 通过扩展字段返回：
 
 | 字段 | 对应供应商数据 |
 | --- | --- |
-| `message.reasoning_content` | Anthropic `thinking` 文本、Gemini thought 片段 |
-| `message.reasoning_signature` | Anthropic `thinking.signature` |
+| `message.reasoning_content` | Anthropic `thinking` 文本、Gemini thought 片段、Codex 推理摘要 |
+| `message.reasoning_signature` | Anthropic `thinking.signature`、Codex 加密推理内容 |
 | `message.redacted_reasoning_content` | Anthropic `redacted_thinking.data` |
 | `message.tool_calls[].thought_signature` | Gemini `thoughtSignature` |
 
@@ -164,6 +168,10 @@ curl --request POST \
 ```
 
 原生 Anthropic 路由保留 Anthropic 内容块与 beta Header。OpenAI 兼容路由转换文本、图片、客户端工具、工具结果、并行工具调用和流式事件。Anthropic 服务端工具无法转换到 OpenAI 兼容 Provider 时，接口返回 `400 unsupported_tool`。
+
+路由到 OpenAI Codex Subscription 账号的模型也使用同一个 Messages 接口：TokenHub 将 Messages 直接转换为 Responses 协议，再把结果转换回 Anthropic 事件。因此 Claude Code 可以直接连接 TokenHub，不需要 CC-Switch 或其他本地协议代理。Codex 签发的推理签名会跨工具调用轮次传递，同一个 Claude Code 会话会保持绑定到同一个健康订阅账号。
+
+在 Codex 路由的 Messages 请求中，由于订阅上游不支持对应请求字段，`max_tokens`、`temperature`、`top_p`、`stop_sequences` 和 Anthropic 结构化输出格式无法被强制执行。
 
 启用 `mid-conversation-system-2026-04-07` 的 Claude Code 请求可以在 `messages` 中包含 `system` 条目。TokenHub 会在原生 Anthropic 路由中保留这些条目，并在 OpenAI 兼容路由中将其转换为保持原顺序的系统消息。未启用该 beta 时，`messages` 仍只接受 `user` 和 `assistant` role。
 

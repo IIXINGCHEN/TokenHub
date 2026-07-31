@@ -131,14 +131,18 @@ Chat Completions requests routed to a native Anthropic or Gemini provider transl
 
 Streaming forwards upstream events as they arrive, so time to first token reflects the provider rather than the full response. Content types these routes cannot represent, such as audio parts, return `400 unsupported_content_block` instead of being dropped from the request.
 
+Chat Completions routed to a Codex Subscription account use the Responses protocol internally and provide the same text, image, function-tool, parallel-tool, reasoning-continuation, and streaming behavior.
+
+The Codex subscription upstream does not accept client sampling, output-token-limit, or stop-sequence fields. TokenHub accepts those fields at the compatibility endpoint but omits them from the subscription request, so `max_tokens`, `max_completion_tokens`, `temperature`, `top_p`, and stop conditions are not enforced on Codex-backed routes. Use a standard API Provider when those controls are contractual.
+
 ### Reasoning continuation
 
 Anthropic and Gemini require the opaque signature attached to a reasoning step to be echoed back verbatim on the next turn of a multi-step tool exchange. The OpenAI Chat Completions schema has no field for it, so TokenHub returns the data in extension fields:
 
 | Field | Provider data |
 | --- | --- |
-| `message.reasoning_content` | Anthropic `thinking` text, Gemini thought parts |
-| `message.reasoning_signature` | Anthropic `thinking.signature` |
+| `message.reasoning_content` | Anthropic `thinking` text, Gemini thought parts, Codex reasoning summaries |
+| `message.reasoning_signature` | Anthropic `thinking.signature`, Codex encrypted reasoning |
 | `message.redacted_reasoning_content` | Anthropic `redacted_thinking.data` |
 | `message.tool_calls[].thought_signature` | Gemini `thoughtSignature` |
 
@@ -164,6 +168,10 @@ curl --request POST \
 ```
 
 Native Anthropic routes preserve Anthropic content blocks and beta headers. OpenAI-compatible routes translate text, images, client tools, tool results, parallel tool calls, and streaming events. Anthropic server tools that cannot be represented by an OpenAI-compatible provider return `400 unsupported_tool`.
+
+Models routed to an OpenAI Codex Subscription account work through the same Messages endpoint: TokenHub translates Messages directly to the Responses protocol and converts the result back to Anthropic events. Claude Code therefore connects to TokenHub directly; CC-Switch or another local protocol proxy is not required. Codex-issued reasoning signatures are carried across tool turns, and a Claude Code session remains affined to one healthy subscription account.
+
+On Codex-backed Messages routes, `max_tokens`, `temperature`, `top_p`, `stop_sequences`, and Anthropic structured-output formatting cannot be enforced because the subscription upstream does not support their equivalent request fields.
 
 Claude Code requests that enable `mid-conversation-system-2026-04-07` may include `system` entries inside `messages`. TokenHub preserves those entries on native Anthropic routes and translates them into ordered system messages on OpenAI-compatible routes. Without that beta, `messages` continues to accept only `user` and `assistant` roles.
 

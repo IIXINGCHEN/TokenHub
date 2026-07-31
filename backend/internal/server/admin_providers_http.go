@@ -575,6 +575,16 @@ func (s *Server) handleAdminProviderResourceNested(w http.ResponseWriter, r *htt
 		}
 		return
 	}
+	if len(parts) == 3 && parts[1] == "quota" {
+		if parts[2] == "reset-credits" {
+			s.handleAdminOpenAIAccountQuotaResetCredits(w, r, user, parts[0])
+			return
+		}
+		if parts[2] == "reset" {
+			s.handleAdminOpenAIAccountQuotaReset(w, r, user, parts[0])
+			return
+		}
+	}
 	if len(parts) != 2 || (parts[1] != "health" && parts[1] != "test" && parts[1] != "refresh-token" && parts[1] != "quota") {
 		writeError(w, r, NewHTTPError(404, "not_found", "Not found"))
 		return

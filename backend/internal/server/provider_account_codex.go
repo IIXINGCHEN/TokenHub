@@ -296,6 +296,9 @@ func consumeCodexResponsesStream(body io.Reader, destination io.Writer) (map[str
 	var response map[string]any
 	var textBuilder strings.Builder
 	var usage Usage
+	collectedOutput := make(map[int]map[string]any)
+	collectedOutputOrder := make([]int, 0, 4)
+	nextUnindexedOutput := -1
 	completed := false
 	for {
 		line, err := reader.ReadString('\n')
@@ -318,8 +321,28 @@ func consumeCodexResponsesStream(body io.Reader, destination io.Writer) (map[str
 						if delta, ok := event["delta"].(string); ok {
 							textBuilder.WriteString(delta)
 						}
-					case "response.completed", "response.done":
+					case "response.output_item.done":
+						if item, ok := event["item"].(map[string]any); ok {
+							index := nextUnindexedOutput
+							if rawIndex, exists := event["output_index"]; exists {
+								index = int(int64FromAny(rawIndex))
+							} else {
+								nextUnindexedOutput--
+							}
+							if _, exists := collectedOutput[index]; !exists {
+								collectedOutputOrder = append(collectedOutputOrder, index)
+							}
+							collectedOutput[index] = item
+						}
+					case "response.completed", "response.done", "response.incomplete":
 						response, _ = event["response"].(map[string]any)
+						if output, _ := anySlice(response["output"]); len(output) == 0 && len(collectedOutputOrder) > 0 {
+							output = make([]any, 0, len(collectedOutputOrder))
+							for _, index := range collectedOutputOrder {
+								output = append(output, collectedOutput[index])
+							}
+							response["output"] = output
+						}
 						usage = usageFromMap(response)
 						completed = true
 					case "response.failed", "error":

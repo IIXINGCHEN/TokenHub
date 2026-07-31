@@ -36,6 +36,10 @@ Each new usage record snapshots the attributed user, so later ownership changes 
 
 TokenHub stores the last known-good provider catalog in the database. On every backend startup, it validates and loads the configured local `provider-catalog.json`, then atomically replaces the database snapshot. Ordinary **Provider Channels** requests only read the database snapshot, and administrators can manually refresh the same local catalog. If local catalog reading, parsing, or completeness validation fails, TokenHub keeps using the last known-good snapshot.
 
+## Codex Usage Reset Credits
+
+For an active OpenAI Codex Subscription account, open **Provider Channels**, edit the Provider, and expand **Advanced > Subscription quota**. The account card shows the authoritative number of available reset credits and the nearest expiry reported by OpenAI. **Reset usage window** opens a second confirmation before it consumes one non-recoverable credit; it resets eligible Codex usage windows but does not change the ChatGPT billing plan. A completed or idempotently repeated operation refreshes both quota and reset-credit details.
+
 ## Provider Inventory, Model Directory, and Publication
 
 TokenHub separates the model lifecycle into three control areas:

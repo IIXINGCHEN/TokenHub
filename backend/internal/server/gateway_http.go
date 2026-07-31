@@ -40,8 +40,15 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	routed, err = compatibleChatRoutes(routed, req)
+	if err != nil {
+		s.finishFailedRoutedCall(r, routed, nil, err)
+		s.recordRequestPayload(routed.Call.RequestID, req, auditErrorPayload(err, routed.Call.RequestID))
+		writeError(w, r, err)
+		return
+	}
 
-	affinity, err := s.chatCacheLocalityAffinity(key.ID, r.Header, req)
+	affinity, err := s.chatGatewayAffinity(key.ID, r.Header, req, routed.Routes)
 	if err != nil {
 		s.finishFailedRoutedCall(r, routed, nil, err)
 		s.recordRequestPayload(routed.Call.RequestID, req, auditErrorPayload(err, routed.Call.RequestID))
@@ -63,10 +70,6 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 				if prepareErr != nil {
 					return struct{}{}, Usage{}, prepareErr
 				}
-				adapter, adapterErr := s.adapterForRoute(prepared)
-				if adapterErr != nil {
-					return struct{}{}, Usage{}, adapterErr
-				}
 				upstreamReq := req
 				if omitReasoningEffort {
 					upstreamReq.ReasoningEffort = nil
@@ -79,7 +82,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 					w.Header().Set("x-request-id", routed.Call.RequestID)
 					s.writeRouteHeaders(w, routed.Call, prepared, attempt)
 				}
-				streamUsage, err := adapter.ChatStream(ctx, prepared.Provider, prepared.ProviderModel, upstreamReq, tracker)
+				streamUsage, err := s.streamChatRoute(ctx, prepared, upstreamReq, r.Header, tracker)
 				return struct{}{}, streamUsage, classifyStreamError(ctx, err, tracker.Wrote())
 			})
 
@@ -325,25 +328,6 @@ func (s *Server) startRoutedCall(w http.ResponseWriter, r *http.Request, project
 		return RoutedCall{}, false
 	}
 	return RoutedCall{Call: call, Routes: s.planRouteOrder(call, routes)}, true
-}
-
-func (s *Server) executeRoutedChat(r *http.Request, routed RoutedCall, req ChatCompletionRequest) (any, RouteSelection, Usage, []RouteAttempt, error) {
-	allowEffortFallback := normalizedReasoningEffort(req.ReasoningEffort) != nil
-	return executeRoutedWithStore(r.Context(), s.store, routed, allowEffortFallback, func(ctx context.Context, route RouteSelection, omitReasoningEffort bool, _ int) (any, Usage, error) {
-		route, err := s.prepareRouteForUpstream(ctx, route)
-		if err != nil {
-			return nil, Usage{}, err
-		}
-		adapter, err := s.adapterForRoute(route)
-		if err != nil {
-			return nil, Usage{}, err
-		}
-		upstreamReq := req
-		if omitReasoningEffort {
-			upstreamReq.ReasoningEffort = nil
-		}
-		return adapter.Chat(ctx, route.Provider, route.ProviderModel, upstreamReq)
-	})
 }
 
 func (s *Server) executeRoutedPlaygroundChat(r *http.Request, routed RoutedCall, req ChatCompletionRequest) (any, RouteSelection, Usage, []RouteAttempt, error) {

@@ -36,6 +36,10 @@ Language: [English](../administrator-guide.md) | 简体中文 | [日本語](../j
 
 TokenHub 会把最后一次成功加载的 Provider 目录保存在数据库中。每次后端启动时，系统都会校验并加载配置的本地 `provider-catalog.json`，然后原子替换数据库快照。普通「Provider 渠道」请求只读取数据库快照，管理员也可以手动刷新同一份本地目录。若本地目录读取、解析或完整性校验失败，TokenHub 会继续使用最后一次有效快照。
 
+## Codex 用量重置资格
+
+对于已启用的 OpenAI Codex Subscription 账号，打开「Provider 渠道」，编辑对应 Provider，再展开「高级 > 订阅额度」。账号卡片会显示 OpenAI 返回的权威剩余重置次数及最近到期时间。「重置套餐用量」会先弹出二次确认，确认后消耗 1 次不可恢复的资格，并重置当前符合条件的 Codex 用量窗口；该操作不会更改 ChatGPT 计费套餐。操作成功或幂等重试成功后，界面会重新拉取额度和重置资格明细。
+
 ## Provider 库存、模型目录与发布
 
 TokenHub 将模型生命周期拆成三个独立的管理区域：

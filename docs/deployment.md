@@ -190,6 +190,8 @@ Start the stack from the repository root:
 
 The script validates the Compose environment, pulls the published image, and starts the managed application container without building locally. It waits up to 180 seconds for the Compose health check before reporting success. It also removes the obsolete standalone frontend container when upgrading from the former two-container layout; the `tokenhub-data` volume is preserved. If the image cannot be pulled during the initial GHCR rollout, it falls back to building from the local checkout. Validation errors name every unsafe variable without printing their values. If the new backend fails or does not become healthy, the script prints up to 100 log lines from that attempt.
 
+The installer prefers the current `docker compose` CLI plugin and falls back to the legacy `docker-compose` command when only that command is available. It also supports Compose releases that provide `config --format` but not `config --environment`; this compatibility path requires `python3`.
+
 Validate without pulling or starting containers:
 
 ```bash

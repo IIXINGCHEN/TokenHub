@@ -177,7 +177,27 @@ func (s *Server) startAnthropicRoutedCall(
 		writeAnthropicError(w, r, err)
 		return RoutedCall{}, false
 	}
-	affinity, err := s.anthropicCacheLocalityAffinity(key.ID, req.Model, r.Header, req.Raw)
+	routes, err = s.filterCodexRoutesByModel(r.Context(), req.Model, routes)
+	if err != nil {
+		httpErr := AsHTTPError(err)
+		s.store.FinishCall(call, RouteSelection{}, Usage{}, httpErr.Status, httpErr.Code, s.clientIP(r), r.UserAgent())
+		s.recordRequestPayload(call.RequestID, req.Raw, auditErrorPayload(err, call.RequestID))
+		writeAnthropicError(w, r, err)
+		return RoutedCall{}, false
+	}
+	compatible, err := compatibleAnthropicRoutes(RoutedCall{
+		Call:   call,
+		Routes: s.planRouteOrder(call, routes),
+	}, req)
+	if err != nil {
+		httpErr := AsHTTPError(err)
+		s.store.FinishCall(call, RouteSelection{}, Usage{}, httpErr.Status, httpErr.Code, s.clientIP(r), r.UserAgent())
+		s.recordRequestPayload(call.RequestID, req.Raw, auditErrorPayload(err, call.RequestID))
+		writeAnthropicError(w, r, err)
+		return RoutedCall{}, false
+	}
+	routes = compatible.Routes
+	affinity, err := s.anthropicGatewayAffinity(key.ID, req.Model, r.Header, req.Raw, routes)
 	if err != nil {
 		httpErr := AsHTTPError(err)
 		s.store.FinishCall(call, RouteSelection{}, Usage{}, httpErr.Status, httpErr.Code, s.clientIP(r), r.UserAgent())
@@ -205,112 +225,6 @@ func (s *Server) executeRoutedAnthropicMessages(
 		}
 		return s.executeAnthropicMessagesRoute(ctx, route, req, r.Header)
 	})
-}
-
-func (s *Server) executeAnthropicMessagesRoute(
-	ctx context.Context,
-	route RouteSelection,
-	req anthropicMessagesRequest,
-	headers http.Header,
-) (map[string]any, Usage, error) {
-	if route.Provider.Type == ProviderAnthropic {
-		return s.executeNativeAnthropicMessages(ctx, route, req, headers)
-	}
-	if !openAIMessageProvider(route.Provider.Type) {
-		return nil, Usage{}, NewHTTPError(
-			http.StatusNotImplemented,
-			"provider_capability_not_supported",
-			"Provider does not support the Anthropic Messages gateway",
-		)
-	}
-	chatReq, err := anthropicToOpenAIChatRequest(req)
-	if err != nil {
-		return nil, Usage{}, err
-	}
-	adapter, err := s.adapterForRoute(route)
-	if err != nil {
-		return nil, Usage{}, err
-	}
-	resp, usage, err := adapter.Chat(ctx, route.Provider, route.ProviderModel, chatReq)
-	if err != nil {
-		return nil, usage, err
-	}
-	body, ok := resp.(map[string]any)
-	if !ok {
-		return nil, usage, NewHTTPError(http.StatusBadGateway, "provider_invalid_response", "Provider returned an invalid chat response")
-	}
-	converted, err := openAIResponseToAnthropic(body, req.Model, usage)
-	if err != nil {
-		return nil, usage, err
-	}
-	return converted, usage, nil
-}
-
-func openAIMessageProvider(providerType string) bool {
-	switch providerType {
-	case ProviderMock, ProviderOpenAI, ProviderOpenAICompatible, ProviderAzureOpenAI, "deepseek", "qwen", "local":
-		return true
-	default:
-		return false
-	}
-}
-
-func compatibleAnthropicRoutes(
-	routed RoutedCall,
-	req anthropicMessagesRequest,
-) (RoutedCall, error) {
-	compatible := routed
-	compatible.Routes = make([]RouteSelection, 0, len(routed.Routes))
-	var firstErr error
-	for _, route := range routed.Routes {
-		err := validateAnthropicRouteCompatibility(route, req)
-		if err == nil {
-			compatible.Routes = append(compatible.Routes, route)
-			continue
-		}
-		if !isAnthropicRouteIncompatibility(err) {
-			return compatible, err
-		}
-		if firstErr == nil {
-			firstErr = err
-		}
-	}
-	if len(compatible.Routes) == 0 {
-		if firstErr == nil {
-			firstErr = ErrProviderMissing
-		}
-		return compatible, firstErr
-	}
-	return compatible, nil
-}
-
-func validateAnthropicRouteCompatibility(route RouteSelection, req anthropicMessagesRequest) error {
-	if route.Provider.Type == ProviderAnthropic {
-		return nil
-	}
-	if !openAIMessageProvider(route.Provider.Type) {
-		return NewHTTPError(
-			http.StatusNotImplemented,
-			"provider_capability_not_supported",
-			"Provider does not support the Anthropic Messages gateway",
-		)
-	}
-	_, err := anthropicToOpenAIChatRequest(req)
-	return err
-}
-
-func isAnthropicRouteIncompatibility(err error) bool {
-	switch AsHTTPError(err).Code {
-	case "provider_capability_not_supported",
-		"unsupported_content_block",
-		"unsupported_image_source",
-		"unsupported_tool",
-		"unsupported_tool_choice",
-		"unsupported_tool_result":
-		return true
-	default:
-		return false
-	}
 }
 
 func anthropicToOpenAIChatRequest(req anthropicMessagesRequest) (ChatCompletionRequest, error) {
@@ -878,7 +792,7 @@ func (s *Server) executeNativeAnthropicMessages(
 	req anthropicMessagesRequest,
 	headers http.Header,
 ) (map[string]any, Usage, error) {
-	payload := cloneAnyMap(req.Raw)
+	payload := nativeAnthropicPayload(req.Raw)
 	payload["model"] = route.ProviderModel
 	payload["stream"] = false
 	resp, err := s.doNativeAnthropicRequest(ctx, route.Provider, "/v1/messages", payload, headers)
@@ -991,6 +905,8 @@ func (s *Server) handleAnthropicMessagesStream(
 			switch {
 			case prepared.Provider.Type == ProviderAnthropic:
 				streamUsage, streamErr = s.streamNativeAnthropicMessages(ctx, prepared, req, r.Header, tracker)
+			case prepared.Provider.Type == ProviderOpenAICodex:
+				streamUsage, streamErr = s.streamCodexAsAnthropic(ctx, prepared, req, r.Header, tracker)
 			case openAIMessageProvider(prepared.Provider.Type):
 				streamUsage, streamErr = s.streamOpenAIAsAnthropic(ctx, prepared, req, tracker)
 			default:
@@ -1035,7 +951,7 @@ func (s *Server) streamNativeAnthropicMessages(
 	headers http.Header,
 	writer io.Writer,
 ) (Usage, error) {
-	payload := cloneAnyMap(req.Raw)
+	payload := nativeAnthropicPayload(req.Raw)
 	payload["model"] = route.ProviderModel
 	payload["stream"] = true
 	resp, err := s.doNativeAnthropicRequest(ctx, route.Provider, "/v1/messages", payload, headers)

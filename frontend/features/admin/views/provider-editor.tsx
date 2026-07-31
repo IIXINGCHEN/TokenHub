@@ -12,10 +12,10 @@ import { ReviewItem } from "../shared/modals";
 import { providerTypeOptions } from "../shared/ui";
 import { ProviderAPIQuickCatalog, ProviderAPIQuickConnect } from "./provider-api-quick-connect";
 import { ProviderModelInventory } from "./provider-model-inventory";
+import { ProviderAccountQuotaReset } from "./provider-account-quota-reset";
 import { ProviderInlineField, providerAccountResourceReady, providerCreateWizardSteps, providerCreateWizardStepTitle, providerCredentialModeLabel, providerCredentialOptions } from "./provider-editor-fields";
 import { ProviderAdvancedFields, ProviderConnectionFields } from "./provider-editor-sections";
-import { formatImageGenerationCapability, formatImageGenerationCapabilityTag, formatProviderAccountDate, formatQuotaPercent, type OpenAIQuotaWindow, ProviderAccountDetails, ProviderOAuthCallbackModal, ProviderOAuthNoticeModal, providerResourceAccountLabel, QuotaMetric, quotaUsagePercent, quotaWindowResetLabel } from "./provider-account-ui";
-
+import { formatImageGenerationCapability, formatImageGenerationCapabilityTag, formatProviderAccountDate, formatQuotaPercent, launchProviderAccountAuthorization, type OpenAIQuotaWindow, type ProviderAccountOAuthAction, ProviderAccountDetails, ProviderOAuthCallbackModal, ProviderOAuthNoticeModal, providerResourceAccountLabel, QuotaMetric, quotaUsagePercent, quotaWindowResetLabel } from "./provider-account-ui";
 const openAIAccountOAuthRedirectURI = "http://localhost:1455/auth/callback";
 
 type OpenAIAccountQuota = {
@@ -461,7 +461,7 @@ export function ProviderUpsertModal({
     for (const resource of selectedAccountResources) {
       if (!accountQuotas[resource.id]) void queryAccountQuota(resource);
     }
-    // Query when the visible account scope changes; successful results remain cached for manual refresh.
+    const timer = window.setInterval(() => { for (const resource of selectedAccountResources) void queryAccountQuota(resource, true); }, 10 * 60 * 1000); return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editTab, mode, selectedAccountResources]);
 
@@ -725,7 +725,7 @@ export function ProviderUpsertModal({
     setAccountOAuthNoticeOpen(true);
   }
 
-  async function openProviderAccountAuthorization() {
+  async function startProviderAccountAuthorization(action: ProviderAccountOAuthAction) {
     try {
       setAccountOAuthBusy(true);
       setAccountOAuthNoticeError("");
@@ -736,12 +736,12 @@ export function ProviderUpsertModal({
       if (!resp.ok) throw new Error(await readAdminError(resp, tx("生成账号授权地址")));
       const generated = (await resp.json()) as ProviderAccountOAuthGenerateResponse;
       savePendingProviderAccountOAuthSession({ session_id: generated.session_id, state: generated.state });
+      await launchProviderAccountAuthorization(action, generated.auth_url);
       setAccountOAuthNoticeOpen(false);
-      window.open(generated.auth_url, "_blank", "noopener,noreferrer");
       setAccountOAuthCallback("");
       setAccountOAuthCallbackModalError("");
       setAccountOAuthCallbackModalOpen(true);
-      setAccountOAuthStatus(tx("已打开 OpenAI/Codex 授权页。授权后请复制浏览器地址栏中的完整 localhost callback URL，并粘贴到回调结果。"));
+      setAccountOAuthStatus(tx(action === "copy" ? "已复制 OpenAI/Codex 授权链接。请在新标签页打开链接并完成授权。" : "已打开 OpenAI/Codex 授权页。授权后请复制浏览器地址栏中的完整 localhost callback URL，并粘贴到回调结果。"));
       setError("");
     } catch (err) {
       if (isAuthExpiredError(err)) return;
@@ -764,7 +764,7 @@ export function ProviderUpsertModal({
     }
   }
 
-  async function queryAccountQuota(resource: ProviderResource) {
+  async function queryAccountQuota(resource: ProviderResource, force = false) {
     setAccountQuotaBusyIDs((current) => ({ ...current, [resource.id]: true }));
     setAccountQuotaErrors((current) => {
       const next = { ...current };
@@ -772,7 +772,7 @@ export function ProviderUpsertModal({
       return next;
     });
     try {
-      const resp = await adminFetch(api, `/api/admin/provider-resources/${resource.id}/quota`);
+      const resp = await adminFetch(api, `/api/admin/provider-resources/${resource.id}/quota${force ? "?refresh=true" : ""}`);
       if (!resp.ok) throw new Error(await readAdminError(resp, tx("查询订阅额度")));
       const quota = (await resp.json()) as OpenAIAccountQuota;
       setAccountQuotas((current) => ({ ...current, [resource.id]: quota }));
@@ -1511,7 +1511,7 @@ export function ProviderUpsertModal({
               <section className="provider-quota-panel">
                 <div className="wizard-panel-head">
                   <h3>{tx("订阅额度")}</h3>
-                  <p>{tx("实时查询 ChatGPT/Codex 套餐用量和重置时间；不会显示虚构的美元余额。")}</p>
+                  <p>{tx("实时查询 ChatGPT/Codex 套餐用量和重置时间；每 10 分钟自动刷新，也可手动刷新。")}</p>
                 </div>
                 <div className="provider-quota-list">
                   {selectedAccountResources.map((resource) => {
@@ -1534,8 +1534,8 @@ export function ProviderUpsertModal({
                             <span className={`provider-image-capability ${imageCapability || "unknown"}`}>
                               {tx(formatImageGenerationCapabilityTag(imageCapability))}
                             </span>
-                            <button className="secondary-button" disabled={accountQuotaBusyIDs[resource.id]} onClick={() => void queryAccountQuota(resource)} type="button">
-                              {tx(accountQuotaBusyIDs[resource.id] ? "查询中" : quota ? "刷新额度" : "查询额度")}
+                            <button className="secondary-button" disabled={accountQuotaBusyIDs[resource.id]} onClick={() => void queryAccountQuota(resource, true)} type="button">
+                              {tx(accountQuotaBusyIDs[resource.id] ? "查询中" : quota ? "刷新用量与重置次数" : "查询用量与重置次数")}
                             </button>
                             {resource.status === "active" ? (
                               <button
@@ -1588,7 +1588,6 @@ export function ProviderUpsertModal({
                               <div className="provider-quota-highlights">
                                 <QuotaMetric label="套餐" value={quota.plan_type || resource.credential_summary?.plan_type || "-"} />
                                 <QuotaMetric label="生图能力" value={formatImageGenerationCapability(resource.options?.image_generation_capability)} />
-                                <QuotaMetric label="重置额度" value={quota.rate_limit_reset_credits ? String(quota.rate_limit_reset_credits.available_count) : "-"} />
                                 <QuotaMetric label="主窗口重置时间" value={quotaWindowResetLabel(primary)} />
                               </div>
                             </div>
@@ -1611,6 +1610,7 @@ export function ProviderUpsertModal({
                             {tx(accountQuotaBusyIDs[resource.id] ? "正在自动查询该真实账号的套餐与额度信息。" : "暂未获取到该账号的套餐与额度信息，可点击查询重试。")}
                           </p>
                         )}
+                        <ProviderAccountQuotaReset api={api} quotaBusy={Boolean(accountQuotaBusyIDs[resource.id])} resource={resource} onRefreshQuota={() => queryAccountQuota(resource, true)} />
                         {accountQuotaErrors[resource.id] ? <p className="provider-quota-error">{accountQuotaErrors[resource.id]}</p> : null}
                       </article>
                     );
@@ -1927,7 +1927,7 @@ export function ProviderUpsertModal({
         busy={accountOAuthBusy}
         error={accountOAuthNoticeError}
         onClose={() => setAccountOAuthNoticeOpen(false)}
-        onConfirm={() => void openProviderAccountAuthorization()}
+        onConfirm={() => startProviderAccountAuthorization("open")} onCopy={() => startProviderAccountAuthorization("copy")}
         open={accountOAuthNoticeOpen}
       />
       <ProviderOAuthCallbackModal
