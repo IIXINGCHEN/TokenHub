@@ -3202,24 +3202,7 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 		}
 	}
 	if usage.TotalTokens > 0 || usage.CostUSD > 0 {
-		if err := tx.Create(&UsageRecord{
-			ID:                 NewID("use"),
-			RequestID:          call.RequestID,
-			ProjectID:          call.Project.ID,
-			APIKeyID:           call.Key.ID,
-			AttributedUserID:   usageAttributionUserID(call.Key, call.Project),
-			ModelName:          call.Model.Name,
-			ProviderID:         route.Provider.ID,
-			ProviderResourceID: routeResourceID(route),
-			InputTokens:        usage.PromptTokens,
-			CachedInputTokens:  usage.CachedInputTokens,
-			CacheWriteTokens:   usage.CacheWriteInputTokens,
-			OutputTokens:       usage.CompletionTokens,
-			ReasoningTokens:    usage.ReasoningOutputTokens,
-			TotalTokens:        usage.TotalTokens,
-			CostUSD:            usage.CostUSD,
-			CreatedAt:          now,
-		}).Error; err != nil {
+		if err := tx.Create(newUsageRecord(call, route, usage, now)).Error; err != nil {
 			return err
 		}
 	}
