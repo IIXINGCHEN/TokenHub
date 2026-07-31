@@ -1454,7 +1454,7 @@ func (s *GormStore) UpdateAPIKey(id string, patch APIKey) (APIKey, error) {
 	if patch.IPAllowlist != nil {
 		key.IPAllowlist = patch.IPAllowlist
 	}
-	if patch.Limits != (QuotaLimits{}) {
+	if patch.LimitsSet || patch.Limits != (QuotaLimits{}) {
 		key.Limits = patch.Limits
 	}
 	if patch.ExpiresAt != nil {

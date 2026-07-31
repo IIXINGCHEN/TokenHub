@@ -3575,14 +3575,14 @@ func (s *Server) handleAdminAPIKeyItem(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPatch:
 		var req struct {
-			Name          string      `json:"name"`
-			Group         string      `json:"group"`
-			OwnerUserID   *string     `json:"owner_user_id"`
-			AllowedModels []string    `json:"allowed_models"`
-			IPAllowlist   []string    `json:"ip_allowlist"`
-			Limits        QuotaLimits `json:"limits"`
-			Status        string      `json:"status"`
-			ExpiresAt     *time.Time  `json:"expires_at"`
+			Name          string       `json:"name"`
+			Group         string       `json:"group"`
+			OwnerUserID   *string      `json:"owner_user_id"`
+			AllowedModels []string     `json:"allowed_models"`
+			IPAllowlist   []string     `json:"ip_allowlist"`
+			Limits        *QuotaLimits `json:"limits"`
+			Status        string       `json:"status"`
+			ExpiresAt     *time.Time   `json:"expires_at"`
 		}
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, r, NewHTTPError(400, "invalid_request", err.Error()))
@@ -3593,9 +3593,12 @@ func (s *Server) handleAdminAPIKeyItem(w http.ResponseWriter, r *http.Request) {
 			Group:       req.Group,
 			Allowed:     req.AllowedModels,
 			IPAllowlist: req.IPAllowlist,
-			Limits:      req.Limits,
+			LimitsSet:   req.Limits != nil,
 			Status:      req.Status,
 			ExpiresAt:   req.ExpiresAt,
+		}
+		if req.Limits != nil {
+			patch.Limits = *req.Limits
 		}
 		if req.OwnerUserID != nil {
 			ownerUserID, err := s.resolveAPIKeyOwner(user, *req.OwnerUserID)
@@ -5923,7 +5926,8 @@ func (s *Server) matchApprovalFlow(trigger string, payload any) (AdminResource, 
 
 func (s *Server) apiKeyUpdateApproval(user AdminUser, key APIKey, patch APIKey) (ApprovalRequest, bool) {
 	trigger := ""
-	if patch.Limits != (QuotaLimits{}) {
+	limitsSet := patch.LimitsSet || patch.Limits != (QuotaLimits{})
+	if limitsSet {
 		trigger = "quota_increase"
 	}
 	if trigger == "" && len(patch.Allowed) > 0 {
@@ -5938,8 +5942,10 @@ func (s *Server) apiKeyUpdateApproval(user AdminUser, key APIKey, patch APIKey) 
 		"requested_action": trigger,
 		"owner_user_id":    patch.OwnerUserID,
 		"allowed_models":   patch.Allowed,
-		"limits":           patch.Limits,
 		"status":           patch.Status,
+	}
+	if limitsSet {
+		payload["limits"] = patch.Limits
 	}
 	return s.approvalRequired(user, trigger, "api_key", key.ID, payload)
 }
@@ -6599,11 +6605,13 @@ func (s *Server) applyApprovalRequest(request ApprovalRequest, actor AdminUser) 
 			"plain_text_visible_once": true,
 		}, nil
 	case request.ResourceType == "api_key":
+		limits, limitsSet := payload["limits"]
 		key, err := s.store.UpdateAPIKey(request.ResourceID, APIKey{
 			OwnerUserID: stringFromPayload(payload, "owner_user_id"),
 			Allowed:     stringSliceFromPayload(payload["allowed_models"]),
 			IPAllowlist: stringSliceFromPayload(payload["ip_allowlist"]),
-			Limits:      quotaLimitsFromPayload(payload["limits"]),
+			Limits:      quotaLimitsFromPayload(limits),
+			LimitsSet:   limitsSet,
 			Status:      stringFromPayload(payload, "status"),
 		})
 		return key, err
