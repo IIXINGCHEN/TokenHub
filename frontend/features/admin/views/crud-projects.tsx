@@ -13,6 +13,7 @@ import { adminDelete, adminFetch, adminMutate, pendingProjectQuotaApproval, proj
 import { DataSection, SimpleTable, StatusPill } from "../shared/ui";
 import { APIKeyEmptyState } from "./api-key-empty-state";
 import { ModelCategoryTabs, NotificationChannelTabs } from "./model-catalog";
+import { ModelGovernanceEmptyState } from "./model-governance-empty-state";
 import { latencyDisplay, requestLogFailed } from "./overview";
 import { APIKeyFlowHint, EntityTable, PaginationControls, type PaginationState, ResourceEmptyState, resultCountLabel, RouteStrategyHint, TableSkeleton } from "./settings-table";
 
@@ -84,6 +85,20 @@ export function CrudView<T>({
     return (
       <DataSection title={config.eyebrow}>
         <APIKeyEmptyState onCreate={onCreate} />
+      </DataSection>
+    );
+  }
+
+  if (config.view === "providers" && data.providers.length === 0 && !loading && !query.trim()) {
+    return (
+      <DataSection title={config.eyebrow}>
+        <ModelGovernanceEmptyState
+          stage="providers"
+          title="还没有 Provider 渠道"
+          description="先添加一个上游 Provider，并选择要引入的模型。Provider 模型价格用于记录真实成本与审计。"
+          actionLabel={config.createLabel ?? "新增 Provider"}
+          onAction={onCreate}
+        />
       </DataSection>
     );
   }

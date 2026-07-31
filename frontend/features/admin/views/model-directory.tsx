@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Boxes, ChevronRight, CircleCheck, CircleDashed, Link2, Plus, Search } from "lucide-react";
+import { AlertTriangle, Boxes, CircleCheck, CircleDashed, Link2, Plus, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { type ApiContext, type AppData, type Model, type ResourceConfig } from "../core/types";
 import { modelCategory, modelCategoryLabel, priceMetric } from "../domain/catalog";
@@ -11,6 +11,7 @@ import { tx } from "../i18n/runtime";
 import { adminFetch, readAdminError } from "../resources/payloads";
 import { DataSection, StatusPill } from "../shared/ui";
 import { ModelBrandIcon } from "./model-catalog";
+import { ModelGovernanceEmptyState, ModelGovernanceFlow } from "./model-governance-empty-state";
 
 export function ModelDirectoryView({
   api,
@@ -20,6 +21,7 @@ export function ModelDirectoryView({
   readOnly = false,
   onReload,
   onCreateModel,
+  onOpenProviders,
   onOpenRoutes,
   onEditModel,
   onDeleteModel,
@@ -31,6 +33,7 @@ export function ModelDirectoryView({
   readOnly?: boolean;
   onReload: () => Promise<void> | void;
   onCreateModel: () => void;
+  onOpenProviders: () => void;
   onOpenRoutes: (model?: Model) => void;
   onEditModel: (model: Model) => void;
   onDeleteModel: (model: Model) => void;
@@ -48,6 +51,7 @@ export function ModelDirectoryView({
     [data, providerID, publication, publishedModels, query],
   );
   const stats = useMemo(() => modelDirectoryStats(publishedModels, data), [data, publishedModels]);
+  const hasImportedProviderModels = data.providers.length > 0 && data.providerModels.length > 0;
 
   async function setPublished(model: Model, published: boolean) {
     setBusy(true);
@@ -65,6 +69,33 @@ export function ModelDirectoryView({
     } finally {
       setBusy(false);
     }
+  }
+
+  if (!loading && publishedModels.length === 0) {
+    if (readOnly) {
+      return (
+        <DataSection title={config.eyebrow}>
+          <ModelGovernanceEmptyState
+            stage="models"
+            title="当前没有可见模型"
+            description="请联系管理员发布模型并授予 API Key 访问范围。"
+          />
+        </DataSection>
+      );
+    }
+    return (
+      <DataSection title={config.eyebrow}>
+        <ModelGovernanceEmptyState
+          stage={hasImportedProviderModels ? "models" : "providers"}
+          title={hasImportedProviderModels ? "还没有对外模型" : "先引入可用的 Provider 模型"}
+          description={hasImportedProviderModels
+            ? "从内置的 165 个模型中挑选对外模型，再选择已引入的 Provider 模型并设置统一对外价格。"
+            : "先在 Provider 渠道添加上游服务并选择要引入的模型；Provider 模型价格用于记录真实成本与审计。"}
+          actionLabel={hasImportedProviderModels ? "新建对外模型" : "前往 Provider 渠道"}
+          onAction={hasImportedProviderModels ? onCreateModel : onOpenProviders}
+        />
+      </DataSection>
+    );
   }
 
   return (
@@ -91,7 +122,7 @@ export function ModelDirectoryView({
         </header>
 
         {!readOnly ? <ModelDirectoryStats stats={stats} /> : null}
-        {!readOnly ? <GovernanceFlow /> : null}
+        {!readOnly ? <ModelGovernanceFlow /> : null}
         {notice ? <div className="inline-notice success"><CircleCheck size={15} />{notice}</div> : null}
         {error ? <div className="inline-notice error"><AlertTriangle size={15} />{error}</div> : null}
 
@@ -129,25 +160,6 @@ export function ModelDirectoryView({
         />
       </div>
     </DataSection>
-  );
-}
-
-function GovernanceFlow() {
-  const steps = [
-    { index: "1", title: "Provider 渠道", detail: "引入上游模型 · 维护真实成本" },
-    { index: "2", title: "模型目录", detail: "选择目录模型 · 选择初始线路 · 设置统一价格" },
-    { index: "3", title: "路由策略", detail: "调整优先级、权重与流量策略" },
-  ];
-  return (
-    <div className="model-governance-flow" aria-label={tx("模型治理流程")}>
-      {steps.map((step, index) => (
-        <div className="model-governance-flow-step" key={step.index}>
-          <span>{step.index}</span>
-          <div><strong>{tx(step.title)}</strong><small>{tx(step.detail)}</small></div>
-          {index < steps.length - 1 ? <ChevronRight size={16} /> : null}
-        </div>
-      ))}
-    </div>
   );
 }
 

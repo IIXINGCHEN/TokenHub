@@ -825,6 +825,8 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
               initialQuery={routeModelQuery}
               loading={loading}
               onCreate={openCreateRoute}
+              onOpenModels={() => selectView("models")}
+              onOpenProviders={() => selectView("providers")}
               onEdit={(route) => setModal({ config: activeConfig, item: route })}
               onDelete={(route) => setConfirmDelete({ config: activeConfig, item: route })}
               onReorder={(model, routes) => void reorderModelRoutes(model, routes)}
@@ -839,6 +841,7 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
               readOnly={!canAccessView(currentUser, "routes")}
               onReload={() => load("models")}
               onCreateModel={() => setModal({ config: activeConfig })}
+              onOpenProviders={() => selectView("providers")}
               onOpenRoutes={openRoutes}
               onEditModel={(item) => setModal({ config: activeConfig, item })}
               onDeleteModel={(item) => setConfirmDelete({ config: activeConfig, item })}

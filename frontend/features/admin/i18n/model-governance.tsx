@@ -99,6 +99,20 @@ const en: Record<string, string> = {
   "配置模型路由": "Configure Model Routes",
   "同步模型参考目录": "Sync Model Reference Catalog",
   "将从配置文件重新同步跟踪模型元数据；Provider 模型库存、路由和手工新增的其他对外模型会保留。": "Tracked model metadata will be resynchronized from the configured file. Provider inventory, routes, and other manually created external models will be preserved.",
+  "Provider 渠道、模型目录和路由策略的配置流程": "Provider channel, model catalog, and routing policy setup flow",
+  "还没有 Provider 渠道": "No Provider channels yet",
+  "先添加一个上游 Provider，并选择要引入的模型。Provider 模型价格用于记录真实成本与审计。": "Add an upstream Provider and select the models to import. Provider model pricing records actual cost for auditing.",
+  "先引入可用的 Provider 模型": "Import an available Provider model first",
+  "先在 Provider 渠道添加上游服务并选择要引入的模型；Provider 模型价格用于记录真实成本与审计。": "Add an upstream service in Provider Channels and select models to import. Provider model pricing records actual cost for auditing.",
+  "前往 Provider 渠道": "Go to Provider Channels",
+  "还没有对外模型": "No external models yet",
+  "从内置的 165 个模型中挑选对外模型，再选择已引入的 Provider 模型并设置统一对外价格。": "Choose an external model from the 165 built-in models, select imported Provider models, and set unified external pricing.",
+  "先创建一个对外模型": "Create an external model first",
+  "从内置的 165 个模型中挑选对外模型，选择已引入的 Provider 模型，并设置统一对外价格。": "Choose an external model from the 165 built-in models, select imported Provider models, and set unified external pricing.",
+  "前往模型目录": "Go to Model Catalog",
+  "还没有路由策略": "No routing policies yet",
+  "为对外模型添加 Provider 线路，并设置优先级、权重与流量策略。路由不会改变统一对外价格。": "Add Provider routes for external models and configure priority, weight, and traffic policies. Routing does not change unified external pricing.",
+  "为模型添加路由": "Add a Model Route",
 };
 
 const ja: Record<string, string> = {
@@ -202,6 +216,20 @@ const ja: Record<string, string> = {
   "配置模型路由": "モデルルートを設定",
   "同步模型参考目录": "モデル参照カタログを同期",
   "将从配置文件重新同步跟踪模型元数据；Provider 模型库存、路由和手工新增的其他对外模型会保留。": "設定ファイルから追跡対象モデルのメタデータを再同期します。Provider モデルインベントリ、ルート、手動作成したその他の外部モデルは保持されます。",
+  "Provider 渠道、模型目录和路由策略的配置流程": "Provider チャネル、モデルカタログ、ルーティングポリシーの設定フロー",
+  "还没有 Provider 渠道": "Provider チャネルがまだありません",
+  "先添加一个上游 Provider，并选择要引入的模型。Provider 模型价格用于记录真实成本与审计。": "まず上流 Provider を追加し、取り込むモデルを選択します。Provider モデル価格は実コストの記録と監査に使用します。",
+  "先引入可用的 Provider 模型": "利用可能な Provider モデルを先に取り込んでください",
+  "先在 Provider 渠道添加上游服务并选择要引入的模型；Provider 模型价格用于记录真实成本与审计。": "まず Provider チャネルで上流サービスを追加し、取り込むモデルを選択してください。Provider モデル価格は実コストの記録と監査に使用します。",
+  "前往 Provider 渠道": "Provider チャネルへ",
+  "还没有对外模型": "外部モデルがまだありません",
+  "从内置的 165 个模型中挑选对外模型，再选择已引入的 Provider 模型并设置统一对外价格。": "組み込みの 165 モデルから外部モデルを選び、取り込み済み Provider モデルと関連付け、統一外部価格を設定します。",
+  "先创建一个对外模型": "外部モデルを 1 つ作成してください",
+  "从内置的 165 个模型中挑选对外模型，选择已引入的 Provider 模型，并设置统一对外价格。": "組み込みの 165 モデルから外部モデルを選び、取り込み済み Provider モデルと関連付けて、統一外部価格を設定します。",
+  "前往模型目录": "モデルカタログへ",
+  "还没有路由策略": "ルーティングポリシーがまだありません",
+  "为对外模型添加 Provider 线路，并设置优先级、权重与流量策略。路由不会改变统一对外价格。": "外部モデルに Provider ルートを追加し、優先度、重み、トラフィックポリシーを設定します。ルーティングによって統一外部価格は変わりません。",
+  "为模型添加路由": "モデルルートを追加",
 };
 
 export const modelGovernanceTranslations = { en, ja } satisfies Record<"en" | "ja", Record<string, string>>;
