@@ -122,6 +122,7 @@ type APIKey struct {
 	Allowed       []string          `json:"allowed_models" gorm:"serializer:json"`
 	IPAllowlist   []string          `json:"ip_allowlist,omitempty" gorm:"serializer:json"`
 	Limits        QuotaLimits       `json:"limits" gorm:"embedded;embeddedPrefix:limit_"`
+	LimitsSet     bool              `json:"-" gorm:"-"`
 	Status        string            `json:"status"`
 	ExpiresAt     *time.Time        `json:"expires_at,omitempty"`
 	RotatedFromID string            `json:"rotated_from_id,omitempty" gorm:"index"`
