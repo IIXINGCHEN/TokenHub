@@ -187,6 +187,10 @@ claude
 
 `ANTHROPIC_AUTH_TOKEN` は TokenHub Key を `Authorization: Bearer` で送信します。Authorization header がない場合は、`ANTHROPIC_API_KEY` の `x-api-key` も利用できます。Token 見積もりは Key とモデル権限を確認しますが、課金対象の推論レコードは作成しません。
 
+## Gemini CLI で Codex サブスクリプション GPT を使用する
+
+Gemini CLI は TokenHub の Gemini ネイティブ `v1beta` API に直接接続し、OpenAI Codex Subscription アカウントへルーティングされた GPT モデルを利用できます。`GEMINI_API_KEY` に TokenHub の Project Key、`GOOGLE_GEMINI_BASE_URL` に `/v1beta` を含まない TokenHub Host を設定し、対象 GPT モデルを選択します。CCswitch は不要です。分離起動、プロジェクト設定、対応エンドポイント、検証方法、制限については [Gemini CLI から Codex サブスクリプション GPT を使用する](gemini-cli-codex-subscription.md) を参照してください。
+
 ## Codex サブスクリプション画像生成
 
 `POST /v1/images/generations` は OpenAI 互換の `model`、`prompt`、`quality`、`size`、`n`、`response_format` を受け付けます。公開仮想モデル `model: "codex-gpt-image-2"` と `n: 1` を使用してください。`gpt-image-2` は別の標準 API モデルであり、Codex サブスクリプションには決してルーティングされません。`Prefer: respond-async` を付けると画像ジョブが返り、`GET /v1/image-jobs/{id}` でポーリングできます。

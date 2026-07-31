@@ -187,6 +187,10 @@ claude
 
 `ANTHROPIC_AUTH_TOKEN` 通过 `Authorization: Bearer` 发送 TokenHub Key。没有 Authorization Header 时，也可通过 `ANTHROPIC_API_KEY` 使用 `x-api-key`。Token 估算会检查 Key 和模型权限，但不生成计费推理记录。
 
+## Gemini CLI 使用 Codex 订阅 GPT
+
+Gemini CLI 可以直接连接 TokenHub 的 Gemini 原生 `v1beta` 接口，并使用路由到 OpenAI Codex Subscription 账号的 GPT 模型。将 `GEMINI_API_KEY` 设置为 TokenHub 项目 Key，将 `GOOGLE_GEMINI_BASE_URL` 设置为不含 `/v1beta` 的 TokenHub Host，并选择对应 GPT 模型即可，不需要 CCswitch。隔离启动、项目级配置、支持端点、验证步骤和限制见 [Gemini CLI 通过 TokenHub 使用 Codex 订阅 GPT](gemini-cli-codex-subscription.md)。
+
 ## Codex 订阅生图
 
 `POST /v1/images/generations` 接受 OpenAI 兼容的 `model`、`prompt`、`quality`、`size`、`n` 和 `response_format` 字段。请使用对外虚拟模型 `model: "codex-gpt-image-2"` 与 `n: 1`。`gpt-image-2` 是独立的标准 API 模型，绝不会路由到 Codex 订阅能力。添加 `Prefer: respond-async` 可先获得图片任务，再轮询 `GET /v1/image-jobs/{id}`。

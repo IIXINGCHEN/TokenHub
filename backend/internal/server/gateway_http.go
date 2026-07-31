@@ -1300,5 +1300,11 @@ func (s *Server) authenticate(r *http.Request) (Project, APIKey, error) {
 	if apiKey := strings.TrimSpace(r.Header.Get("x-api-key")); apiKey != "" {
 		return s.store.ValidateAPIKey(apiKey, s.clientIP(r))
 	}
+	// The official Google Gen AI SDK, and therefore Gemini CLI in API-key mode,
+	// sends its credential in x-goog-api-key when GOOGLE_GEMINI_BASE_URL points
+	// at a compatible gateway.
+	if apiKey := strings.TrimSpace(r.Header.Get("x-goog-api-key")); apiKey != "" {
+		return s.store.ValidateAPIKey(apiKey, s.clientIP(r))
+	}
 	return Project{}, APIKey{}, ErrInvalidAPIKey
 }
