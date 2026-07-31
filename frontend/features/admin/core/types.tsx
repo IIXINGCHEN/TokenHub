@@ -735,6 +735,7 @@ export type ResourceAction<T> = {
   label: string;
   title?: string;
   visible?: (item: T) => boolean;
+  navigate?: (item: T) => ViewKey;
   run?: (ctx: ApiContext, item: T) => Promise<void>;
   modal?: (item: T, data: AppData) => ModalState<any>;
   doneMessage?: (item: T) => string;

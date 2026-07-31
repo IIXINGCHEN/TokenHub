@@ -1051,6 +1051,10 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
   );
 
   async function runResourceAction<T>(action: ResourceAction<T>, item: T, appData: AppData) {
+    if (action.navigate) {
+      selectView(action.navigate(item));
+      return;
+    }
     if (action.modal) {
       const nextModal = action.modal(item, appData);
       if (nextModal.config.view === "api-keys" && !nextModal.item) {

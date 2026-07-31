@@ -1,6 +1,6 @@
 import { type FieldConfig, type Model, type ModelRoute, type Provider, type ProviderResource, type ResourceConfig } from "../core/types";
 import { modelCategory, modelCategoryFormOptions, modelCategoryLabel } from "../domain/catalog";
-import { codexImageCapableResources, findProvider, isCodexSubscriptionImageModel, modelCapabilitySummary, modelPriceSummary, modelRouteDefaults, modelRoutesFor, modelSelectOptions, projectMemberProjectSelectOptions, providerAccountResourceSummary, providerDisplayBaseURL, providerDisplayName, providerDisplayType, providerModelSelectOptions, providerRouteDefaults, providerRouteSummary, providerSelectOptions, routeProjectScopeSummary, routeScoreSummary, stringifyForm } from "../domain/entities";
+import { codexImageCapableResources, findProvider, isCodexSubscriptionImageModel, modelCapabilitySummary, modelPriceSummary, modelRouteDefaults, modelRoutesFor, modelSelectOptions, projectMemberProjectSelectOptions, providerAccountResourceSummary, providerDisplayBaseURL, providerDisplayName, providerDisplayType, providerModelSelectOptions, providerRouteSummary, providerSelectOptions, routeProjectScopeSummary, routeScoreSummary, stringifyForm } from "../domain/entities";
 import { formatTime, modelToForm, routeStrategyLabel } from "../domain/formatting";
 import { providerTypeLabel, resourceTypeLabel } from "../domain/labels";
 import { availableProviderModelSelectOptions } from "../domain/provider-model-selection";
@@ -42,11 +42,8 @@ export function providerConfig(): ResourceConfig<Provider> {
     actions: [
       {
         label: "配置路由",
-        title: "为该 Provider 新增模型路由",
-        modal: (item, ctx) => ({
-          config: routeConfig(),
-          initialValues: providerRouteDefaults(item, ctx),
-        }),
+        title: "路由策略",
+        navigate: () => "routes",
       },
       {
         label: "测试",
