@@ -165,7 +165,7 @@ export function ModelDirectoryView({
 function GovernanceFlow() {
   const steps = [
     { index: "1", title: "Provider 渠道", detail: "引入上游模型 · 维护真实成本" },
-    { index: "2", title: "模型目录", detail: "定义对外名称 · 选择初始线路 · 设置统一价格" },
+    { index: "2", title: "模型目录", detail: "选择目录模型 · 选择初始线路 · 设置统一价格" },
     { index: "3", title: "路由策略", detail: "调整优先级、权重与流量策略" },
   ];
   return (

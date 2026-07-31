@@ -1,6 +1,6 @@
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Edit3, Info, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
-import { type AdminResource, type AdminUser, type APIKey, type AppData, type ModalState, type ResourceAction, type ResourceConfig, type SettingsTabKey, type ToolbarAction, type ViewKey } from "../core/types";
+import { type AdminResource, type AdminUser, type APIKey, type AppData, type ModalState, type Model, type ResourceAction, type ResourceConfig, type SettingsTabKey, type ToolbarAction, type ViewKey } from "../core/types";
 import { filterRows } from "../domain/catalog";
 import { readPath, rowID, stringifyValue } from "../domain/entities";
 import { formatNumber, formatTime } from "../domain/formatting";
@@ -13,6 +13,7 @@ import { IdentityProviderEditModal } from "../shared/modals";
 import { FieldInput, StatusPill } from "../shared/ui";
 import { identityProviderInitialFormValues } from "../shell/auth";
 import { CrudView } from "./crud-projects";
+import { ModelCreateModal } from "./model-create-modal";
 
 export function SettingsView({
   data,
@@ -628,6 +629,21 @@ export function EditModal<T>({
     return (
       <IdentityProviderEditModal
         state={state as unknown as ModalState<AdminResource>}
+        data={data}
+        currentUser={currentUser}
+        values={values}
+        setValues={setValues}
+        loading={loading}
+        onClose={onClose}
+        onSave={onSave}
+      />
+    );
+  }
+
+  if (state.config.view === "models" && !state.item) {
+    return (
+      <ModelCreateModal
+        config={state.config as unknown as ResourceConfig<Model>}
         data={data}
         currentUser={currentUser}
         values={values}

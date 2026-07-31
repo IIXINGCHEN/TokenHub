@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
+import { importTypeScript } from "./typescript-test-loader.mjs";
+
+const {
   availableProviderModelSelectOptions,
   initialModelRoutes,
   providerModelSelectionValue,
-} from "./provider-model-selection.ts";
+} = await importTypeScript(new URL("./provider-model-selection.ts", import.meta.url));
 
 test("available Provider model options only include active inventory on active Providers", () => {
   const data = {
