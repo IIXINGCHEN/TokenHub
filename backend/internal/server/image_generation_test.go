@@ -462,7 +462,7 @@ type imageStartRejectStore struct {
 	Store
 }
 
-func (s imageStartRejectStore) StartCall(context.Context, Project, APIKey, string) (CallContext, error) {
+func (s imageStartRejectStore) StartCall(context.Context, Project, APIKey, string, int64) (CallContext, error) {
 	return CallContext{}, ErrModelNotAllowed
 }
 
@@ -609,7 +609,7 @@ func TestCodexImageModelPermissionIsNotInheritedFromGPTImage2(t *testing.T) {
 	}
 	store.AddModel(Model{Name: "gpt-image-2", Modality: "image", Status: StatusActive})
 	store.AddModel(Model{Name: codexImageModelName, Modality: "image", Status: StatusActive})
-	if _, err := store.StartCall(context.Background(), project, key, codexImageModelName); err != ErrModelNotAllowed {
+	if _, err := store.StartCall(context.Background(), project, key, codexImageModelName, 0); err != ErrModelNotAllowed {
 		t.Fatalf("gpt-image-2 permission must not grant Codex image access: %v", err)
 	}
 }
@@ -631,7 +631,7 @@ func TestImageJobCompletionIsAtomic(t *testing.T) {
 		ModelName: model.Name, ProviderID: provider.ID, ProviderModel: openAIImageModelName,
 		Priority: 1, Weight: 100, Status: StatusActive,
 	})
-	call, err := store.StartCall(context.Background(), project, key, model.Name)
+	call, err := store.StartCall(context.Background(), project, key, model.Name, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

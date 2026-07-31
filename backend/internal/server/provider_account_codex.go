@@ -406,7 +406,7 @@ func (s *Server) handleStreamingResponses(w http.ResponseWriter, r *http.Request
 			s.store.RecordRouteAttempts(routed.Call.RequestID, attempts)
 			s.store.FinishCall(routed.Call, route, usage, httpErr.Status, httpErr.Code, s.clientIP(r), r.UserAgent())
 		} else {
-			s.finishFailedRoutedCall(r, routed, attempts, err)
+			s.finishFailedRoutedCall(r, routed, attempts, usage, err)
 		}
 		s.recordRequestPayload(routed.Call.RequestID, request, auditErrorPayload(err, routed.Call.RequestID))
 		if !streamStarted {

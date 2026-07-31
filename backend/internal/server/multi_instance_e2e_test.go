@@ -370,6 +370,51 @@ func testClusterWideHTTPEnforcement(t *testing.T, storeA *GormStore, storeB *Gor
 		t.Fatalf("daily quota was not atomic: ok=%d limited=%d", okCount, limitedCount)
 	}
 
+	keyRPM := int64(1)
+	minuteKey, _, err := storeA.CreateAPIKey(project.ID, APIKey{
+		ID:           "key_minute_" + suffix,
+		Name:         "Cluster minute limits",
+		Status:       StatusActive,
+		RateLimitRPM: &keyRPM,
+	}, "thk_minute_"+suffix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storeA.DeleteAPIKey(minuteKey.ID)
+	minuteCall, err := storeA.StartCall(context.Background(), project, minuteKey, modelName, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storeA.FinishCall(minuteCall, RouteSelection{}, Usage{}, http.StatusOK, "", "127.0.0.1", "multi-instance-e2e")
+	if _, err := storeB.StartCall(context.Background(), project, minuteKey, modelName, 0); AsHTTPError(err).Code != "api_key_rpm_exceeded" {
+		t.Fatalf("second replica bypassed API key RPM: %v", err)
+	}
+
+	keyTPM := int64(3)
+	tokenKey, _, err := storeA.CreateAPIKey(project.ID, APIKey{
+		ID:            "key_tokens_" + suffix,
+		Name:          "Cluster token reservation",
+		Status:        StatusActive,
+		TokenLimitTPM: &keyTPM,
+	}, "thk_tokens_"+suffix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storeA.DeleteAPIKey(tokenKey.ID)
+	tokenCall, err := storeA.StartCall(context.Background(), project, tokenKey, modelName, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := storeB.StartCall(context.Background(), project, tokenKey, modelName, 1); AsHTTPError(err).Code != "api_key_tpm_exceeded" {
+		t.Fatalf("second replica bypassed API key TPM reservation: %v", err)
+	}
+	storeA.FinishCall(tokenCall, RouteSelection{}, Usage{}, http.StatusBadGateway, "upstream_failed", "127.0.0.1", "multi-instance-e2e")
+	recoveredCall, err := storeB.StartCall(context.Background(), project, tokenKey, modelName, 3)
+	if err != nil {
+		t.Fatalf("TPM reservation was not returned cluster-wide: %v", err)
+	}
+	storeB.FinishCall(recoveredCall, RouteSelection{}, Usage{}, http.StatusOK, "", "127.0.0.1", "multi-instance-e2e")
+
 	if _, err := storeA.UpdateProviderResource(resource.ID, ProviderResource{
 		ResourceType:   "mock",
 		Status:         StatusActive,

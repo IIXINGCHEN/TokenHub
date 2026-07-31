@@ -409,7 +409,7 @@ func (s *Server) handleImageAsset(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) startImageCall(w http.ResponseWriter, r *http.Request, project Project, key APIKey, request imageGenerationRequest) (CallContext, bool) {
-	call, err := s.store.StartCall(s.imageContext, project, key, request.Model)
+	call, err := s.store.StartCall(s.imageContext, project, key, request.Model, EstimateTextTokens(request.Prompt))
 	if err != nil {
 		httpErr := AsHTTPError(err)
 		requestID := s.store.RecordRejectedRequest(project, key, request.Model, false, httpErr.Status, httpErr.Code, s.clientIP(r), r.UserAgent())
@@ -421,6 +421,7 @@ func (s *Server) startImageCall(w http.ResponseWriter, r *http.Request, project 
 		return CallContext{}, false
 	}
 	w.Header().Set("x-request-id", call.RequestID)
+	writeRateLimitHeaders(w.Header(), call.RateLimitHeaders)
 	return call, true
 }
 

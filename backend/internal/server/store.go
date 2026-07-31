@@ -156,7 +156,7 @@ type Store interface {
 	SelectRouteCandidates(modelName string) ([]RouteSelection, error)
 	MarkRouteUsed(routeID string)
 	MarkProviderResourceUsed(resourceID string)
-	StartCall(ctx context.Context, project Project, key APIKey, modelName string) (CallContext, error)
+	StartCall(ctx context.Context, project Project, key APIKey, modelName string, tokenReservation int64) (CallContext, error)
 	FinishCall(call CallContext, route RouteSelection, usage Usage, statusCode int, errorCode string, clientIP string, userAgent string)
 	RecordPlaygroundRequest(call CallContext, route RouteSelection, statusCode int, errorCode string, clientIP string, userAgent string)
 	RecordRouteAttempts(requestID string, attempts []RouteAttempt)

@@ -3,6 +3,7 @@ package server
 import (
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"net/http"
 	"strconv"
 	"strings"
@@ -35,11 +36,12 @@ type GatewayMetrics struct {
 	registry     *prometheus.Registry
 	projectLabel bool
 
-	requests *prometheus.CounterVec
-	duration *prometheus.HistogramVec
-	inFlight prometheus.Gauge
-	tokens   *prometheus.CounterVec
-	cost     *prometheus.CounterVec
+	requests      *prometheus.CounterVec
+	duration      *prometheus.HistogramVec
+	inFlight      prometheus.Gauge
+	tokens        *prometheus.CounterVec
+	cost          *prometheus.CounterVec
+	rateLimitHits *prometheus.CounterVec
 }
 
 // GatewayCallSample is one finished gateway request, successful or not.
@@ -101,12 +103,30 @@ func NewGatewayMetrics(projectLabel bool) *GatewayMetrics {
 		Name:      "cost_usd_total",
 		Help:      "Estimated cost in USD attributed to model API requests.",
 	}, withProject("model", "provider_type", "provider_id"))
+	m.rateLimitHits = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: metricsSubsystem,
+		Name:      "rate_limit_hits_total",
+		Help:      "API key rate-limit rejections by limit type and a non-secret, masked key identifier. Series are created only for configured keys that hit a limit.",
+	}, []string{"scope", "limit", "key_ref"})
 
-	m.registry.MustRegister(m.requests, m.duration, m.inFlight, m.tokens, m.cost)
+	m.registry.MustRegister(m.requests, m.duration, m.inFlight, m.tokens, m.cost, m.rateLimitHits)
 	// Process and Go runtime metrics are what an operator reaches for first when the
 	// gateway itself is the suspect, and they cost nothing to collect.
 	m.registry.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	return m
+}
+
+func (m *GatewayMetrics) ObserveRateLimitHit(keyID string, limit string) {
+	if m == nil || strings.TrimSpace(keyID) == "" {
+		return
+	}
+	m.rateLimitHits.WithLabelValues("api_key", metricsLabel(limit), maskedAPIKeyMetricLabel(keyID)).Inc()
+}
+
+func maskedAPIKeyMetricLabel(keyID string) string {
+	digest := sha256.Sum256([]byte(strings.TrimSpace(keyID)))
+	return "key_" + hex.EncodeToString(digest[:6])
 }
 
 // MetricsSink is implemented by stores that can report gateway metrics. The server

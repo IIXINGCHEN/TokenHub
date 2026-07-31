@@ -103,6 +103,7 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	httpErr := AsHTTPError(err)
+	writeRateLimitHeaders(w.Header(), httpErr.Headers)
 	requestID := strings.TrimSpace(w.Header().Get("x-request-id"))
 	if requestID == "" {
 		requestID = NewID("req")
@@ -116,6 +117,14 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 		},
 		"request_id": requestID,
 	})
+}
+
+func writeRateLimitHeaders(header http.Header, values map[string]string) {
+	for key, value := range values {
+		if strings.TrimSpace(value) != "" {
+			header.Set(key, value)
+		}
+	}
 }
 
 const auditPayloadMaxChars = 64 * 1024

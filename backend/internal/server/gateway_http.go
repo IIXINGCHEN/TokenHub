@@ -43,7 +43,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	affinity, err := s.chatCacheLocalityAffinity(key.ID, r.Header, req)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, nil, err)
+		s.finishFailedRoutedCall(r, routed, nil, Usage{}, err)
 		s.recordRequestPayload(routed.Call.RequestID, req, auditErrorPayload(err, routed.Call.RequestID))
 		writeError(w, r, err)
 		return
@@ -108,7 +108,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	resp, route, usage, attempts, err := s.executeRoutedChat(r, routed, req)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, attempts, err)
+		s.finishFailedRoutedCall(r, routed, attempts, usage, err)
 		s.recordRequestPayload(routed.Call.RequestID, req, auditErrorPayload(err, routed.Call.RequestID))
 		writeError(w, r, err)
 		return
@@ -154,7 +154,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 				"provider_capability_not_supported",
 				"Streaming responses are not supported",
 			)
-			s.finishFailedRoutedCall(r, routed, nil, err)
+			s.finishFailedRoutedCall(r, routed, nil, Usage{}, err)
 			s.recordRequestPayload(routed.Call.RequestID, req, auditErrorPayload(err, routed.Call.RequestID))
 			writeError(w, r, err)
 			return
@@ -162,7 +162,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	affinity, err := resolveCodexSessionAffinity(s.config.SecretKey, key.ID, r.Header, req)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, nil, err)
+		s.finishFailedRoutedCall(r, routed, nil, Usage{}, err)
 		s.recordRequestPayload(routed.Call.RequestID, req, auditErrorPayload(err, routed.Call.RequestID))
 		writeError(w, r, err)
 		return
@@ -178,7 +178,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, route, usage, attempts, err := s.executeRoutedResponses(r, routed, req)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, attempts, err)
+		s.finishFailedRoutedCall(r, routed, attempts, usage, err)
 		s.recordRequestPayload(routed.Call.RequestID, req, auditErrorPayload(err, routed.Call.RequestID))
 		writeError(w, r, err)
 		return
@@ -225,7 +225,7 @@ func (s *Server) handleResponsesCompact(w http.ResponseWriter, r *http.Request) 
 	affinityRequest := ResponsesRequest{Model: model, raw: request}
 	affinity, err := resolveCodexSessionAffinity(s.config.SecretKey, key.ID, r.Header, affinityRequest)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, nil, err)
+		s.finishFailedRoutedCall(r, routed, nil, Usage{}, err)
 		s.recordRequestPayload(routed.Call.RequestID, request, auditErrorPayload(err, routed.Call.RequestID))
 		writeError(w, r, err)
 		return
@@ -237,7 +237,7 @@ func (s *Server) handleResponsesCompact(w http.ResponseWriter, r *http.Request) 
 	}
 	response, route, usage, attempts, err := s.executeRoutedCompact(r, routed, request)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, attempts, err)
+		s.finishFailedRoutedCall(r, routed, attempts, usage, err)
 		s.recordRequestPayload(routed.Call.RequestID, request, auditErrorPayload(err, routed.Call.RequestID))
 		writeError(w, r, err)
 		return
@@ -278,7 +278,7 @@ func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, route, usage, attempts, err := s.executeRoutedEmbeddings(r, routed, req)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, attempts, err)
+		s.finishFailedRoutedCall(r, routed, attempts, usage, err)
 		s.recordRequestPayload(routed.Call.RequestID, req, auditErrorPayload(err, routed.Call.RequestID))
 		writeError(w, r, err)
 		return
@@ -294,7 +294,7 @@ func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) startRoutedCall(w http.ResponseWriter, r *http.Request, project Project, key APIKey, model string, stream bool, requestPayload any) (RoutedCall, bool) {
-	call, err := s.store.StartCall(r.Context(), project, key, model)
+	call, err := s.store.StartCall(r.Context(), project, key, model, requestTokenReservation(requestPayload))
 	call.Stream = stream
 	if err != nil {
 		httpErr := AsHTTPError(err)
@@ -305,6 +305,7 @@ func (s *Server) startRoutedCall(w http.ResponseWriter, r *http.Request, project
 		return RoutedCall{}, false
 	}
 	w.Header().Set("x-request-id", call.RequestID)
+	writeRateLimitHeaders(w.Header(), call.RateLimitHeaders)
 	if call.requestContext != nil {
 		*r = *r.WithContext(call.requestContext)
 	}
@@ -581,6 +582,7 @@ func executeRoutedWithStore[T any](
 ) (T, RouteSelection, Usage, []RouteAttempt, error) {
 	var zero T
 	var lastErr error = ErrProviderMissing
+	var cumulativeUsage Usage
 	var affinityBindings map[string]AdapterSessionBinding
 	var err error
 	routed, affinityBindings, err = applyAdapterSessionAffinity(ctx, store, routed)
@@ -590,7 +592,7 @@ func executeRoutedWithStore[T any](
 	attempts := make([]RouteAttempt, 0, len(routed.Routes)+1)
 	for _, route := range routed.Routes {
 		if leaseErr := coordinationLeaseError(ctx); leaseErr != nil {
-			return zero, route, Usage{}, attempts, leaseErr
+			return zero, route, cumulativeUsage, attempts, leaseErr
 		}
 		resourceID := routeResourceID(route)
 		binding, hasBinding := affinityBindings[route.Provider.ID]
@@ -606,7 +608,7 @@ func executeRoutedWithStore[T any](
 			})
 			lastErr = err
 			if !shouldFailoverRoutedError(err, routeIsBound) {
-				return zero, route, Usage{}, attempts, err
+				return zero, route, cumulativeUsage, attempts, err
 			}
 			continue
 		}
@@ -614,6 +616,7 @@ func executeRoutedWithStore[T any](
 		for {
 			attemptStartedAt := time.Now()
 			resp, usage, err := call(leaseCtx, route, omitReasoningEffort, len(attempts)+1)
+			cumulativeUsage = accumulateProviderUsage(cumulativeUsage, usage)
 			latencyMS := maxInt64(1, time.Since(attemptStartedAt).Milliseconds())
 			if leaseErr := coordinationLeaseError(leaseCtx); leaseErr != nil {
 				err = leaseErr
@@ -647,9 +650,9 @@ func executeRoutedWithStore[T any](
 					rebindReason = "resource_failover"
 				}
 				if bindErr := commitAdapterSessionAffinity(ctx, store, routed, affinityBindings, route, rebindReason); bindErr != nil {
-					return zero, route, usage, attempts, bindErr
+					return zero, route, cumulativeUsage, attempts, bindErr
 				}
-				return resp, route, usage, attempts, nil
+				return resp, route, cumulativeUsage, attempts, nil
 			}
 			lastErr = err
 			if retryWithoutEffort {
@@ -664,7 +667,7 @@ func executeRoutedWithStore[T any](
 					})
 					lastErr = retryErr
 					if !shouldFailoverRoutedError(retryErr, routeIsBound) {
-						return zero, route, Usage{}, attempts, retryErr
+						return zero, route, cumulativeUsage, attempts, retryErr
 					}
 					break
 				}
@@ -672,12 +675,12 @@ func executeRoutedWithStore[T any](
 				continue
 			}
 			if !shouldFailoverRoutedError(err, routeIsBound) {
-				return zero, route, usage, attempts, err
+				return zero, route, cumulativeUsage, attempts, err
 			}
 			break
 		}
 	}
-	return zero, RouteSelection{}, Usage{}, attempts, lastErr
+	return zero, RouteSelection{}, cumulativeUsage, attempts, lastErr
 }
 
 func routeAttemptStatusAndCode(err error, reasoningEffortRejected bool) (int, string) {
@@ -789,11 +792,11 @@ func (w *streamWriteTracker) Flush() {
 	}
 }
 
-func (s *Server) finishFailedRoutedCall(r *http.Request, routed RoutedCall, attempts []RouteAttempt, err error) {
+func (s *Server) finishFailedRoutedCall(r *http.Request, routed RoutedCall, attempts []RouteAttempt, usage Usage, err error) {
 	httpErr := AsHTTPError(err)
 	route := lastAttemptRoute(attempts)
 	s.store.RecordRouteAttempts(routed.Call.RequestID, attempts)
-	s.store.FinishCall(routed.Call, route, Usage{}, httpErr.Status, httpErr.Code, s.clientIP(r), r.UserAgent())
+	s.store.FinishCall(routed.Call, route, usage, httpErr.Status, httpErr.Code, s.clientIP(r), r.UserAgent())
 }
 
 func (s *Server) adapterForRoute(route RouteSelection) (ProviderAdapter, error) {

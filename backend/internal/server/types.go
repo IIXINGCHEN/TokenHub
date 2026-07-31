@@ -65,7 +65,8 @@ type HTTPError struct {
 	Status         int
 	Code           string
 	Message        string
-	UpstreamStatus int `json:"-"`
+	UpstreamStatus int               `json:"-"`
+	Headers        map[string]string `json:"-"`
 }
 
 func (e *HTTPError) Error() string {
@@ -123,6 +124,10 @@ type APIKey struct {
 	IPAllowlist   []string          `json:"ip_allowlist,omitempty" gorm:"serializer:json"`
 	Limits        QuotaLimits       `json:"limits" gorm:"embedded;embeddedPrefix:limit_"`
 	LimitsSet     bool              `json:"-" gorm:"-"`
+	RateLimitRPM  *int64            `json:"rate_limit_rpm,omitempty"`
+	RateLimitSet  bool              `json:"-" gorm:"-"`
+	TokenLimitTPM *int64            `json:"token_limit_tpm,omitempty"`
+	TokenLimitSet bool              `json:"-" gorm:"-"`
 	Status        string            `json:"status"`
 	ExpiresAt     *time.Time        `json:"expires_at,omitempty"`
 	RotatedFromID string            `json:"rotated_from_id,omitempty" gorm:"index"`
@@ -133,6 +138,8 @@ type APIKey struct {
 }
 
 type QuotaLimits struct {
+	RateLimitRPM    int64   `json:"rate_limit_rpm"`
+	TokenLimitTPM   int64   `json:"token_limit_tpm"`
 	DailyRequests   int64   `json:"daily_requests"`
 	MonthlyRequests int64   `json:"monthly_requests"`
 	DailyTokens     int64   `json:"daily_tokens"`
@@ -1036,6 +1043,11 @@ type CallContext struct {
 	Key       APIKey
 	Model     Model
 	StartedAt time.Time
+	// RateLimitHeaders is calculated atomically with minute-bucket admission so
+	// every compatible HTTP surface reports the same effective limits.
+	RateLimitHeaders map[string]string
+	TokenLimitBucket string
+	ReservedTokens   int64
 	// Stream records whether the client asked for a streamed response. It only
 	// labels observability output and never influences routing.
 	Stream         bool

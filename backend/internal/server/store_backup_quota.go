@@ -459,6 +459,8 @@ func quotaPolicyLimits(tx *gorm.DB, project Project, key APIKey) QuotaLimits {
 			continue
 		}
 		limits = mergeQuotaLimits(limits, QuotaLimits{
+			RateLimitRPM:    int64Field(resource.Fields, "rate_limit_rpm"),
+			TokenLimitTPM:   int64Field(resource.Fields, "token_limit_tpm"),
 			DailyRequests:   int64Field(resource.Fields, "daily_requests"),
 			MonthlyRequests: int64Field(resource.Fields, "monthly_requests"),
 			DailyTokens:     int64Field(resource.Fields, "daily_tokens"),
@@ -617,6 +619,8 @@ func budgetAppliesToProject(budget AdminResource, project Project, costCenter st
 
 func mergeQuotaLimits(base QuotaLimits, override QuotaLimits) QuotaLimits {
 	return QuotaLimits{
+		RateLimitRPM:    strictInt64(base.RateLimitRPM, override.RateLimitRPM),
+		TokenLimitTPM:   strictInt64(base.TokenLimitTPM, override.TokenLimitTPM),
 		DailyRequests:   strictInt64(base.DailyRequests, override.DailyRequests),
 		MonthlyRequests: strictInt64(base.MonthlyRequests, override.MonthlyRequests),
 		DailyTokens:     strictInt64(base.DailyTokens, override.DailyTokens),

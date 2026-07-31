@@ -387,6 +387,9 @@ func (s *GormStore) CreateAPIKey(projectID string, key APIKey, rawSecret string)
 	if err := s.db.First(&Project{}, "id = ?", projectID).Error; err != nil {
 		return APIKey{}, "", notFound(err, "project_not_found", "Project not found")
 	}
+	if err := validateAPIKeyMinuteLimits(key.RateLimitRPM, key.TokenLimitTPM); err != nil {
+		return APIKey{}, "", err
+	}
 	if rawSecret == "" {
 		rawSecret = s.generateAPIKeySecret()
 	}
@@ -467,6 +470,9 @@ func (s *GormStore) UpdateAPIKey(id string, patch APIKey) (APIKey, error) {
 		return APIKey{}, notFound(err, "api_key_not_found", "API key not found")
 	}
 	hydrateAPIKey(&key)
+	if err := validateAPIKeyMinuteLimits(patch.RateLimitRPM, patch.TokenLimitTPM); err != nil {
+		return APIKey{}, err
+	}
 	if patch.Name != "" {
 		key.Name = patch.Name
 	}
@@ -489,6 +495,12 @@ func (s *GormStore) UpdateAPIKey(id string, patch APIKey) (APIKey, error) {
 	if patch.LimitsSet || patch.Limits != (QuotaLimits{}) {
 		key.Limits = patch.Limits
 	}
+	if patch.RateLimitSet || patch.RateLimitRPM != nil {
+		key.RateLimitRPM = patch.RateLimitRPM
+	}
+	if patch.TokenLimitSet || patch.TokenLimitTPM != nil {
+		key.TokenLimitTPM = patch.TokenLimitTPM
+	}
 	if patch.ExpiresAt != nil {
 		key.ExpiresAt = patch.ExpiresAt
 	}
@@ -496,6 +508,13 @@ func (s *GormStore) UpdateAPIKey(id string, patch APIKey) (APIKey, error) {
 		return APIKey{}, err
 	}
 	return publicKey(key), nil
+}
+
+func validateAPIKeyMinuteLimits(rpm *int64, tpm *int64) error {
+	if (rpm != nil && *rpm < 0) || (tpm != nil && *tpm < 0) {
+		return NewHTTPError(http.StatusBadRequest, "invalid_api_key_rate_limit", "API key RPM and TPM limits must be zero or greater")
+	}
+	return nil
 }
 
 func (s *GormStore) RotateAPIKey(id string, graceUntil *time.Time) (APIKey, string, error) {

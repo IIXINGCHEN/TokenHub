@@ -49,7 +49,7 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 
 	resp, route, usage, attempts, err := s.executeRoutedAnthropicMessages(r, routed, req)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, attempts, err)
+		s.finishFailedRoutedCall(r, routed, attempts, usage, err)
 		s.recordRequestPayload(routed.Call.RequestID, req.Raw, auditErrorPayload(err, routed.Call.RequestID))
 		writeAnthropicError(w, r, err)
 		return
@@ -147,7 +147,6 @@ func keyCanAccessModel(store Store, key APIKey, model string) bool {
 	}
 	return false
 }
-
 func (s *Server) startAnthropicRoutedCall(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -155,7 +154,7 @@ func (s *Server) startAnthropicRoutedCall(
 	key APIKey,
 	req anthropicMessagesRequest,
 ) (RoutedCall, bool) {
-	call, err := s.store.StartCall(r.Context(), project, key, req.Model)
+	call, err := s.store.StartCall(r.Context(), project, key, req.Model, anthropicTokenReservation(req))
 	call.Stream = req.Stream
 	if err != nil {
 		httpErr := AsHTTPError(err)
@@ -166,6 +165,7 @@ func (s *Server) startAnthropicRoutedCall(
 		return RoutedCall{}, false
 	}
 	w.Header().Set("x-request-id", call.RequestID)
+	writeRateLimitHeaders(w.Header(), call.RateLimitHeaders)
 	if call.requestContext != nil {
 		*r = *r.WithContext(call.requestContext)
 	}
@@ -963,7 +963,7 @@ func (s *Server) handleAnthropicMessagesStream(
 ) {
 	compatible, compatibilityErr := compatibleAnthropicRoutes(routed, req)
 	if compatibilityErr != nil {
-		s.finishFailedRoutedCall(r, routed, nil, compatibilityErr)
+		s.finishFailedRoutedCall(r, routed, nil, Usage{}, compatibilityErr)
 		s.recordRequestPayload(routed.Call.RequestID, req.Raw, auditErrorPayload(compatibilityErr, routed.Call.RequestID))
 		writeAnthropicError(w, r, compatibilityErr)
 		return
@@ -1471,6 +1471,7 @@ func estimateAnthropicValueTokens(value any) int64 {
 
 func writeAnthropicError(w http.ResponseWriter, r *http.Request, err error) {
 	httpErr := AsHTTPError(err)
+	writeRateLimitHeaders(w.Header(), httpErr.Headers)
 	requestID := strings.TrimSpace(w.Header().Get("x-request-id"))
 	if requestID == "" {
 		requestID = NewID("req")
@@ -1486,7 +1487,6 @@ func writeAnthropicError(w http.ResponseWriter, r *http.Request, err error) {
 		"request_id": requestID,
 	})
 }
-
 func anthropicErrorType(status int) string {
 	switch status {
 	case http.StatusBadRequest, http.StatusNotFound, http.StatusMethodNotAllowed:
