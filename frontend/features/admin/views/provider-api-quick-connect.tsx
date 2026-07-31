@@ -2,6 +2,7 @@ import { Check, Eye, EyeOff, KeyRound, Plus, RefreshCw, Search } from "lucide-re
 import { useState } from "react";
 import { type ProviderCatalogEntry, type ProviderCatalogModel } from "../core/types";
 import { providerTypeLabel } from "../domain/labels";
+import { formatModelPrice } from "../domain/formatting";
 import { clearCustomValidity, countWithUnit, handleRequiredFieldInvalid, tx } from "../i18n/runtime";
 import { providerTypeOptions } from "../shared/ui";
 
@@ -106,7 +107,7 @@ export function ProviderAPIQuickConnect({
           <h3>{name}</h3>
           <p>{values.base_url || tx("填写 Base URL 后连接上游")}</p>
         </div>
-        <strong>{countWithUnit(selectedModelCount, "个已启用模型", "enabled model", "件の有効モデル")}</strong>
+        <strong>{countWithUnit(selectedModelCount, "个待引入模型", "model to import", "件の取り込み予定モデル")}</strong>
       </div>
 
       <div className="provider-editor-tabs provider-quick-tabs" role="tablist" aria-label={tx("Provider 编辑区")}>
@@ -175,7 +176,7 @@ export function ProviderAPIQuickConnect({
             <>
               <div className="provider-quick-model-summary">
                 <strong>{tx("模型列表")}</strong>
-                <span>{selectedModelCount}/{modelCount} {tx("启用")}</span>
+                <span>{selectedModelCount}/{modelCount} {tx("待引入")}</span>
               </div>
               <div className="provider-quick-model-tools">
                 <div className="provider-template-search provider-quick-model-search">
@@ -197,11 +198,11 @@ export function ProviderAPIQuickConnect({
                     <article className={enabled ? "provider-quick-model-item active" : "provider-quick-model-item"} key={model.id}>
                       <div>
                         <strong>{model.display_name || model.name}</strong>
-                        <span>{model.canonical_name || model.id} ← {model.id} · {model.family || model.category || model.type || "model"}</span>
+                        <span>{model.canonical_name || model.id} ← {model.id} · {model.family || model.category || model.type || "model"} · {tx("渠道成本")} {formatModelPrice(model)}</span>
                       </div>
                       <button
                         aria-checked={enabled}
-                        aria-label={`${tx(enabled ? "停用" : "启用")} ${model.display_name || model.name}`}
+                        aria-label={`${tx(enabled ? "移除" : "引入")} ${model.display_name || model.name}`}
                         className={enabled ? "provider-quick-model-switch active" : "provider-quick-model-switch"}
                         onClick={() => onModelToggle(model.id, !enabled)}
                         role="switch"

@@ -563,7 +563,7 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
     try {
       await restoreDefaultModelCatalog(api);
       setConfirmRestoreModels(false);
-      setNotice(tx("模型目录已恢复"));
+      setNotice(tx("模型参考目录已同步"));
       await load();
     } catch (err) {
       if (isAuthExpiredError(err)) return;
@@ -805,6 +805,7 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
               language={language}
               onTabChange={setSettingsTab}
               onLanguageChange={changeLanguage}
+              onRestoreModelCatalog={() => setConfirmRestoreModels(true)}
               onCreate={(config) => setModal({ config })}
               onEdit={(config, item) => setModal({ config, item })}
               onDelete={(config, item) => setConfirmDelete({ config, item })}
@@ -830,11 +831,12 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
               loading={loading}
               readOnly={!canAccessView(currentUser, "routes")}
               onReload={() => load("models")}
+              onCreateModel={() => setModal({ config: activeConfig })}
+              onOpenRoutes={() => selectView("routes")}
               onEditModel={(item) => setModal({ config: activeConfig, item })}
               onDeleteModel={(item) => setConfirmDelete({ config: activeConfig, item })}
               onEditRoute={(route) => setModal({ config: resourceConfigFor("routes") as ResourceConfig<ModelRoute>, item: route })}
               onDeleteRoute={(route) => setConfirmDelete({ config: resourceConfigFor("routes") as ResourceConfig<ModelRoute>, item: route })}
-              onRestoreDefaults={() => setConfirmRestoreModels(true)}
             />
           ) : activeView === "reports" && activeConfig ? (
             <ReportsView
@@ -936,6 +938,7 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
           api={api}
           catalog={data.providerCatalog}
           standardModels={data.models}
+          providerModels={data.providerModels}
           resources={data.providerResources}
           loading={loading}
           onClose={() => setProviderCreateOpen(false)}
@@ -956,6 +959,7 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
           api={api}
           catalog={data.providerCatalog}
           standardModels={data.models}
+          providerModels={data.providerModels}
           routes={data.routes}
           resources={data.providerResources.filter((resource) => resource.provider_id === providerEditItem.id)}
           loading={loading}
@@ -1021,9 +1025,9 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
 
       {confirmRestoreModels ? (
         <ConfirmDialog
-          title={tx("恢复出厂目录")}
-          message={tx("将从配置文件重新导入标准模型，并覆盖同名模型的目录字段；手动新增的其他模型会保留。")}
-          confirmLabel="恢复"
+          title={tx("同步模型参考目录")}
+          message={tx("将从配置文件重新同步跟踪模型元数据；Provider 模型库存、路由和手工新增的其他对外模型会保留。")}
+          confirmLabel="同步"
           confirmClassName="button"
           loading={loading}
           onCancel={() => setConfirmRestoreModels(false)}

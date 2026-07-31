@@ -8,9 +8,9 @@ This guide is for platform administrators, security operators, and infrastructur
 
 | Area | Responsibility |
 | --- | --- |
-| Provider Channels | Configure upstream Base URLs, credentials, resources, and health checks |
-| Model Directory | Publish external API model names and manage Provider upstream-model inventory |
-| Routing Policies | Map external models to Provider models with priority, weight, and failover strategy |
+| Provider Channels | Configure upstream connections, import model inventory, and maintain actual Provider costs |
+| Model Directory | Publish external API model names, capabilities, and unified client-facing prices |
+| Routing Policies | Map external models to imported Provider models with priority, weight, and failover strategy |
 | Projects and Teams | Define ownership boundaries for keys, quota, and cost attribution |
 | Identity Sources | Configure OAuth or OIDC login providers for enterprise sign-in |
 | Security and Audit | Review request logs, admin events, key rotation, and policy changes |
@@ -18,12 +18,13 @@ This guide is for platform administrators, security operators, and infrastructur
 ## Production Setup Order
 
 1. Configure at least one identity source and keep a controlled administrator account.
-2. Add upstream providers such as `OpenAI Production`, `Azure East US`, or `Internal Model Gateway`.
-3. Import selected upstream models from the Provider into the Provider-model inventory.
-4. Publish the selected models with a same-name mapping, or assign a custom external name and mapping.
-5. Create teams, projects, cost centers, and default quota policies.
-6. Validate the flow with Model Playground and request logs.
-7. Review usage attribution before issuing keys broadly.
+2. Add an upstream Provider such as `OpenAI Production`, `Azure East US`, or `Internal Model Gateway`, and import the upstream models that it can serve.
+3. Record each imported Provider model's actual input, cache-read, and output costs for audit.
+4. Create the external models to expose to applications and set their unified client-facing prices.
+5. Add routes from each external model to one or more imported Provider models.
+6. Create teams, projects, cost centers, and default quota policies.
+7. Validate the flow with Model Playground and request logs.
+8. Review usage attribution before issuing keys broadly.
 
 ## API Key Ownership and Usage Attribution
 
@@ -35,19 +36,19 @@ Each new usage record snapshots the attributed user, so later ownership changes 
 
 TokenHub stores the last known-good provider catalog in the database. On every backend startup, it validates and loads the configured local `provider-catalog.json`, then atomically replaces the database snapshot. Ordinary **Provider Channels** requests only read the database snapshot, and administrators can manually refresh the same local catalog. If local catalog reading, parsing, or completeness validation fails, TokenHub keeps using the last known-good snapshot.
 
-## Model Directory and Publication
+## Provider Inventory, Model Directory, and Publication
 
-The Model Directory separates three concepts that were previously easy to confuse:
+TokenHub separates the model lifecycle into three control areas:
 
-| View | Meaning |
+| Control area | Meaning |
 | --- | --- |
-| **External Models** | The API contract exposed to applications. This is the default view and initially shows only published models. |
-| **Provider Upstream Models** | Models imported for one concrete Provider. Importing inventory alone does not expose a model to clients. |
-| **Candidate Templates** | Reference metadata from the tracked catalog. A template is neither connected nor callable until it is imported and mapped. |
+| **Provider Channels** | Upstream connections and their imported model inventory. Creating a catalog-based Provider requires selecting at least one model, but importing inventory alone never exposes it to clients. Custom Providers can be created empty and populated after the upstream connection is available. |
+| **Model Directory** | Only the external models that form the API contract for applications. Their prices are the unified client-facing prices, independent of which Provider route serves a request. |
+| **Routing Policies** | Explicit mappings from an external model to models already imported by one or more Providers, plus traffic and failover strategy. |
 
-When importing a Provider model, **Import and publish** creates an enabled same-name mapping by default. The external name can be edited before import. For example, an administrator can publish the external name `DeepSeek` while mapping it to `OpenAI Production / gpt-4.5`. A Provider upstream model can also be mapped to more than one external alias.
+The steps are deliberately separate: add a Provider and import inventory, create an external model, then configure its routes. For example, an administrator can expose the external model `DeepSeek` while routing it to `OpenAI Production / gpt-4.5`. The same Provider model may back several external aliases, and one external model may route to several Providers.
 
-An administrator can instead create an external model manually and select one of the upstream models already imported for a Provider. If the required upstream model is not listed, import it into Provider inventory first; this keeps inventory and mappings as two explicit steps.
+Provider-model prices represent actual upstream cost and are used for internal audit. Model Directory prices represent the unified external charge used for client billing estimates, quota accounting, metrics, and usage reports. A route selects the upstream implementation but does not change the external price.
 
 Publication and runtime health are different states. Membership in `GET /v1/models` requires an active external `Model`, at least one active `ModelRoute`, and API-key access when a model allowlist is configured. It does not change when a Provider or Provider Resource is temporarily unhealthy. Health affects whether a request can be served and is shown separately in the directory and routing diagnostics. Disabling the external model removes it from `GET /v1/models` while retaining its mappings for later re-publication.
 
@@ -89,7 +90,7 @@ Testing a resource from the console still recovers it immediately when the adapt
 
 ## Request Usage Audit
 
-Each request row in **Request Logs** includes its total tokens and estimated cost. The detail panel retains the upstream billing breakdown when it is available: cached, cache-write, and audio input tokens, plus reasoning, audio, accepted-prediction, and rejected-prediction output tokens. Providers that do not return a field are shown as zero. Input and output totals already contain their detail categories, so do not add the detail values to the totals again.
+Each request row in **Request Logs** includes its total tokens and external billing amount. For administrators with global operations visibility, the detail panel also shows the Provider's actual cost calculated from the selected Provider model; other users do not receive that cost field. The panel retains the upstream billing breakdown when it is available: cached, cache-write, and audio input tokens, plus reasoning, audio, accepted-prediction, and rejected-prediction output tokens. Providers that do not return a field are shown as zero. Input and output totals already contain their detail categories, so do not add the detail values to the totals again.
 
 ## Metrics
 
@@ -101,7 +102,7 @@ TokenHub can expose Prometheus metrics at `GET /metrics`. Collection is off by d
 | `tokenhub_gateway_request_duration_seconds` | histogram | End-to-end latency including failover attempts. Buckets run to 300s. |
 | `tokenhub_gateway_requests_in_flight` | gauge | Model API requests currently being served. Admin traffic and scrapes are excluded. |
 | `tokenhub_gateway_tokens_total` | counter | Tokens by kind: `prompt`, `completion`, `cached`, `cache_write`, `reasoning`. |
-| `tokenhub_gateway_cost_usd_total` | counter | Estimated cost, using the same prices as the usage records. |
+| `tokenhub_gateway_cost_usd_total` | counter | Unified external billing estimate from Model Directory prices. Provider actual cost remains in privileged request audit rather than this metric. |
 
 Go runtime and process metrics are exposed alongside them.
 
@@ -117,9 +118,9 @@ To push instead of scrape, point an OpenTelemetry Collector's `prometheus` recei
 
 The model catalog accepts an optional cache read price in USD per 1 million tokens. When it is configured, cached input tokens use that price in estimated costs. When it is left blank, TokenHub estimates the cache read price at about 0.83% of the standard input price for DeepSeek V4 Pro, 2% for other DeepSeek models, and 10% for other non-embedding models. The model pricing table marks estimated values and explains the applied ratio on hover.
 
-## Candidate Template Recovery
+## Catalog Metadata Recovery
 
-Deleting an external model removes its database record and routes, but it does not edit `data/model-catalog.yaml` or the file configured by `TOKENHUB_MODEL_CATALOG_FILE`. Backend startup synchronizes the candidate metadata from that file again. Administrators can also use **Restore Candidate Templates** on the **Candidate Templates** tab to refresh that metadata while keeping custom external models. Restoring a template does not import it for a Provider, create a mapping, or publish it in `GET /v1/models`.
+Deleting an external model removes its database record and routes, but it does not edit `data/model-catalog.yaml` or the file configured by `TOKENHUB_MODEL_CATALOG_FILE`. Backend startup synchronizes tracked catalog metadata from that file again; administrators can trigger the same synchronization without a restart from **Settings → Base Settings → Sync Model Reference Catalog**. This synchronization does not import a model for a Provider, create a route, or publish it in `GET /v1/models`; those remain explicit administrative actions in their respective control areas.
 
 ## Security Checklist
 

@@ -3153,6 +3153,7 @@ func (s *GormStore) FinishCall(call CallContext, route RouteSelection, usage Usa
 	_ = s.stopInFlightLeaseHeartbeat(call.RequestID)
 	// priceUsage is pure, so it runs outside the lock and its result is final here.
 	usage = priceUsage(call.Model, usage)
+	usage.ProviderCostUSD = s.providerCostUSD(route, usage)
 	// Registered before the lock is taken, so LIFO ordering runs it *after* the
 	// unlock: reporting metrics must not extend how long this request holds the
 	// store-wide mutex. Deferring also means the request is still counted when the
@@ -3544,6 +3545,7 @@ func (s *GormStore) CompleteImageJob(call CallContext, job ImageJob, revisedProm
 	}
 	_ = s.stopInFlightLeaseHeartbeat(call.RequestID)
 	usage = priceUsage(call.Model, usage)
+	usage.ProviderCostUSD = s.providerCostUSD(route, usage)
 
 	now := time.Now().UTC()
 	if job.CompletedAt == nil {

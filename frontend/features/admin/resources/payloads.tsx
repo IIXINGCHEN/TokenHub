@@ -19,10 +19,9 @@ export function providerPayload(values: Record<string, string>) {
     status: values.status || "active",
     healthy: values.healthy !== "false",
     priority: numberOr(values.priority, 10),
-    catalog_id: values.catalog_id,
-    model_category: values.model_category,
-    create_routes: values.create_routes === "true",
-    selected_models: splitList(values.selected_models),
+		catalog_id: values.catalog_id,
+		model_category: values.model_category,
+		selected_models: splitList(values.selected_models),
     custom_models: parseProviderCatalogModels(values.custom_models),
   };
 }

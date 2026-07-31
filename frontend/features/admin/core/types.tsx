@@ -470,6 +470,7 @@ export type RequestLog = {
   rejected_prediction_tokens?: number;
   total_tokens?: number;
   estimated_cost_usd?: number;
+  provider_cost_usd?: number;
   usage_record_count?: number;
 };
 
@@ -493,6 +494,7 @@ export type UsageRecord = {
   rejected_prediction_tokens?: number;
   total_tokens: number;
   estimated_cost_usd: number;
+  provider_cost_usd?: number;
   created_at: string;
 };
 

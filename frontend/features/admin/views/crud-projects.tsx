@@ -328,7 +328,7 @@ export function ProviderChannelTable({
             <tr>
               <th>{tx("服务商 / 通道")}</th>
               <th>{tx("健康与基础监控")}</th>
-              <th>{tx("路由与账号")}</th>
+              <th>{tx("模型、路由与账号")}</th>
               <th>{tx("真实监控 · L3")}</th>
               <th>{tx("性能与质量")}</th>
               <th>{tx("Codex 套餐")}</th>
@@ -339,6 +339,7 @@ export function ProviderChannelTable({
             {rows.map((row) => {
               const routeSummary = tx(providerRouteSummary(row.provider, data));
               const accountDetail = providerChannelAccountDetail(row.resources);
+              const importedModelCount = data.providerModels.filter((model) => model.provider_id === row.provider.id).length;
               return <tr key={row.provider.id}>
                 <td>
                   <div className="provider-monitor-name">
@@ -363,7 +364,8 @@ export function ProviderChannelTable({
                 </td>
                 <td>
                   <div className="provider-channel-routing">
-                    <strong title={routeSummary}>{routeSummary}</strong>
+                    <strong>{importedModelCount} {tx("个已引入模型")}</strong>
+                    <span title={routeSummary}>{routeSummary}</span>
                     <span title={accountDetail || undefined}>
                       {row.resources.length || 0} {tx("账号资源")}{accountDetail ? ` · ${accountDetail}` : ""} · P{formatNumber(row.provider.priority)}
                     </span>
