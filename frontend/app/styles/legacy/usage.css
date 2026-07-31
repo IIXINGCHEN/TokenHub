@@ -993,11 +993,16 @@
 
 .billing-connector-modal {
   width: min(720px, calc(100vw - 32px));
+  overflow: hidden;
 }
 
-.billing-connector-form {
+.modal-body.billing-connector-form {
   max-height: min(58vh, 520px);
   overflow-y: auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px 20px;
+  padding: 22px 24px 24px;
+  scrollbar-gutter: stable;
 }
 
 .billing-wide-field {
@@ -1014,8 +1019,10 @@
     width: 100%;
   }
 
-  .billing-connector-form {
+  .modal-body.billing-connector-form {
     grid-template-columns: 1fr;
+    gap: 16px;
+    padding: 18px;
   }
 
   .billing-wide-field {

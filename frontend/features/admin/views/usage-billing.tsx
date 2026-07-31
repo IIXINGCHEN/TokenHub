@@ -645,7 +645,7 @@ function BillingConnectorEditor({ api, connector, onClose, onSaved }: { api: Api
           <div><p className="eyebrow">Billing Connector</p><h2>{tx(connector ? "编辑账单连接器" : "新增账单连接器")}</h2></div>
           <button className="icon-button" onClick={onClose} title={tx("关闭")} type="button"><X size={18} /></button>
         </div>
-        <div className="form-grid two billing-connector-form">
+        <div className="modal-body billing-connector-form">
           <label className="field"><span>{tx("名称")} *</span><input value={values.name} onChange={(event) => update("name", event.target.value)} required /></label>
           <label className="field"><span>{tx("类型")} *</span><select disabled={Boolean(connector)} value={values.type} onChange={(event) => update("type", event.target.value)}><option value="oneapi">OneAPI</option><option value="aliyun">Aliyun</option></select></label>
           <label className="field billing-wide-field"><span>Base URL *</span><input type="url" value={values.base_url} onChange={(event) => update("base_url", event.target.value)} required /></label>
@@ -666,8 +666,8 @@ function BillingConnectorEditor({ api, connector, onClose, onSaved }: { api: Api
               <label className="field"><span>{tx("每币种单位 Quota")}</span><input min="1" type="number" value={values.quota_per_unit} onChange={(event) => update("quota_per_unit", event.target.value)} /></label>
             </>
           )}
+          {error ? <div className="billing-inline-error billing-wide-field" role="alert">{error}</div> : null}
         </div>
-        {error ? <div className="billing-inline-error" role="alert">{error}</div> : null}
         <div className="modal-actions"><button className="secondary-button" disabled={busy} onClick={onClose} type="button">{tx("取消")}</button><button className="button" disabled={busy} type="submit">{busy ? tx("保存中") : tx("保存")}</button></div>
       </form>
     </div>
