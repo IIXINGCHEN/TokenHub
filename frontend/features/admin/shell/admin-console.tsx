@@ -10,6 +10,7 @@ import { emptyData, emptySummary, filterByModelCategory, filterRows } from "../d
 import { modelRouteDefaults, rowTitle } from "../domain/entities";
 import { uniqueUIID, viewFromPath } from "../domain/formatting";
 import { reportDatasetLabel } from "../domain/labels";
+import { resourceCreateTarget } from "../domain/resource-create-target";
 import { type AppLanguage, bulkDeleteConfirmMessage, deleteConfirmMessage, importUsersDoneMessage, importUsersSkippedMessage, isIssuedAPIKey, readSavedLanguage, setActiveLanguage, tx } from "../i18n/runtime";
 import { createKeyWithCapture } from "../resources/generic-config";
 import { downloadReport } from "../resources/governance-config";
@@ -666,23 +667,22 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
       setError(tx("数据加载中，请稍后再操作。"));
       return;
     }
-    if (activeConfig.view === "providers") {
-      setProviderCreateOpen(true);
-      return;
+    switch (resourceCreateTarget(activeConfig.view)) {
+      case "provider-modal":
+        setProviderCreateOpen(true);
+        return;
+      case "project-workspace":
+        setProjectWorkspace({ mode: "create" });
+        return;
+      case "notification-channel-modal":
+        setModal({ config: activeConfig, initialValues: notificationChannelDefaults(modelCategoryFilter) });
+        return;
+      case "api-key-wizard":
+        openCreateAPIKey();
+        return;
+      default:
+        setModal({ config: activeConfig });
     }
-    if (activeConfig.view === "projects") {
-      setProjectWorkspace({ mode: "create" });
-      return;
-    }
-    if (activeConfig.view === "notification-channels") {
-      setModal({ config: activeConfig, initialValues: notificationChannelDefaults(modelCategoryFilter) });
-      return;
-    }
-    if (activeConfig.view === "api-keys") {
-      openCreateAPIKey();
-      return;
-    }
-    setModal({ config: activeConfig });
   }
 
   async function saveModelRoutingPolicy(model: Model, policy: ModelRoutePolicy, successMessage = `已应用 ${model.name} 的模型路由策略`) {
