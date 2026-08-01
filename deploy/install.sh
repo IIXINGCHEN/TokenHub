@@ -114,19 +114,9 @@ if ! "${compose[@]}" config --quiet; then
   exit 1
 fi
 
-compose_config_help="$("${compose[@]}" config --help 2>/dev/null || true)"
-if grep -q -- '--environment' <<<"$compose_config_help"; then
-  compose_environment="$("${compose[@]}" config --environment)" || {
-    error "Docker Compose could not resolve deployment environment variables"
-    exit 1
-  }
-elif grep -q -- '--format' <<<"$compose_config_help"; then
-  if ! command -v python3 >/dev/null 2>&1; then
-    error "Docker Compose does not support config --environment and python3 is unavailable"
-    error "upgrade Docker Compose or install python3 to validate the deployment configuration"
-    exit 1
-  fi
-
+if compose_environment="$("${compose[@]}" config --environment 2>/dev/null)"; then
+  :
+elif command -v python3 >/dev/null 2>&1; then
   compose_environment="$("${compose[@]}" config --format json | python3 -c '
 import json
 import sys
@@ -152,10 +142,9 @@ print(f"TOKENHUB_IMAGE_TAG={image_tag or '\''latest'\''}")
   }
 else
   error "Docker Compose cannot expose its resolved interpolation environment"
-  error "upgrade Docker Compose to a version with config --environment or config --format"
+  error "upgrade Docker Compose or install python3 to validate the deployment configuration"
   exit 1
 fi
-unset compose_config_help
 
 tokenhub_environment=""
 admin_token=""
