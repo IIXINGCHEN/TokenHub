@@ -18,7 +18,7 @@ Language: [English](../administrator-guide.md) | [简体中文](../zh-CN/adminis
 ## 本番設定順序
 
 1. 少なくとも 1 つの ID プロバイダーを設定し、管理者アカウントを保持します。
-2. `OpenAI Production`、`Azure East US`、`Internal Model Gateway` などの上流 Provider を追加し、提供可能な上流モデルを取り込みます。
+2. `OpenAI Production`、`Azure East US`、`Internal Model Gateway` などの上流 Provider を追加します。保存前に **接続テスト** で Base URL と API Key を検証し、実測された応答時間を確認してから、提供可能な上流モデルを取り込みます。
 3. 取り込んだ各 Provider モデルに、監査用の実際の入力、キャッシュ読み取り、出力コストを記録します。
 4. アプリケーションへ公開する外部モデルを作成し、統一された顧客向け価格を設定します。
 5. 各外部モデルから、1 つ以上の取り込み済み Provider モデルへのルートを追加します。
@@ -31,6 +31,14 @@ Language: [English](../administrator-guide.md) | [简体中文](../zh-CN/adminis
 API Key を発行するときは、**帰属ユーザー**で実際の利用者を選択します。発行者は監査メタデータに残りますが、Key の利用量は帰属ユーザーに計上されます。プラットフォーム管理者は任意の有効ユーザー、チームリーダーは自チームの有効ユーザーを選択でき、一般ユーザーは自分だけを指定できます。
 
 新しい利用量レコードにはその時点の帰属ユーザーが固定保存されるため、後から帰属を変更したり Key を削除したりしても、記録済みの履歴は書き換わりません。このフィールド導入前のレコードは、Key の現在の帰属ユーザー、従来の発行者、プロジェクト責任者、最後に `unknown` の順でフォールバックします。個人ランキングには、利用実績に現れた Key 数と、現在帰属している失効前の Key 数が別々に表示されます。
+
+## Key 単位の RPM・TPM 制限
+
+各 API Key には、1 分あたりのリクエスト数（RPM）と Token 数（TPM）を任意で設定できます。未設定または `null` は、適用されるグローバル・プロジェクト・チームポリシーを継承します。`0` は Key 固有の上限を追加しませんが、上位レベルの制限を回避することはできません。正の値は Key 固有の上限を追加します。複数の正の制限が適用される場合、TokenHub は最も厳しい値を適用します。Key を無効にすると、制限値にかかわらずすべてのリクエストが拒否されます。
+
+RPM は Provider 呼び出し前に消費されます。TPM も同じ時点で、推定入力数と最大出力数から予約されます。最大出力を明示していないテキストリクエストでは、出力 4,096 Token を予約します。リクエスト完了後、Provider が返した総 Token 数で精算し、総数がない場合はプロンプトと補完 Token の合計を使用します。キャッシュ Token と推論 Token はこれらの合計に含まれているため、再加算しません。失敗または中断したリクエストでは、未使用の予約分を返却します。
+
+上限超過時は HTTP 429 と `api_key_rpm_exceeded` または `api_key_tpm_exceeded` を返し、`Retry-After` と、対応する `X-RateLimit-Limit-*`、`X-RateLimit-Remaining-*`、`X-RateLimit-Reset-*` ヘッダーを付与します。分単位バケットはデータベースに保存され、SQLite と PostgreSQL のどちらでも複数の TokenHub インスタンス間で共有されます。メトリクスには短いハッシュ化済み Key 参照だけが含まれ、完全な API Key は公開されません。
 
 ## Provider カタログの可用性
 
@@ -130,6 +138,7 @@ TokenHub は `GET /metrics` で Prometheus メトリクスを公開できます�
 | `tokenhub_gateway_requests_in_flight` | gauge | 処理中のモデル API リクエスト数。管理トラフィックとスクレイプは含みません。 |
 | `tokenhub_gateway_tokens_total` | counter | 種別ごとの Token：`prompt`、`completion`、`cached`、`cache_write`、`reasoning`。 |
 | `tokenhub_gateway_cost_usd_total` | counter | Model Directory 価格による統一外部請求見積もり。Provider 実コストは権限付きリクエスト監査にのみ保持され、このメトリクスには含まれません。 |
+| `tokenhub_gateway_rate_limit_hits_total` | counter | 実際に適用されたポリシースコープと制限種別ごとの拒否リクエスト数。`key_ref` の短いハッシュは `api_key` 制限でのみ使用し、継承したグローバル・プロジェクト・チーム制限では時系列の基数を抑えるため `none` を使用します。 |
 | `tokenhub_gateway_trace_completions_total` | counter | 完了した呼び出しのトレースエクスポートでの行き先: `converted` または `dropped`。トレース有効時のみ。 |
 | `tokenhub_gateway_trace_spans_total` | counter | span の OTLP エクスポート結果: `exported` または `failed`。トレース有効時のみ。 |
 

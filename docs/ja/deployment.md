@@ -375,9 +375,9 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_CLUSTER_LOCK_TTL_SECONDS` | `180` | クラスター調整ロックの期限と更新間隔の基準 |
 | `TOKENHUB_GRACEFUL_SHUTDOWN_SECONDS` | `150` | 停止時に処理中リクエストを待機する最大秒数 |
 | `TOKENHUB_STOP_GRACE_PERIOD` | `180s` | Docker がバックエンドを強制停止するまでの Compose 猶予時間 |
-| `TOKENHUB_CACHE_AFFINITY_ENABLED` | `false` | 同一セッションを同一の上流アカウントに固定し、上流の prompt cache が継続的にヒットするようにします。ルーティング挙動を変えるため既定では無効 |
+| `TOKENHUB_CACHE_AFFINITY_ENABLED` | `false` | Chat Completions、Anthropic Messages、Responses で同一セッションを同一の上流アカウントに固定し、上流の prompt cache が継続的にヒットするようにします。ルーティング挙動を変えるため既定では無効 |
 | `TOKENHUB_CACHE_AFFINITY_MODELS` | 空 | 段階的ロールアウト用のモデル許可リスト（カンマ区切り）。空の場合は全モデルが対象 |
-| `TOKENHUB_CACHE_AFFINITY_ALLOW_USER_SCOPE` | `false` | ユーザー単位の識別子もアフィニティキーとして受け入れるか。同一ユーザーの並行セッションが同じ値を共有し単一アカウントに集中するため既定では無効 |
+| `TOKENHUB_CACHE_AFFINITY_ALLOW_USER_SCOPE` | `false` | Chat/Responses の `user` と Anthropic の `metadata.user_id` もアフィニティキーとして受け入れるか。同一ユーザーの並行セッションが同じ値を共有し単一アカウントに集中するため既定では無効 |
 | `TOKENHUB_IMAGE_STORAGE_DIR` | `data/images` | 生成された画像アセットを保存するディレクトリ |
 | `TOKENHUB_IMAGE_WORKER_CONCURRENCY` | `2` | 画像生成キューを処理するワーカー数 |
 | `TOKENHUB_IMAGE_QUEUE_CAPACITY` | `64` | キューで待機できる画像ジョブの上限 |

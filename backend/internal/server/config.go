@@ -93,8 +93,8 @@ type Config struct {
 	// CacheAffinityModels is the allowlist used for staged rollout. Empty means
 	// every model.
 	CacheAffinityModels []string
-	// CacheAffinityAllowUserScope accepts user-scoped identifiers
-	// (metadata.user_id / user) as affinity keys. Off by default: one user's
+	// CacheAffinityAllowUserScope accepts user-scoped identifiers from Chat,
+	// Responses, and Anthropic (metadata.user_id / user) as affinity keys. Off by default: one user's
 	// concurrent sessions share the value, pinning all their traffic to a single
 	// account and creating a hotspot.
 	CacheAffinityAllowUserScope bool

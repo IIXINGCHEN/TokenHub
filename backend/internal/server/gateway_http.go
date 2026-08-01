@@ -49,7 +49,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	affinity, err := s.chatGatewayAffinity(key.ID, r.Header, req, routed.Routes)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, nil, err, req)
+		s.finishFailedRoutedCall(r, routed, nil, Usage{}, err, req)
 		writeError(w, r, err)
 		return
 	}
@@ -93,6 +93,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			s.store.MarkRouteUsed(route.Route.ID)
 			s.store.MarkProviderResourceUsed(routeResourceID(route))
 		}
+		routed.Call.StreamOutputCommitted = tracker.WroteData()
 		s.finishRoutedCall(r, GatewayCallCompletion{
 			Call:            routed.Call,
 			Route:           route,
@@ -117,7 +118,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	resp, route, usage, attempts, err := s.executeRoutedChat(r, routed, req)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, attempts, err, req)
+		s.finishFailedRoutedCall(r, routed, attempts, usage, err, req)
 		writeError(w, r, err)
 		return
 	}
@@ -152,6 +153,17 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	routed.Routes = s.routesWithAdapterCapability(routed.Routes, AdapterCapabilityResponses)
+	if len(routed.Routes) == 0 {
+		err := NewHTTPError(
+			http.StatusNotImplemented,
+			"provider_capability_not_supported",
+			"Responses are not supported",
+		)
+		s.finishFailedRoutedCall(r, routed, nil, Usage{}, err, req)
+		writeError(w, r, err)
+		return
+	}
 	if req.Stream {
 		routed.Routes = s.routesWithAdapterCapability(routed.Routes, AdapterCapabilityResponseStream)
 		if len(routed.Routes) == 0 {
@@ -160,21 +172,35 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 				"provider_capability_not_supported",
 				"Streaming responses are not supported",
 			)
-			s.finishFailedRoutedCall(r, routed, nil, err, req)
+			s.finishFailedRoutedCall(r, routed, nil, Usage{}, err, req)
 			writeError(w, r, err)
 			return
 		}
 	}
 	affinity, err := resolveCodexSessionAffinity(s.config.SecretKey, key.ID, r.Header, req)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, nil, err, req)
+		s.finishFailedRoutedCall(r, routed, nil, Usage{}, err, req)
 		writeError(w, r, err)
 		return
 	}
-	if affinity != nil && routesContainAdapterType(routed.Routes, ProviderOpenAICodex) {
+	codexAffinityApplied := affinity != nil && routesContainAdapterType(routed.Routes, ProviderOpenAICodex)
+	if codexAffinityApplied {
 		routed.Affinity = affinity
 		routed.Call.Affinity = affinity
 		routed.Routes = s.planRouteOrder(routed.Call, routed.Routes)
+	}
+	if !codexAffinityApplied {
+		affinity, err = s.responsesCacheLocalityAffinity(key.ID, r.Header, req)
+		if err != nil {
+			s.finishFailedRoutedCall(r, routed, nil, Usage{}, err, req)
+			writeError(w, r, err)
+			return
+		}
+		if affinity != nil {
+			routed.Affinity = affinity
+			routed.Call.Affinity = affinity
+			routed.Routes = s.planRouteOrder(routed.Call, routed.Routes)
+		}
 	}
 	if req.Stream {
 		s.handleStreamingResponses(w, r, routed, req)
@@ -182,7 +208,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, route, usage, attempts, err := s.executeRoutedResponses(r, routed, req)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, attempts, err, req)
+		s.finishFailedRoutedCall(r, routed, attempts, usage, err, req)
 		writeError(w, r, err)
 		return
 	}
@@ -226,7 +252,7 @@ func (s *Server) handleResponsesCompact(w http.ResponseWriter, r *http.Request) 
 	affinityRequest := ResponsesRequest{Model: model, raw: request}
 	affinity, err := resolveCodexSessionAffinity(s.config.SecretKey, key.ID, r.Header, affinityRequest)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, nil, err, request)
+		s.finishFailedRoutedCall(r, routed, nil, Usage{}, err, request)
 		writeError(w, r, err)
 		return
 	}
@@ -237,7 +263,7 @@ func (s *Server) handleResponsesCompact(w http.ResponseWriter, r *http.Request) 
 	}
 	response, route, usage, attempts, err := s.executeRoutedCompact(r, routed, request)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, attempts, err, request)
+		s.finishFailedRoutedCall(r, routed, attempts, usage, err, request)
 		writeError(w, r, err)
 		return
 	}
@@ -275,7 +301,7 @@ func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, route, usage, attempts, err := s.executeRoutedEmbeddings(r, routed, req)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, attempts, err, req)
+		s.finishFailedRoutedCall(r, routed, attempts, usage, err, req)
 		writeError(w, r, err)
 		return
 	}
@@ -289,7 +315,7 @@ func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) startRoutedCall(w http.ResponseWriter, r *http.Request, project Project, key APIKey, model string, stream bool, requestPayload any) (RoutedCall, bool) {
 	admittedAt := time.Now().UTC()
-	call, err := s.store.StartCall(r.Context(), project, key, model)
+	call, err := s.store.StartCall(r.Context(), project, key, model, requestTokenReservation(requestPayload))
 	call.Stream = stream
 	if err != nil {
 		requestID := s.finishRejectedCall(r, admittedAt, project, key, model, stream, err, requestPayload)
@@ -298,18 +324,19 @@ func (s *Server) startRoutedCall(w http.ResponseWriter, r *http.Request, project
 		return RoutedCall{}, false
 	}
 	w.Header().Set("x-request-id", call.RequestID)
+	writeRateLimitHeaders(w.Header(), call.RateLimitHeaders)
 	if call.requestContext != nil {
 		*r = *r.WithContext(call.requestContext)
 	}
 	routes, err := s.store.SelectRouteCandidates(model)
 	if err != nil {
-		s.finishFailedRoutedCall(r, RoutedCall{Call: call}, nil, err, requestPayload)
+		s.finishFailedRoutedCall(r, RoutedCall{Call: call}, nil, Usage{}, err, requestPayload)
 		writeError(w, r, err)
 		return RoutedCall{}, false
 	}
 	routes, err = s.filterCodexRoutesByModel(r.Context(), model, routes)
 	if err != nil {
-		s.finishFailedRoutedCall(r, RoutedCall{Call: call}, nil, err, requestPayload)
+		s.finishFailedRoutedCall(r, RoutedCall{Call: call}, nil, Usage{}, err, requestPayload)
 		writeError(w, r, err)
 		return RoutedCall{}, false
 	}
@@ -571,6 +598,7 @@ func executeRoutedWithStore[T any](
 ) (T, RouteSelection, Usage, []RouteAttempt, error) {
 	var zero T
 	var lastErr error = ErrProviderMissing
+	var cumulativeTokens int64
 	var affinityBindings map[string]AdapterSessionBinding
 	var err error
 	routed, affinityBindings, err = applyAdapterSessionAffinity(ctx, store, routed)
@@ -580,7 +608,7 @@ func executeRoutedWithStore[T any](
 	attempts := make([]RouteAttempt, 0, len(routed.Routes)+1)
 	for _, route := range routed.Routes {
 		if leaseErr := coordinationLeaseError(ctx); leaseErr != nil {
-			return zero, route, Usage{}, attempts, leaseErr
+			return zero, route, Usage{RateLimitTokens: cumulativeTokens}, attempts, leaseErr
 		}
 		resourceID := routeResourceID(route)
 		binding, hasBinding := affinityBindings[route.Provider.ID]
@@ -597,7 +625,7 @@ func executeRoutedWithStore[T any](
 			})
 			lastErr = err
 			if !shouldFailoverRoutedError(err, routeIsBound) {
-				return zero, route, Usage{}, attempts, err
+				return zero, route, Usage{RateLimitTokens: cumulativeTokens}, attempts, err
 			}
 			continue
 		}
@@ -605,6 +633,8 @@ func executeRoutedWithStore[T any](
 		for {
 			attemptStartedAt := time.Now()
 			resp, usage, err := call(leaseCtx, route, omitReasoningEffort, len(attempts)+1)
+			cumulativeTokens = saturatingAddNonNegative(cumulativeTokens, meteredTokens(usage))
+			usage.RateLimitTokens = cumulativeTokens
 			attemptEndedAt := time.Now()
 			latencyMS := maxInt64(1, attemptEndedAt.Sub(attemptStartedAt).Milliseconds())
 			if leaseErr := coordinationLeaseError(leaseCtx); leaseErr != nil {
@@ -668,7 +698,7 @@ func executeRoutedWithStore[T any](
 					})
 					lastErr = retryErr
 					if !shouldFailoverRoutedError(retryErr, routeIsBound) {
-						return zero, route, Usage{}, attempts, retryErr
+						return zero, route, Usage{RateLimitTokens: cumulativeTokens}, attempts, retryErr
 					}
 					break
 				}
@@ -681,7 +711,7 @@ func executeRoutedWithStore[T any](
 			break
 		}
 	}
-	return zero, RouteSelection{}, Usage{}, attempts, lastErr
+	return zero, RouteSelection{}, Usage{RateLimitTokens: cumulativeTokens}, attempts, lastErr
 }
 
 // clientDisconnected reports that there is no longer anyone to answer. The
@@ -719,8 +749,9 @@ func finishProviderResourceAttempt(ctx context.Context, store Store, resourceID 
 }
 
 type streamWriteTracker struct {
-	writer io.Writer
-	wrote  bool
+	writer       io.Writer
+	wrote        bool
+	bytesWritten int64
 	// onFirstWrite runs once, just before the first byte is written. Response
 	// headers must wait until that moment: failover can move to another candidate,
 	// and writing early would expose the preferred route rather than the one that
@@ -741,7 +772,9 @@ func (w *streamWriteTracker) Write(data []byte) (int, error) {
 		}
 	}
 	w.wrote = true
-	return w.writer.Write(data)
+	n, err := w.writer.Write(data)
+	w.bytesWritten = saturatingAddNonNegative(w.bytesWritten, int64(n))
+	return n, err
 }
 
 // classifyStreamError decides whether a streaming failure may move to the next
@@ -774,6 +807,10 @@ func classifyStreamError(ctx context.Context, err error, wrote bool) error {
 
 func (w *streamWriteTracker) Wrote() bool {
 	return w != nil && w.wrote
+}
+
+func (w *streamWriteTracker) WroteData() bool {
+	return w != nil && w.bytesWritten > 0
 }
 
 // ensureStarted runs the deferred hook even when the upstream produced no bytes.
@@ -820,12 +857,26 @@ func (s *Server) responsesAdapterForRoute(route RouteSelection) (any, error) {
 func (s *Server) routesWithAdapterCapability(routes []RouteSelection, capability AdapterCapability) []RouteSelection {
 	filtered := make([]RouteSelection, 0, len(routes))
 	for _, route := range routes {
-		descriptor, ok := s.adapterRegistry.Describe(route.Provider.Type)
-		if ok && adapterSupports(descriptor, capability) {
+		if s.routeSupportsAdapterCapability(route, capability) {
 			filtered = append(filtered, route)
 		}
 	}
 	return filtered
+}
+
+func (s *Server) routeSupportsAdapterCapability(route RouteSelection, capability AdapterCapability) bool {
+	descriptor, ok := s.adapterRegistry.Describe(route.Provider.Type)
+	if !ok || !adapterSupports(descriptor, capability) {
+		return false
+	}
+	if route.Provider.Type != "deepseek" ||
+		(capability != AdapterCapabilityResponses && capability != AdapterCapabilityResponseStream) {
+		return true
+	}
+	// DeepSeek's Responses API is model-scoped rather than provider-scoped. Keep
+	// this allowlist narrow: unsupported parameters are otherwise silently ignored
+	// upstream, which would make an endpoint-level capability claim misleading.
+	return strings.EqualFold(strings.TrimSpace(route.ProviderModel), "deepseek-v4-flash")
 }
 
 func (s *Server) planRouteOrder(call CallContext, routes []RouteSelection) []RouteSelection {

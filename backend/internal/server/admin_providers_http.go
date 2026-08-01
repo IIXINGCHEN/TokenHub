@@ -386,6 +386,39 @@ func (s *Server) handleAdminProviderNested(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/admin/providers/"), "/")
+	if len(parts) == 1 && parts[0] == "test-connection" {
+		if r.Method != http.MethodPost {
+			writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
+			return
+		}
+		var req ProviderCreateRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, r, NewHTTPError(http.StatusBadRequest, "invalid_request", err.Error()))
+			return
+		}
+		if strings.TrimSpace(req.BaseURL) == "" {
+			writeError(w, r, NewHTTPError(http.StatusBadRequest, "provider_base_url_required", "Base URL is required to test the connection"))
+			return
+		}
+		if strings.TrimSpace(req.APIKey) == "" {
+			writeError(w, r, NewHTTPError(http.StatusBadRequest, "provider_api_key_required", "API key is required to test the connection"))
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		startedAt := time.Now()
+		catalog, err := CustomProviderCatalogFromUpstream(ctx, http.DefaultClient, req)
+		if err != nil {
+			writeError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"healthy":      true,
+			"latency_ms":   time.Since(startedAt).Milliseconds(),
+			"models_count": catalog.ModelsCount,
+		})
+		return
+	}
 	if len(parts) == 1 {
 		switch r.Method {
 		case http.MethodPatch:

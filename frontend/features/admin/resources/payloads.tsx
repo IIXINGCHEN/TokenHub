@@ -225,6 +225,8 @@ export function projectQuotaPolicy(data: AppData, project: Project) {
 export function projectQuotaValues(quota?: AdminResource): ProjectQuotaValues {
   return {
     status: quota?.status || "active",
+    rate_limit_rpm: quotaFieldValue(quota, "rate_limit_rpm"),
+    token_limit_tpm: quotaFieldValue(quota, "token_limit_tpm"),
     daily_requests: quotaFieldValue(quota, "daily_requests"),
     monthly_requests: quotaFieldValue(quota, "monthly_requests"),
     daily_tokens: quotaFieldValue(quota, "daily_tokens"),
@@ -249,6 +251,8 @@ export function projectQuotaPayload(project: Project, values: ProjectQuotaValues
     fields: {
       scope: "project",
       scope_id: project.id,
+      rate_limit_rpm: numberOr(values.rate_limit_rpm, 0),
+      token_limit_tpm: numberOr(values.token_limit_tpm, 0),
       daily_requests: numberOr(values.daily_requests, 0),
       monthly_requests: numberOr(values.monthly_requests, 0),
       daily_tokens: numberOr(values.daily_tokens, 0),
@@ -319,6 +323,8 @@ export function projectQuotaSummary(data: AppData, project: Project) {
   if (!quota) return "未配置";
   if (quota.status !== "active") return enumValueLabel(quota.status);
   const parts = [
+    quotaSummaryPart(quota, "rate_limit_rpm", "RPM"),
+    quotaSummaryPart(quota, "token_limit_tpm", "TPM"),
     quotaSummaryPart(quota, "daily_requests", "日请求"),
     quotaSummaryPart(quota, "monthly_requests", "月请求"),
     quotaSummaryPart(quota, "daily_tokens", "日 Token"),
@@ -458,6 +464,8 @@ export function keyCreatePayload(values: Record<string, string>) {
     owner_user_id: values.owner_user_id,
     allowed_models: splitList(values.allowed_models),
     ip_allowlist: splitList(values.ip_allowlist),
+    rate_limit_rpm: minuteLimitValue(values.rate_limit_rpm, false),
+    token_limit_tpm: minuteLimitValue(values.token_limit_tpm, false),
     limits: keyLimits(values),
   };
 }
@@ -470,8 +478,15 @@ export function keyPatchPayload(values: Record<string, string>) {
     status: values.status || "active",
     allowed_models: splitList(values.allowed_models),
     ip_allowlist: splitList(values.ip_allowlist),
+    rate_limit_rpm: minuteLimitValue(values.rate_limit_rpm, true),
+    token_limit_tpm: minuteLimitValue(values.token_limit_tpm, true),
     limits: keyLimits(values),
   };
+}
+
+function minuteLimitValue(value: string | undefined, clearWhenBlank: boolean) {
+  if (!value?.trim()) return clearWhenBlank ? null : undefined;
+  return numberOr(value, 0);
 }
 
 export function notificationChannelPayload(values: Record<string, string>, existing?: AdminResource) {

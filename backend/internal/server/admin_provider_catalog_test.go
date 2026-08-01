@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAdminCreatesProviderModelAndRoute(t *testing.T) {
@@ -143,6 +144,67 @@ func TestAdminProviderConfigurationFailsEarlyAndPatchPreservesFields(t *testing.
 		provider.Headers["x-provider"] != "preserved" ||
 		provider.Options["region"] != "test" {
 		t.Fatalf("partial patch erased provider fields: %+v", provider)
+	}
+}
+
+func TestAdminTestsUnsavedProviderConnection(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/models" {
+			t.Errorf("unexpected upstream request: %s %s", r.Method, r.URL.Path)
+			http.Error(w, "unexpected request", http.StatusBadRequest)
+			return
+		}
+		if got := r.Header.Get("authorization"); got != "Bearer test-secret" {
+			t.Errorf("authorization = %q, want Bearer test-secret", got)
+			http.Error(w, "unexpected authorization", http.StatusUnauthorized)
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"data": []map[string]any{{"id": "deepseek-chat"}},
+		})
+	}))
+	defer upstream.Close()
+
+	app := newTestServer()
+	resp := doJSON(t, app, http.MethodPost, "/api/admin/providers/test-connection", map[string]any{
+		"name":     "DeepSeek",
+		"type":     "deepseek",
+		"base_url": upstream.URL + "/v1",
+		"api_key":  "test-secret",
+	}, "")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected connection test 200, got %d: %s", resp.Code, resp.Body)
+	}
+	var result struct {
+		Healthy     bool  `json:"healthy"`
+		LatencyMS   int64 `json:"latency_ms"`
+		ModelsCount int   `json:"models_count"`
+	}
+	if err := json.Unmarshal([]byte(resp.Body), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.Healthy || result.LatencyMS < 1 || result.ModelsCount != 1 {
+		t.Fatalf("unexpected connection result: %+v", result)
+	}
+}
+
+func TestAdminProviderConnectionTestRequiresCredentials(t *testing.T) {
+	app := newTestServer()
+	for _, testCase := range []struct {
+		name string
+		body map[string]any
+		code string
+	}{
+		{name: "base URL", body: map[string]any{"api_key": "test-secret"}, code: "provider_base_url_required"},
+		{name: "API key", body: map[string]any{"base_url": "https://example.invalid/v1"}, code: "provider_api_key_required"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			resp := doJSON(t, app, http.MethodPost, "/api/admin/providers/test-connection", testCase.body, "")
+			if resp.Code != http.StatusBadRequest || !strings.Contains(resp.Body, `"code":"`+testCase.code+`"`) {
+				t.Fatalf("expected %s, got %d: %s", testCase.code, resp.Code, resp.Body)
+			}
+		})
 	}
 }
 

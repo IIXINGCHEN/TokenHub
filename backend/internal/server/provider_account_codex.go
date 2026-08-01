@@ -339,7 +339,7 @@ func consumeCodexResponsesStream(body io.Reader, destination io.Writer) (map[str
 }
 
 func (s *Server) handleStreamingResponses(w http.ResponseWriter, r *http.Request, routed RoutedCall, request ResponsesRequest) {
-	streamStarted := false
+	tracker := &streamWriteTracker{writer: w}
 	attemptNumber := 0
 	allowEffortFallback := normalizedReasoningEffort(responsesReasoningEffort(request)) != nil
 	response, route, usage, attempts, err := executeRoutedWithStore(r.Context(), s.store, routed, allowEffortFallback, func(ctx context.Context, route RouteSelection, omitReasoningEffort bool, attempt int) (map[string]any, Usage, error) {
@@ -375,9 +375,8 @@ func (s *Server) handleStreamingResponses(w http.ResponseWriter, r *http.Request
 		w.Header().Set("x-request-id", routed.Call.RequestID)
 		writeCodexResponseHeaders(w.Header(), opened.Header)
 		s.writeRouteHeaders(w, routed.Call, prepared, attemptNumber)
-		w.WriteHeader(http.StatusOK)
-		streamStarted = true
-		response, _, usage, streamErr := consumeCodexResponsesStream(opened.Body, w)
+		tracker.ensureStarted()
+		response, _, usage, streamErr := consumeCodexResponsesStream(opened.Body, tracker)
 		applyCodexResponseMetadata(&usage, opened.Header)
 		if streamErr != nil {
 			return response, usage, &ProviderInvocationError{
@@ -387,10 +386,12 @@ func (s *Server) handleStreamingResponses(w http.ResponseWriter, r *http.Request
 		}
 		return response, usage, nil
 	})
+	streamStarted := tracker.Wrote()
+	routed.Call.StreamOutputCommitted = tracker.WroteData()
 	if err != nil {
 		if streamStarted {
-			// The client already has a 200 and part of the stream, so the usage the
-			// upstream reported before failing is real and must not be discarded.
+			// The client already has a 200, so any usage the upstream reported
+			// before failing is real and must not be discarded.
 			httpErr := AsHTTPError(err)
 			s.finishRoutedCall(r, GatewayCallCompletion{
 				Call:            routed.Call,
@@ -404,7 +405,7 @@ func (s *Server) handleStreamingResponses(w http.ResponseWriter, r *http.Request
 				ResponsePayload: auditErrorPayload(err, routed.Call.RequestID),
 			})
 		} else {
-			s.finishFailedRoutedCall(r, routed, attempts, err, request)
+			s.finishFailedRoutedCall(r, routed, attempts, usage, err, request)
 		}
 		if !streamStarted {
 			writeError(w, r, err)
