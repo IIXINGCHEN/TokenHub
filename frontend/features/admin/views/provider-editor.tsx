@@ -773,22 +773,21 @@ export function ProviderUpsertModal({
 
   async function queryAccountQuota(resource: ProviderResource, force = false) {
     setAccountQuotaBusyIDs((current) => ({ ...current, [resource.id]: true }));
-    setAccountQuotaErrors((current) => {
-      const next = { ...current };
-      delete next[resource.id];
-      return next;
-    });
+    setAccountQuotaErrors((current) => Object.fromEntries(Object.entries(current).filter(([id]) => id !== resource.id)));
     try {
       const resp = await adminFetch(api, `/api/admin/provider-resources/${resource.id}/quota${force ? "?refresh=true" : ""}`);
       if (!resp.ok) throw new Error(await readAdminError(resp, tx("查询订阅额度")));
       const quota = (await resp.json()) as OpenAIAccountQuota;
       setAccountQuotas((current) => ({ ...current, [resource.id]: quota }));
+      return true;
     } catch (err) {
-      if (isAuthExpiredError(err)) return;
+      setAccountQuotas((current) => Object.fromEntries(Object.entries(current).filter(([id]) => id !== resource.id)));
+      if (isAuthExpiredError(err)) return false;
       setAccountQuotaErrors((current) => ({
         ...current,
         [resource.id]: err instanceof Error ? err.message : tx("查询订阅额度失败"),
       }));
+      return false;
     } finally {
       setAccountQuotaBusyIDs((current) => ({ ...current, [resource.id]: false }));
     }

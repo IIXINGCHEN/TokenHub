@@ -48,7 +48,7 @@ export function ProviderAccountQuotaReset({
   api: ApiContext;
   quotaBusy: boolean;
   resource: ProviderResource;
-  onRefreshQuota: () => Promise<void>;
+  onRefreshQuota: () => Promise<boolean>;
 }) {
   const [details, setDetails] = useState<CodexResetCredits | null>(null);
   const [detailsBusy, setDetailsBusy] = useState(false);
@@ -84,9 +84,11 @@ export function ProviderAccountQuotaReset({
         storeResetConfirmation(resource.id, recovered);
       }
       setNow(Date.now());
+      return true;
     } catch (error) {
-      if (isAuthExpiredError(error)) return;
+      if (isAuthExpiredError(error)) return false;
       setDetailsError(error instanceof Error ? error.message : tx("查询 Codex 重置次数失败"));
+      return false;
     } finally {
       setDetailsBusy(false);
     }
@@ -174,10 +176,16 @@ export function ProviderAccountQuotaReset({
       clearStoredResetConfirmation(resource.id);
       const completed = result.code === "already_redeemed" ? tx("该重置请求此前已完成，正在刷新额度。") : tx("重置请求已完成，正在刷新额度。");
       const windowsReset = typeof result.windows_reset === "number" && Number.isFinite(result.windows_reset) ? result.windows_reset : null;
-      await Promise.allSettled([loadResetCredits(), onRefreshQuota()]);
       setSelectedCreditID("");
       setConfirmation(null);
-      setResetNotice(windowsReset !== null ? `${completed} ${tx("受影响窗口")}：${windowsReset}` : completed);
+      const [creditsRefreshed, quotaRefreshed] = await Promise.all([loadResetCredits(), onRefreshQuota()]);
+      const completionNotice = windowsReset !== null ? `${completed} ${tx("受影响窗口")}：${windowsReset}` : completed;
+      setResetNotice(completionNotice);
+      if (!creditsRefreshed || !quotaRefreshed) {
+        setResetError(tx("重置已经完成，但最新用量或重置次数刷新失败；旧数据已清除，请点击“刷新用量与重置次数”重试。"));
+        return;
+      }
+      setResetError("");
     } catch (error) {
       if (isAuthExpiredError(error)) {
         clearStoredResetConfirmation(resource.id);
@@ -230,6 +238,7 @@ export function ProviderAccountQuotaReset({
       </div>
       {detailsError ? <p className="provider-quota-error" role="alert">{detailsError}</p> : null}
       {detailsNeedRefresh ? <p className="provider-quota-error" role="alert">{tx("可用重置次数明细暂不可用、已过期或不一致，请点击“刷新用量与重置次数”重新查询。")}</p> : null}
+      {!confirmation && resetError ? <p className="provider-quota-error" role="alert">{resetError}</p> : null}
       {resetNotice ? <p className="provider-credential-note" role="status">{resetNotice}</p> : null}
       {confirmation ? (
         <div className="modal-backdrop provider-account-confirmation-backdrop" role="presentation">

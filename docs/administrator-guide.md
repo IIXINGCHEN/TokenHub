@@ -48,6 +48,8 @@ TokenHub stores the last known-good provider catalog in the database. On every b
 
 For an active OpenAI Codex Subscription account, open **Provider Channels**, edit the Provider, and expand **Advanced > Subscription quota**. The account card shows the authoritative number of available reset credits and the nearest expiry reported by OpenAI. **Reset usage window** opens a second confirmation before it consumes one non-recoverable credit; it resets eligible Codex usage windows but does not change the ChatGPT billing plan. A completed or idempotently repeated operation refreshes both quota and reset-credit details.
 
+Reset idempotency state is stored as `AdminResource` records of kind `codex-quota-reset-operations` in the existing admin-resources table, so this feature requires no schema migration. Succeeded and failed records are retained and are not automatically deleted because they prevent a replay from consuming another credit; include them in normal database retention and backups. During an upgrade, preserve the database. A `pending` or `unknown` record blocks a different reset for the same account, is shown to the console after restart, and may only be retried with the same idempotency key, expected count, and credit ID until OpenAI returns a definitive outcome.
+
 ## Provider Inventory, Model Directory, and Publication
 
 TokenHub separates the model lifecycle into three control areas:
