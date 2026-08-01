@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"tokenhub/backend/internal/server"
 )
@@ -371,6 +372,34 @@ func (c *AdminAPIClient) DeleteProject(ctx context.Context, id string) error {
 	return c.doJSON(ctx, http.MethodDelete, c.endpoint("/api/admin/projects", id), nil, nil)
 }
 
+// ListProviderModels and ImportProviderModels cover the provider model
+// inventory. A route can only be created once its upstream model is imported
+// for that provider, so the sink has to populate the inventory first.
+func (c *AdminAPIClient) ListProviderModels(ctx context.Context) ([]server.ProviderModel, error) {
+	var resp listResponse[server.ProviderModel]
+	if err := c.doJSON(ctx, http.MethodGet, c.endpoint("/api/admin/provider-models"), nil, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Data, nil
+}
+
+func (c *AdminAPIClient) ImportProviderModels(ctx context.Context, providerID string, upstreamModels []string) ([]server.ProviderModel, error) {
+	models := make([]server.ProviderCatalogModel, 0, len(upstreamModels))
+	for _, name := range upstreamModels {
+		// The server keys the imported inventory on ProviderCatalogModel.ID,
+		// so the upstream model name belongs there rather than in Name.
+		models = append(models, server.ProviderCatalogModel{ID: name, Name: name})
+	}
+	// Publish is rejected outright by the server: external models and routes
+	// are created as first-class bundle items instead.
+	req := server.ProviderModelImportRequest{ProviderID: providerID, Models: models, Publish: false}
+	var resp server.ProviderModelImportResult
+	if err := c.doJSON(ctx, http.MethodPost, c.endpoint("/api/admin/provider-models/import"), req, &resp); err != nil {
+		return nil, err
+	}
+	return resp.ProviderModels, nil
+}
+
 // ListResources, CreateResource and DeleteResource cover the generic admin
 // resource endpoint. The migration uses them for teams, which have no
 // dedicated endpoint of their own.
@@ -410,9 +439,42 @@ func (c *AdminAPIClient) CreateProjectKey(ctx context.Context, projectID string,
 	return resp, nil
 }
 
+// apiKeyWriteRequest mirrors the PATCH /api/admin/api-keys/{id} payload.
+// The Admin API decodes limits into a pointer and treats a present object as
+// an explicit assignment, so marshalling server.APIKey — whose Limits is a
+// value field that always serializes — would clear the target's quota
+// whenever the bundle carries none. Fields the bundle does not own are
+// omitted so the server keeps its current values.
+// The slice fields deliberately omit `omitempty`: a nil slice encodes as null
+// and the server keeps its current value, while a non-nil empty slice encodes
+// as [] and really clears the list. With omitempty both encode to nothing, so
+// a bundle asking to clear allowed_models would report an update that changed
+// nothing.
+type apiKeyWriteRequest struct {
+	Name          string              `json:"name,omitempty"`
+	Group         string              `json:"group,omitempty"`
+	AllowedModels []string            `json:"allowed_models"`
+	IPAllowlist   []string            `json:"ip_allowlist"`
+	Limits        *server.QuotaLimits `json:"limits,omitempty"`
+	Status        string              `json:"status,omitempty"`
+	ExpiresAt     *time.Time          `json:"expires_at,omitempty"`
+}
+
 func (c *AdminAPIClient) UpdateAPIKey(ctx context.Context, id string, req server.APIKey) (server.APIKey, error) {
+	payload := apiKeyWriteRequest{
+		Name:          req.Name,
+		Group:         req.Group,
+		AllowedModels: req.Allowed,
+		IPAllowlist:   req.IPAllowlist,
+		Status:        req.Status,
+		ExpiresAt:     req.ExpiresAt,
+	}
+	if req.Limits != (server.QuotaLimits{}) {
+		limits := req.Limits
+		payload.Limits = &limits
+	}
 	var resp server.APIKey
-	if err := c.doJSON(ctx, http.MethodPatch, c.endpoint("/api/admin/api-keys", id), req, &resp); err != nil {
+	if err := c.doJSON(ctx, http.MethodPatch, c.endpoint("/api/admin/api-keys", id), payload, &resp); err != nil {
 		return server.APIKey{}, err
 	}
 	return resp, nil

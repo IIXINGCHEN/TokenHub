@@ -466,3 +466,78 @@ func TestSameAPIKeyUsesResolvedProjectAndIgnoresServerMetadata(t *testing.T) {
 		t.Fatal("expected an unresolved project ID to differ")
 	}
 }
+
+// TestHTTPSinkApplyProviderAndRouteOnCleanTarget exercises the core remote
+// migration path against a target with no demo data: provider, resource,
+// model and route together. Creating a route requires the upstream model to
+// be present in the provider's imported inventory, so this covers the whole
+// chain rather than the model-only slice the other tests use.
+func TestHTTPSinkApplyProviderAndRouteOnCleanTarget(t *testing.T) {
+	config := server.Config{
+		AdminToken:             "test-admin-token",
+		BootstrapAdminPassword: "admin123456",
+		ModelCatalogFile:       writeTestCatalog(t),
+	}
+	store := server.NewMemoryStoreWithConfig(config)
+	if err := server.BootstrapBaseDataWithConfig(store, config); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	ts := httptest.NewServer(server.NewWithConfig(store, config).Handler())
+	defer ts.Close()
+
+	client := NewAdminAPIClient(ts.URL, "test-admin-token", http.DefaultClient)
+	sink := NewHTTPSink(client, bundle.StaticResolver{"PROVIDER_API_KEY": "provider-secret"})
+
+	migrationBundle := &bundle.CanonicalMigrationBundle{
+		SchemaVersion: bundle.SchemaVersion,
+		Source:        bundle.Source{Adapter: "litellm", AdapterVersion: "1.60.0"},
+		GeneratedAt:   time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC),
+		Providers: []bundle.ProviderRef{{
+			ExternalRef:  bundle.ExternalRef{System: "litellm", ID: "provider/openai"},
+			APIKeySecret: &bundle.SecretRef{Ref: "PROVIDER_API_KEY"},
+			Spec:         server.Provider{ID: "litellm-provider-openai", Name: "openai-migrated", Type: "openai", BaseURL: "https://api.openai.com/v1", Status: server.StatusActive},
+		}},
+		ProviderResources: []bundle.ProviderResourceRef{{
+			ExternalRef: bundle.ExternalRef{System: "litellm", ID: "resource/openai-main"},
+			ProviderRef: "provider/openai",
+			Spec:        server.ProviderResource{ID: "litellm-resource-openai-main", Name: "openai-main", ResourceType: "openai", BaseURL: "https://api.openai.com/v1", Status: server.StatusActive},
+		}},
+		Models: []bundle.ModelRef{{
+			ExternalRef: bundle.ExternalRef{System: "litellm", ID: "model/gpt-4o-mini"},
+			Spec:        server.Model{Name: "gpt-4o-mini", Family: "gpt-4o", Modality: "text", Status: server.StatusActive},
+		}},
+		Routes: []bundle.RouteRef{{
+			ExternalRef:         bundle.ExternalRef{System: "litellm", ID: "route/gpt-4o-mini"},
+			ModelRef:            "model/gpt-4o-mini",
+			ProviderRef:         "provider/openai",
+			ProviderResourceRef: "resource/openai-main",
+			Spec:                server.ModelRoute{ModelName: "gpt-4o-mini", ProviderModel: "gpt-4o-mini", Status: server.StatusActive},
+		}},
+	}
+
+	if _, err := sink.Apply(context.Background(), migrationBundle); err != nil {
+		t.Fatalf("apply provider+route bundle on a clean target: %v", err)
+	}
+
+	routes, err := client.ListRoutes(context.Background())
+	if err != nil {
+		t.Fatalf("list routes: %v", err)
+	}
+	found := false
+	for _, route := range routes {
+		if route.ModelName == "gpt-4o-mini" && route.ProviderModel == "gpt-4o-mini" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected the migrated route to exist, got %+v", routes)
+	}
+
+	verifyResult, err := sink.Verify(context.Background(), migrationBundle)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if !verifyResult.OK {
+		t.Fatalf("expected verification to pass, got %+v", verifyResult.Issues)
+	}
+}

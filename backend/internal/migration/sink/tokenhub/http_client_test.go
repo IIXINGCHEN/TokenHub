@@ -83,3 +83,57 @@ func TestAdminAPIClientSurfacesApprovalRequired(t *testing.T) {
 		t.Fatalf("expected approval payload to be preserved, got %s", approvalErr.Approval)
 	}
 }
+
+// TestAPIKeyUpdateOmitsUnownedQuotaLimits guards against server.APIKey being
+// marshalled directly on update. The Admin API decodes "limits" into a pointer
+// and treats its presence as an explicit assignment, so always emitting the
+// value field would clear the target's quota whenever the bundle carries none.
+func TestAPIKeyUpdateOmitsUnownedQuotaLimits(t *testing.T) {
+	var bodies []map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		bodies = append(bodies, payload)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"key-1","name":"migrated"}`))
+	}))
+	defer ts.Close()
+
+	client := NewAdminAPIClient(ts.URL, "test-admin-token", http.DefaultClient)
+
+	if _, err := client.UpdateAPIKey(context.Background(), "key-1", server.APIKey{
+		Name:   "migrated",
+		Group:  "default",
+		Status: server.StatusActive,
+	}); err != nil {
+		t.Fatalf("update without limits: %v", err)
+	}
+	if _, err := client.UpdateAPIKey(context.Background(), "key-1", server.APIKey{
+		Name:   "migrated",
+		Group:  "default",
+		Status: server.StatusActive,
+		Limits: server.QuotaLimits{MonthlyCostUSD: 100},
+	}); err != nil {
+		t.Fatalf("update with limits: %v", err)
+	}
+
+	if len(bodies) != 2 {
+		t.Fatalf("expected 2 captured requests, got %d", len(bodies))
+	}
+	if _, present := bodies[0]["limits"]; present {
+		t.Fatalf("expected limits to be omitted when the bundle carries none, payload=%v", bodies[0])
+	}
+	limits, ok := bodies[1]["limits"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected limits to be sent when the bundle carries them, payload=%v", bodies[1])
+	}
+	if cost, _ := limits["monthly_cost_usd"].(float64); cost != 100 {
+		t.Fatalf("expected monthly_cost_usd=100, got %v", limits)
+	}
+}

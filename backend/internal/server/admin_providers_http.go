@@ -539,7 +539,7 @@ func (s *Server) handleAdminProviderResourceNested(w http.ResponseWriter, r *htt
 	if !ok {
 		return
 	}
-	parts := splitNestedAdminPath(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/admin/provider-resources/"), "/"), providerResourceActions)
+	parts := splitNestedEscapedAdminPath(r.URL.EscapedPath(), "/api/admin/provider-resources/", providerResourceActions)
 	if len(parts) == 1 && parts[0] == "bulk" {
 		s.handleAdminProviderResourceBulk(w, r, user)
 		return
@@ -980,7 +980,7 @@ func (s *Server) handleAdminRouteItem(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	parts := splitNestedAdminPath(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/admin/routing-rules/"), "/"), routingRuleActions)
+	parts := splitNestedEscapedAdminPath(r.URL.EscapedPath(), "/api/admin/routing-rules/", routingRuleActions)
 	if len(parts) == 0 || parts[0] == "" || len(parts) > 2 {
 		writeError(w, r, NewHTTPError(404, "not_found", "Not found"))
 		return

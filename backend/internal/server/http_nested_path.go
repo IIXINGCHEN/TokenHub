@@ -49,3 +49,21 @@ func splitNestedAdminPath(remainder string, actions []string) []string {
 	}
 	return []string{remainder}
 }
+
+// splitNestedEscapedAdminPath is splitNestedAdminPath over the escaped path.
+// The suffix match runs before decoding so a real "/<action>" separator is
+// told apart from an ID that only looks like one once decoded: a resource
+// whose ID is "tenant/health" arrives as "tenant%2Fhealth" and must stay a
+// single ID rather than becoming the "health" action on "tenant".
+func splitNestedEscapedAdminPath(escapedPath string, prefix string, actions []string) []string {
+	parts := splitNestedAdminPath(strings.Trim(strings.TrimPrefix(escapedPath, prefix), "/"), actions)
+	if len(parts) == 0 {
+		return nil
+	}
+	decoded, err := url.PathUnescape(parts[0])
+	if err != nil {
+		return nil
+	}
+	parts[0] = decoded
+	return parts
+}

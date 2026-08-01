@@ -104,3 +104,31 @@ func TestAdminResourceDeleteWithSlashedID(t *testing.T) {
 		}
 	}
 }
+
+// TestSplitNestedEscapedAdminPath covers the nested action parsing over the
+// escaped path: an ID whose decoded form ends in an action name must not be
+// mistaken for that action on a shorter ID.
+func TestSplitNestedEscapedAdminPath(t *testing.T) {
+	const prefix = "/api/admin/provider-resources/"
+	actions := []string{"health", "test", "refresh-token", "quota"}
+	cases := []struct {
+		name string
+		path string
+		want []string
+	}{
+		{"empty", prefix, nil},
+		{"plain id", prefix + "res-1", []string{"res-1"}},
+		{"real action", prefix + "res-1/health", []string{"res-1", "health"}},
+		{"escaped id keeps action", prefix + "litellm%2Fkey%2Fabc/quota", []string{"litellm/key/abc", "quota"}},
+		{"escaped id ending in action name", prefix + "tenant%2Fhealth", []string{"tenant/health"}},
+		{"escaped id without action", prefix + "litellm%2Fkey%2Fabc", []string{"litellm/key/abc"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := splitNestedEscapedAdminPath(tc.path, prefix, actions)
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("splitNestedEscapedAdminPath(%q) = %v, want %v", tc.path, got, tc.want)
+			}
+		})
+	}
+}

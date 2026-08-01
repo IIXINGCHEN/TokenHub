@@ -802,38 +802,80 @@ func findRouteByBusinessKey(items []server.ModelRoute, modelName string, resourc
 // sameProvider reports whether two providers are equivalent for idempotency
 // checks. Credentials are cleared and CreatedAt is aliased so that only the
 // remaining, migration-managed fields participate in the comparison.
-func sameProvider(left server.Provider, right server.Provider) bool {
-	left.APIKey = ""
-	right.APIKey = ""
-	left.CreatedAt = right.CreatedAt
-	left.Headers = normalizeStringMap(left.Headers)
-	right.Headers = normalizeStringMap(right.Headers)
-	left.Options = normalizeStringMap(left.Options)
-	right.Options = normalizeStringMap(right.Options)
-	return reflect.DeepEqual(left, right)
+// sameProvider reports whether applying desired onto existing would be a
+// no-op. Like sameRoute it compares the fields the bundle owns instead of
+// deep-equalling the struct: the target fills Healthy and Priority with
+// defaults on create (true and 10), which would otherwise report drift on a
+// provider that was just migrated and turn every re-apply into an update.
+// Healthy is never compared at all — it is a runtime probe result, not
+// migratable state. APIKey is write-only on the target and cannot be read
+// back for comparison.
+func sameProvider(existing server.Provider, desired server.Provider) bool {
+	if desired.ID != "" && existing.ID != desired.ID {
+		return false
+	}
+	if existing.Name != desired.Name || existing.Type != desired.Type {
+		return false
+	}
+	if desired.BaseURL != "" && existing.BaseURL != desired.BaseURL {
+		return false
+	}
+	if desired.Status != "" && existing.Status != desired.Status {
+		return false
+	}
+	if desired.Priority != 0 && existing.Priority != desired.Priority {
+		return false
+	}
+	return reflect.DeepEqual(normalizeStringMap(existing.Headers), normalizeStringMap(desired.Headers)) &&
+		reflect.DeepEqual(normalizeStringMap(existing.Options), normalizeStringMap(desired.Options))
 }
 
-func sameProviderResource(left server.ProviderResource, right server.ProviderResource) bool {
-	left.APIKey = ""
-	right.APIKey = ""
-	left.CredentialBlob = ""
-	right.CredentialBlob = ""
-	left.Credentials = nil
-	right.Credentials = nil
-	left.CredentialSummary = nil
-	right.CredentialSummary = nil
-	left.CreatedAt = right.CreatedAt
-	left.UpdatedAt = right.UpdatedAt
-	left.LastUsedAt = right.LastUsedAt
-	left.LastCheckedAt = right.LastCheckedAt
-	left.CooldownUntil = right.CooldownUntil
-	left.Headers = normalizeStringMap(left.Headers)
-	right.Headers = normalizeStringMap(right.Headers)
-	left.Options = normalizeStringMap(left.Options)
-	right.Options = normalizeStringMap(right.Options)
-	left.CredentialSummary = normalizeStringMap(left.CredentialSummary)
-	right.CredentialSummary = normalizeStringMap(right.CredentialSummary)
-	return reflect.DeepEqual(left, right)
+// sameProviderResource follows sameProvider: only the fields the bundle owns
+// take part. The target defaults Healthy to true and Weight to 100 on create,
+// and credential material, timestamps and observation state are either
+// write-only or runtime-owned.
+func sameProviderResource(existing server.ProviderResource, desired server.ProviderResource) bool {
+	if desired.ID != "" && existing.ID != desired.ID {
+		return false
+	}
+	if existing.Name != desired.Name || existing.ProviderID != desired.ProviderID {
+		return false
+	}
+	if desired.ResourceType != "" && existing.ResourceType != desired.ResourceType {
+		return false
+	}
+	if desired.BaseURL != "" && existing.BaseURL != desired.BaseURL {
+		return false
+	}
+	if desired.Status != "" && existing.Status != desired.Status {
+		return false
+	}
+	if desired.Group != "" && existing.Group != desired.Group {
+		return false
+	}
+	if desired.Region != "" && existing.Region != desired.Region {
+		return false
+	}
+	if desired.Environment != "" && existing.Environment != desired.Environment {
+		return false
+	}
+	if desired.Priority != 0 && existing.Priority != desired.Priority {
+		return false
+	}
+	if desired.Weight != 0 && existing.Weight != desired.Weight {
+		return false
+	}
+	if desired.RateLimitRPM != 0 && existing.RateLimitRPM != desired.RateLimitRPM {
+		return false
+	}
+	if desired.TokenLimitTPM != 0 && existing.TokenLimitTPM != desired.TokenLimitTPM {
+		return false
+	}
+	if desired.MaxConcurrency != 0 && existing.MaxConcurrency != desired.MaxConcurrency {
+		return false
+	}
+	return reflect.DeepEqual(normalizeStringMap(existing.Headers), normalizeStringMap(desired.Headers)) &&
+		reflect.DeepEqual(normalizeStringMap(existing.Options), normalizeStringMap(desired.Options))
 }
 
 func sameModel(left server.Model, right server.Model) bool {

@@ -12,10 +12,14 @@ import (
 )
 
 type HTTPSink struct {
-	client   *AdminAPIClient
-	secrets  bundle.SecretResolver
-	newKeys  map[string]string
-	refIndex refIndex
+	client  *AdminAPIClient
+	secrets bundle.SecretResolver
+	newKeys map[string]string
+	// providerModels caches the provider inventory keyed by provider and
+	// upstream model. It is nil until the first route needs it, so a bundle
+	// without routes never pays for the lookup.
+	providerModels map[string]bool
+	refIndex       refIndex
 }
 
 func NewHTTPSink(client *AdminAPIClient, secrets bundle.SecretResolver) *HTTPSink {
@@ -33,6 +37,7 @@ func (s *HTTPSink) Apply(ctx context.Context, migrationBundle *bundle.CanonicalM
 	}
 	s.newKeys = map[string]string{}
 	s.refIndex = newRefIndex()
+	s.providerModels = nil
 	providers, err := s.client.ListProviders(ctx)
 	if err != nil {
 		return nil, err
@@ -827,10 +832,48 @@ func (s *HTTPSink) applyRouteHTTP(ctx context.Context, existing []server.ModelRo
 		updated, err := s.client.UpdateRoute(ctx, current.ID, spec)
 		return Change{Resource: "route", ID: current.ID, Action: ActionUpdate}, updated, err
 	}
+	if err := s.ensureProviderModel(ctx, spec.ProviderID, spec.ProviderModel); err != nil {
+		return Change{}, server.ModelRoute{}, err
+	}
 	created, err := s.client.CreateRoute(ctx, spec)
 	if err != nil {
 		return Change{}, server.ModelRoute{}, err
 	}
 	s.refIndex.routes[item.ExternalRef.ID] = created.ID
 	return Change{Resource: "route", ID: created.ID, Action: ActionCreate}, created, nil
+}
+
+// ensureProviderModel imports the route's upstream model into the provider's
+// inventory when it is missing. The Admin API refuses to create a route for a
+// model that was never imported for that provider, so a migration into a
+// target without pre-existing inventory would otherwise fail outright.
+func (s *HTTPSink) ensureProviderModel(ctx context.Context, providerID string, upstreamModel string) error {
+	providerID = strings.TrimSpace(providerID)
+	upstreamModel = strings.TrimSpace(upstreamModel)
+	if providerID == "" || upstreamModel == "" {
+		return nil
+	}
+	if s.providerModels == nil {
+		existing, err := s.client.ListProviderModels(ctx)
+		if err != nil {
+			return err
+		}
+		s.providerModels = map[string]bool{}
+		for _, model := range existing {
+			s.providerModels[providerModelKey(model.ProviderID, model.UpstreamModel)] = true
+		}
+	}
+	key := providerModelKey(providerID, upstreamModel)
+	if s.providerModels[key] {
+		return nil
+	}
+	if _, err := s.client.ImportProviderModels(ctx, providerID, []string{upstreamModel}); err != nil {
+		return fmt.Errorf("import upstream model %s for provider %s: %w", upstreamModel, providerID, err)
+	}
+	s.providerModels[key] = true
+	return nil
+}
+
+func providerModelKey(providerID string, upstreamModel string) string {
+	return strings.TrimSpace(providerID) + "\x00" + strings.TrimSpace(upstreamModel)
 }
