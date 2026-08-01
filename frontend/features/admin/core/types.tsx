@@ -78,6 +78,67 @@ export type Provider = {
   options?: Record<string, string>;
 };
 
+export type BillingConnector = {
+	id: string;
+	name: string;
+	type: "aliyun" | "newapi" | "oneapi";
+	base_url: string;
+	status: string;
+	schedule_interval_minutes: number;
+	config?: Record<string, string>;
+	credentials_configured: boolean;
+	last_synced_through?: string;
+	last_sync_status?: string;
+	last_sync_message?: string;
+	last_sync_at?: string;
+	next_sync_at?: string;
+	created_at: string;
+	updated_at: string;
+};
+
+export type BillingRecord = {
+	id: string;
+	connector_id: string;
+	external_id: string;
+	source_type: string;
+	account_id?: string;
+	service?: string;
+	product?: string;
+	model?: string;
+	currency: string;
+	gross_amount: string;
+	discount_amount: string;
+	tax_amount: string;
+	refund_amount: string;
+	net_amount: string;
+	usage_quantity?: number;
+	usage_unit?: string;
+	usage_start_at: string;
+	usage_end_at: string;
+	source_timezone: string;
+	billing_period: string;
+	external_request_id?: string;
+	raw_snapshot_id: string;
+};
+
+export type BillingSyncRun = {
+	id: string;
+	connector_id: string;
+	trigger: string;
+	status: string;
+	range_start: string;
+	range_end: string;
+	pages_fetched: number;
+	attempts: number;
+	records_seen: number;
+	records_inserted: number;
+	records_updated: number;
+	error_code?: string;
+	error_message?: string;
+	started_at: string;
+	finished_at?: string;
+};
+
 export type AdapterDescriptor = {
   type: string;
   capabilities: string[];
@@ -459,6 +520,19 @@ export type RequestLog = {
   client_ip?: string;
   user_agent?: string;
   created_at: string;
+  input_tokens?: number;
+  cached_input_tokens?: number;
+  cache_write_input_tokens?: number;
+  input_audio_tokens?: number;
+  output_tokens?: number;
+  reasoning_output_tokens?: number;
+  output_audio_tokens?: number;
+  accepted_prediction_tokens?: number;
+  rejected_prediction_tokens?: number;
+  total_tokens?: number;
+  estimated_cost_usd?: number;
+  provider_cost_usd?: number;
+  usage_record_count?: number;
 };
 
 export type UsageRecord = {
@@ -473,10 +547,15 @@ export type UsageRecord = {
   input_tokens: number;
   cached_input_tokens?: number;
   cache_write_input_tokens?: number;
+  input_audio_tokens?: number;
   output_tokens: number;
   reasoning_output_tokens?: number;
+  output_audio_tokens?: number;
+  accepted_prediction_tokens?: number;
+  rejected_prediction_tokens?: number;
   total_tokens: number;
   estimated_cost_usd: number;
+  provider_cost_usd?: number;
   created_at: string;
 };
 
@@ -681,6 +760,9 @@ export type FieldConfig = {
   help?: string;
   readOnlyOnEdit?: boolean;
   multiSelectOnEdit?: boolean;
+  createOnly?: boolean;
+  emptyOptionsText?: string;
+  emptySelectionText?: string;
   visible?: (values: Record<string, string>) => boolean;
 };
 
@@ -714,6 +796,7 @@ export type ResourceAction<T> = {
   label: string;
   title?: string;
   visible?: (item: T) => boolean;
+  navigate?: (item: T) => ViewKey;
   run?: (ctx: ApiContext, item: T) => Promise<void>;
   modal?: (item: T, data: AppData) => ModalState<any>;
   doneMessage?: (item: T) => string;
@@ -755,6 +838,9 @@ export type AppData = {
   resources: Record<string, AdminResource[]>;
   providerCatalog: ProviderCatalogEntry[];
   providerMonitoring: ProviderMonitoringSnapshot[];
+	billingConnectors: BillingConnector[];
+	billingRecords: BillingRecord[];
+	billingSyncRuns: BillingSyncRun[];
 };
 
 export type ApiContext = {

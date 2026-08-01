@@ -8,6 +8,8 @@ TokenHub 面向私有化部署，由 Go 后端、Next.js 管理后台和 SQLite 
 
 TokenHub 支持两种数据库后端：
 
+下面的命令使用 Docker Compose。两种后端同样支持不使用 Docker 的方式，参见[原生 Release + systemd](#原生-release--systemd)。
+
 ### SQLite（默认）
 
 **优点：**
@@ -301,6 +303,30 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 
 仅在明确需要删除本地数据时使用 `down -v`。
 
+## 本地运行生产构建（不使用 Docker）
+
+`deploy/local/run-local.sh` 以完全不依赖 Docker、不需要 root、不需要 systemd 的方式，在自己的机器上用生产构建运行后端和控制台。它是开发辅助手段，不是部署方式：要把 TokenHub 装到服务器上，请使用[原生 Release + systemd](#原生-release--systemd) 或 [Docker Compose](#docker-compose)。
+
+```bash
+./deploy/local/run-local.sh          # 前台运行，Ctrl-C 同时停止两者
+./deploy/local/run-local.sh -d       # 后台运行，立即返回
+./deploy/local/run-local.sh status
+./deploy/local/run-local.sh logs -f
+./deploy/local/run-local.sh stop
+```
+
+按需构建两个组件，然后以 loopback 方式运行。二进制、控制台产物、数据库、日志和 pid 文件都放在仓库内的 `.tokenhub/`（已被 gitignore），删除该目录即可重置实例。构建过程还可能刷新前端的常规忽略产物（`frontend/node_modules`、`frontend/.next`）。不安装任何系统级内容，也不创建服务账号。
+
+它运行的是**生产构建**——和部署时完全相同的 standalone 产物——而不是 dev server，因此能暴露只在生产构建下出现的问题。它使用开发用凭据（`admin` / `admin123456`），只监听 loopback，数据存放在 `.tokenhub/tokenhub.db` 这个 SQLite 数据库中。
+
+加 `-d` 后服务会脱离启动它的 shell，在该 shell 退出、终端关闭后继续运行；但重启机器不会自动拉起，需要这种能力请使用正式的安装方式。两种模式都会写 pid 文件，因此 `status` 和 `stop` 对前台实例同样有效。`stop` 在发信号前会校验记录的 pid 仍属于本实例，因此不会误杀被系统复用了该号码的其它进程；启动前还会先占用两个端口，端口被占用时直接报错，不会把别的服务的响应误判成启动成功。
+
+需要 Go（版本见 `backend/go.mod`）、Node 22 或更高、npm 和 C 编译器，因为后端通过 cgo 链接 SQLite。
+
+以上在 Linux 上验证过。macOS 没有 `setsid`，脚本会退化为遍历进程树来停止服务；该路径已实现但未在 macOS 上实测。
+
+其他参数：`--rebuild`、`--reset`（清空本地数据库）、`--backend-port N`、`--console-port N`、`restart`。
+
 ## 后端环境变量
 
 | 变量 | 默认值 | 说明 |
@@ -382,11 +408,11 @@ SQLite 是项目、Key、Provider、路由、用户、请求日志、用量、�
 ./deploy/install.sh --model-catalog /absolute/path/to/model-catalog.yaml
 ```
 
-自定义文件会覆盖镜像内的候选模板目录，其版本需要与 `TOKENHUB_IMAGE_TAG` 分别管理。更新文件后，重启后端容器，并在管理后台「模型目录」的「候选模板库」页签确认结果。
+自定义文件会覆盖镜像内的跟踪模型目录，其版本需要与 `TOKENHUB_IMAGE_TAG` 分别管理。更新文件后，重启后端容器或执行系统设置中的目录同步操作，并确认没有模型目录错误。
 
-更新当前配置的目录文件后，可以重启后端，也可以在管理后台「模型目录」的「候选模板库」页签点击「恢复候选模板」。该操作会刷新参考元数据、保留自定义对外模型，但不会发布任何模板。
+更新当前配置的目录文件后，可以重启后端，也可以在「系统设置 → 基础设置」中点击「同步模型参考目录」。两种方式都会同步参考元数据、保留自定义对外模型，但不会发布任何模型。
 
-`data/model-catalog.yaml` 提供候选模板的参考元数据，它不是路由准入清单，也不会发布模型。`data/provider-catalog.json` 提供 Provider 模板，以及在 Provider 配置中可选择的候选上游模型。引入选中项只会创建持久化的 Provider 模型库存；选择发布时，还会创建或复用对外模型并添加启用映射。`GET /v1/models` 只返回启用且至少存在一条启用路由的对外模型；配置 API Key 模型白名单时还会进一步过滤。如需使用自定义 Provider 目录，将 `TOKENHUB_PROVIDER_CATALOG_FILE` 指向具有相同 `providers` 结构的本地 JSON 文件。
+`data/model-catalog.yaml` 提供跟踪目录的参考元数据，它不是路由准入清单，也不会发布模型。`data/provider-catalog.json` 提供 Provider 模板，以及在 Provider 配置中可选择的上游模型。引入选中项只会创建持久化的 Provider 模型库存；对外模型及其统一对客价格需要在模型目录中单独创建，再到路由策略映射到已引入的 Provider 模型。`GET /v1/models` 只返回启用且至少存在一条启用路由的对外模型；配置 API Key 模型白名单时还会进一步过滤。如需使用自定义 Provider 目录，将 `TOKENHUB_PROVIDER_CATALOG_FILE` 指向具有相同 `providers` 结构的本地 JSON 文件。
 
 ## 反向代理
 

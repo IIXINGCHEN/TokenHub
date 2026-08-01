@@ -137,7 +137,7 @@ export function FieldInput({
           <input
             value={filter}
             onChange={(event) => setFilter(event.target.value)}
-            placeholder={tx(field.key === "model_name" ? "搜索模型" : "搜索选项")}
+            placeholder={tx(field.placeholder ?? (field.key === "model_name" ? "搜索模型" : "搜索选项"))}
             type="search"
           />
           <button
@@ -153,7 +153,7 @@ export function FieldInput({
         </div>
         <div className="multi-select-list">
           {filteredOptions.length === 0 ? (
-            <div className="empty">{tx(field.key === "model_name" ? "没有匹配的模型" : "没有匹配的选项")}</div>
+            <div className="empty">{tx(options.length === 0 && field.emptyOptionsText ? field.emptyOptionsText : (field.key === "model_name" ? "没有匹配的模型" : "没有匹配的选项"))}</div>
           ) : filteredOptions.map((option) => (
             <label className="multi-select-option" key={option.value}>
               <input
@@ -173,7 +173,7 @@ export function FieldInput({
             </label>
           ))}
         </div>
-        <small>{selectedCount > 0 ? (field.key === "model_name" ? selectedModelsText(selectedCount) : selectedOptionsText(selectedCount)) : tx(field.key === "model_name" ? "请选择至少一个统一模型" : "请选择至少一个选项")}</small>
+        <small>{selectedCount > 0 ? (field.key === "model_name" ? selectedModelsText(selectedCount) : selectedOptionsText(selectedCount)) : tx(field.emptySelectionText ?? (field.key === "model_name" ? "请选择至少一个统一模型" : "请选择至少一个选项"))}</small>
         {field.help ? <small>{tx(field.help)}</small> : null}
       </div>
     );

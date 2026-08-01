@@ -8,9 +8,9 @@ Language: [English](../administrator-guide.md) | 简体中文 | [日本語](../j
 
 | 区域 | 责任 |
 | --- | --- |
-| Provider Channels | 配置上游 Base URL、凭证、资源和健康检查 |
-| 模型目录 | 发布对外 API 模型名，并管理 Provider 上游模型库存 |
-| Routing Policies | 用优先级、权重和故障转移策略把对外模型映射到 Provider 模型 |
+| Provider Channels | 配置上游连接、引入模型库存并维护 Provider 真实成本 |
+| 模型目录 | 从内置模型目录挑选模型、创建对外 API 契约、选择初始 Provider 线路并设置统一对客价格 |
+| Routing Policies | 细调 Provider 映射、优先级、权重、项目作用域和故障转移策略 |
 | Projects and Teams | 定义 Key、额度和成本归因的组织边界 |
 | Identity Sources | 配置 OAuth 或 OIDC 企业登录 |
 | Security and Audit | 审查请求日志、后台操作、Key 轮换和策略变更 |
@@ -18,12 +18,13 @@ Language: [English](../administrator-guide.md) | 简体中文 | [日本語](../j
 ## 生产上线顺序
 
 1. 至少配置一个身份源，并保留可控的管理员账号。
-2. 添加上游 Provider，例如 `OpenAI Production`、`Azure East US` 或 `Internal Model Gateway`。
-3. 从 Provider 中选择并引入需要的上游模型，形成 Provider 模型库存。
-4. 将选中模型按同名 1:1 方式发布，或设置自定义对外名称与映射。
-5. 创建团队、项目、成本中心和默认额度策略。
-6. 用 Model Playground 和请求日志验证链路。
-7. 在大规模发放 Key 前检查用量归因。
+2. 添加上游 Provider，例如 `OpenAI Production`、`Azure East US` 或 `Internal Model Gateway`，并引入它可提供的上游模型。
+3. 为每个已引入的 Provider 模型记录真实的输入、缓存读取和输出成本，用于审计。
+4. 创建需要向业务开放的对外模型，并设置统一对客价格。
+5. 将每个对外模型路由到一个或多个已引入的 Provider 模型。
+6. 创建团队、项目、成本中心和默认额度策略。
+7. 用 Model Playground 和请求日志验证链路。
+8. 在大规模发放 Key 前检查用量归因。
 
 ## API Key 归属与用量归因
 
@@ -35,19 +36,21 @@ Language: [English](../administrator-guide.md) | 简体中文 | [日本語](../j
 
 TokenHub 会把最后一次成功加载的 Provider 目录保存在数据库中。每次后端启动时，系统都会校验并加载配置的本地 `provider-catalog.json`，然后原子替换数据库快照。普通「Provider 渠道」请求只读取数据库快照，管理员也可以手动刷新同一份本地目录。若本地目录读取、解析或完整性校验失败，TokenHub 会继续使用最后一次有效快照。
 
-## 模型目录与发布
+## Provider 库存、模型目录与发布
 
-新的模型目录将过去容易混淆的三个概念分开展示：
+TokenHub 将模型生命周期拆成三个独立的管理区域：
 
-| 视图 | 含义 |
+| 管理区域 | 含义 |
 | --- | --- |
-| **对外模型** | 提供给业务应用的 API 契约。这是默认视图，初始只展示已发布模型。 |
-| **Provider 上游模型** | 已引入到某个具体 Provider 的真实模型库存。只引入库存不会对客户端暴露模型。 |
-| **候选模板库** | 来自跟踪目录的参考元数据。模板在引入并建立映射前，既未接入也不可调用。 |
+| **Provider Channels** | 上游连接及其已引入的模型库存。基于目录创建 Provider 时必须至少选择一个模型，但只引入库存不会对客户端开放；自定义 Provider 可以先空建，待上游连接可用后再加载模型。 |
+| **模型目录** | 只管理提供给业务应用的对外模型，即 API 契约。新建时先从内置模型参考目录选择模板，也可选择空白自定义模型；然后选择一个或多个已引入 Provider 模型，同步生成初始路由。这里的价格是统一对客价格，不随实际命中的 Provider 路由变化。 |
+| **Routing Policies** | 管理对外模型的 Provider 映射，并细调优先级、权重、项目作用域、流量分配和故障转移策略。 |
 
-从 Provider 引入模型时，「引入并发布」默认创建同名 1:1 映射，管理员也可以在引入前修改对外名称。例如，对外发布 `DeepSeek`，但映射到 `OpenAI Production / gpt-4.5`。一个 Provider 上游模型也可以映射到多个对外别名。
+各区域的职责仍然分开：先添加 Provider 并引入库存；然后从内置参考目录挑选模型，创建它的对外契约、选择至少一条初始 Provider 线路并设置统一对外价格。所选模板会带出模型名、能力、上下文和建议价格，保存前均可调整。创建后，映射的新增、修改和删除只在 Routing Policies 中进行。模型目录只保留只读的上游摘要，行内入口会打开 Routing Policies 并筛选当前对外模型；Provider 渠道列表的“配置路由”会进入完整的 Routing Policies 页面，以便新增映射。例如，可以向客户端开放 `DeepSeek`，但将它路由到 `OpenAI Production / gpt-4.5`。同一个 Provider 模型可以支持多个对外别名，一个对外模型也可以路由到多个 Provider。
 
-管理员也可以手工创建对外模型，并从某个 Provider 已引入的上游模型中选择映射目标。如果所需模型尚未出现，应先把它引入 Provider 库存，再创建映射，让「引入」和「发布」保持为两个明确步骤。
+Provider 模型价格代表真实上游成本，用于内部审计；模型目录价格代表统一对外收费，用于客户计费估算、额度计算、指标和用量报表。路由只选择上游实现，不会改变对外价格。
+
+当 Provider 渠道、模型目录或路由策略还没有配置数据时，控制台会展示同一套三步引导：引入 Provider 库存、从内置的 165 个模型中创建对外模型、再配置路由。主操作按钮始终指向最早尚未完成的前置步骤，避免管理员进入当前还无法完成的表单。
 
 「发布状态」与「运行健康」相互独立。模型要出现在 `GET /v1/models` 中，必须同时满足：对外 `Model` 已启用、至少有一条已启用 `ModelRoute`，且在 API Key 配置了模型白名单时获得授权。Provider 或 Provider Resource 短时不健康不会改变该列表，只会影响当前请求能否成功，并在目录和路由诊断中单独展示。下线对外模型会将它从 `GET /v1/models` 移除，但保留映射，便于之后重新发布。
 
@@ -86,6 +89,11 @@ Provider 连接信息和项目限制仍按线路配置。编辑单条 Provider �
 只有试探请求自身成功才能关闭熔断；熔断触发时已经在途的请求无论结果如何都无法关闭它。客户端中途断连、策略拒绝、模型不支持这几种情况既不计入失败、也不清零失败计数，因此「失败、断连、失败」这样的交替模式仍然会触发熔断。
 
 在控制台对资源执行「测试」时，如果适配器支持主动探测，资源仍会立即恢复，因为该探测会发起一次真实的上游请求。禁用资源仍然是管理员的最高优先级操作：被禁用的资源无论上游是否正常，都不会被自动恢复。
+
+## 请求用量审计
+
+「请求日志」中的每条记录会显示 Token 总量和对外计费金额。拥有全局运维可见权限的管理员还可以在详情面板查看根据命中 Provider 模型计算的真实成本；其他用户不会收到该成本字段。详情面板会在上游返回数据时保留完整计费明细，包括缓存读、缓存写和音频输入 Token，以及推理、音频、接受预测和拒绝预测输出 Token；Provider 未返回的字段显示为 0。输入和输出总量已经包含对应明细，不能再次相加，否则会重复计算。
+
 ## 指标
 
 TokenHub 可以在 `GET /metrics` 暴露 Prometheus 指标。该功能默认关闭，需设置 `TOKENHUB_METRICS_ENABLED=true` 才会启用；关闭时不采集任何数据，端点返回 404。该端点始终需要鉴权：指标会泄露模型名、Provider 和资源标识以及花费，因此不允许匿名访问。请使用 `Authorization: Bearer <token>`，令牌取自 `TOKENHUB_METRICS_TOKEN`；该变量为空时回落到管理员令牌。建议配置独立令牌，避免把管理员凭据放进 Prometheus 抓取配置。通过查询参数传令牌会被拒绝，因为它会被记进访问日志。
@@ -96,7 +104,7 @@ TokenHub 可以在 `GET /metrics` 暴露 Prometheus 指标。该功能默认关�
 | `tokenhub_gateway_request_duration_seconds` | histogram | 端到端耗时，包含失败转移。分桶上限为 300 秒。 |
 | `tokenhub_gateway_requests_in_flight` | gauge | 正在处理的模型 API 请求数，不含管理后台流量和抓取请求。 |
 | `tokenhub_gateway_tokens_total` | counter | 按类型统计的 Token：`prompt`、`completion`、`cached`、`cache_write`、`reasoning`。 |
-| `tokenhub_gateway_cost_usd_total` | counter | 估算成本，与用量记录采用同一套价格。 |
+| `tokenhub_gateway_cost_usd_total` | counter | 使用模型目录价格计算的统一对外计费估算；Provider 真实成本只保留在有权限的请求审计中，不进入该指标。 |
 
 同时暴露 Go 运行时和进程指标。
 
@@ -112,9 +120,19 @@ TokenHub 可以在 `GET /metrics` 暴露 Prometheus 指标。该功能默认关�
 
 模型目录支持按每百万 Token 配置可选的缓存读取价格。配置后，命中缓存的输入 Token 按该价格估算成本；留空时，DeepSeek V4 Pro 按标准输入价的约 0.83% 估算，其他 DeepSeek 模型按 2% 估算，其余非 Embedding 模型按 10% 估算。模型定价表会标记估算值，并在悬停时说明采用的比例。
 
-## 候选模板恢复
+## 目录元数据恢复
 
-删除对外模型会移除其数据库记录及路由，但不会修改 `data/model-catalog.yaml` 或 `TOKENHUB_MODEL_CATALOG_FILE` 指向的文件。后端启动时会再次同步其中的候选元数据。管理员也可以在「模型目录」的「候选模板库」页签使用「恢复候选模板」刷新这些元数据，同时保留自定义对外模型。恢复模板不会把模型引入 Provider、创建映射，也不会将其发布到 `GET /v1/models`。
+删除对外模型会移除其数据库记录及路由，但不会修改 `data/model-catalog.yaml` 或 `TOKENHUB_MODEL_CATALOG_FILE` 指向的文件。后端启动时会再次同步其中的跟踪目录元数据；管理员也可以在「系统设置 → 基础设置 → 同步模型参考目录」中免重启触发同一操作。该同步不会把模型引入 Provider、创建路由或将其发布到 `GET /v1/models`；这些操作仍需在各自的管理区域中显式完成。
+
+## 外部账单连接器
+
+平台管理员可在「成本账单」中管理外部账单源。TokenHub 支持阿里云 `QueryInstanceBill`、NewAPI 额度数据和 OneAPI 兼容日志源。连接器可以测试连接、立即同步、按分钟设置定时同步、停用并保留历史记录，也可以随后重新启用。
+
+阿里云连接器需要账单 RPC Base URL、AccessKey ID、AccessKey Secret、源时区，可选填写 Product Code。TokenHub 使用 HMAC-SHA1 为每个 RPC 请求签名，并按账期逐月推进。NewAPI 连接器需要 Base URL、访问令牌、`New-Api-User` 用户 ID、币种，以及一个币种单位对应的 Quota 数量；TokenHub 会按照官方文档携带鉴权请求头调用 `GET /api/data/self`，并自动把同步范围切分为最长 30 天的窗口。OneAPI 兼容连接器需要 Base URL、API Token、日志路径、币种和 Quota 换算值。所有连接器都可以设置每秒请求上限；临时网络错误、`429` 和 `5xx` 会使用有上限的指数退避重试。
+
+手动同步可以传入 RFC 3339 格式的 `from` 和 `to`。未指定时间范围时，从上一次成功同步的结束时间继续。每页保存一次上游 Cursor，因此失败重试会从断点继续当前区间，而不是重新开始。规范化账单以 `(connector_id, external_id)` 作为幂等键，并保留币种、源时区、税费、折扣、退款、账期和用量起止时间。最近同步会展示页数、请求尝试数、新增/更新记录数和经过清理的失败代码。
+
+连接器凭证和原始账单快照都使用 `TOKENHUB_SECRET_KEY` 派生的 AES-GCM 密钥加密，不会由管理 API 返回，也不会写入审计 Payload。重启和多副本部署时必须保持该密钥稳定。相关端点包括 `GET/POST /api/admin/billing/connectors`、`PATCH /api/admin/billing/connectors/{id}`、`POST /api/admin/billing/connectors/{id}/test`、`POST /api/admin/billing/connectors/{id}/sync`、`GET /api/admin/billing/records` 和 `GET /api/admin/billing/sync-runs`。
 
 ## 安全检查清单
 

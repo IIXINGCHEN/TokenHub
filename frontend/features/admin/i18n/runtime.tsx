@@ -125,28 +125,28 @@ export function countWithUnit(count: number, zhUnit: string, enUnit: string, jaU
   return `${formatted} ${zhUnit}`;
 }
 
-export function providerSaveMessage(updated: boolean, accountResourceCreated: boolean, routed: number, categoryLabel: string) {
-  const routeCount = routed > 0
-    ? countWithUnit(routed, `条${categoryLabel}路由`, `${categoryLabel} route`, `${categoryLabel} ルート`)
+export function providerSaveMessage(updated: boolean, accountResourceCreated: boolean, imported: number, categoryLabel: string) {
+  const modelCount = imported > 0
+    ? countWithUnit(imported, `个${categoryLabel}上游模型`, `${categoryLabel} upstream model`, `${categoryLabel} 上流モデル`)
     : "";
   if (activeLanguage === "en") {
     return [
       `Provider ${updated ? "updated" : "created"}`,
       accountResourceCreated ? "account resource created" : "",
-      routeCount ? `${routeCount} created` : "",
+      modelCount ? `${modelCount} imported` : "",
     ].filter(Boolean).join(", ");
   }
   if (activeLanguage === "ja") {
     return [
       `Provider を${updated ? "更新" : "作成"}しました`,
       accountResourceCreated ? "アカウントリソースを作成しました" : "",
-      routeCount ? `${routeCount}を作成しました` : "",
+      modelCount ? `${modelCount}を取り込みました` : "",
     ].filter(Boolean).join("、");
   }
   return [
     `Provider 已${updated ? "更新" : "新增"}`,
     accountResourceCreated ? "已创建账号资源" : "",
-    routeCount ? `创建 ${routeCount}` : "",
+    modelCount ? `引入 ${modelCount}` : "",
   ].filter(Boolean).join("，");
 }
 

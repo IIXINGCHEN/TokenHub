@@ -8,6 +8,8 @@ TokenHub is designed for private deployment with a Go backend, a Next.js admin c
 
 TokenHub supports two database backends:
 
+The commands below use Docker Compose. Both backends are equally supported without Docker; see [Native Release with systemd](#native-release-with-systemd).
+
 ### SQLite (Default)
 
 **Advantages:**
@@ -301,6 +303,30 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 
 Only use `down -v` when you intentionally want to delete local data.
 
+## Running the Production Build Locally (without Docker)
+
+`deploy/local/run-local.sh` runs the backend and the console on your own machine from a production build, with no Docker, no root and no systemd. This is a development aid, not a deployment method: to install TokenHub on a server, use [Native Release with systemd](#native-release-with-systemd) or [Docker Compose](#docker-compose).
+
+```bash
+./deploy/local/run-local.sh          # foreground, Ctrl-C stops both
+./deploy/local/run-local.sh -d       # background, returns immediately
+./deploy/local/run-local.sh status
+./deploy/local/run-local.sh logs -f
+./deploy/local/run-local.sh stop
+```
+
+Builds both components if needed, then runs them on loopback. The binary, the console bundle, the database, the logs and the pid files all live in `.tokenhub/` inside the repository, which is gitignored; deleting that directory resets the instance. Building may also refresh the usual ignored frontend artefacts (`frontend/node_modules`, `frontend/.next`). Nothing is installed system-wide and no service account is created.
+
+This runs the **production** build — the same standalone bundle a deployment runs — rather than a dev server, so it surfaces problems that only appear in a production build. It uses development credentials (`admin` / `admin123456`), binds loopback only, and keeps its data in SQLite at `.tokenhub/tokenhub.db`.
+
+With `-d` the services detach from the launching shell and keep running after it exits — and after the terminal closes — but not across a reboot; use a real installation for that. Both modes write pid files, so `status` and `stop` also work on a foreground instance. `stop` verifies that the recorded pid still belongs to this instance before signalling it, so a recycled pid is never killed by mistake, and both ports are claimed before anything starts so the script cannot report success against an unrelated service already listening.
+
+Requires Go (the version in `backend/go.mod`), Node 22 or newer, npm and a C compiler, because the backend links SQLite through cgo.
+
+Verified on Linux. macOS lacks `setsid`, so the script falls back to walking the process tree when stopping; that path is implemented but untested on macOS.
+
+Options: `--rebuild`, `--reset` to drop the local database, `--backend-port N`, `--console-port N`, `restart`.
+
 ## Backend Environment Variables
 
 | Variable | Default | Description |
@@ -385,11 +411,11 @@ To mount a custom catalog explicitly:
 ./deploy/install.sh --model-catalog /absolute/path/to/model-catalog.yaml
 ```
 
-After editing the configured catalog file, restart the backend or use **Restore Candidate Templates** on the Model Directory's **Candidate Templates** tab. This refreshes reference metadata without removing custom external models and does not publish any template.
+After editing the configured catalog file, restart the backend or choose **Settings → Base Settings → Sync Model Reference Catalog**. Either path synchronizes the reference metadata without removing custom external models and does not publish any model.
 
-The custom mount intentionally overrides the image catalog and is therefore managed separately from `TOKENHUB_IMAGE_TAG`. After updating that file, restart the backend container and confirm the entries on the **Candidate Templates** tab.
+The custom mount intentionally overrides the image catalog and is therefore managed separately from `TOKENHUB_IMAGE_TAG`. After updating that file, restart the backend container or run the settings synchronization action, and confirm that the operation completes without a model-catalog error.
 
-`data/model-catalog.yaml` provides reference metadata for candidate templates; it is not a route allowlist and does not publish models. `data/provider-catalog.json` provides Provider templates and the candidate upstream models that can be selected during Provider setup. Importing a selection creates persisted Provider-model inventory. Publishing additionally creates or reuses an external model and adds an enabled mapping. `GET /v1/models` lists only active external models with at least one active route, filtered by the API Key model allowlist when configured. To use a custom Provider catalog, set `TOKENHUB_PROVIDER_CATALOG_FILE` to a local JSON file using the same `providers` structure.
+`data/model-catalog.yaml` provides tracked reference metadata; it is not a route allowlist and does not publish models. `data/provider-catalog.json` provides Provider templates and the upstream models that can be selected during Provider setup. Importing a selection creates persisted Provider-model inventory only. External models and their unified client-facing prices are created separately in Model Directory, then mapped to imported Provider models under Routing Policies. `GET /v1/models` lists only active external models with at least one active route, filtered by the API Key model allowlist when configured. To use a custom Provider catalog, set `TOKENHUB_PROVIDER_CATALOG_FILE` to a local JSON file using the same `providers` structure.
 
 ## Reverse Proxy
 

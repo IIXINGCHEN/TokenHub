@@ -116,7 +116,7 @@ export function providerCreateWizardSteps(credentialMode: ProviderCredentialMode
     { title: "接入方式", icon: UserRoundCheck },
     { title: "渠道信息", icon: Server },
     { title: "账号与凭据", icon: KeyRound },
-    { title: "路由与确认", icon: Boxes },
+    { title: "模型库存与确认", icon: Boxes },
   ];
 }
 
