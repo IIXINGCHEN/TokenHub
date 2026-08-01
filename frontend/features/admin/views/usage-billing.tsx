@@ -18,26 +18,28 @@ export function UsageView({ data, user }: { data: AppData; user: AdminUser }) {
       <div className="two-column">
         <DataSection title="模型用量">
           <SimpleTable
-            columns={["模型", "请求", "Token", "缓存读", "成本"]}
+            columns={["模型", "请求", "Token", "缓存读", "缓存命中率", "成本"]}
             paginationKey="usage-models"
             rows={modelBreakdown.map((row) => [
               row.id,
               formatNumber(row.request_count),
               compactNumber(row.total_tokens),
               compactNumber(row.cached_input_tokens ?? 0),
+              cacheHitRate(row.cached_input_tokens ?? 0, row.input_tokens),
               `$${formatMoney(row.estimated_cost_usd)}`,
             ])}
           />
         </DataSection>
         <DataSection title={showMemberBreakdown ? "成员用量" : "项目归因"}>
           <SimpleTable
-            columns={[showMemberBreakdown ? "成员" : "项目", "请求", "Token", "缓存读", "成本"]}
+            columns={[showMemberBreakdown ? "成员" : "项目", "请求", "Token", "缓存读", "缓存命中率", "成本"]}
             paginationKey={showMemberBreakdown ? "usage-members" : "usage-projects"}
             rows={(showMemberBreakdown ? data.breakdown.members ?? [] : data.breakdown.projects ?? []).map((row) => [
               showMemberBreakdown ? usageMemberLabel(data, row.id) : row.id,
               formatNumber(row.request_count),
               compactNumber(row.total_tokens),
               compactNumber(row.cached_input_tokens ?? 0),
+              cacheHitRate(row.cached_input_tokens ?? 0, row.input_tokens),
               `$${formatMoney(row.estimated_cost_usd)}`,
             ])}
           />
@@ -46,13 +48,14 @@ export function UsageView({ data, user }: { data: AppData; user: AdminUser }) {
       {showMemberBreakdown ? (
         <DataSection title="项目归因">
           <SimpleTable
-            columns={["项目", "请求", "Token", "缓存读", "成本"]}
+            columns={["项目", "请求", "Token", "缓存读", "缓存命中率", "成本"]}
             paginationKey="usage-projects"
             rows={(data.breakdown.projects ?? []).map((row) => [
               projectName(data, row.id),
               formatNumber(row.request_count),
               compactNumber(row.total_tokens),
               compactNumber(row.cached_input_tokens ?? 0),
+              cacheHitRate(row.cached_input_tokens ?? 0, row.input_tokens),
               `$${formatMoney(row.estimated_cost_usd)}`,
             ])}
           />
@@ -60,6 +63,11 @@ export function UsageView({ data, user }: { data: AppData; user: AdminUser }) {
       ) : null}
     </>
   );
+}
+
+export function cacheHitRate(cachedInputTokens: number, inputTokens: number) {
+  if (!Number.isFinite(cachedInputTokens) || !Number.isFinite(inputTokens) || inputTokens <= 0) return "0%";
+  return `${Math.min(100, Math.max(0, (cachedInputTokens / inputTokens) * 100)).toFixed(1)}%`;
 }
 
 export function PersonalUsageSummary({ data }: { data: AppData }) {

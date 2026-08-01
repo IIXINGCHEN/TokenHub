@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -27,6 +28,58 @@ func TestNormalizeProviderCatalogModelUsesExplicitCanonicalName(t *testing.T) {
 	})
 	if fallback.CanonicalName != "k3" {
 		t.Fatalf("expected ID-derived canonical name k3, got %q", fallback.CanonicalName)
+	}
+}
+
+func TestBuiltinDeepSeekCatalogDescribesNativeV4Capabilities(t *testing.T) {
+	var deepSeek ProviderCatalogEntry
+	for _, entry := range builtinProviderCatalog(true) {
+		if entry.ID == "deepseek" {
+			deepSeek = entry
+			break
+		}
+	}
+	if deepSeek.ID == "" {
+		t.Fatal("expected builtin DeepSeek provider")
+	}
+	models := map[string]ProviderCatalogModel{}
+	for _, model := range deepSeek.Models {
+		models[model.ID] = model
+	}
+	flash, ok := models["deepseek-v4-flash"]
+	if !ok {
+		t.Fatal("expected native deepseek-v4-flash model")
+	}
+	if flash.ContextWindow != 1048576 || flash.MaxOutputTokens != 393216 ||
+		flash.InputPriceUSDPer1M != 0.14 || flash.CacheReadPriceUSDPer1M != 0.0028 || flash.OutputPriceUSDPer1M != 0.28 {
+		t.Fatalf("unexpected V4 Flash limits or pricing: %+v", flash)
+	}
+	if flash.Metadata["endpoints"] != "responses,chat/completions,anthropic" || flash.Metadata["reasoning_effort_options"] != "low,high,max" {
+		t.Fatalf("unexpected V4 Flash protocol metadata: %+v", flash.Metadata)
+	}
+	pro, ok := models["deepseek-v4-pro"]
+	if !ok {
+		t.Fatal("expected native deepseek-v4-pro model")
+	}
+	if strings.Contains(pro.Metadata["endpoints"], "responses") {
+		t.Fatalf("V4 Pro must not advertise Responses before upstream support exists: %+v", pro.Metadata)
+	}
+}
+
+func TestDeepSeekResponsesCapabilityIsModelScoped(t *testing.T) {
+	server := New(NewMemoryStore())
+	flash := RouteSelection{Provider: Provider{Type: "deepseek"}, ProviderModel: "deepseek-v4-flash"}
+	pro := RouteSelection{Provider: Provider{Type: "deepseek"}, ProviderModel: "deepseek-v4-pro"}
+	if !server.routeSupportsAdapterCapability(flash, AdapterCapabilityResponses) ||
+		!server.routeSupportsAdapterCapability(flash, AdapterCapabilityResponseStream) {
+		t.Fatal("V4 Flash must support Responses and streaming Responses")
+	}
+	if server.routeSupportsAdapterCapability(pro, AdapterCapabilityResponses) ||
+		server.routeSupportsAdapterCapability(pro, AdapterCapabilityResponseStream) {
+		t.Fatal("V4 Pro must not support Responses before DeepSeek enables it upstream")
+	}
+	if !server.routeSupportsAdapterCapability(pro, AdapterCapabilityChat) {
+		t.Fatal("V4 Pro must retain Chat Completions support")
 	}
 }
 

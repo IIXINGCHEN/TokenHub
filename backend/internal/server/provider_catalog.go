@@ -399,7 +399,7 @@ func builtinProviderCatalog(includeModels bool) []ProviderCatalogEntry {
 		builtinCatalogEntry("openai", "OpenAI", ProviderOpenAI, "https://api.openai.com/v1", "https://platform.openai.com/docs/models", []string{"gpt-5", "gpt-5-mini", "gpt-4.1-mini", "text-embedding-3-small"}),
 		builtinCatalogEntry("anthropic", "Anthropic", ProviderAnthropic, "https://api.anthropic.com", "https://docs.anthropic.com", []string{"claude-sonnet-4.5", "claude-haiku-4.5"}),
 		builtinCatalogEntry("google", "Google Gemini", ProviderGemini, "https://generativelanguage.googleapis.com/v1beta", "https://ai.google.dev/gemini-api/docs", []string{"gemini-2.5-pro", "gemini-2.5-flash"}),
-		builtinCatalogEntry("deepseek", "DeepSeek", "deepseek", "https://api.deepseek.com", "https://platform.deepseek.com/api-docs", []string{"deepseek-chat", "deepseek-reasoner"}),
+		deepSeekBuiltinCatalogEntry(),
 		builtinCatalogEntry("qwen", "Qwen", "qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1", "https://help.aliyun.com/zh/model-studio", []string{"qwen-max", "qwen-plus"}),
 		{ID: "siliconflow", Name: "SiliconFlow", DisplayName: "SiliconFlow", Type: ProviderOpenAICompatible, BaseURL: "https://api.siliconflow.cn/v1", DocURL: "https://cloud.siliconflow.com/models", Source: "builtin"},
 		{ID: "ollama", Name: "Ollama", DisplayName: "Ollama", Type: "local", BaseURL: "http://127.0.0.1:11434/v1", DocURL: "https://ollama.com", Source: "builtin"},
@@ -409,6 +409,59 @@ func builtinProviderCatalog(includeModels bool) []ProviderCatalogEntry {
 		return entries
 	}
 	return cloneCatalogEntries(entries, false)
+}
+
+func deepSeekBuiltinCatalogEntry() ProviderCatalogEntry {
+	entry := builtinCatalogEntry(
+		"deepseek",
+		"DeepSeek",
+		"deepseek",
+		"https://api.deepseek.com",
+		"https://api-docs.deepseek.com",
+		[]string{"deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"},
+	)
+	for index := range entry.Models {
+		model := &entry.Models[index]
+		model.InputModalities = []string{"text"}
+		model.OutputModalities = []string{"text"}
+		model.Capabilities = []string{"chat", "reasoning", "tools", "structured_outputs"}
+		model.SupportedParameters = []string{"temperature", "top_p", "tools", "tool_choice", "response_format", "reasoning"}
+		switch model.ID {
+		case "deepseek-v4-flash":
+			model.DisplayName = "DeepSeek V4 Flash"
+			model.ContextWindow = 1048576
+			model.MaxOutputTokens = 393216
+			model.InputPriceUSDPer1M = 0.14
+			model.CacheReadPriceUSDPer1M = 0.0028
+			model.OutputPriceUSDPer1M = 0.28
+			model.Metadata = map[string]string{
+				"source":                   "builtin",
+				"upstream_source":          "deepseek-api",
+				"endpoints":                "responses,chat/completions,anthropic",
+				"reasoning_effort_options": "low,high,max",
+				"reasoning_default":        "true",
+				"tool_call":                "true",
+				"vision":                   "false",
+			}
+		case "deepseek-v4-pro":
+			model.DisplayName = "DeepSeek V4 Pro"
+			model.ContextWindow = 1048576
+			model.MaxOutputTokens = 393216
+			model.InputPriceUSDPer1M = 0.435
+			model.CacheReadPriceUSDPer1M = 0.003625
+			model.OutputPriceUSDPer1M = 0.87
+			model.Metadata = map[string]string{
+				"source":                   "builtin",
+				"upstream_source":          "deepseek-api",
+				"endpoints":                "chat/completions,anthropic",
+				"reasoning_effort_options": "low,high,max",
+				"reasoning_default":        "true",
+				"tool_call":                "true",
+				"vision":                   "false",
+			}
+		}
+	}
+	return entry
 }
 
 func builtinCatalogEntry(id string, name string, providerType string, baseURL string, docURL string, modelIDs []string) ProviderCatalogEntry {

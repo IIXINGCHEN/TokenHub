@@ -150,6 +150,17 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	routed.Routes = s.routesWithAdapterCapability(routed.Routes, AdapterCapabilityResponses)
+	if len(routed.Routes) == 0 {
+		err := NewHTTPError(
+			http.StatusNotImplemented,
+			"provider_capability_not_supported",
+			"Responses are not supported",
+		)
+		s.finishFailedRoutedCall(r, routed, nil, err, req)
+		writeError(w, r, err)
+		return
+	}
 	if req.Stream {
 		routed.Routes = s.routesWithAdapterCapability(routed.Routes, AdapterCapabilityResponseStream)
 		if len(routed.Routes) == 0 {
@@ -169,10 +180,24 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	if affinity != nil && routesContainAdapterType(routed.Routes, ProviderOpenAICodex) {
+	codexAffinityApplied := affinity != nil && routesContainAdapterType(routed.Routes, ProviderOpenAICodex)
+	if codexAffinityApplied {
 		routed.Affinity = affinity
 		routed.Call.Affinity = affinity
 		routed.Routes = s.planRouteOrder(routed.Call, routed.Routes)
+	}
+	if !codexAffinityApplied {
+		affinity, err = s.responsesCacheLocalityAffinity(key.ID, r.Header, req)
+		if err != nil {
+			s.finishFailedRoutedCall(r, routed, nil, err, req)
+			writeError(w, r, err)
+			return
+		}
+		if affinity != nil {
+			routed.Affinity = affinity
+			routed.Call.Affinity = affinity
+			routed.Routes = s.planRouteOrder(routed.Call, routed.Routes)
+		}
 	}
 	if req.Stream {
 		s.handleStreamingResponses(w, r, routed, req)
@@ -837,12 +862,26 @@ func (s *Server) responsesAdapterForRoute(route RouteSelection) (any, error) {
 func (s *Server) routesWithAdapterCapability(routes []RouteSelection, capability AdapterCapability) []RouteSelection {
 	filtered := make([]RouteSelection, 0, len(routes))
 	for _, route := range routes {
-		descriptor, ok := s.adapterRegistry.Describe(route.Provider.Type)
-		if ok && adapterSupports(descriptor, capability) {
+		if s.routeSupportsAdapterCapability(route, capability) {
 			filtered = append(filtered, route)
 		}
 	}
 	return filtered
+}
+
+func (s *Server) routeSupportsAdapterCapability(route RouteSelection, capability AdapterCapability) bool {
+	descriptor, ok := s.adapterRegistry.Describe(route.Provider.Type)
+	if !ok || !adapterSupports(descriptor, capability) {
+		return false
+	}
+	if route.Provider.Type != "deepseek" ||
+		(capability != AdapterCapabilityResponses && capability != AdapterCapabilityResponseStream) {
+		return true
+	}
+	// DeepSeek's Responses API is model-scoped rather than provider-scoped. Keep
+	// this allowlist narrow: unsupported parameters are otherwise silently ignored
+	// upstream, which would make an endpoint-level capability claim misleading.
+	return strings.EqualFold(strings.TrimSpace(route.ProviderModel), "deepseek-v4-flash")
 }
 
 func (s *Server) planRouteOrder(call CallContext, routes []RouteSelection) []RouteSelection {
