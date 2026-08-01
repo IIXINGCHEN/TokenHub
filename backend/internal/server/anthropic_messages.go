@@ -869,7 +869,7 @@ func (s *Server) executeNativeAnthropicMessages(
 	payload := cloneAnyMap(req.Raw)
 	payload["model"] = route.ProviderModel
 	payload["stream"] = false
-	resp, err := s.doNativeAnthropicRequest(ctx, route.Provider, "/v1/messages", payload, headers)
+	resp, err := s.doNativeAnthropicRequest(ctx, route.Provider, "/v1/messages", payload, headers, false)
 	if err != nil {
 		return nil, Usage{}, err
 	}
@@ -890,6 +890,7 @@ func (s *Server) doNativeAnthropicRequest(
 	endpoint string,
 	payload map[string]any,
 	downstreamHeaders http.Header,
+	stream bool,
 ) (*http.Response, error) {
 	baseURL := strings.TrimRight(provider.BaseURL, "/")
 	if baseURL == "" {
@@ -919,18 +920,17 @@ func (s *Server) doNativeAnthropicRequest(
 	for key, value := range provider.Headers {
 		req.Header.Set(key, value)
 	}
-	client := http.DefaultClient
-	if adapter, ok := s.adapters[ProviderAnthropic].(AnthropicAdapter); ok && adapter.Client != nil {
-		client = adapter.Client
-	}
-	resp, err := client.Do(req)
+	// The native path builds its own request but must follow the same streaming
+	// policy as the adapter: a total deadline would truncate a live stream.
+	adapter, _ := s.adapters[ProviderAnthropic].(AnthropicAdapter)
+	resp, err := sendUpstream(adapter.Client, adapter.StreamClient, adapter.StreamIdleTimeout, req, stream)
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode >= 400 {
 		defer resp.Body.Close()
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, newProviderHTTPError(resp.StatusCode, data)
+		return nil, newProviderHTTPError(resp.StatusCode, resp.Header, data)
 	}
 	return resp, nil
 }
@@ -1034,7 +1034,7 @@ func (s *Server) streamNativeAnthropicMessages(
 	payload := cloneAnyMap(req.Raw)
 	payload["model"] = route.ProviderModel
 	payload["stream"] = true
-	resp, err := s.doNativeAnthropicRequest(ctx, route.Provider, "/v1/messages", payload, headers)
+	resp, err := s.doNativeAnthropicRequest(ctx, route.Provider, "/v1/messages", payload, headers, true)
 	if err != nil {
 		return Usage{}, err
 	}
@@ -1467,12 +1467,7 @@ func estimateAnthropicValueTokens(value any) int64 {
 
 func writeAnthropicError(w http.ResponseWriter, r *http.Request, err error) {
 	httpErr := AsHTTPError(err)
-	writeRateLimitHeaders(w.Header(), httpErr.Headers)
-	requestID := strings.TrimSpace(w.Header().Get("x-request-id"))
-	if requestID == "" {
-		requestID = NewID("req")
-	}
-	w.Header().Set("x-request-id", requestID)
+	requestID := errorResponseHeaders(w, err)
 	writeJSON(w, httpErr.Status, map[string]any{
 		"type": "error",
 		"error": map[string]any{

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"strconv"
@@ -103,12 +104,7 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	httpErr := AsHTTPError(err)
-	writeRateLimitHeaders(w.Header(), httpErr.Headers)
-	requestID := strings.TrimSpace(w.Header().Get("x-request-id"))
-	if requestID == "" {
-		requestID = NewID("req")
-	}
-	w.Header().Set("x-request-id", requestID)
+	requestID := errorResponseHeaders(w, err)
 	writeJSON(w, httpErr.Status, map[string]any{
 		"error": map[string]any{
 			"message": httpErr.Message,
@@ -125,6 +121,25 @@ func writeRateLimitHeaders(header http.Header, values map[string]string) {
 			header.Set(key, value)
 		}
 	}
+}
+
+// errorResponseHeaders installs the headers every error response carries and
+// returns the request ID its body has to repeat. Retry-After among them: the
+// upstream already said how long to wait, and answering 429 without it leaves the
+// caller guessing.
+func errorResponseHeaders(w http.ResponseWriter, err error) string {
+	requestID := strings.TrimSpace(w.Header().Get("x-request-id"))
+	if requestID == "" {
+		requestID = NewID("req")
+	}
+	w.Header().Set("x-request-id", requestID)
+	writeRateLimitHeaders(w.Header(), AsHTTPError(err).Headers)
+	if retryAfter := providerErrorRetryAfter(err); retryAfter > 0 &&
+		AsHTTPError(err).Status == http.StatusTooManyRequests &&
+		w.Header().Get("retry-after") == "" {
+		w.Header().Set("retry-after", strconv.Itoa(int(math.Ceil(retryAfter.Seconds()))))
+	}
+	return requestID
 }
 
 const auditPayloadMaxChars = 64 * 1024
