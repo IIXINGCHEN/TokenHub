@@ -10,12 +10,14 @@ import (
 	"testing"
 )
 
+const codexCompatibilityRouteModel = "gpt-5.5"
+
 func newCodexCompatibilityRouteTestServer(t *testing.T, transport http.RoundTripper) (*Server, *GormStore, string) {
 	t.Helper()
 	store := NewMemoryStore()
 	project := store.CreateProject(Project{Name: "Codex Bridge Route Test", Status: StatusActive})
 	_, secret, err := store.CreateAPIKey(project.ID, APIKey{
-		Name: "Codex Bridge Key", Allowed: []string{localCodexCompatModel}, Status: StatusActive,
+		Name: "Codex Bridge Key", Allowed: []string{codexCompatibilityRouteModel}, Status: StatusActive,
 	}, "thk_codex_bridge_route")
 	if err != nil {
 		t.Fatal(err)
@@ -27,7 +29,7 @@ func newCodexCompatibilityRouteTestServer(t *testing.T, transport http.RoundTrip
 	resource, err := store.AddProviderResource(ProviderResource{
 		ID: "rsrc_codex_bridge_route", ProviderID: provider.ID, Name: "Codex Bridge Account",
 		ResourceType: ProviderResourceOpenAISubscription, Status: StatusActive, Healthy: true,
-		Options: codexCapabilityOptionsForTest(localCodexCompatModel),
+		Options: codexCapabilityOptionsForTest(codexCompatibilityRouteModel),
 		Credentials: &ProviderResourceCredentials{
 			AccessToken: "access_codex_bridge", AccountID: "account_codex_bridge",
 		},
@@ -35,10 +37,10 @@ func newCodexCompatibilityRouteTestServer(t *testing.T, transport http.RoundTrip
 	if err != nil {
 		t.Fatal(err)
 	}
-	store.AddModel(Model{Name: localCodexCompatModel, Modality: "chat", Status: StatusActive})
+	store.AddModel(Model{Name: codexCompatibilityRouteModel, Modality: "chat", Status: StatusActive})
 	store.AddRoute(ModelRoute{
-		ID: "route_codex_bridge", ModelName: localCodexCompatModel, ProviderID: provider.ID,
-		ProviderResourceID: resource.ID, ProviderModel: localCodexCompatModel,
+		ID: "route_codex_bridge", ModelName: codexCompatibilityRouteModel, ProviderID: provider.ID,
+		ProviderResourceID: resource.ID, ProviderModel: codexCompatibilityRouteModel,
 		Priority: 1, Weight: 100, Status: StatusActive, Strategy: RouteStrategyPriorityOnly,
 	})
 	server := NewWithConfig(store, Config{AdminToken: "dev_admin_token", SecretKey: "codex-bridge-route-secret"})
@@ -76,7 +78,7 @@ func codexCompatibilityRouteResponse(t *testing.T, request *http.Request) (*http
 
 func codexCompatibilityRouteSSE(t *testing.T, toolName string) string {
 	t.Helper()
-	return localCodexCompatSSE(t,
+	return codexCompatibilityTestSSE(t,
 		map[string]any{"type": "response.created", "response": map[string]any{"id": "resp_codex_bridge", "status": "in_progress"}},
 		map[string]any{"type": "response.output_item.added", "output_index": 0, "item": map[string]any{
 			"type": "reasoning", "id": "rs_codex_bridge", "summary": []any{}, "encrypted_content": "codex-bridge-signature",
@@ -108,6 +110,28 @@ func codexCompatibilityRouteSSE(t *testing.T, toolName string) string {
 	)
 }
 
+func codexCompatibilityTestSSE(t *testing.T, payloads ...map[string]any) string {
+	t.Helper()
+	var result strings.Builder
+	for _, payload := range payloads {
+		eventType, _ := payload["type"].(string)
+		if eventType == "" {
+			t.Fatalf("SSE payload has no type: %#v", payload)
+		}
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("encode SSE payload: %v", err)
+		}
+		result.WriteString("event: ")
+		result.WriteString(eventType)
+		result.WriteByte('\n')
+		result.WriteString("data: ")
+		result.Write(encoded)
+		result.WriteString("\n\n")
+	}
+	return result.String()
+}
+
 func doCodexCompatibilityRouteJSON(t *testing.T, handler http.Handler, path string, payload map[string]any, secret string, sessionID string) *httptest.ResponseRecorder {
 	t.Helper()
 	encoded, err := json.Marshal(payload)
@@ -126,7 +150,7 @@ func doCodexCompatibilityRouteJSON(t *testing.T, handler http.Handler, path stri
 
 func codexCompatibilityChatPayload(stream bool) map[string]any {
 	return map[string]any{
-		"model": localCodexCompatModel, "stream": stream,
+		"model": codexCompatibilityRouteModel, "stream": stream,
 		"messages": []any{map[string]any{"role": "user", "content": "Inspect README.md"}},
 		"tools": []any{map[string]any{
 			"type": "function", "function": map[string]any{
@@ -139,7 +163,7 @@ func codexCompatibilityChatPayload(stream bool) map[string]any {
 
 func codexCompatibilityAnthropicPayload(stream bool) map[string]any {
 	return map[string]any{
-		"model": localCodexCompatModel, "stream": stream, "max_tokens": 1024,
+		"model": codexCompatibilityRouteModel, "stream": stream, "max_tokens": 1024,
 		"messages": []any{map[string]any{"role": "user", "content": "Inspect README.md"}},
 		"tools": []any{map[string]any{
 			"name": "inspect_workspace_file_with_a_long_original_name", "description": "Inspect a file",
@@ -212,8 +236,8 @@ func TestCodexCompatibilityChatFiltersIncompatibleCodexRoute(t *testing.T) {
 	}))
 	fallback := store.AddProvider(Provider{ID: "prv_codex_bridge_fallback", Name: "Chat Fallback", Type: ProviderMock, Status: StatusActive, Healthy: true})
 	store.AddRoute(ModelRoute{
-		ID: "route_codex_bridge_fallback", ModelName: localCodexCompatModel, ProviderID: fallback.ID,
-		ProviderModel: localCodexCompatModel, Priority: 2, Weight: 100, Status: StatusActive, Strategy: RouteStrategyPriorityOnly,
+		ID: "route_codex_bridge_fallback", ModelName: codexCompatibilityRouteModel, ProviderID: fallback.ID,
+		ProviderModel: codexCompatibilityRouteModel, Priority: 2, Weight: 100, Status: StatusActive, Strategy: RouteStrategyPriorityOnly,
 	})
 	payload := codexCompatibilityChatPayload(false)
 	payload["response_format"] = map[string]any{"type": "unsupported_xml"}
@@ -226,21 +250,21 @@ func TestCodexCompatibilityChatFiltersIncompatibleCodexRoute(t *testing.T) {
 func TestCodexCompatibilityChatFailsOverAndKeepsSessionAffinity(t *testing.T) {
 	store := NewMemoryStore()
 	project := store.CreateProject(Project{Name: "Codex Failover Affinity", Status: StatusActive})
-	_, secret, err := store.CreateAPIKey(project.ID, APIKey{Name: "Affinity Key", Allowed: []string{localCodexCompatModel}, Status: StatusActive}, "thk_codex_affinity_route")
+	_, secret, err := store.CreateAPIKey(project.ID, APIKey{Name: "Affinity Key", Allowed: []string{codexCompatibilityRouteModel}, Status: StatusActive}, "thk_codex_affinity_route")
 	if err != nil {
 		t.Fatal(err)
 	}
 	provider := store.AddProvider(Provider{ID: "prv_codex_affinity_route", Name: "Codex Affinity", Type: ProviderOpenAICodex, Status: StatusActive, Healthy: true})
 	for _, resource := range []ProviderResource{
-		{ID: "rsrc_codex_bad", ProviderID: provider.ID, Name: "Bad Account", ResourceType: ProviderResourceOpenAISubscription, Status: StatusActive, Healthy: true, Priority: 1, Options: codexCapabilityOptionsForTest(localCodexCompatModel), Credentials: &ProviderResourceCredentials{AccessToken: "access_bad", AccountID: "account_bad"}},
-		{ID: "rsrc_codex_good", ProviderID: provider.ID, Name: "Good Account", ResourceType: ProviderResourceOpenAISubscription, Status: StatusActive, Healthy: true, Priority: 2, Options: codexCapabilityOptionsForTest(localCodexCompatModel), Credentials: &ProviderResourceCredentials{AccessToken: "access_good", AccountID: "account_good"}},
+		{ID: "rsrc_codex_bad", ProviderID: provider.ID, Name: "Bad Account", ResourceType: ProviderResourceOpenAISubscription, Status: StatusActive, Healthy: true, Priority: 1, Options: codexCapabilityOptionsForTest(codexCompatibilityRouteModel), Credentials: &ProviderResourceCredentials{AccessToken: "access_bad", AccountID: "account_bad"}},
+		{ID: "rsrc_codex_good", ProviderID: provider.ID, Name: "Good Account", ResourceType: ProviderResourceOpenAISubscription, Status: StatusActive, Healthy: true, Priority: 2, Options: codexCapabilityOptionsForTest(codexCompatibilityRouteModel), Credentials: &ProviderResourceCredentials{AccessToken: "access_good", AccountID: "account_good"}},
 	} {
 		if _, err := store.AddProviderResource(resource); err != nil {
 			t.Fatal(err)
 		}
 	}
-	store.AddModel(Model{Name: localCodexCompatModel, Modality: "chat", Status: StatusActive})
-	store.AddRoute(ModelRoute{ID: "route_codex_affinity", ModelName: localCodexCompatModel, ProviderID: provider.ID, ProviderModel: localCodexCompatModel, Status: StatusActive, Priority: 1, Weight: 100, Strategy: RouteStrategyPriorityOnly})
+	store.AddModel(Model{Name: codexCompatibilityRouteModel, Modality: "chat", Status: StatusActive})
+	store.AddRoute(ModelRoute{ID: "route_codex_affinity", ModelName: codexCompatibilityRouteModel, ProviderID: provider.ID, ProviderModel: codexCompatibilityRouteModel, Status: StatusActive, Priority: 1, Weight: 100, Strategy: RouteStrategyPriorityOnly})
 	badCalls := 0
 	goodCalls := 0
 	server := NewWithConfig(store, Config{AdminToken: "dev_admin_token", SecretKey: "codex-affinity-route-secret"})
