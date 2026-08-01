@@ -224,8 +224,9 @@ func (s *Server) matchApprovalFlow(trigger string, payload any) (AdminResource, 
 
 func (s *Server) apiKeyUpdateApproval(user AdminUser, key APIKey, patch APIKey) (ApprovalRequest, bool) {
 	trigger := ""
-	limitsSet := patch.LimitsSet || patch.Limits != (QuotaLimits{})
-	if limitsSet {
+	quotaLimitsSet := patch.LimitsSet || patch.Limits != (QuotaLimits{})
+	minuteLimitsSet := patch.RateLimitSet || patch.TokenLimitSet
+	if quotaLimitsSet || minuteLimitsSet {
 		trigger = "quota_increase"
 	}
 	if trigger == "" && len(patch.Allowed) > 0 {
@@ -242,8 +243,14 @@ func (s *Server) apiKeyUpdateApproval(user AdminUser, key APIKey, patch APIKey) 
 		"allowed_models":   patch.Allowed,
 		"status":           patch.Status,
 	}
-	if limitsSet {
+	if quotaLimitsSet {
 		payload["limits"] = patch.Limits
+	}
+	if patch.RateLimitSet {
+		payload["rate_limit_rpm"] = patch.RateLimitRPM
+	}
+	if patch.TokenLimitSet {
+		payload["token_limit_tpm"] = patch.TokenLimitTPM
 	}
 	return s.approvalRequired(user, trigger, "api_key", key.ID, payload)
 }
@@ -879,13 +886,15 @@ func (s *Server) applyApprovalRequest(request ApprovalRequest, actor AdminUser) 
 			requesterRole = normalizeAdminRole(actor.Role)
 		}
 		key, secret, err := s.store.CreateAPIKey(projectID, APIKey{
-			Name:        stringFromPayload(payload, "name"),
-			Group:       stringFromPayload(payload, "group"),
-			OwnerUserID: ownerUserID,
-			Allowed:     stringSliceFromPayload(payload["allowed_models"]),
-			IPAllowlist: stringSliceFromPayload(payload["ip_allowlist"]),
-			Limits:      quotaLimitsFromPayload(payload["limits"]),
-			Status:      StatusActive,
+			Name:          stringFromPayload(payload, "name"),
+			Group:         stringFromPayload(payload, "group"),
+			OwnerUserID:   ownerUserID,
+			Allowed:       stringSliceFromPayload(payload["allowed_models"]),
+			IPAllowlist:   stringSliceFromPayload(payload["ip_allowlist"]),
+			Limits:        quotaLimitsFromPayload(payload["limits"]),
+			RateLimitRPM:  optionalInt64Value(payload, "rate_limit_rpm"),
+			TokenLimitTPM: optionalInt64Value(payload, "token_limit_tpm"),
+			Status:        StatusActive,
 			Metadata: map[string]string{
 				"created_by":      request.RequesterID,
 				"created_by_role": requesterRole,
@@ -904,13 +913,19 @@ func (s *Server) applyApprovalRequest(request ApprovalRequest, actor AdminUser) 
 		}, nil
 	case request.ResourceType == "api_key":
 		limits, limitsSet := payload["limits"]
+		rateLimitRPM, rateLimitSet := optionalInt64Payload(payload, "rate_limit_rpm")
+		tokenLimitTPM, tokenLimitSet := optionalInt64Payload(payload, "token_limit_tpm")
 		key, err := s.store.UpdateAPIKey(request.ResourceID, APIKey{
-			OwnerUserID: stringFromPayload(payload, "owner_user_id"),
-			Allowed:     stringSliceFromPayload(payload["allowed_models"]),
-			IPAllowlist: stringSliceFromPayload(payload["ip_allowlist"]),
-			Limits:      quotaLimitsFromPayload(limits),
-			LimitsSet:   limitsSet,
-			Status:      stringFromPayload(payload, "status"),
+			OwnerUserID:   stringFromPayload(payload, "owner_user_id"),
+			Allowed:       stringSliceFromPayload(payload["allowed_models"]),
+			IPAllowlist:   stringSliceFromPayload(payload["ip_allowlist"]),
+			Limits:        quotaLimitsFromPayload(limits),
+			LimitsSet:     limitsSet,
+			RateLimitRPM:  rateLimitRPM,
+			RateLimitSet:  rateLimitSet,
+			TokenLimitTPM: tokenLimitTPM,
+			TokenLimitSet: tokenLimitSet,
+			Status:        stringFromPayload(payload, "status"),
 		})
 		return key, err
 	case request.ResourceType == "budgets" || request.ResourceType == "quota-policies":
@@ -919,6 +934,11 @@ func (s *Server) applyApprovalRequest(request ApprovalRequest, actor AdminUser) 
 			Description: stringFromPayload(payload, "description"),
 			Status:      stringFromPayload(payload, "status"),
 			Fields:      fieldsFromPayload(payload["fields"]),
+		}
+		if request.ResourceType == "quota-policies" {
+			if err := validateQuotaPolicyMinuteLimits(resource.Fields); err != nil {
+				return nil, err
+			}
 		}
 		var saved AdminResource
 		var err error
@@ -1141,6 +1161,8 @@ func quotaLimitsFromPayload(value any) QuotaLimits {
 		return typed
 	case map[string]any:
 		return QuotaLimits{
+			RateLimitRPM:    int64Field(typed, "rate_limit_rpm"),
+			TokenLimitTPM:   int64Field(typed, "token_limit_tpm"),
 			DailyRequests:   int64Field(typed, "daily_requests"),
 			MonthlyRequests: int64Field(typed, "monthly_requests"),
 			DailyTokens:     int64Field(typed, "daily_tokens"),
@@ -1152,4 +1174,18 @@ func quotaLimitsFromPayload(value any) QuotaLimits {
 	default:
 		return QuotaLimits{}
 	}
+}
+
+func optionalInt64Value(payload map[string]any, key string) *int64 {
+	value, _ := optionalInt64Payload(payload, key)
+	return value
+}
+
+func optionalInt64Payload(payload map[string]any, key string) (*int64, bool) {
+	raw, exists := payload[key]
+	if !exists || raw == nil {
+		return nil, exists
+	}
+	value := int64Field(payload, key)
+	return &value, true
 }

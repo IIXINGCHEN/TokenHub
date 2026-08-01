@@ -145,7 +145,7 @@ func TestStartCallRecordsLocalLatencyReference(t *testing.T) {
 	}
 	model := store.AddModel(Model{Name: "reference-chat", Modality: "chat", Status: StatusActive})
 
-	call, err := store.StartCall(context.Background(), project, key, model.Name)
+	call, err := store.StartCall(context.Background(), project, key, model.Name, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

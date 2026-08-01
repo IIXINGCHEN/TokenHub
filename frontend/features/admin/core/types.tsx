@@ -52,6 +52,8 @@ export type APIKey = {
   ip_allowlist?: string[];
   status: string;
   limits?: Record<string, number>;
+  rate_limit_rpm?: number;
+  token_limit_tpm?: number;
   expires_at?: string;
   rotated_from_id?: string;
   grace_until?: string;

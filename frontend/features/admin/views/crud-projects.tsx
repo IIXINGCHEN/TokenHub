@@ -991,6 +991,8 @@ export function TeamMembersPanel({ data, team, onClose }: { data: AppData; team:
 
 export type ProjectQuotaValues = {
   status: string;
+  rate_limit_rpm: string;
+  token_limit_tpm: string;
   daily_requests: string;
   monthly_requests: string;
   daily_tokens: string;
@@ -1001,6 +1003,8 @@ export type ProjectQuotaValues = {
 };
 
 export const projectQuotaFields: Array<{ key: keyof ProjectQuotaValues; label: string; suffix?: string }> = [
+  { key: "rate_limit_rpm", label: "每分钟请求（RPM）" },
+  { key: "token_limit_tpm", label: "每分钟 Token（TPM）" },
   { key: "daily_requests", label: "日请求" },
   { key: "monthly_requests", label: "月请求" },
   { key: "daily_tokens", label: "日 Token" },
