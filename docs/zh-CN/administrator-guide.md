@@ -18,7 +18,7 @@ Language: [English](../administrator-guide.md) | 简体中文 | [日本語](../j
 ## 生产上线顺序
 
 1. 至少配置一个身份源，并保留可控的管理员账号。
-2. 添加上游 Provider，例如 `OpenAI Production`、`Azure East US` 或 `Internal Model Gateway`，并引入它可提供的上游模型。
+2. 添加上游 Provider，例如 `OpenAI Production`、`Azure East US` 或 `Internal Model Gateway`。保存前先用「测试连接」校验 Base URL 和 API Key，并查看实测响应耗时，再引入它可提供的上游模型。
 3. 为每个已引入的 Provider 模型记录真实的输入、缓存读取和输出成本，用于审计。
 4. 创建需要向业务开放的对外模型，并设置统一对客价格。
 5. 将每个对外模型路由到一个或多个已引入的 Provider 模型。

@@ -18,7 +18,7 @@ This guide is for platform administrators, security operators, and infrastructur
 ## Production Setup Order
 
 1. Configure at least one identity source and keep a controlled administrator account.
-2. Add an upstream Provider such as `OpenAI Production`, `Azure East US`, or `Internal Model Gateway`, and import the upstream models that it can serve.
+2. Add an upstream Provider such as `OpenAI Production`, `Azure East US`, or `Internal Model Gateway`. Before saving, use **Test Connection** to validate its Base URL and API Key and review the measured response latency, then import the upstream models that it can serve.
 3. Record each imported Provider model's actual input, cache-read, and output costs for audit.
 4. Create the external models to expose to applications and set their unified client-facing prices.
 5. Add routes from each external model to one or more imported Provider models.
