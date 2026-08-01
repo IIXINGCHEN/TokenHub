@@ -10,8 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -26,8 +24,25 @@ const (
 	openAICodexStreamIdleTimeout = 5 * time.Minute
 )
 
+func (a *CodexSubscriptionAdapter) streamIdleTimeout() time.Duration {
+	if a == nil || a.StreamIdleTimeout <= 0 {
+		return openAICodexStreamIdleTimeout
+	}
+	return a.StreamIdleTimeout
+}
+
+var errCodexStreamIdle = NewHTTPError(
+	http.StatusGatewayTimeout,
+	"codex_stream_idle_timeout",
+	"Codex stream was idle for too long",
+)
+
 type CodexSubscriptionAdapter struct {
-	Client             *http.Client
+	Client *http.Client
+	// Client deliberately carries no total deadline: a Codex stream is bounded by
+	// how long it stays silent, not by how long it runs. StreamIdleTimeout is that
+	// budget; zero keeps the historical five minutes.
+	StreamIdleTimeout  time.Duration
 	RefreshCredentials func(context.Context, string, bool) (ProviderResourceCredentials, error)
 	ModelsURL          string
 	QuotaURL           string
@@ -201,59 +216,8 @@ func (a CodexSubscriptionAdapter) openResponsesWithCredentials(ctx context.Conte
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
 		return nil, classifyCodexHTTPError(resp.StatusCode, resp.Header, data)
 	}
-	resp.Body = newIdleTimeoutReadCloser(resp.Body, openAICodexStreamIdleTimeout)
+	resp.Body = newIdleTimeoutReadCloser(resp.Body, a.streamIdleTimeout(), errCodexStreamIdle)
 	return resp, nil
-}
-
-type idleTimeoutReadCloser struct {
-	source   io.ReadCloser
-	timeout  time.Duration
-	timerMu  sync.Mutex
-	timer    *time.Timer
-	timedOut atomic.Bool
-}
-
-func newIdleTimeoutReadCloser(source io.ReadCloser, timeout time.Duration) io.ReadCloser {
-	if source == nil || timeout <= 0 {
-		return source
-	}
-	reader := &idleTimeoutReadCloser{source: source, timeout: timeout}
-	reader.resetTimer()
-	return reader
-}
-
-func (r *idleTimeoutReadCloser) Read(buffer []byte) (int, error) {
-	count, err := r.source.Read(buffer)
-	if count > 0 {
-		r.resetTimer()
-	}
-	if err != nil && r.timedOut.Load() {
-		return count, NewHTTPError(http.StatusGatewayTimeout, "codex_stream_idle_timeout", "Codex stream was idle for too long")
-	}
-	return count, err
-}
-
-func (r *idleTimeoutReadCloser) Close() error {
-	r.timerMu.Lock()
-	if r.timer != nil {
-		r.timer.Stop()
-		r.timer = nil
-	}
-	r.timerMu.Unlock()
-	return r.source.Close()
-}
-
-func (r *idleTimeoutReadCloser) resetTimer() {
-	r.timerMu.Lock()
-	defer r.timerMu.Unlock()
-	if r.timer == nil {
-		r.timer = time.AfterFunc(r.timeout, func() {
-			r.timedOut.Store(true)
-			_ = r.source.Close()
-		})
-		return
-	}
-	r.timer.Reset(r.timeout)
 }
 
 func codexResponsesEndpoint(provider Provider) (string, error) {
@@ -425,13 +389,23 @@ func (s *Server) handleStreamingResponses(w http.ResponseWriter, r *http.Request
 	})
 	if err != nil {
 		if streamStarted {
+			// The client already has a 200 and part of the stream, so the usage the
+			// upstream reported before failing is real and must not be discarded.
 			httpErr := AsHTTPError(err)
-			s.store.RecordRouteAttempts(routed.Call.RequestID, attempts)
-			s.store.FinishCall(routed.Call, route, usage, httpErr.Status, httpErr.Code, s.clientIP(r), r.UserAgent())
+			s.finishRoutedCall(r, GatewayCallCompletion{
+				Call:            routed.Call,
+				Route:           route,
+				Usage:           usage,
+				Attempts:        attempts,
+				StatusCode:      httpErr.Status,
+				ErrorCode:       httpErr.Code,
+				ErrorMessage:    httpErr.Message,
+				RequestPayload:  request,
+				ResponsePayload: auditErrorPayload(err, routed.Call.RequestID),
+			})
 		} else {
-			s.finishFailedRoutedCall(r, routed, attempts, err)
+			s.finishFailedRoutedCall(r, routed, attempts, err, request)
 		}
-		s.recordRequestPayload(routed.Call.RequestID, request, auditErrorPayload(err, routed.Call.RequestID))
 		if !streamStarted {
 			writeError(w, r, err)
 		}
@@ -442,9 +416,7 @@ func (s *Server) handleStreamingResponses(w http.ResponseWriter, r *http.Request
 	}
 	s.store.MarkRouteUsed(route.Route.ID)
 	s.store.MarkProviderResourceUsed(routeResourceID(route))
-	s.store.RecordRouteAttempts(routed.Call.RequestID, attempts)
-	s.store.FinishCall(routed.Call, route, usage, http.StatusOK, "", s.clientIP(r), r.UserAgent())
-	s.recordRequestPayload(routed.Call.RequestID, request, response)
+	s.finishSuccessfulRoutedCall(r, routed, route, usage, attempts, request, response)
 }
 
 func codexStreamEventError(event map[string]any) error {

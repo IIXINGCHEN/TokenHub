@@ -15,7 +15,7 @@ func (s *Server) handleAdminResources(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/admin/resources/"), "/"), "/")
+	parts := splitEscapedAdminPath(r.URL.EscapedPath(), "/api/admin/resources/")
 	if len(parts) == 0 || parts[0] == "" {
 		writeError(w, r, NewHTTPError(404, "not_found", "Not found"))
 		return

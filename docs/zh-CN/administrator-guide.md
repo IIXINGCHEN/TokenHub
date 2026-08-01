@@ -90,9 +90,30 @@ Provider 连接信息和项目限制仍按线路配置。编辑单条 Provider �
 | 恢复 | 试探请求成功到达上游即关闭熔断、重置失败计数，并产生 `provider_resource_recovered` 告警 |
 | 重新摘除 | 试探失败会立即进入下一轮冷却，每次翻倍，上限为 `TOKENHUB_RESOURCE_COOLDOWN_MAX_SECONDS` |
 
-只有试探请求自身成功才能关闭熔断；熔断触发时已经在途的请求无论结果如何都无法关闭它。客户端中途断连、策略拒绝、模型不支持这几种情况既不计入失败、也不清零失败计数，因此「失败、断连、失败」这样的交替模式仍然会触发熔断。
+只有试探请求自身成功才能关闭熔断；熔断触发时已经在途的请求无论结果如何都无法关闭它。计不计入失败，取决于这次上游失败说明了资源的什么问题，而不是调用方看到的状态码。客户端中途断连、策略拒绝、模型不支持、上游判定请求本身格式错误，以及其它「问题出在请求而非账号」的情况，既不计入失败、也不清零失败计数，因此「失败、断连、失败」这样的交替模式仍然会触发熔断。凭据被拒、账号无法计费、限流以及上游自身故障则会计入失败。
 
 在控制台对资源执行「测试」时，如果适配器支持主动探测，资源仍会立即恢复，因为该探测会发起一次真实的上游请求。禁用资源仍然是管理员的最高优先级操作：被禁用的资源无论上游是否正常，都不会被自动恢复。
+
+## 上游错误分类
+
+一次上游失败要分别回答三个问题，单个状态码无法同时答对：告诉调用方什么、路由要不要换下一个候选、这次尝试要不要计入 Provider Resource 的失败次数。格式错误的请求换任何 Provider 都是错的，因此直接返回给调用方、不再切换；凭据被拒只属于某一个账号，因此请求继续切换、并由该账号承担失败计数。
+
+| 上游 | 调用方看到 | 错误码 | 是否换候选 | 是否计入资源失败 |
+| --- | --- | --- | --- | --- |
+| `400`、`422` | 同一状态码 | `provider_invalid_request` | 否 | 否 |
+| `401`、`403` | `502` | `provider_auth_error` | 是 | 是 |
+| `402` | `502` | `provider_payment_required` | 是 | 是 |
+| `404` | `502` | `provider_model_not_found` | 是 | 否 |
+| `408` | `504` | `provider_upstream_timeout` | 是 | 是 |
+| `413` | `413` | `provider_invalid_request` | 否 | 否 |
+| `429` | `429`，并带 `Retry-After` | `provider_rate_limited` | 是 | 是 |
+| `502`、`503`、`504` | 同一状态码 | `provider_upstream_unavailable` | 是 | 是 |
+| 其它 `5xx` | `502` | `provider_upstream_error` | 是 | 是 |
+| 其它 `4xx` | `502` | `provider_error` | 否 | 否 |
+
+上游的 `401` / `403` 不会原样透传：它表示网关自己配置的该 Provider 凭据被拒绝，调用方看到 `401` 会误以为自己的 TokenHub API Key 失效。出于同样原因，这两种情况不会把上游响应体返回给调用方——Provider 常在其中回显被拒绝的密钥。原始状态码会记录在每次路由尝试的 `upstream_status` 上，供运维查看。
+
+每次路由尝试都会同时记录两者：`status_code` 是告诉调用方的状态，`upstream_status` 是 Provider 实际返回的状态。
 
 ## 请求用量审计
 
@@ -109,6 +130,8 @@ TokenHub 可以在 `GET /metrics` 暴露 Prometheus 指标。该功能默认关�
 | `tokenhub_gateway_requests_in_flight` | gauge | 正在处理的模型 API 请求数，不含管理后台流量和抓取请求。 |
 | `tokenhub_gateway_tokens_total` | counter | 按类型统计的 Token：`prompt`、`completion`、`cached`、`cache_write`、`reasoning`。 |
 | `tokenhub_gateway_cost_usd_total` | counter | 使用模型目录价格计算的统一对外计费估算；Provider 真实成本只保留在有权限的请求审计中，不进入该指标。 |
+| `tokenhub_gateway_trace_completions_total` | counter | 已完成调用在链路导出中的去向：`converted` 或 `dropped`。仅在开启追踪时存在。 |
+| `tokenhub_gateway_trace_spans_total` | counter | span 在 OTLP 导出中的结果：`exported` 或 `failed`。仅在开启追踪时存在。 |
 
 同时暴露 Go 运行时和进程指标。
 
@@ -116,9 +139,37 @@ TokenHub 可以在 `GET /metrics` 暴露 Prometheus 指标。该功能默认关�
 
 在路由之前就被拒绝的请求（API Key 无效、额度耗尽、模型不存在）只增加请求计数。它们没有到达任何 Provider，因此不产生 Token、成本和耗时。目录中不存在的模型名会被记为 `unknown` 而不是原样上报，避免客户端用随机模型名刷高时间序列数量。
 
-标签为 `model`、`provider_type`、`provider_id`、`resource_id`、`status_code`、`error_code` 和 `stream`。设置 `TOKENHUB_METRICS_PROJECT_LABEL=true` 会追加 `project_id`，使每个网关指标的时间序列数量按活跃项目数成倍增长；除非确实需要按项目看板，否则建议保持关闭，按 Key 的归因请改用用量报表。
+标签为 `model`、`provider_type`、`provider_id`、`resource_id`、`status_code`、`error_code` 和 `stream`。上游失败不再统一上报为 `status_code="502"` 加 `provider_error`，而是使用「上游错误分类」一节列出的状态码与错误码，按旧取值匹配的看板和告警需要相应更新。设置 `TOKENHUB_METRICS_PROJECT_LABEL=true` 会追加 `project_id`，使每个网关指标的时间序列数量按活跃项目数成倍增长；除非确实需要按项目看板，否则建议保持关闭，按 Key 的归因请改用用量报表。
 
-如果需要 push 而不是抓取，可以让 OpenTelemetry Collector 的 `prometheus` receiver 抓取该端点再转发；网关自身只提供 Prometheus exposition 格式。
+如果指标需要 push 而不是被抓取，可以让 OpenTelemetry Collector 的 `prometheus` receiver 抓取该端点再转发。链路追踪是另一路信号，由网关直接推送，见下节。
+
+## 链路追踪导出
+
+TokenHub 可以通过 OTLP/HTTP 为每次网关调用导出一条 OpenTelemetry 链路。每条链路包含一个代表该请求的根 span，以及每个进入调用流程的候选各一个 generation span，因此一次故障转移会同时呈现两个候选，以及各自消耗的 Token 与成本。因容量不足而被跳过的候选从未触达 Provider，改为记录成根 span 上的一个 event。指标只能告诉你延迟升高了，链路能告诉你是哪个账号服务了这次请求、花了多少钱。该功能默认关闭：它会把运行数据发送到另一个系统。
+
+`TOKENHUB_TRACING_ENDPOINT` 需填写 OTLP traces 的完整信号级 URL（含完整路径），网关按原样使用、不追加任何路径——因为猜测出来的路径后缀只会表现为静默的 404，而不是启动报错。不带路径，或带有 query、fragment、userinfo 的 URL 会在启动时被拒绝，而不是被悄悄导出到别处。任何 OTLP/HTTP 后端都可以接入；**不需要 OpenTelemetry Collector**，因为网关直接使用 OTLP over HTTP，而不是 gRPC。
+
+接入 Langfuse：
+
+```bash
+TOKENHUB_TRACING_ENABLED=true
+TOKENHUB_TRACING_ENDPOINT=https://cloud.langfuse.com/api/public/otel/v1/traces
+TOKENHUB_TRACING_HEADERS="Authorization=Basic $(printf '%s' 'pk-lf-...:sk-lf-...' | base64),x-langfuse-ingestion-version=4"
+```
+
+属性映射面向 Langfuse v4 的摄入模型；该版本对自建部署已 GA，并且是 2026-04-14 之后创建的 Langfuse Cloud 组织的默认版本。自建 Langfuse v4 除 PostgreSQL、Redis 和对象存储外，还要求 ClickHouse 25.12 或更高版本。TokenHub 不会把 Langfuse 打包进自己的 Compose 文件：那是另一套有独立升级周期的有状态服务，把两者耦合会让一次 Langfuse 迁移变成网关停机。
+
+是否导出提示词和响应，与是否开启追踪是两个独立决策，`TOKENHUB_TRACING_CAPTURE_PAYLOADS` 默认关闭。关闭时链路依然携带状态码、耗时、每次尝试所用的 Provider 与资源、Token、成本、传输方式和上游请求 ID。开启后，请求与响应体会经过与本地 payload 日志相同的脱敏与截断；上游错误文本同样按 payload 对待，因为上游错误里可能夹带响应体、URL 或账号标识。
+
+Token 用量与成本只挂在 generation span 上，绝不挂在根 span 上。Langfuse v4 按 observation 聚合，若在根上重复携带，项目总量中的每个 Token 和每一分钱都会被算两遍。Token 计数在导出时还会被改写为互斥的分桶。TokenHub 的输入与输出总数本身已包含各自的明细类别——输入侧的缓存命中、缓存写入、音频，输出侧的推理、音频、预测——而 Langfuse 会把收到的分桶直接相加，因此每项明细都要从所属总数中扣除，并以剩余额度封顶。导出的成本只有对外计费金额；Provider 自身成本不导出，它被 TokenHub 有意限制在特权请求审计中。
+
+![Langfuse 中的一次故障转移链路：根请求 span、两次失败的不可达账号尝试，以及最终提供服务、带有自身 Token 数与成本的 generation](../assets/screenshots/tracing-langfuse-trace-en.png)
+
+链路 ID 与 span ID 都由请求 ID 推导而来，因此返回给客户端的 `x-request-id` 无需任何对照表即可直接定位到对应链路。但这只是查找便利，**不是**去重保证：Langfuse 对已见过的 span ID 仍可能生成重复 observation。因此导出重试被关闭，投递语义是 at-most-once——因瞬时故障丢失的批次不会重发。对携带 Token 数与花费的链路来说，成本被算多了才是更糟的失败；何况这条管道在饱和时本来就是丢弃而非等待。Playground 流量会带上 `playground` 标签导出，便于从成本分析中排除；在路由之前就被拒绝的请求同样会导出，因为额度或准入失败往往正是你要排查的对象。
+
+![Langfuse 链路列表中并列展示的网关流量、Playground 流量与被拒绝请求，可按标签过滤](../assets/screenshots/tracing-langfuse-list-en.png)
+
+导出永远不会拖慢请求。完成事件先入队，由独立的 goroutine 转换成 span；队列满时直接丢弃该事件，而不是让它排队等待。丢弃数计入 `tokenhub_gateway_trace_completions_total` 的 `outcome="dropped"`，并且每分钟最多记录一条日志，这样 Langfuse 里的空档就能与「网关本来就没有流量」区分开。是否真正送达则单独计入 `tokenhub_gateway_trace_spans_total`——队列打满和后端拒收是两类不同的问题，处理方式也不同。图片生成任务目前尚未纳入追踪：它们在 worker 上异步完成，需要先单独设计幂等方案。
 
 ## Prompt Cache 计价
 

@@ -42,16 +42,14 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	routed, err = compatibleChatRoutes(routed, req)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, nil, err)
-		s.recordRequestPayload(routed.Call.RequestID, req, auditErrorPayload(err, routed.Call.RequestID))
+		s.finishFailedRoutedCall(r, routed, nil, err, req)
 		writeError(w, r, err)
 		return
 	}
 
 	affinity, err := s.chatGatewayAffinity(key.ID, r.Header, req, routed.Routes)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, nil, err)
-		s.recordRequestPayload(routed.Call.RequestID, req, auditErrorPayload(err, routed.Call.RequestID))
+		s.finishFailedRoutedCall(r, routed, nil, err, req)
 		writeError(w, r, err)
 		return
 	}
@@ -95,9 +93,17 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			s.store.MarkRouteUsed(route.Route.ID)
 			s.store.MarkProviderResourceUsed(routeResourceID(route))
 		}
-		s.store.RecordRouteAttempts(routed.Call.RequestID, attempts)
-		s.store.FinishCall(routed.Call, route, usage, status, code, s.clientIP(r), r.UserAgent())
-		s.recordRequestPayload(routed.Call.RequestID, req, auditStreamPayload(status, code, streamErr))
+		s.finishRoutedCall(r, GatewayCallCompletion{
+			Call:            routed.Call,
+			Route:           route,
+			Usage:           usage,
+			Attempts:        attempts,
+			StatusCode:      status,
+			ErrorCode:       code,
+			ErrorMessage:    errorMessageOrEmpty(streamErr),
+			RequestPayload:  req,
+			ResponsePayload: auditStreamPayload(status, code, streamErr),
+		})
 		if streamErr != nil && !tracker.Wrote() {
 			// Nothing reached the client, so the response is a plain JSON error.
 			// Still emit routing headers here: onFirstWrite never ran, and callers
@@ -111,16 +117,13 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	resp, route, usage, attempts, err := s.executeRoutedChat(r, routed, req)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, attempts, err)
-		s.recordRequestPayload(routed.Call.RequestID, req, auditErrorPayload(err, routed.Call.RequestID))
+		s.finishFailedRoutedCall(r, routed, attempts, err, req)
 		writeError(w, r, err)
 		return
 	}
 	s.store.MarkRouteUsed(route.Route.ID)
 	s.store.MarkProviderResourceUsed(routeResourceID(route))
-	s.store.RecordRouteAttempts(routed.Call.RequestID, attempts)
-	s.store.FinishCall(routed.Call, route, usage, http.StatusOK, "", s.clientIP(r), r.UserAgent())
-	s.recordRequestPayload(routed.Call.RequestID, req, resp)
+	s.finishSuccessfulRoutedCall(r, routed, route, usage, attempts, req, resp)
 	w.Header().Set("x-request-id", routed.Call.RequestID)
 	s.writeRouteHeaders(w, routed.Call, route, len(attempts))
 	writeJSON(w, http.StatusOK, resp)
@@ -157,16 +160,14 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 				"provider_capability_not_supported",
 				"Streaming responses are not supported",
 			)
-			s.finishFailedRoutedCall(r, routed, nil, err)
-			s.recordRequestPayload(routed.Call.RequestID, req, auditErrorPayload(err, routed.Call.RequestID))
+			s.finishFailedRoutedCall(r, routed, nil, err, req)
 			writeError(w, r, err)
 			return
 		}
 	}
 	affinity, err := resolveCodexSessionAffinity(s.config.SecretKey, key.ID, r.Header, req)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, nil, err)
-		s.recordRequestPayload(routed.Call.RequestID, req, auditErrorPayload(err, routed.Call.RequestID))
+		s.finishFailedRoutedCall(r, routed, nil, err, req)
 		writeError(w, r, err)
 		return
 	}
@@ -181,16 +182,13 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, route, usage, attempts, err := s.executeRoutedResponses(r, routed, req)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, attempts, err)
-		s.recordRequestPayload(routed.Call.RequestID, req, auditErrorPayload(err, routed.Call.RequestID))
+		s.finishFailedRoutedCall(r, routed, attempts, err, req)
 		writeError(w, r, err)
 		return
 	}
 	s.store.MarkRouteUsed(route.Route.ID)
 	s.store.MarkProviderResourceUsed(routeResourceID(route))
-	s.store.RecordRouteAttempts(routed.Call.RequestID, attempts)
-	s.store.FinishCall(routed.Call, route, usage, http.StatusOK, "", s.clientIP(r), r.UserAgent())
-	s.recordRequestPayload(routed.Call.RequestID, req, resp)
+	s.finishSuccessfulRoutedCall(r, routed, route, usage, attempts, req, resp)
 	w.Header().Set("x-request-id", routed.Call.RequestID)
 	writeCodexResponseHeaders(w.Header(), usage.ResponseHeaders)
 	s.writeRouteHeaders(w, routed.Call, route, len(attempts))
@@ -228,8 +226,7 @@ func (s *Server) handleResponsesCompact(w http.ResponseWriter, r *http.Request) 
 	affinityRequest := ResponsesRequest{Model: model, raw: request}
 	affinity, err := resolveCodexSessionAffinity(s.config.SecretKey, key.ID, r.Header, affinityRequest)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, nil, err)
-		s.recordRequestPayload(routed.Call.RequestID, request, auditErrorPayload(err, routed.Call.RequestID))
+		s.finishFailedRoutedCall(r, routed, nil, err, request)
 		writeError(w, r, err)
 		return
 	}
@@ -240,16 +237,13 @@ func (s *Server) handleResponsesCompact(w http.ResponseWriter, r *http.Request) 
 	}
 	response, route, usage, attempts, err := s.executeRoutedCompact(r, routed, request)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, attempts, err)
-		s.recordRequestPayload(routed.Call.RequestID, request, auditErrorPayload(err, routed.Call.RequestID))
+		s.finishFailedRoutedCall(r, routed, attempts, err, request)
 		writeError(w, r, err)
 		return
 	}
 	s.store.MarkRouteUsed(route.Route.ID)
 	s.store.MarkProviderResourceUsed(routeResourceID(route))
-	s.store.RecordRouteAttempts(routed.Call.RequestID, attempts)
-	s.store.FinishCall(routed.Call, route, usage, http.StatusOK, "", s.clientIP(r), r.UserAgent())
-	s.recordRequestPayload(routed.Call.RequestID, request, response)
+	s.finishSuccessfulRoutedCall(r, routed, route, usage, attempts, request, response)
 	w.Header().Set("x-request-id", routed.Call.RequestID)
 	writeCodexResponseHeaders(w.Header(), usage.ResponseHeaders)
 	s.writeRouteHeaders(w, routed.Call, route, len(attempts))
@@ -281,29 +275,25 @@ func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, route, usage, attempts, err := s.executeRoutedEmbeddings(r, routed, req)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, attempts, err)
-		s.recordRequestPayload(routed.Call.RequestID, req, auditErrorPayload(err, routed.Call.RequestID))
+		s.finishFailedRoutedCall(r, routed, attempts, err, req)
 		writeError(w, r, err)
 		return
 	}
 	s.store.MarkRouteUsed(route.Route.ID)
 	s.store.MarkProviderResourceUsed(routeResourceID(route))
-	s.store.RecordRouteAttempts(routed.Call.RequestID, attempts)
-	s.store.FinishCall(routed.Call, route, usage, http.StatusOK, "", s.clientIP(r), r.UserAgent())
-	s.recordRequestPayload(routed.Call.RequestID, req, resp)
+	s.finishSuccessfulRoutedCall(r, routed, route, usage, attempts, req, resp)
 	w.Header().Set("x-request-id", routed.Call.RequestID)
 	s.writeRouteHeaders(w, routed.Call, route, len(attempts))
 	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) startRoutedCall(w http.ResponseWriter, r *http.Request, project Project, key APIKey, model string, stream bool, requestPayload any) (RoutedCall, bool) {
+	admittedAt := time.Now().UTC()
 	call, err := s.store.StartCall(r.Context(), project, key, model)
 	call.Stream = stream
 	if err != nil {
-		httpErr := AsHTTPError(err)
-		requestID := s.store.RecordRejectedRequest(project, key, model, stream, httpErr.Status, httpErr.Code, s.clientIP(r), r.UserAgent())
+		requestID := s.finishRejectedCall(r, admittedAt, project, key, model, stream, err, requestPayload)
 		w.Header().Set("x-request-id", requestID)
-		s.recordRequestPayload(requestID, requestPayload, auditErrorPayload(err, requestID))
 		writeError(w, r, err)
 		return RoutedCall{}, false
 	}
@@ -313,17 +303,13 @@ func (s *Server) startRoutedCall(w http.ResponseWriter, r *http.Request, project
 	}
 	routes, err := s.store.SelectRouteCandidates(model)
 	if err != nil {
-		httpErr := AsHTTPError(err)
-		s.store.FinishCall(call, RouteSelection{}, Usage{}, httpErr.Status, httpErr.Code, s.clientIP(r), r.UserAgent())
-		s.recordRequestPayload(call.RequestID, requestPayload, auditErrorPayload(err, call.RequestID))
+		s.finishFailedRoutedCall(r, RoutedCall{Call: call}, nil, err, requestPayload)
 		writeError(w, r, err)
 		return RoutedCall{}, false
 	}
 	routes, err = s.filterCodexRoutesByModel(r.Context(), model, routes)
 	if err != nil {
-		httpErr := AsHTTPError(err)
-		s.store.FinishCall(call, RouteSelection{}, Usage{}, httpErr.Status, httpErr.Code, s.clientIP(r), r.UserAgent())
-		s.recordRequestPayload(call.RequestID, requestPayload, auditErrorPayload(err, call.RequestID))
+		s.finishFailedRoutedCall(r, RoutedCall{Call: call}, nil, err, requestPayload)
 		writeError(w, r, err)
 		return RoutedCall{}, false
 	}
@@ -506,13 +492,18 @@ func (s *Server) handleAdminPlaygroundChat(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	requestID := NewID("pg")
+	startedAt := time.Now()
 	routed := RoutedCall{
 		Call: CallContext{
 			RequestID: requestID,
 			Project:   Project{ID: "admin_playground", Name: "Admin Playground", Status: StatusActive},
 			Key:       APIKey{ID: user.ID, Name: "Admin Playground"},
-			Model:     Model{Name: req.Model, Status: StatusActive},
-			StartedAt: time.Now().UTC(),
+			// The catalog model, not a bare name: pricing lives on it, and per-attempt
+			// cost is computed from whatever this carries. A name-only model silently
+			// reports every playground generation as free.
+			Model:      playgroundModel(s.store, req.Model),
+			StartedAt:  startedAt.UTC(),
+			measuredAt: startedAt,
 		},
 	}
 	routed.Routes = s.planRouteOrder(routed.Call, routes)
@@ -520,9 +511,17 @@ func (s *Server) handleAdminPlaygroundChat(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		httpErr := AsHTTPError(err)
 		route = lastAttemptRoute(attempts)
-		s.store.RecordRouteAttempts(requestID, attempts)
-		s.store.RecordPlaygroundRequest(routed.Call, route, httpErr.Status, httpErr.Code, s.clientIP(r), r.UserAgent())
-		s.recordRequestPayload(requestID, req, auditErrorPayload(err, requestID))
+		s.finishRoutedCall(r, GatewayCallCompletion{
+			Kind:            CompletionKindPlayground,
+			Call:            routed.Call,
+			Route:           route,
+			Attempts:        attempts,
+			StatusCode:      httpErr.Status,
+			ErrorCode:       httpErr.Code,
+			ErrorMessage:    httpErr.Message,
+			RequestPayload:  req,
+			ResponsePayload: auditErrorPayload(err, requestID),
+		})
 		s.recordAdminAudit(r, user, "chat_failed", "playground", req.Model, "", map[string]any{
 			"model":    req.Model,
 			"attempts": playgroundRouteAttempts(attempts),
@@ -533,15 +532,22 @@ func (s *Server) handleAdminPlaygroundChat(w http.ResponseWriter, r *http.Reques
 	}
 	s.store.MarkRouteUsed(route.Route.ID)
 	s.store.MarkProviderResourceUsed(routeResourceID(route))
-	s.store.RecordRouteAttempts(requestID, attempts)
-	s.store.RecordPlaygroundRequest(routed.Call, route, http.StatusOK, "", s.clientIP(r), r.UserAgent())
+	s.finishRoutedCall(r, GatewayCallCompletion{
+		Kind:            CompletionKindPlayground,
+		Call:            routed.Call,
+		Route:           route,
+		Usage:           usage,
+		Attempts:        attempts,
+		StatusCode:      http.StatusOK,
+		RequestPayload:  req,
+		ResponsePayload: resp,
+	})
 	s.recordAdminAudit(r, user, "chat", "playground", req.Model, "", map[string]any{
 		"model":    req.Model,
 		"route":    playgroundRouteSummary(route),
 		"usage":    usage,
 		"attempts": len(attempts),
 	})
-	s.recordRequestPayload(requestID, req, resp)
 	w.Header().Set("x-request-id", requestID)
 	writeJSON(w, http.StatusOK, PlaygroundChatResponse{
 		Response:  resp,
@@ -583,10 +589,11 @@ func executeRoutedWithStore[T any](
 		if err != nil {
 			status, code := statusAndCode(err)
 			attempts = append(attempts, RouteAttempt{
-				Selection: route,
-				Status:    status,
-				ErrorCode: code,
-				Error:     errorMessage(err),
+				Selection:      route,
+				Status:         status,
+				UpstreamStatus: AsHTTPError(err).upstreamStatusOrZero(),
+				ErrorCode:      code,
+				Error:          errorMessage(err),
 			})
 			lastErr = err
 			if !shouldFailoverRoutedError(err, routeIsBound) {
@@ -598,7 +605,8 @@ func executeRoutedWithStore[T any](
 		for {
 			attemptStartedAt := time.Now()
 			resp, usage, err := call(leaseCtx, route, omitReasoningEffort, len(attempts)+1)
-			latencyMS := maxInt64(1, time.Since(attemptStartedAt).Milliseconds())
+			attemptEndedAt := time.Now()
+			latencyMS := maxInt64(1, attemptEndedAt.Sub(attemptStartedAt).Milliseconds())
 			if leaseErr := coordinationLeaseError(leaseCtx); leaseErr != nil {
 				err = leaseErr
 			}
@@ -606,24 +614,35 @@ func executeRoutedWithStore[T any](
 			// not even via the effort fallback on the same route. These checks are
 			// load-bearing: ProviderInvocationError implements Unwrap, so
 			// isReasoningEffortRejection sees through the wrapper and would
-			// otherwise return true for an error that must not be retried.
+			// otherwise return true for an error that must not be retried. The
+			// disconnect is excluded directly rather than through the client
+			// disposition, which an effort rejection now also carries: refusing a
+			// bad parameter is a client error, and dropping the effort is exactly
+			// how the gateway fixes it.
 			disposition := providerErrorDisposition(err)
 			retryWithoutEffort := allowReasoningEffortFallback &&
 				!omitReasoningEffort &&
 				disposition != ProviderErrorStreamCommitted &&
-				disposition != ProviderErrorClient &&
+				!clientDisconnected(leaseCtx, err) &&
 				isReasoningEffortRejection(err)
 			if !retryWithoutEffort {
 				finishProviderResourceAttempt(leaseCtx, store, resourceID, leaseID, err, usage)
 			}
 			status, code := routeAttemptStatusAndCode(err, retryWithoutEffort)
 			attempts = append(attempts, RouteAttempt{
-				Selection: route,
-				Status:    status,
-				ErrorCode: code,
-				Error:     errorMessage(err),
-				Invoked:   true,
-				LatencyMS: latencyMS,
+				Selection:      route,
+				Status:         status,
+				UpstreamStatus: AsHTTPError(err).upstreamStatusOrZero(),
+				ErrorCode:      code,
+				Error:          errorMessage(err),
+				Invoked:        true,
+				LatencyMS:      latencyMS,
+				// Priced per attempt so a failover reports what each candidate cost
+				// rather than attributing the whole request to the winner. Tokens
+				// burned by an attempt that later failed were still billed.
+				Usage:     priceUsage(routed.Call.Model, usage),
+				StartedAt: attemptStartedAt.UTC(),
+				EndedAt:   attemptEndedAt.UTC(),
 			})
 			if err == nil {
 				rebindReason := ""
@@ -641,10 +660,11 @@ func executeRoutedWithStore[T any](
 					store.ReleaseProviderResourceCapacity(resourceID, leaseID)
 					status, code = statusAndCode(retryErr)
 					attempts = append(attempts, RouteAttempt{
-						Selection: route,
-						Status:    status,
-						ErrorCode: code,
-						Error:     errorMessage(retryErr),
+						Selection:      route,
+						Status:         status,
+						UpstreamStatus: AsHTTPError(retryErr).upstreamStatusOrZero(),
+						ErrorCode:      code,
+						Error:          errorMessage(retryErr),
 					})
 					lastErr = retryErr
 					if !shouldFailoverRoutedError(retryErr, routeIsBound) {
@@ -662,6 +682,14 @@ func executeRoutedWithStore[T any](
 		}
 	}
 	return zero, RouteSelection{}, Usage{}, attempts, lastErr
+}
+
+// clientDisconnected reports that there is no longer anyone to answer. The
+// context is consulted as well as the error because classifyStreamError marks a
+// mid-stream disconnect by its disposition without the error itself carrying a
+// context.Canceled chain.
+func clientDisconnected(ctx context.Context, err error) bool {
+	return errors.Is(err, context.Canceled) || (ctx != nil && errors.Is(ctx.Err(), context.Canceled))
 }
 
 func routeAttemptStatusAndCode(err error, reasoningEffortRejected bool) (int, string) {
@@ -771,13 +799,6 @@ func (w *streamWriteTracker) Flush() {
 	if flusher, ok := w.writer.(http.Flusher); ok {
 		flusher.Flush()
 	}
-}
-
-func (s *Server) finishFailedRoutedCall(r *http.Request, routed RoutedCall, attempts []RouteAttempt, err error) {
-	httpErr := AsHTTPError(err)
-	route := lastAttemptRoute(attempts)
-	s.store.RecordRouteAttempts(routed.Call.RequestID, attempts)
-	s.store.FinishCall(routed.Call, route, Usage{}, httpErr.Status, httpErr.Code, s.clientIP(r), r.UserAgent())
 }
 
 func (s *Server) adapterForRoute(route RouteSelection) (ProviderAdapter, error) {
@@ -1307,4 +1328,18 @@ func (s *Server) authenticate(r *http.Request) (Project, APIKey, error) {
 		return s.store.ValidateAPIKey(apiKey, s.clientIP(r))
 	}
 	return Project{}, APIKey{}, ErrInvalidAPIKey
+}
+
+// playgroundModel resolves the catalog entry for a playground request so its usage
+// is priced like any other call. It falls back to a name-only model when the catalog
+// does not know the name, which keeps the console usable against a model that was
+// just removed.
+func playgroundModel(store Store, name string) Model {
+	name = strings.TrimSpace(name)
+	for _, model := range store.ListModels() {
+		if model.Name == name {
+			return model
+		}
+	}
+	return Model{Name: name, Status: StatusActive}
 }

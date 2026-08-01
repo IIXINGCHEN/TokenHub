@@ -90,9 +90,30 @@ Provider の接続情報とプロジェクト制限は、引き続きルート�
 | 復旧 | 試行が上流に到達して成功するとブレーカーを閉じ、失敗回数をリセットし、`provider_resource_recovered` アラートを発行 |
 | 再切り離し | 試行が失敗すると直ちに次のクールダウンへ移行し、`TOKENHUB_RESOURCE_COOLDOWN_MAX_SECONDS` を上限として毎回倍増 |
 
-ブレーカーを閉じられるのは、試行リクエスト自身の成功だけです。ブレーカー作動時にすでに実行中だったリクエストは、結果にかかわらずブレーカーを閉じられません。ストリーム途中でのクライアント切断、ポリシー拒否、非対応モデルは失敗として数えず、失敗回数をリセットもしないため、「失敗・切断・失敗」のような交互パターンでもブレーカーは作動します。
+ブレーカーを閉じられるのは、試行リクエスト自身の成功だけです。ブレーカー作動時にすでに実行中だったリクエストは、結果にかかわらずブレーカーを閉じられません。失敗として数えるかどうかは、その上流エラーがリソースについて何を示したかで決まり、呼び出し側に返した ステータスでは決まりません。ストリーム途中でのクライアント切断、ポリシー拒否、非対応モデル、上流が不正と判断したリクエスト、その他「原因がアカウントではなくリクエスト側にある」ものは失敗として数えず、失敗回数をリセットもしないため、「失敗・切断・失敗」のような交互パターンでもブレーカーは作動します。認証情報の拒否、支払い不能なアカウント、レート制限、上流自体の障害は失敗として数えます。
 
 コンソールからリソースを「テスト」した場合、アダプターがプローブに対応していれば即座に復旧します。これは実際の上流リクエストを発行するためです。リソースの無効化は引き続き管理者の最優先操作であり、無効化されたリソースは上流の状態にかかわらず自動復旧の対象になりません。
+
+## 上流エラーの分類
+
+上流の失敗は 3 つの別々の問いに答える必要があり、1 つのステータスコードでは同時に答えられません。呼び出し側に何を返すか、ルーターが次の候補を試すか、その試行を Provider Resource の失敗として数えるかです。不正なリクエストはどの Provider でも不正なので、呼び出し側に返して他の候補は試しません。認証情報の拒否は 1 つのアカウント固有なので、リクエストは次へ進み、そのアカウントが失敗として数えられます。
+
+| 上流 | 呼び出し側が見る | エラーコード | 次の候補を試す | リソースの失敗に数える |
+| --- | --- | --- | --- | --- |
+| `400`、`422` | 同じステータス | `provider_invalid_request` | いいえ | いいえ |
+| `401`、`403` | `502` | `provider_auth_error` | はい | はい |
+| `402` | `502` | `provider_payment_required` | はい | はい |
+| `404` | `502` | `provider_model_not_found` | はい | いいえ |
+| `408` | `504` | `provider_upstream_timeout` | はい | はい |
+| `413` | `413` | `provider_invalid_request` | いいえ | いいえ |
+| `429` | `429`（`Retry-After` 付き） | `provider_rate_limited` | はい | はい |
+| `502`、`503`、`504` | 同じステータス | `provider_upstream_unavailable` | はい | はい |
+| その他の `5xx` | `502` | `provider_upstream_error` | はい | はい |
+| その他の `4xx` | `502` | `provider_error` | いいえ | いいえ |
+
+上流の `401` / `403` はそのまま転送しません。これはゲートウェイ自身がその Provider 向けに設定した認証情報が拒否されたという意味であり、呼び出し側が `401` を見ると自分の TokenHub API Key が失効したと誤解します。同じ理由で、この 2 つでは上流のレスポンスボディも返しません。Provider が拒否した鍵をその中に含めることがあるためです。元のステータスは各ルート試行の `upstream_status` に記録され、運用者が確認できます。
+
+各ルート試行は両方を記録します。`status_code` は呼び出し側に返したステータス、`upstream_status` は Provider が実際に返したステータスです。
 
 ## リクエスト使用量の監査
 
@@ -109,6 +130,8 @@ TokenHub は `GET /metrics` で Prometheus メトリクスを公開できます�
 | `tokenhub_gateway_requests_in_flight` | gauge | 処理中のモデル API リクエスト数。管理トラフィックとスクレイプは含みません。 |
 | `tokenhub_gateway_tokens_total` | counter | 種別ごとの Token：`prompt`、`completion`、`cached`、`cache_write`、`reasoning`。 |
 | `tokenhub_gateway_cost_usd_total` | counter | Model Directory 価格による統一外部請求見積もり。Provider 実コストは権限付きリクエスト監査にのみ保持され、このメトリクスには含まれません。 |
+| `tokenhub_gateway_trace_completions_total` | counter | 完了した呼び出しのトレースエクスポートでの行き先: `converted` または `dropped`。トレース有効時のみ。 |
+| `tokenhub_gateway_trace_spans_total` | counter | span の OTLP エクスポート結果: `exported` または `failed`。トレース有効時のみ。 |
 
 あわせて Go ランタイムとプロセスのメトリクスも公開されます。
 
@@ -116,9 +139,37 @@ TokenHub は `GET /metrics` で Prometheus メトリクスを公開できます�
 
 ルーティング前に拒否されたリクエスト（無効な API Key、クォータ超過、未知のモデル）はリクエスト数のみを増やします。Provider に到達していないため、Token・コスト・所要時間は記録しません。カタログに存在しないモデル名はそのまま記録せず `unknown` として扱うため、任意のモデル名を大量に送っても系列数を増やすことはできません。
 
-ラベルは `model`、`provider_type`、`provider_id`、`resource_id`、`status_code`、`error_code`、`stream` です。`TOKENHUB_METRICS_PROJECT_LABEL=true` を設定すると `project_id` が追加され、各ゲートウェイメトリクスの系列数がアクティブなプロジェクト数だけ増加します。プロジェクト単位のダッシュボードが必要な場合を除き無効のままにし、Key 単位の集計には使用量レポートを利用してください。
+ラベルは `model`、`provider_type`、`provider_id`、`resource_id`、`status_code`、`error_code`、`stream` です。上流の失敗は `status_code="502"` と `provider_error` の 1 組にまとめて報告されなくなり、「上流エラーの分類」に記載のステータスとエラーコードを持ちます。旧来の値で一致させているダッシュボードやアラートは更新が必要です。`TOKENHUB_METRICS_PROJECT_LABEL=true` を設定すると `project_id` が追加され、各ゲートウェイメトリクスの系列数がアクティブなプロジェクト数だけ増加します。プロジェクト単位のダッシュボードが必要な場合を除き無効のままにし、Key 単位の集計には使用量レポートを利用してください。
 
-スクレイプではなく push が必要な場合は、OpenTelemetry Collector の `prometheus` receiver でこのエンドポイントを収集して転送してください。ゲートウェイ自体は Prometheus exposition 形式のみを提供します。
+メトリクスをスクレイプではなく push したい場合は、OpenTelemetry Collector の `prometheus` receiver でこのエンドポイントを収集して転送してください。トレースは別のシグナルで、ゲートウェイが直接送信します。次節を参照してください。
+
+## トレースのエクスポート
+
+TokenHub はゲートウェイ呼び出しごとに 1 本の OpenTelemetry トレースを OTLP/HTTP でエクスポートできます。各トレースはリクエストを表すルート span と、呼び出し処理に入った候補ごとの generation span で構成されます。そのためフェイルオーバーが起きた場合は両方の候補が、それぞれが消費した Token とコストとともに表示されます。容量を確保できずスキップされた候補は Provider に到達していないため、ルート span 上の event として記録します。メトリクスは遅延が増えたことしか伝えませんが、トレースはどのアカウントが処理し、いくらかかったのかを示します。既定では無効です。運用データを別のシステムへ送信するためです。
+
+`TOKENHUB_TRACING_ENDPOINT` にはシグナル固有の OTLP traces URL を、パスまで含めて設定します。値はそのまま使用され、パスは一切追加されません。推測したパス接尾辞は起動エラーではなく静かな 404 として失敗するためです。パスのない URL や、query・fragment・userinfo を含む URL は、意図しない宛先へ静かに送信されるのではなく起動時に拒否されます。OTLP/HTTP に対応する任意のバックエンドを利用できます。ゲートウェイは gRPC ではなく OTLP over HTTP を直接話すため、**OpenTelemetry Collector は不要です**。
+
+Langfuse の場合:
+
+```bash
+TOKENHUB_TRACING_ENABLED=true
+TOKENHUB_TRACING_ENDPOINT=https://cloud.langfuse.com/api/public/otel/v1/traces
+TOKENHUB_TRACING_HEADERS="Authorization=Basic $(printf '%s' 'pk-lf-...:sk-lf-...' | base64),x-langfuse-ingestion-version=4"
+```
+
+属性のマッピングは Langfuse v4 のインジェストモデルを対象としています。v4 はセルフホスト環境で一般提供されており、2026-04-14 以降に作成された Langfuse Cloud 組織の既定バージョンです。Langfuse v4 のセルフホストには、PostgreSQL・Redis・オブジェクトストレージに加えて ClickHouse 25.12 以降が必要です。TokenHub は Langfuse を自身の Compose ファイルに同梱しません。Langfuse は独自の更新サイクルを持つもう 1 つのステートフルなスタックであり、両者を結合すると Langfuse の移行がゲートウェイの停止に直結するためです。
+
+プロンプトとレスポンスをエクスポートするかどうかは、トレースを有効にするかどうかとは別の判断であり、`TOKENHUB_TRACING_CAPTURE_PAYLOADS` は既定で無効です。無効でもトレースにはステータス、レイテンシ、各試行を処理した Provider とリソース、Token、コスト、トランスポート、上流リクエスト ID が含まれます。有効にすると、リクエストとレスポンスの本文は保存済みペイロードログと同じマスキングと切り詰めを経て送信されます。上流のエラー本文も同じ理由でペイロードとして扱います。上流エラーにはレスポンス本文・URL・アカウント識別子が含まれ得るためです。
+
+使用量とコストは generation span にのみ付与し、ルート span には決して付与しません。Langfuse v4 は observation 単位で集計するため、ルートにも重複して持たせるとプロジェクト合計で Token もコストも二重計上されます。Token 数はエクスポート時に互いに排他的なバケットへ書き換えられます。TokenHub の入力・出力の合計には各明細カテゴリ（入力側はキャッシュ読み取り・キャッシュ書き込み・音声、出力側は推論・音声・予測）がすでに含まれている一方、Langfuse は受け取ったバケットをそのまま合計するため、各明細を合計から差し引き、残量を上限として割り当てます。エクスポートするコストは請求額のみです。Provider 自身のコストは送信しません。TokenHub が意図的に特権リクエスト監査の中に限定しているためです。
+
+![Langfuse に表示されたフェイルオーバーのトレース: ルートのリクエスト span、到達不能なアカウントへの 2 回の失敗、そして実際に処理し独自の Token 数とコストを持つ generation](../assets/screenshots/tracing-langfuse-trace-en.png)
+
+トレース ID と span ID はいずれもリクエスト ID から導出されるため、クライアントへ返した `x-request-id` だけで対応するトレースに到達できます。ただしこれは検索の利便性であって重複排除の保証ではありません。Langfuse は既知の span ID に対しても重複した observation を作成し得ます。そのためエクスポートのリトライは無効化しており、配送は at-most-once です。一時的な失敗で失われたバッチは再送しません。Token 数とコストを含むトレースでは、コストが過大に計上される方が深刻な失敗であり、そもそもこのパイプラインは飽和時に待たずに破棄します。Playground のトラフィックは `playground` タグ付きでエクスポートされるため、コスト分析から除外できます。ルーティング前に拒否されたリクエストもエクスポートします。クォータや受け入れ制御による失敗こそ、調査したい対象であることが多いためです。
+
+![ゲートウェイ・Playground・拒否されたリクエストが並ぶ Langfuse のトレース一覧。タグで絞り込めます](../assets/screenshots/tracing-langfuse-list-en.png)
+
+エクスポートがリクエストを遅らせることはありません。完了イベントはキューに入り、別の goroutine が span へ変換します。キューが満杯のときは待たせるのではなく破棄します。破棄数は `tokenhub_gateway_trace_completions_total` の `outcome="dropped"` に計上され、ログは最大 1 分に 1 回に抑えられます。実際に到達したかどうかは `tokenhub_gateway_trace_spans_total` に別途計上します。キューの飽和とバックエンドの拒否は別種の問題であり、対処も異なるためです。これにより Langfuse 側の空白期間が「トラフィックがなかった」のか「破棄された」のかを区別できます。画像生成ジョブはまだトレース対象外です。ワーカー上で非同期に完了するため、先に冪等性の設計が必要です。
 
 ## Prompt Cache の料金
 

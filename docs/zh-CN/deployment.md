@@ -362,6 +362,15 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_METRICS_ENABLED` | `false` | 采集 Prometheus 指标并提供 `GET /metrics` |
 | `TOKENHUB_METRICS_TOKEN` | 空 | `/metrics` 的 Bearer 令牌；留空时回落到管理员令牌 |
 | `TOKENHUB_METRICS_PROJECT_LABEL` | `false` | 为网关指标添加 `project_id` 标签，会按项目数放大时间序列数量 |
+| `TOKENHUB_TRACING_ENABLED` | `false` | 通过 OTLP/HTTP 为每次网关调用导出一条 OpenTelemetry 链路 |
+| `TOKENHUB_TRACING_ENDPOINT` | 空 | OTLP traces 的信号级 URL，按原样使用；Langfuse 为 `<host>/api/public/otel/v1/traces` |
+| `TOKENHUB_TRACING_HEADERS` | 空 | 逗号分隔的 `name=value` 导出请求头，包含凭据 |
+| `TOKENHUB_TRACING_CAPTURE_PAYLOADS` | `false` | 在导出的 span 中包含提示词、响应和上游错误文本 |
+| `TOKENHUB_TRACING_SAMPLE_RATIO` | `1` | 导出比例，取值 0 到 1 |
+| `TOKENHUB_TRACING_TIMEOUT_SECONDS` | `10` | 单次导出尝试的时间上限 |
+| `TOKENHUB_TRACING_QUEUE_SIZE` | `2048` | 等待转换成 span 的完成事件数；队列满时丢弃链路而不是拖慢请求 |
+| `TOKENHUB_UPSTREAM_NON_STREAM_TIMEOUT_SECONDS` | `120` | 单个非流式上游请求的整体超时 |
+| `TOKENHUB_UPSTREAM_STREAM_IDLE_TIMEOUT_SECONDS` | `300` | 流式请求没有整体超时；该值限制等待响应头的时长，以及流开始后允许的静默时长。每收到一个字节即重新计时 |
 | `TOKENHUB_IN_FLIGHT_LEASE_TTL_SECONDS` | `300` | 集群并发租约的过期时间及续租周期基准 |
 | `TOKENHUB_CLUSTER_LOCK_TTL_SECONDS` | `180` | 集群协调锁的过期时间及续租周期基准 |
 | `TOKENHUB_GRACEFUL_SHUTDOWN_SECONDS` | `150` | 停机时等待在途请求完成的最长秒数 |
@@ -374,6 +383,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_IMAGE_QUEUE_CAPACITY` | `64` | 队列中允许排队的图片任务上限 |
 | `TOKENHUB_IMAGE_JOB_TIMEOUT_SECONDS` | `300` | 单个图片生成任务的超时时间，超时判定为失败 |
 | `TOKENHUB_IMAGE_CAPABILITY_RETRY_SECONDS` | `86400` | 被标记为不支持图片生成的供应商资源，隔多久重新探测一次 |
+| `TOKENHUB_API` | 空 | `tokenhub-migrate` CLI 的目标 Admin API 地址。仅由该 CLI 读取，后端服务不会读取；可被 `--to` 覆盖 |
 
 ## 前端环境变量
 

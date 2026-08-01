@@ -129,14 +129,13 @@ func (s *Server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request) {
 	routed.Routes = s.routesWithAdapterCapability(routed.Routes, capability)
 	if len(routed.Routes) == 0 {
 		err := NewHTTPError(http.StatusNotImplemented, "provider_capability_not_supported", "No route supports the Gemini CLI compatibility protocol")
-		s.finishFailedRoutedCall(r, routed, nil, err)
-		s.recordRequestPayload(routed.Call.RequestID, payload, auditErrorPayload(err, routed.Call.RequestID))
+		s.finishFailedRoutedCall(r, routed, nil, err, payload)
 		writeError(w, r, err)
 		return
 	}
 	affinity, err := s.geminiGatewayAffinity(key.ID, r.Header, payload, routed.Routes)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, nil, err)
+		s.finishFailedRoutedCall(r, routed, nil, err, payload)
 		writeError(w, r, err)
 		return
 	}
@@ -151,14 +150,13 @@ func (s *Server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	response, route, usage, attempts, err := s.executeRoutedGemini(r, routed, request, payload)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, attempts, err)
-		s.recordRequestPayload(routed.Call.RequestID, payload, auditErrorPayload(err, routed.Call.RequestID))
+		s.finishFailedRoutedCall(r, routed, attempts, err, payload)
 		writeError(w, r, err)
 		return
 	}
 	converted, err := codexResponsesToGemini(response, model, usage, reverseNames)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, attempts, err)
+		s.finishFailedRoutedCall(r, routed, attempts, err, payload)
 		writeError(w, r, err)
 		return
 	}

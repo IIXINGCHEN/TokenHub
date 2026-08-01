@@ -507,6 +507,9 @@ func (s *GormStore) StartCall(ctx context.Context, project Project, key APIKey, 
 		if err != nil {
 			return err
 		}
+		// Taken next to the database reading so the two describe the same instant,
+		// and the local reference does not also absorb the admission work below.
+		measuredAt := time.Now()
 		dayCounter, err := s.quotaBucketForUpdate(tx, privateKey.ID, "day", dayBucket(now))
 		if err != nil {
 			return err
@@ -545,6 +548,7 @@ func (s *GormStore) StartCall(ctx context.Context, project Project, key APIKey, 
 			Key:            publicKey(privateKey),
 			Model:          model,
 			StartedAt:      now,
+			measuredAt:     measuredAt,
 			requestContext: ctx,
 		}
 		return nil
@@ -561,11 +565,10 @@ func (s *GormStore) StartCall(ctx context.Context, project Project, key APIKey, 
 func (s *GormStore) FinishCall(call CallContext, route RouteSelection, usage Usage, statusCode int, errorCode string, clientIP string, userAgent string) {
 	// Measured here rather than inside the deferred observation, so latency reflects
 	// what the client waited for and excludes the persistence and lock time that
-	// follows. FinishCall is invoked after the last streamed byte is written.
-	elapsed := time.Duration(0)
-	if !call.StartedAt.IsZero() {
-		elapsed = time.Since(call.StartedAt)
-	}
+	// follows. FinishCall is invoked after the last streamed byte is written. The
+	// same value is threaded into the transaction below so the persisted latency
+	// and the reported metric describe the same interval.
+	elapsed := call.elapsed()
 	_ = s.stopInFlightLeaseHeartbeat(call.RequestID)
 	// priceUsage is pure, so it runs outside the lock and its result is final here.
 	usage = priceUsage(call.Model, usage)
@@ -580,7 +583,7 @@ func (s *GormStore) FinishCall(call CallContext, route RouteSelection, usage Usa
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
 	err := s.db.Transaction(func(tx *gorm.DB) error {
-		return s.finishCallTransaction(tx, call, route, usage, statusCode, errorCode, clientIP, userAgent, now)
+		return s.finishCallTransaction(tx, call, route, usage, statusCode, errorCode, clientIP, userAgent, now, elapsed)
 	})
 	if err != nil {
 		log.Printf("[tokenhub] failed to finish call request=%s: %v", call.RequestID, err)
@@ -590,7 +593,7 @@ func (s *GormStore) FinishCall(call CallContext, route RouteSelection, usage Usa
 	}
 }
 
-func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route RouteSelection, usage Usage, statusCode int, errorCode string, clientIP string, userAgent string, now time.Time) error {
+func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route RouteSelection, usage Usage, statusCode int, errorCode string, clientIP string, userAgent string, now time.Time, elapsed time.Duration) error {
 	if call.Key.ID != "" {
 		if err := s.lockScopeForUpdate(tx, "api_key", call.Key.ID); err != nil {
 			return err
@@ -638,7 +641,7 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 		Transport:          usage.Transport,
 		StatusCode:         statusCode,
 		ErrorCode:          errorCode,
-		LatencyMS:          time.Since(call.StartedAt).Milliseconds(),
+		LatencyMS:          elapsed.Milliseconds(),
 		ClientIP:           clientIP,
 		UserAgent:          userAgent,
 		CreatedAt:          now,
@@ -654,7 +657,7 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 			Source:      "gateway_request",
 			Operation:   "inference",
 			Success:     providerObservationSuccess(statusCode, errorCode),
-			LatencyMS:   time.Since(call.StartedAt).Milliseconds(),
+			LatencyMS:   elapsed.Milliseconds(),
 			ErrorCode:   errorCode,
 			ObservedAt:  now,
 		}).Error; err != nil {
@@ -691,6 +694,9 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 }
 
 func (s *GormStore) RecordPlaygroundRequest(call CallContext, route RouteSelection, statusCode int, errorCode string, clientIP string, userAgent string) {
+	// Measured before the lock, matching FinishCall: the recorded latency is what
+	// the caller waited for and excludes contention on the store-wide mutex.
+	elapsed := call.elapsed()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -705,7 +711,7 @@ func (s *GormStore) RecordPlaygroundRequest(call CallContext, route RouteSelecti
 		ProviderModel:      route.ProviderModel,
 		StatusCode:         statusCode,
 		ErrorCode:          errorCode,
-		LatencyMS:          time.Since(call.StartedAt).Milliseconds(),
+		LatencyMS:          elapsed.Milliseconds(),
 		ClientIP:           clientIP,
 		UserAgent:          userAgent,
 		CreatedAt:          time.Now().UTC(),
@@ -719,21 +725,7 @@ func (s *GormStore) RecordRouteAttempts(requestID string, attempts []RouteAttemp
 	now := time.Now().UTC()
 	items := make([]RouteAttemptLog, 0, len(attempts))
 	for index, attempt := range attempts {
-		items = append(items, RouteAttemptLog{
-			ID:                 NewID("rat"),
-			RequestID:          requestID,
-			AttemptIndex:       index + 1,
-			RouteID:            attempt.Selection.Route.ID,
-			ProviderID:         attempt.Selection.Provider.ID,
-			ProviderResourceID: routeResourceID(attempt.Selection),
-			ProviderModel:      attempt.Selection.ProviderModel,
-			StatusCode:         attempt.Status,
-			ErrorCode:          attempt.ErrorCode,
-			ErrorMessage:       attempt.Error,
-			Invoked:            attempt.Invoked,
-			LatencyMS:          attempt.LatencyMS,
-			CreatedAt:          now,
-		})
+		items = append(items, newRouteAttemptLog(requestID, index, attempt, now))
 	}
 	_ = s.db.Create(&items).Error
 }
@@ -923,7 +915,7 @@ func (s *GormStore) FailUnfinishedImageJobs(code string, message string) ([]Imag
 					ModelName:  job.Model,
 					StatusCode: http.StatusServiceUnavailable,
 					ErrorCode:  code,
-					LatencyMS:  now.Sub(job.CreatedAt).Milliseconds(),
+					LatencyMS:  latencyMillis(now.Sub(job.CreatedAt)),
 					CreatedAt:  now,
 				}).Error; err != nil {
 					return err
@@ -955,10 +947,7 @@ func (s *GormStore) UpdateImageJob(job ImageJob, revisedPrompt string) error {
 }
 
 func (s *GormStore) CompleteImageJob(call CallContext, job ImageJob, revisedPrompt string, asset ImageAsset, route RouteSelection, usage Usage, clientIP string, userAgent string) error {
-	elapsed := time.Duration(0)
-	if !call.StartedAt.IsZero() {
-		elapsed = time.Since(call.StartedAt)
-	}
+	elapsed := call.elapsed()
 	_ = s.stopInFlightLeaseHeartbeat(call.RequestID)
 	usage = priceUsage(call.Model, usage)
 	usage.ProviderCostUSD = s.providerCostUSD(route, usage)
@@ -982,7 +971,7 @@ func (s *GormStore) CompleteImageJob(call CallContext, job ImageJob, revisedProm
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		return s.db.Transaction(func(tx *gorm.DB) error {
-			if err := s.finishCallTransaction(tx, call, route, usage, http.StatusOK, "", clientIP, userAgent, now); err != nil {
+			if err := s.finishCallTransaction(tx, call, route, usage, http.StatusOK, "", clientIP, userAgent, now, elapsed); err != nil {
 				return err
 			}
 			if err := tx.Create(&asset).Error; err != nil {
@@ -1060,4 +1049,44 @@ func (s *GormStore) GetImageAsset(id string) (ImageAsset, bool) {
 		return ImageAsset{}, false
 	}
 	return asset, true
+}
+
+// newRouteAttemptLog is the persisted form of one routing attempt.
+//
+// It lives next to nothing else on purpose: the mapping is long, it belongs to the
+// RouteAttempt type rather than to the store, and keeping it here means adding a
+// field to an attempt touches one function instead of the store's largest file.
+func newRouteAttemptLog(requestID string, index int, attempt RouteAttempt, now time.Time) RouteAttemptLog {
+	return RouteAttemptLog{
+		ID:                       NewID("rat"),
+		RequestID:                requestID,
+		AttemptIndex:             index + 1,
+		RouteID:                  attempt.Selection.Route.ID,
+		ProviderID:               attempt.Selection.Provider.ID,
+		ProviderResourceID:       routeResourceID(attempt.Selection),
+		ProviderModel:            attempt.Selection.ProviderModel,
+		StatusCode:               attempt.Status,
+		UpstreamStatus:           attempt.UpstreamStatus,
+		ErrorCode:                attempt.ErrorCode,
+		ErrorMessage:             attempt.Error,
+		Invoked:                  attempt.Invoked,
+		LatencyMS:                attempt.LatencyMS,
+		ServedModel:              attempt.Usage.ServedModel,
+		UpstreamRequestID:        attempt.Usage.UpstreamRequestID,
+		Transport:                attempt.Usage.Transport,
+		InputTokens:              attempt.Usage.PromptTokens,
+		CachedInputTokens:        attempt.Usage.CachedInputTokens,
+		CacheWriteTokens:         attempt.Usage.CacheWriteInputTokens,
+		InputAudioTokens:         attempt.Usage.InputAudioTokens,
+		OutputTokens:             attempt.Usage.CompletionTokens,
+		ReasoningTokens:          attempt.Usage.ReasoningOutputTokens,
+		OutputAudioTokens:        attempt.Usage.OutputAudioTokens,
+		AcceptedPredictionTokens: attempt.Usage.AcceptedPredictionTokens,
+		RejectedPredictionTokens: attempt.Usage.RejectedPredictionTokens,
+		TotalTokens:              attempt.Usage.TotalTokens,
+		CostUSD:                  attempt.Usage.CostUSD,
+		StartedAt:                attempt.StartedAt,
+		EndedAt:                  attempt.EndedAt,
+		CreatedAt:                now,
+	}
 }

@@ -76,6 +76,15 @@ func NewHTTPError(status int, code, message string) *HTTPError {
 	return &HTTPError{Status: status, Code: code, Message: message}
 }
 
+// upstreamStatusOrZero is nil-safe: the attempt records call it on the result of
+// AsHTTPError, which is nil when there was no error to describe.
+func (e *HTTPError) upstreamStatusOrZero() int {
+	if e == nil {
+		return 0
+	}
+	return e.UpstreamStatus
+}
+
 func AsHTTPError(err error) *HTTPError {
 	if err == nil {
 		return nil
@@ -509,19 +518,39 @@ type ImageAsset struct {
 }
 
 type RouteAttemptLog struct {
-	ID                 string    `json:"id" gorm:"primaryKey"`
-	RequestID          string    `json:"request_id" gorm:"index"`
-	AttemptIndex       int       `json:"attempt_index"`
-	RouteID            string    `json:"route_id,omitempty" gorm:"index;index:idx_route_attempt_adaptive,priority:1"`
-	ProviderID         string    `json:"provider_id,omitempty" gorm:"index"`
-	ProviderResourceID string    `json:"provider_resource_id,omitempty" gorm:"index"`
-	ProviderModel      string    `json:"provider_model,omitempty"`
-	StatusCode         int       `json:"status_code"`
-	ErrorCode          string    `json:"error_code,omitempty"`
-	ErrorMessage       string    `json:"error_message,omitempty"`
-	Invoked            bool      `json:"invoked" gorm:"index;index:idx_route_attempt_adaptive,priority:2"`
-	LatencyMS          int64     `json:"latency_ms,omitempty"`
-	CreatedAt          time.Time `json:"created_at" gorm:"index:idx_route_attempt_adaptive,priority:3"`
+	ID                       string  `json:"id" gorm:"primaryKey"`
+	RequestID                string  `json:"request_id" gorm:"index"`
+	AttemptIndex             int     `json:"attempt_index"`
+	RouteID                  string  `json:"route_id,omitempty" gorm:"index;index:idx_route_attempt_adaptive,priority:1"`
+	ProviderID               string  `json:"provider_id,omitempty" gorm:"index"`
+	ProviderResourceID       string  `json:"provider_resource_id,omitempty" gorm:"index"`
+	ProviderModel            string  `json:"provider_model,omitempty"`
+	StatusCode               int     `json:"status_code"`
+	UpstreamStatus           int     `json:"upstream_status,omitempty"`
+	ErrorCode                string  `json:"error_code,omitempty"`
+	ErrorMessage             string  `json:"error_message,omitempty"`
+	Invoked                  bool    `json:"invoked" gorm:"index;index:idx_route_attempt_adaptive,priority:2"`
+	LatencyMS                int64   `json:"latency_ms,omitempty"`
+	ServedModel              string  `json:"served_model,omitempty"`
+	UpstreamRequestID        string  `json:"upstream_request_id,omitempty"`
+	Transport                string  `json:"transport,omitempty"`
+	InputTokens              int64   `json:"input_tokens,omitempty"`
+	CachedInputTokens        int64   `json:"cached_input_tokens,omitempty"`
+	CacheWriteTokens         int64   `json:"cache_write_input_tokens,omitempty"`
+	InputAudioTokens         int64   `json:"input_audio_tokens,omitempty"`
+	OutputTokens             int64   `json:"output_tokens,omitempty"`
+	ReasoningTokens          int64   `json:"reasoning_output_tokens,omitempty"`
+	OutputAudioTokens        int64   `json:"output_audio_tokens,omitempty"`
+	AcceptedPredictionTokens int64   `json:"accepted_prediction_tokens,omitempty"`
+	RejectedPredictionTokens int64   `json:"rejected_prediction_tokens,omitempty"`
+	TotalTokens              int64   `json:"total_tokens,omitempty"`
+	CostUSD                  float64 `json:"estimated_cost_usd,omitempty"`
+	// StartedAt and EndedAt record when this candidate was actually invoked. CreatedAt
+	// cannot substitute: every attempt of a request is written in one batch and so
+	// shares a single CreatedAt.
+	StartedAt time.Time `json:"started_at,omitzero"`
+	EndedAt   time.Time `json:"ended_at,omitzero"`
+	CreatedAt time.Time `json:"created_at" gorm:"index:idx_route_attempt_adaptive,priority:3"`
 }
 
 type AlertEvent struct {
@@ -1017,11 +1046,31 @@ type RouteExplainStep struct {
 
 type RouteAttempt struct {
 	Selection RouteSelection `json:"selection"`
-	Status    int            `json:"status"`
-	ErrorCode string         `json:"error_code,omitempty"`
-	Error     string         `json:"error,omitempty"`
-	Invoked   bool           `json:"invoked"`
-	LatencyMS int64          `json:"latency_ms,omitempty"`
+	// Status is what the caller was told. UpstreamStatus is what the provider
+	// actually answered, which the mapping to Status deliberately does not
+	// preserve — an upstream 401 is reported as 502 so a caller does not read it
+	// as their own key being rejected. Diagnosing a route needs both.
+	Status         int    `json:"status"`
+	UpstreamStatus int    `json:"upstream_status,omitempty"`
+	ErrorCode      string `json:"error_code,omitempty"`
+	Error          string `json:"error,omitempty"`
+	// Invoked reports that this candidate entered the invocation path, not that a
+	// request necessarily reached the upstream: acquiring credentials or resolving an
+	// adapter can still fail first. It is the boundary that distinguishes a candidate
+	// that was tried from one skipped for lack of capacity.
+	Invoked   bool  `json:"invoked"`
+	LatencyMS int64 `json:"latency_ms,omitempty"`
+	// Usage is what this candidate alone consumed, priced with the requested model.
+	// A failed attempt keeps whatever the upstream reported before failing: those
+	// tokens were billed regardless of the request failing over afterwards.
+	//
+	// Only invoked attempts have usage. A candidate skipped because capacity could
+	// not be acquired never reached a provider.
+	Usage Usage `json:"usage,omitzero"`
+	// StartedAt and EndedAt bound the upstream invocation. They are zero for a
+	// candidate that was never invoked.
+	StartedAt time.Time `json:"started_at,omitzero"`
+	EndedAt   time.Time `json:"ended_at,omitzero"`
 }
 
 type RoutedCall struct {
@@ -1035,12 +1084,63 @@ type CallContext struct {
 	Project   Project
 	Key       APIKey
 	Model     Model
+	// StartedAt is the database clock reading taken when the call was admitted:
+	// StartCall derives the quota buckets and the lease expiry from that reading
+	// so every replica agrees on them, and reports it here for callers that want
+	// the admission timestamp. It is *not* a valid reference for measuring how
+	// long the call ran — no production path reads it for that any more.
 	StartedAt time.Time
+	// measuredAt is the local reference used to measure how long the call ran.
+	// It is deliberately separate from StartedAt: on PostgreSQL deployments the
+	// database and the application usually run on different hosts, and any clock
+	// skew between them would otherwise land directly in request_logs.latency_ms
+	// (a database host running four minutes ahead produced latencies near
+	// -240000ms). time.Now keeps its monotonic reading here, so the measurement
+	// also survives wall-clock adjustments on this host.
+	measuredAt time.Time
 	// Stream records whether the client asked for a streamed response. It only
 	// labels observability output and never influences routing.
 	Stream         bool
 	Affinity       *RequestAffinity
 	requestContext context.Context
+}
+
+// measuredStart reports when the call began, on the clock its duration is
+// measured against. Anything paired with a timestamp this process stamps — an
+// elapsed time, a trace span end — has to start here rather than at StartedAt,
+// which the database clock produced.
+func (c CallContext) measuredStart() time.Time {
+	if !c.measuredAt.IsZero() {
+		return c.measuredAt
+	}
+	// Contexts assembled by hand rather than by StartCall carry only StartedAt.
+	// Falling back to it keeps their reporting working; callers clamp the result.
+	return c.StartedAt
+}
+
+// elapsed reports how long the call has been running. It never returns a
+// negative duration: callers persist the result as latency_ms, and a negative
+// latency is always a clock artefact rather than a real measurement.
+func (c CallContext) elapsed() time.Duration {
+	reference := c.measuredStart()
+	if reference.IsZero() {
+		return 0
+	}
+	if elapsed := time.Since(reference); elapsed > 0 {
+		return elapsed
+	}
+	return 0
+}
+
+// latencyMillis converts an interval into the non-negative value stored in a
+// latency_ms column. Intervals derived from a persisted timestamp can come out
+// negative when the replica that wrote it ran ahead of the replica reading it,
+// and a negative latency is never a real measurement.
+func latencyMillis(interval time.Duration) int64 {
+	if interval <= 0 {
+		return 0
+	}
+	return interval.Milliseconds()
 }
 
 func NewID(prefix string) string {
