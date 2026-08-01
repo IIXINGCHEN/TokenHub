@@ -541,3 +541,78 @@ func TestHTTPSinkApplyProviderAndRouteOnCleanTarget(t *testing.T) {
 		t.Fatalf("expected verification to pass, got %+v", verifyResult.Issues)
 	}
 }
+
+// TestHTTPSinkUpdatesRouteWhenInventoryMissing covers the update half of the
+// imported-inventory rule: the target validates it on PATCH as well, so a
+// re-apply that has to patch a route must restore the entry rather than fail.
+func TestHTTPSinkUpdatesRouteWhenInventoryMissing(t *testing.T) {
+	config := server.Config{
+		AdminToken:             "test-admin-token",
+		BootstrapAdminPassword: "admin123456",
+		ModelCatalogFile:       writeTestCatalog(t),
+	}
+	store := server.NewMemoryStoreWithConfig(config)
+	if err := server.BootstrapBaseDataWithConfig(store, config); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	ts := httptest.NewServer(server.NewWithConfig(store, config).Handler())
+	defer ts.Close()
+
+	client := NewAdminAPIClient(ts.URL, "test-admin-token", http.DefaultClient)
+	sink := NewHTTPSink(client, bundle.StaticResolver{"PROVIDER_API_KEY": "provider-secret"})
+
+	newBundle := func(priority int) *bundle.CanonicalMigrationBundle {
+		return &bundle.CanonicalMigrationBundle{
+			SchemaVersion: bundle.SchemaVersion,
+			Source:        bundle.Source{Adapter: "litellm", AdapterVersion: "1.60.0"},
+			GeneratedAt:   time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC),
+			Providers: []bundle.ProviderRef{{
+				ExternalRef:  bundle.ExternalRef{System: "litellm", ID: "provider/openai"},
+				APIKeySecret: &bundle.SecretRef{Ref: "PROVIDER_API_KEY"},
+				Spec:         server.Provider{ID: "litellm-provider-openai", Name: "openai-migrated", Type: "openai", BaseURL: "https://api.openai.com/v1", Status: server.StatusActive},
+			}},
+			ProviderResources: []bundle.ProviderResourceRef{{
+				ExternalRef: bundle.ExternalRef{System: "litellm", ID: "resource/openai-main"},
+				ProviderRef: "provider/openai",
+				Spec:        server.ProviderResource{ID: "litellm-resource-openai-main", Name: "openai-main", ResourceType: "openai", BaseURL: "https://api.openai.com/v1", Status: server.StatusActive},
+			}},
+			Models: []bundle.ModelRef{{
+				ExternalRef: bundle.ExternalRef{System: "litellm", ID: "model/gpt-4o-mini"},
+				Spec:        server.Model{Name: "gpt-4o-mini", Family: "gpt-4o", Modality: "text", Status: server.StatusActive},
+			}},
+			Routes: []bundle.RouteRef{{
+				ExternalRef:         bundle.ExternalRef{System: "litellm", ID: "route/gpt-4o-mini"},
+				ModelRef:            "model/gpt-4o-mini",
+				ProviderRef:         "provider/openai",
+				ProviderResourceRef: "resource/openai-main",
+				Spec:                server.ModelRoute{ModelName: "gpt-4o-mini", ProviderModel: "gpt-4o-mini", Priority: priority, Status: server.StatusActive},
+			}},
+		}
+	}
+
+	if _, err := sink.Apply(context.Background(), newBundle(1)); err != nil {
+		t.Fatalf("first apply: %v", err)
+	}
+	// Drop the imported inventory the way an operator pruning models would.
+	for _, model := range store.ListProviderModels() {
+		if err := store.DeleteProviderModel(model.ID); err != nil {
+			t.Fatalf("delete provider model: %v", err)
+		}
+	}
+
+	// The route now exists but its upstream model is no longer imported, so
+	// this apply has to patch it and must restore the entry to do so.
+	if _, err := sink.Apply(context.Background(), newBundle(7)); err != nil {
+		t.Fatalf("re-apply with drifted route: %v", err)
+	}
+
+	routes, err := client.ListRoutes(context.Background())
+	if err != nil {
+		t.Fatalf("list routes: %v", err)
+	}
+	for _, route := range routes {
+		if route.ModelName == "gpt-4o-mini" && route.Priority != 7 {
+			t.Fatalf("expected the drifted priority to be applied, got %+v", route)
+		}
+	}
+}

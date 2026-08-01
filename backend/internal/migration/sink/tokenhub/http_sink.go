@@ -829,6 +829,11 @@ func (s *HTTPSink) applyRouteHTTP(ctx context.Context, existing []server.ModelRo
 		if action == ActionSkip {
 			return Change{Resource: "route", ID: current.ID, Action: ActionSkip}, server.ModelRoute{}, nil
 		}
+		// The target validates the imported inventory on update too, so a
+		// route whose model is missing there cannot be patched either.
+		if err := s.ensureProviderModel(ctx, spec.ProviderID, spec.ProviderModel); err != nil {
+			return Change{}, server.ModelRoute{}, err
+		}
 		updated, err := s.client.UpdateRoute(ctx, current.ID, spec)
 		return Change{Resource: "route", ID: current.ID, Action: ActionUpdate}, updated, err
 	}
