@@ -26,6 +26,16 @@ This guide is for platform administrators, security operators, and infrastructur
 7. Validate the flow with Model Playground and request logs.
 8. Review usage attribution before issuing keys broadly.
 
+## Model Playground Diagnostics
+
+Open **Model Playground** from the console to validate a model through the same routing and Provider adapters used by gateway traffic. Every assistant turn keeps its own compact diagnostic summary: delivery mode, gateway-measured time to first token (TTFT), output throughput, total duration, full-context input tokens, output tokens, estimated cost, local completion time, and request ID. Expand **Diagnostics** to inspect millisecond timestamps plus the actual response details. Sessions remain in the current browser page unless explicitly exported.
+
+TokenHub streams a unified SSE event format to the Playground. If the selected upstream supports streaming, TTFT is measured from gateway admission to the first content delta and output throughput is calculated over the first-to-last content interval. If the upstream supports only buffered responses, TokenHub automatically falls back to buffered mode, marks TTFT as not applicable, and reports end-to-end output throughput instead of inventing a first-token measurement. Stopping a request preserves the partial text and marks the candidate as cancelled; authoritative token counts are shown only when the Provider returns them.
+
+Rerunning an assistant turn creates another candidate for that turn and removes later turns so the new branch cannot silently reuse stale context. Changing models starts a new session by default; keeping the existing context requires an explicit choice. Parameter controls follow the selected model's declared `supported_parameters`, so the Playground does not send controls that the model catalog says are unsupported.
+
+All permitted Playground users can see performance, usage, request ID, and their response details. Provider, resource, upstream request ID, and per-attempt routing details are visible only to roles with routing-read permission. Cost is labelled as an estimate because it uses the external model's configured price rather than an upstream invoice.
+
 ## API Key Ownership and Usage Attribution
 
 When issuing an API Key, select the actual user in **Owner User**. The issuer remains in audit metadata, but the Key's usage is attributed to its owner. Platform administrators may select any active user; team leaders may select an active user in their own team; ordinary users can only assign Keys to themselves.

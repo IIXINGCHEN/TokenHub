@@ -773,6 +773,10 @@ type ChatCompletionRequest struct {
 	MaxTokens         int            `json:"max_tokens,omitempty"`
 	Temperature       *float64       `json:"temperature,omitempty"`
 	TopP              *float64       `json:"top_p,omitempty"`
+	PresencePenalty   *float64       `json:"presence_penalty,omitempty"`
+	FrequencyPenalty  *float64       `json:"frequency_penalty,omitempty"`
+	MinP              *float64       `json:"min_p,omitempty"`
+	TopK              *int           `json:"top_k,omitempty"`
 	Stop              any            `json:"stop,omitempty"`
 	Tools             any            `json:"tools,omitempty"`
 	ToolChoice        any            `json:"tool_choice,omitempty"`
@@ -858,6 +862,10 @@ func (r ChatCompletionRequest) MarshalJSON() ([]byte, error) {
 	setOrDeleteRawJSONField(raw, "max_tokens", r.MaxTokens, r.MaxTokens != 0)
 	setOrDeleteRawJSONField(raw, "temperature", r.Temperature, r.Temperature != nil)
 	setOrDeleteRawJSONField(raw, "top_p", r.TopP, r.TopP != nil)
+	setOrDeleteRawJSONField(raw, "presence_penalty", r.PresencePenalty, r.PresencePenalty != nil)
+	setOrDeleteRawJSONField(raw, "frequency_penalty", r.FrequencyPenalty, r.FrequencyPenalty != nil)
+	setOrDeleteRawJSONField(raw, "min_p", r.MinP, r.MinP != nil)
+	setOrDeleteRawJSONField(raw, "top_k", r.TopK, r.TopK != nil)
 	setOrDeleteRawJSONField(raw, "stop", r.Stop, r.Stop != nil)
 	setOrDeleteRawJSONField(raw, "tools", r.Tools, r.Tools != nil)
 	setOrDeleteRawJSONField(raw, "tool_choice", r.ToolChoice, r.ToolChoice != nil)
@@ -879,29 +887,39 @@ type PlaygroundChatResponse struct {
 }
 
 type PlaygroundRouteSummary struct {
-	RouteID          string  `json:"route_id,omitempty"`
-	ProviderID       string  `json:"provider_id,omitempty"`
-	ProviderName     string  `json:"provider_name,omitempty"`
-	ResourceID       string  `json:"resource_id,omitempty"`
-	ResourceName     string  `json:"resource_name,omitempty"`
-	ProviderModel    string  `json:"provider_model,omitempty"`
-	Priority         int     `json:"priority,omitempty"`
-	ResourcePriority int     `json:"resource_priority,omitempty"`
-	Weight           int     `json:"weight,omitempty"`
-	QualityScore     int     `json:"quality_score,omitempty"`
-	CostScore        int     `json:"cost_score,omitempty"`
-	Strategy         string  `json:"strategy,omitempty"`
-	EffectiveWeight  int     `json:"effective_weight,omitempty"`
-	Samples          int64   `json:"samples,omitempty"`
-	SuccessRate      float64 `json:"success_rate,omitempty"`
-	LatencyMS        int64   `json:"latency_ms,omitempty"`
+	RouteID           string  `json:"route_id,omitempty"`
+	ProviderID        string  `json:"provider_id,omitempty"`
+	ProviderName      string  `json:"provider_name,omitempty"`
+	ResourceID        string  `json:"resource_id,omitempty"`
+	ResourceName      string  `json:"resource_name,omitempty"`
+	ProviderModel     string  `json:"provider_model,omitempty"`
+	UpstreamRequestID string  `json:"upstream_request_id,omitempty"`
+	ServedModel       string  `json:"served_model,omitempty"`
+	ModelETag         string  `json:"model_etag,omitempty"`
+	Transport         string  `json:"transport,omitempty"`
+	Priority          int     `json:"priority,omitempty"`
+	ResourcePriority  int     `json:"resource_priority,omitempty"`
+	Weight            int     `json:"weight,omitempty"`
+	QualityScore      int     `json:"quality_score,omitempty"`
+	CostScore         int     `json:"cost_score,omitempty"`
+	Strategy          string  `json:"strategy,omitempty"`
+	EffectiveWeight   int     `json:"effective_weight,omitempty"`
+	Samples           int64   `json:"samples,omitempty"`
+	SuccessRate       float64 `json:"success_rate,omitempty"`
+	LatencyMS         int64   `json:"latency_ms,omitempty"`
 }
 
 type PlaygroundRouteAttempt struct {
-	Route  PlaygroundRouteSummary `json:"route"`
-	Status int                    `json:"status"`
-	Code   string                 `json:"code,omitempty"`
-	Error  string                 `json:"error,omitempty"`
+	Route          PlaygroundRouteSummary `json:"route,omitzero"`
+	Status         int                    `json:"status"`
+	UpstreamStatus int                    `json:"upstream_status,omitempty"`
+	Code           string                 `json:"code,omitempty"`
+	Error          string                 `json:"error,omitempty"`
+	Invoked        bool                   `json:"invoked"`
+	LatencyMS      int64                  `json:"latency_ms,omitempty"`
+	Usage          Usage                  `json:"usage,omitzero"`
+	StartedAt      time.Time              `json:"started_at,omitzero"`
+	EndedAt        time.Time              `json:"ended_at,omitzero"`
 }
 
 type ResponsesRequest struct {

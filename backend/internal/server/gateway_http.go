@@ -576,6 +576,7 @@ func (s *Server) handleAdminPlaygroundChat(w http.ResponseWriter, r *http.Reques
 	}
 	s.store.MarkRouteUsed(route.Route.ID)
 	s.store.MarkProviderResourceUsed(routeResourceID(route))
+	usage = priceUsage(routed.Call.Model, usage)
 	s.finishRoutedCall(r, GatewayCallCompletion{
 		Kind:            CompletionKindPlayground,
 		Call:            routed.Call,
@@ -595,9 +596,9 @@ func (s *Server) handleAdminPlaygroundChat(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("x-request-id", requestID)
 	writeJSON(w, http.StatusOK, PlaygroundChatResponse{
 		Response:  resp,
-		Route:     playgroundRouteSummary(route),
-		Usage:     usage,
-		Attempts:  playgroundRouteAttempts(attempts),
+		Route:     playgroundRouteForUser(user, route, usage),
+		Usage:     playgroundUsageForUser(user, usage),
+		Attempts:  playgroundAttemptsForUser(user, attempts),
 		RequestID: requestID,
 	})
 }
@@ -1326,10 +1327,16 @@ func playgroundRouteAttempts(attempts []RouteAttempt) []PlaygroundRouteAttempt {
 	out := make([]PlaygroundRouteAttempt, 0, len(attempts))
 	for _, attempt := range attempts {
 		out = append(out, PlaygroundRouteAttempt{
-			Route:  playgroundRouteSummary(attempt.Selection),
-			Status: attempt.Status,
-			Code:   attempt.ErrorCode,
-			Error:  attempt.Error,
+			Route:          playgroundRouteSummary(attempt.Selection),
+			Status:         attempt.Status,
+			UpstreamStatus: attempt.UpstreamStatus,
+			Code:           attempt.ErrorCode,
+			Error:          attempt.Error,
+			Invoked:        attempt.Invoked,
+			LatencyMS:      attempt.LatencyMS,
+			Usage:          attempt.Usage,
+			StartedAt:      attempt.StartedAt,
+			EndedAt:        attempt.EndedAt,
 		})
 	}
 	return out

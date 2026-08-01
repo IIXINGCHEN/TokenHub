@@ -78,6 +78,7 @@ export const adminNavGroups: NavGroup[] = [
       { view: "providers", label: "Provider 渠道", icon: Server },
       { view: "models", label: "模型目录", icon: Boxes },
       { view: "routes", label: "路由策略", icon: Gauge },
+      { view: "playground", label: "模型演练场", icon: Send },
     ],
   },
   {
