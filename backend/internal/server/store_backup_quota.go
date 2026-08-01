@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -485,6 +486,38 @@ func quotaPolicyLimits(tx *gorm.DB, project Project, key APIKey) (QuotaLimits, M
 		limits = mergeQuotaLimits(limits, candidate)
 	}
 	return limits, scopes
+}
+
+func validateQuotaPolicyMinuteLimits(fields map[string]any) error {
+	for _, key := range []string{"rate_limit_rpm", "token_limit_tpm"} {
+		value, ok := fields[key]
+		if !ok || value == nil {
+			continue
+		}
+		if !validNonNegativeInt64(value) {
+			return NewHTTPError(http.StatusBadRequest, "invalid_quota_policy_rate_limit", "Quota policy RPM and TPM limits must be non-negative 64-bit integers")
+		}
+	}
+	return nil
+}
+
+func validNonNegativeInt64(value any) bool {
+	switch typed := value.(type) {
+	case int:
+		return typed >= 0
+	case int64:
+		return typed >= 0
+	case float64:
+		return !math.IsNaN(typed) && !math.IsInf(typed, 0) && typed >= 0 && typed < math.Exp2(63) && math.Trunc(typed) == typed
+	case json.Number:
+		parsed, err := strconv.ParseInt(string(typed), 10, 64)
+		return err == nil && parsed >= 0
+	case string:
+		parsed, err := strconv.ParseInt(strings.TrimSpace(typed), 10, 64)
+		return err == nil && parsed >= 0
+	default:
+		return false
+	}
 }
 
 func strictLimitChanged(current int64, candidate int64) bool {

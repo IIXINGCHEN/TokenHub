@@ -404,6 +404,46 @@ func TestAPIKeyMinuteLimitUsesStrictestApplicablePolicy(t *testing.T) {
 	}
 }
 
+func TestQuotaPolicyMinuteLimitsRejectInvalidValues(t *testing.T) {
+	store := NewMemoryStore()
+	project := store.CreateProject(Project{Name: "Invalid Quota Policy", Status: StatusActive})
+	policy := store.CreateResource("quota-policies", AdminResource{
+		Name: "Existing Policy", Status: StatusActive,
+		Fields: map[string]any{"scope": "project", "scope_id": project.ID, "rate_limit_rpm": 1},
+	})
+	app := New(store).Handler()
+	for _, test := range []struct {
+		name    string
+		method  string
+		path    string
+		payload map[string]any
+	}{
+		{
+			name: "negative create", method: http.MethodPost, path: "/api/admin/resources/quota-policies",
+			payload: map[string]any{"name": "Negative RPM", "fields": map[string]any{"rate_limit_rpm": -1}},
+		},
+		{
+			name: "overflow create", method: http.MethodPost, path: "/api/admin/resources/quota-policies",
+			payload: map[string]any{"name": "Overflow TPM", "fields": map[string]any{"token_limit_tpm": json.Number("9223372036854775808")}},
+		},
+		{
+			name: "negative update", method: http.MethodPatch, path: "/api/admin/resources/quota-policies/" + policy.ID,
+			payload: map[string]any{"fields": map[string]any{"token_limit_tpm": -1}},
+		},
+		{
+			name: "negative project request", method: http.MethodPost, path: "/api/admin/projects/" + project.ID + "/quota-increase",
+			payload: map[string]any{"fields": map[string]any{"rate_limit_rpm": -1}},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := doJSON(t, app, test.method, test.path, test.payload, "")
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body, "invalid_quota_policy_rate_limit") {
+				t.Fatalf("invalid quota policy returned %d: %s", response.Code, response.Body)
+			}
+		})
+	}
+}
+
 func TestProjectMinuteLimitsApplyIndependentlyPerKeyUnderConcurrency(t *testing.T) {
 	for _, test := range []struct {
 		name             string

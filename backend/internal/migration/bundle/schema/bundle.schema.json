@@ -272,8 +272,8 @@
             "allowed_models": {"type": ["array", "null"], "items": {"type": "string"}},
             "ip_allow_list": {"type": "array", "items": {"type": "string"}},
             "ip_allowlist": {"type": ["array", "null"], "items": {"type": "string"}},
-            "rate_limit_rpm": {"type": ["integer", "null"]},
-            "token_limit_tpm": {"type": ["integer", "null"]},
+            "rate_limit_rpm": {"type": ["integer", "null"], "minimum": 0, "maximum": 9223372036854775807},
+            "token_limit_tpm": {"type": ["integer", "null"], "minimum": 0, "maximum": 9223372036854775807},
             "limits": {
               "type": "object",
               "additionalProperties": false,
@@ -310,8 +310,8 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "rate_limit_rpm": {"type": "integer"},
-            "token_limit_tpm": {"type": "integer"},
+            "rate_limit_rpm": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+            "token_limit_tpm": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
             "daily_requests": {"type": "integer"},
             "monthly_requests": {"type": "integer"},
             "daily_tokens": {"type": "integer"},

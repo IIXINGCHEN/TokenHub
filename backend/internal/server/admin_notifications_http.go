@@ -935,6 +935,11 @@ func (s *Server) applyApprovalRequest(request ApprovalRequest, actor AdminUser) 
 			Status:      stringFromPayload(payload, "status"),
 			Fields:      fieldsFromPayload(payload["fields"]),
 		}
+		if request.ResourceType == "quota-policies" {
+			if err := validateQuotaPolicyMinuteLimits(resource.Fields); err != nil {
+				return nil, err
+			}
+		}
 		var saved AdminResource
 		var err error
 		if request.ResourceID == "" {
