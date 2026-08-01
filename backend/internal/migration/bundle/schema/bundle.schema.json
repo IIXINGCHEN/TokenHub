@@ -278,8 +278,6 @@
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "rate_limit_rpm": {"type": "integer"},
-                "token_limit_tpm": {"type": "integer"},
                 "daily_requests": {"type": "integer"},
                 "monthly_requests": {"type": "integer"},
                 "daily_tokens": {"type": "integer"},
