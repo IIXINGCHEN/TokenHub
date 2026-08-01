@@ -46,6 +46,11 @@ func TestBuiltinDeepSeekCatalogDescribesNativeV4Capabilities(t *testing.T) {
 	for _, model := range deepSeek.Models {
 		models[model.ID] = model
 	}
+	for _, legacyID := range []string{"deepseek-chat", "deepseek-reasoner"} {
+		if _, ok := models[legacyID]; ok {
+			t.Fatalf("discontinued DeepSeek model %q must not be advertised", legacyID)
+		}
+	}
 	flash, ok := models["deepseek-v4-flash"]
 	if !ok {
 		t.Fatal("expected native deepseek-v4-flash model")

@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
@@ -9,6 +10,25 @@ import (
 	"strings"
 	"time"
 )
+
+type nullableInt64Patch struct {
+	Set   bool
+	Value *int64
+}
+
+func (value *nullableInt64Patch) UnmarshalJSON(data []byte) error {
+	value.Set = true
+	if string(data) == "null" {
+		value.Value = nil
+		return nil
+	}
+	var decoded int64
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	value.Value = &decoded
+	return nil
+}
 
 func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAdmin(w, r, "overview", r.Method)
@@ -832,6 +852,8 @@ func (s *Server) handleAdminAPIKeyCreate(w http.ResponseWriter, r *http.Request,
 		AllowedModels []string    `json:"allowed_models"`
 		IPAllowlist   []string    `json:"ip_allowlist"`
 		Limits        QuotaLimits `json:"limits"`
+		RateLimitRPM  *int64      `json:"rate_limit_rpm"`
+		TokenLimitTPM *int64      `json:"token_limit_tpm"`
 		ExpiresAt     *time.Time  `json:"expires_at"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
@@ -851,6 +873,8 @@ func (s *Server) handleAdminAPIKeyCreate(w http.ResponseWriter, r *http.Request,
 		"allowed_models":   req.AllowedModels,
 		"ip_allowlist":     req.IPAllowlist,
 		"limits":           req.Limits,
+		"rate_limit_rpm":   req.RateLimitRPM,
+		"token_limit_tpm":  req.TokenLimitTPM,
 		"expires_at":       req.ExpiresAt,
 		"requested_action": "api_key_create",
 	}
@@ -860,14 +884,16 @@ func (s *Server) handleAdminAPIKeyCreate(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	key, secret, err := s.store.CreateAPIKey(projectID, APIKey{
-		Name:        req.Name,
-		Group:       req.Group,
-		OwnerUserID: ownerUserID,
-		Allowed:     req.AllowedModels,
-		IPAllowlist: req.IPAllowlist,
-		Limits:      req.Limits,
-		ExpiresAt:   req.ExpiresAt,
-		Status:      StatusActive,
+		Name:          req.Name,
+		Group:         req.Group,
+		OwnerUserID:   ownerUserID,
+		Allowed:       req.AllowedModels,
+		IPAllowlist:   req.IPAllowlist,
+		Limits:        req.Limits,
+		RateLimitRPM:  req.RateLimitRPM,
+		TokenLimitTPM: req.TokenLimitTPM,
+		ExpiresAt:     req.ExpiresAt,
+		Status:        StatusActive,
 		Metadata: map[string]string{
 			"created_by":      user.ID,
 			"created_by_role": normalizeAdminRole(user.Role),
@@ -877,13 +903,18 @@ func (s *Server) handleAdminAPIKeyCreate(w http.ResponseWriter, r *http.Request,
 		writeError(w, r, err)
 		return
 	}
-	s.recordAdminAudit(r, user, "create", "api_key", key.ID, "", map[string]any{"project_id": key.ProjectID, "name": key.Name, "owner_user_id": key.OwnerUserID})
+	s.recordAdminAudit(r, user, "create", "api_key", key.ID, "", map[string]any{
+		"project_id": key.ProjectID, "name": key.Name, "owner_user_id": key.OwnerUserID,
+		"rate_limit_rpm": key.RateLimitRPM, "token_limit_tpm": key.TokenLimitTPM,
+	})
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id":                      key.ID,
 		"api_key":                 secret,
 		"name":                    key.Name,
 		"project_id":              key.ProjectID,
 		"owner_user_id":           key.OwnerUserID,
+		"rate_limit_rpm":          key.RateLimitRPM,
+		"token_limit_tpm":         key.TokenLimitTPM,
 		"plain_text_visible_once": true,
 	})
 }
@@ -941,27 +972,33 @@ func (s *Server) handleAdminAPIKeyItem(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPatch:
 		var req struct {
-			Name          string       `json:"name"`
-			Group         string       `json:"group"`
-			OwnerUserID   *string      `json:"owner_user_id"`
-			AllowedModels []string     `json:"allowed_models"`
-			IPAllowlist   []string     `json:"ip_allowlist"`
-			Limits        *QuotaLimits `json:"limits"`
-			Status        string       `json:"status"`
-			ExpiresAt     *time.Time   `json:"expires_at"`
+			Name          string             `json:"name"`
+			Group         string             `json:"group"`
+			OwnerUserID   *string            `json:"owner_user_id"`
+			AllowedModels []string           `json:"allowed_models"`
+			IPAllowlist   []string           `json:"ip_allowlist"`
+			Limits        *QuotaLimits       `json:"limits"`
+			RateLimitRPM  nullableInt64Patch `json:"rate_limit_rpm"`
+			TokenLimitTPM nullableInt64Patch `json:"token_limit_tpm"`
+			Status        string             `json:"status"`
+			ExpiresAt     *time.Time         `json:"expires_at"`
 		}
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, r, NewHTTPError(400, "invalid_request", err.Error()))
 			return
 		}
 		patch := APIKey{
-			Name:        req.Name,
-			Group:       req.Group,
-			Allowed:     req.AllowedModels,
-			IPAllowlist: req.IPAllowlist,
-			LimitsSet:   req.Limits != nil,
-			Status:      req.Status,
-			ExpiresAt:   req.ExpiresAt,
+			Name:          req.Name,
+			Group:         req.Group,
+			Allowed:       req.AllowedModels,
+			IPAllowlist:   req.IPAllowlist,
+			LimitsSet:     req.Limits != nil,
+			RateLimitRPM:  req.RateLimitRPM.Value,
+			RateLimitSet:  req.RateLimitRPM.Set,
+			TokenLimitTPM: req.TokenLimitTPM.Value,
+			TokenLimitSet: req.TokenLimitTPM.Set,
+			Status:        req.Status,
+			ExpiresAt:     req.ExpiresAt,
 		}
 		if req.Limits != nil {
 			patch.Limits = *req.Limits

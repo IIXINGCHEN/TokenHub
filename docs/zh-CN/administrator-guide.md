@@ -42,6 +42,14 @@ TokenHub 会向演练场输出统一的 SSE 事件格式。所选上游支持流
 
 每条新用量记录都会固化当时的归属用户，因此以后转移归属或删除 Key 不会改写已记录的历史。对该字段上线前的旧记录，系统依次回退到 Key 当前归属用户、旧的发放人、项目负责人，最后显示为「未知」。个人排行会分别展示用量中实际出现过的 Key 数，以及当前归属且未吊销的 Key 数。
 
+## 单 Key RPM 与 TPM 限制
+
+每个 API Key 都可以设置可选的每分钟请求数（RPM）和每分钟 Token 数（TPM）限制。未设置或 `null` 表示继承适用的全局、项目和团队策略；`0` 表示不增加 Key 自身的限制，但不能绕过上层限制；正数表示增加 Key 级限制。当多个正数限制同时适用时，TokenHub 执行其中最严格的值。禁用 Key 后，无论限制值如何，所有请求都会被拒绝。
+
+RPM 在调用 Provider 前扣减。TPM 同时按请求的预估输入量和最大输出量进行预留；文本请求未显式指定最大输出时，会预留 4,096 个输出 Token。请求结束后，系统按 Provider 返回的总 Token 数结算；若无总数，则使用提示词与补全 Token 之和。缓存与推理 Token 已包含在这些总数中，不会重复累加。失败或中断的请求会返还未使用的预留量。
+
+超过限制时返回 HTTP 429，错误码为 `api_key_rpm_exceeded` 或 `api_key_tpm_exceeded`，并附带 `Retry-After` 以及对应的 `X-RateLimit-Limit-*`、`X-RateLimit-Remaining-*` 和 `X-RateLimit-Reset-*` 响应头。分钟桶保存在数据库中，在 SQLite 和 PostgreSQL 上都会由多个 TokenHub 实例共享。指标只暴露短哈希形式的 Key 引用，绝不会包含完整 API Key。
+
 ## Provider 目录可用性
 
 TokenHub 会把最后一次成功加载的 Provider 目录保存在数据库中。每次后端启动时，系统都会校验并加载配置的本地 `provider-catalog.json`，然后原子替换数据库快照。普通「Provider 渠道」请求只读取数据库快照，管理员也可以手动刷新同一份本地目录。若本地目录读取、解析或完整性校验失败，TokenHub 会继续使用最后一次有效快照。
@@ -136,6 +144,7 @@ TokenHub 可以在 `GET /metrics` 暴露 Prometheus 指标。该功能默认关�
 | `tokenhub_gateway_requests_in_flight` | gauge | 正在处理的模型 API 请求数，不含管理后台流量和抓取请求。 |
 | `tokenhub_gateway_tokens_total` | counter | 按类型统计的 Token：`prompt`、`completion`、`cached`、`cache_write`、`reasoning`。 |
 | `tokenhub_gateway_cost_usd_total` | counter | 使用模型目录价格计算的统一对外计费估算；Provider 真实成本只保留在有权限的请求审计中，不进入该指标。 |
+| `tokenhub_gateway_rate_limit_hits_total` | counter | 按实际生效的策略作用域和限制类型统计被拒请求；仅 `api_key` 限制使用短哈希 `key_ref`，继承自全局、项目和团队的限制统一使用 `none`，以控制时间序列基数。 |
 | `tokenhub_gateway_trace_completions_total` | counter | 已完成调用在链路导出中的去向：`converted` 或 `dropped`。仅在开启追踪时存在。 |
 | `tokenhub_gateway_trace_spans_total` | counter | span 在 OTLP 导出中的结果：`exported` 或 `failed`。仅在开启追踪时存在。 |
 

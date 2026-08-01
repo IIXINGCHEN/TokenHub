@@ -6,12 +6,15 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+const apiKeyMinuteBucketRetention = 24 * time.Hour
 
 func (s *GormStore) TestProvider(id string) (Provider, error) {
 	s.mu.Lock()
@@ -475,7 +478,7 @@ func (s *GormStore) MarkProviderResourceUsed(resourceID string) {
 		Updates(map[string]any{"last_used_at": now, "updated_at": now}).Error
 }
 
-func (s *GormStore) StartCall(ctx context.Context, project Project, key APIKey, modelName string) (CallContext, error) {
+func (s *GormStore) StartCall(ctx context.Context, project Project, key APIKey, modelName string, tokenReservation int64) (CallContext, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -502,7 +505,26 @@ func (s *GormStore) StartCall(ctx context.Context, project Project, key APIKey, 
 		if len(privateKey.AllowedModels) > 0 && !privateKey.AllowedModels[modelName] {
 			return ErrModelNotAllowed
 		}
-		effectiveLimits := mergeQuotaLimits(privateKey.Limits, quotaPolicyLimits(tx, project, privateKey))
+		keyLimits := privateKey.Limits
+		keyLimits.RateLimitRPM = 0
+		keyLimits.TokenLimitTPM = 0
+		if privateKey.RateLimitRPM != nil {
+			keyLimits.RateLimitRPM = *privateKey.RateLimitRPM
+		}
+		if privateKey.TokenLimitTPM != nil {
+			keyLimits.TokenLimitTPM = *privateKey.TokenLimitTPM
+		}
+		policyLimits, minuteLimitScopes, err := quotaPolicyLimits(tx, project, privateKey)
+		if err != nil {
+			return err
+		}
+		if strictLimitChanged(policyLimits.RateLimitRPM, keyLimits.RateLimitRPM) {
+			minuteLimitScopes.RPM = "api_key"
+		}
+		if strictLimitChanged(policyLimits.TokenLimitTPM, keyLimits.TokenLimitTPM) {
+			minuteLimitScopes.TPM = "api_key"
+		}
+		effectiveLimits := mergeQuotaLimits(keyLimits, policyLimits)
 		now, err := s.databaseNow(tx)
 		if err != nil {
 			return err
@@ -510,6 +532,13 @@ func (s *GormStore) StartCall(ctx context.Context, project Project, key APIKey, 
 		// Taken next to the database reading so the two describe the same instant,
 		// and the local reference does not also absorb the admission work below.
 		measuredAt := time.Now()
+		if err := pruneAPIKeyMinuteBuckets(tx, privateKey.ID, now); err != nil {
+			return err
+		}
+		minuteCounter, err := s.consumeAPIKeyMinuteRequest(tx, privateKey.ID, effectiveLimits, minuteLimitScopes, tokenReservation, now)
+		if err != nil {
+			return err
+		}
 		dayCounter, err := s.quotaBucketForUpdate(tx, privateKey.ID, "day", dayBucket(now))
 		if err != nil {
 			return err
@@ -543,13 +572,18 @@ func (s *GormStore) StartCall(ctx context.Context, project Project, key APIKey, 
 			return err
 		}
 		call = CallContext{
-			RequestID:      requestID,
-			Project:        project,
-			Key:            publicKey(privateKey),
-			Model:          model,
-			StartedAt:      now,
-			measuredAt:     measuredAt,
-			requestContext: ctx,
+			RequestID:        requestID,
+			Project:          project,
+			Key:              publicKey(privateKey),
+			Model:            model,
+			StartedAt:        now,
+			measuredAt:       measuredAt,
+			RateLimitHeaders: apiKeyRateLimitHeaders(effectiveLimits, minuteCounter, now, false),
+			requestContext:   ctx,
+		}
+		if effectiveLimits.TokenLimitTPM > 0 {
+			call.TokenLimitBucket = minuteBucket(now)
+			call.ReservedTokens = maxInt64(tokenReservation, 0)
 		}
 		return nil
 	})
@@ -560,6 +594,86 @@ func (s *GormStore) StartCall(ctx context.Context, project Project, key APIKey, 
 		call.requestContext = s.startInFlightLeaseHeartbeat(ctx, requestID, leaseConfirmedFor)
 	}
 	return call, nil
+}
+
+func pruneAPIKeyMinuteBuckets(tx *gorm.DB, keyID string, now time.Time) error {
+	cutoff := minuteBucket(now.Add(-apiKeyMinuteBucketRetention))
+	return tx.Where("key_id = ? AND scope = ? AND bucket < ?", keyID, "minute", cutoff).Delete(&QuotaBucket{}).Error
+}
+
+func (s *GormStore) consumeAPIKeyMinuteRequest(tx *gorm.DB, keyID string, limits QuotaLimits, scopes MinuteLimitScopes, tokenReservation int64, now time.Time) (QuotaCounter, error) {
+	if limits.RateLimitRPM <= 0 && limits.TokenLimitTPM <= 0 {
+		return QuotaCounter{}, nil
+	}
+	bucket, err := s.quotaBucketForUpdate(tx, keyID, "minute", minuteBucket(now))
+	if err != nil {
+		return QuotaCounter{}, err
+	}
+	if limits.RateLimitRPM > 0 && bucket.Requests >= limits.RateLimitRPM {
+		s.metrics.ObserveRateLimitHit(keyID, "rpm", scopes.RPM)
+		return QuotaCounter{}, apiKeyRateLimitError(
+			"api_key_rpm_exceeded",
+			"API key requests per minute limit exceeded",
+			limits,
+			bucket.QuotaCounter,
+			now,
+		)
+	}
+	tokenReservation = maxInt64(tokenReservation, 0)
+	if limits.TokenLimitTPM > 0 && saturatingAddNonNegative(bucket.TotalTokens, tokenReservation) > limits.TokenLimitTPM {
+		s.metrics.ObserveRateLimitHit(keyID, "tpm", scopes.TPM)
+		return QuotaCounter{}, apiKeyRateLimitError(
+			"api_key_tpm_exceeded",
+			"API key tokens per minute limit exceeded",
+			limits,
+			bucket.QuotaCounter,
+			now,
+		)
+	}
+	if limits.RateLimitRPM > 0 {
+		bucket.Requests++
+	}
+	if limits.TokenLimitTPM > 0 {
+		bucket.TotalTokens = saturatingAddNonNegative(bucket.TotalTokens, tokenReservation)
+	}
+	if err := tx.Save(&bucket).Error; err != nil {
+		return QuotaCounter{}, err
+	}
+	return bucket.QuotaCounter, nil
+}
+
+func apiKeyRateLimitError(code string, message string, limits QuotaLimits, counter QuotaCounter, now time.Time) error {
+	return &HTTPError{
+		Status:  http.StatusTooManyRequests,
+		Code:    code,
+		Message: message,
+		Headers: apiKeyRateLimitHeaders(limits, counter, now, true),
+	}
+}
+
+func apiKeyRateLimitHeaders(limits QuotaLimits, counter QuotaCounter, now time.Time, retry bool) map[string]string {
+	if limits.RateLimitRPM <= 0 && limits.TokenLimitTPM <= 0 {
+		return nil
+	}
+	resetSeconds := int64(now.Truncate(time.Minute).Add(time.Minute).Sub(now).Seconds())
+	if resetSeconds < 1 {
+		resetSeconds = 1
+	}
+	headers := map[string]string{}
+	if limits.RateLimitRPM > 0 {
+		headers["X-RateLimit-Limit-Requests"] = strconv.FormatInt(limits.RateLimitRPM, 10)
+		headers["X-RateLimit-Remaining-Requests"] = strconv.FormatInt(maxInt64(limits.RateLimitRPM-counter.Requests, 0), 10)
+		headers["X-RateLimit-Reset-Requests"] = strconv.FormatInt(resetSeconds, 10)
+	}
+	if limits.TokenLimitTPM > 0 {
+		headers["X-RateLimit-Limit-Tokens"] = strconv.FormatInt(limits.TokenLimitTPM, 10)
+		headers["X-RateLimit-Remaining-Tokens"] = strconv.FormatInt(maxInt64(limits.TokenLimitTPM-counter.TotalTokens, 0), 10)
+		headers["X-RateLimit-Reset-Tokens"] = strconv.FormatInt(resetSeconds, 10)
+	}
+	if retry {
+		headers["Retry-After"] = strconv.FormatInt(resetSeconds, 10)
+	}
+	return headers
 }
 
 func (s *GormStore) FinishCall(call CallContext, route RouteSelection, usage Usage, statusCode int, errorCode string, clientIP string, userAgent string) {
@@ -601,6 +715,17 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 	}
 	var key APIKey
 	if err := tx.First(&key, "id = ?", call.Key.ID).Error; err == nil {
+		providerTokens := meteredTokens(usage)
+		actualTokens := usage.RateLimitTokens
+		if actualTokens <= 0 {
+			actualTokens = providerTokens
+		}
+		if call.StreamOutputCommitted && providerTokens == 0 && actualTokens < call.ReservedTokens {
+			actualTokens = call.ReservedTokens
+		}
+		if err := s.reconcileAPIKeyMinuteTokens(tx, call, actualTokens); err != nil {
+			return err
+		}
 		dayCounter, err := s.quotaBucketForUpdate(tx, key.ID, "day", dayBucket(now))
 		if err != nil {
 			return err
@@ -691,6 +816,29 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 		}
 	}
 	return tx.Delete(&InFlightLease{}, "id = ?", call.RequestID).Error
+}
+
+func (s *GormStore) reconcileAPIKeyMinuteTokens(tx *gorm.DB, call CallContext, actualTokens int64) error {
+	if call.TokenLimitBucket == "" || call.ReservedTokens == 0 && actualTokens == 0 {
+		return nil
+	}
+	bucket, err := s.quotaBucketForUpdate(tx, call.Key.ID, "minute", call.TokenLimitBucket)
+	if err != nil {
+		return err
+	}
+	actualTokens = maxInt64(actualTokens, 0)
+	reservedTokens := maxInt64(call.ReservedTokens, 0)
+	if actualTokens >= reservedTokens {
+		bucket.TotalTokens = saturatingAddNonNegative(bucket.TotalTokens, actualTokens-reservedTokens)
+	} else {
+		refund := reservedTokens - actualTokens
+		if refund >= bucket.TotalTokens {
+			bucket.TotalTokens = 0
+		} else {
+			bucket.TotalTokens -= refund
+		}
+	}
+	return tx.Save(&bucket).Error
 }
 
 func (s *GormStore) RecordPlaygroundRequest(call CallContext, route RouteSelection, statusCode int, errorCode string, clientIP string, userAgent string) {
@@ -817,7 +965,7 @@ func (s *GormStore) CreateImageJob(job ImageJob, prompt string) (ImageJob, error
 		job.ID = NewID("imgjob")
 	}
 	if strings.TrimSpace(job.Status) == "" {
-		job.Status = "queued"
+		job.Status = imageJobStatusQueued
 	}
 	if job.CreatedAt.IsZero() {
 		job.CreatedAt = time.Now().UTC()
@@ -833,8 +981,8 @@ func (s *GormStore) CreateImageJob(job ImageJob, prompt string) (ImageJob, error
 func (s *GormStore) ClaimImageJob(id string) (ImageJob, bool, error) {
 	now := time.Now().UTC()
 	result := s.db.Model(&ImageJob{}).
-		Where("id = ? AND status = ?", id, "queued").
-		Updates(map[string]any{"status": "running", "started_at": now})
+		Where("id = ? AND status = ?", id, imageJobStatusQueued).
+		Updates(map[string]any{"status": imageJobStatusRunning, "started_at": now})
 	if result.Error != nil {
 		return ImageJob{}, false, result.Error
 	}
@@ -879,16 +1027,17 @@ func (s *GormStore) FailUnfinishedImageJobs(code string, message string) ([]Imag
 	now := time.Now().UTC()
 	var jobs []ImageJob
 	err := s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("status IN ?", []string{"queued", "running"}).Find(&jobs).Error; err != nil {
+		unfinished := []string{imageJobStatusQueued, imageJobStatusRunning}
+		if err := tx.Where("status IN ?", unfinished).Find(&jobs).Error; err != nil {
 			return err
 		}
 		if len(jobs) == 0 {
 			return nil
 		}
 		if err := tx.Model(&ImageJob{}).
-			Where("status IN ?", []string{"queued", "running"}).
+			Where("status IN ?", unfinished).
 			Updates(map[string]any{
-				"status":        "failed",
+				"status":        imageJobStatusFailed,
 				"error_code":    code,
 				"error_message": message,
 				"completed_at":  now,
@@ -928,7 +1077,7 @@ func (s *GormStore) FailUnfinishedImageJobs(code string, message string) ([]Imag
 		return nil, err
 	}
 	for index := range jobs {
-		jobs[index].Status = "failed"
+		jobs[index].Status = imageJobStatusFailed
 		jobs[index].ErrorCode = code
 		jobs[index].ErrorMessage = message
 		jobs[index].CompletedAt = &now
@@ -978,9 +1127,9 @@ func (s *GormStore) CompleteImageJob(call CallContext, job ImageJob, revisedProm
 				return err
 			}
 			result := tx.Model(&ImageJob{}).
-				Where("id = ? AND status = ?", job.ID, "running").
+				Where("id = ? AND status = ?", job.ID, imageJobStatusRunning).
 				Updates(map[string]any{
-					"status":                    "completed",
+					"status":                    imageJobStatusCompleted,
 					"provider_id":               job.ProviderID,
 					"provider_resource_id":      job.ProviderResourceID,
 					"provider_model":            job.ProviderModel,

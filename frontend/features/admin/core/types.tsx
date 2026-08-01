@@ -52,6 +52,8 @@ export type APIKey = {
   ip_allowlist?: string[];
   status: string;
   limits?: Record<string, number>;
+  rate_limit_rpm?: number;
+  token_limit_tpm?: number;
   expires_at?: string;
   rotated_from_id?: string;
   grace_until?: string;
@@ -700,11 +702,8 @@ export type ViewKey =
   | "users"
   | "quota-policies"
   | "cost-centers"
-  | "budgets"
-  | "chargebacks"
   | "approval-flows"
   | "approvals"
-  | "invoices"
   | "reports"
   | "usage"
   | "billing"
@@ -736,11 +735,8 @@ export const viewRoutes: Record<ViewKey, string> = {
   users: "/users",
   "quota-policies": "/quota-policies",
   "cost-centers": "/cost-centers",
-  budgets: "/budgets",
-  chargebacks: "/chargebacks",
   "approval-flows": "/approval-flows",
   approvals: "/approvals",
-  invoices: "/invoices",
   reports: "/reports",
   usage: "/usage",
   billing: "/billing",

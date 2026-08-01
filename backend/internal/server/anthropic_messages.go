@@ -50,7 +50,7 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 
 	resp, route, usage, attempts, err := s.executeRoutedAnthropicMessages(r, routed, req)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, attempts, err, req.Raw)
+		s.finishFailedRoutedCall(r, routed, attempts, usage, err, req.Raw)
 		writeAnthropicError(w, r, err)
 		return
 	}
@@ -146,15 +146,9 @@ func keyCanAccessModel(store Store, key APIKey, model string) bool {
 	return false
 }
 
-func (s *Server) startAnthropicRoutedCall(
-	w http.ResponseWriter,
-	r *http.Request,
-	project Project,
-	key APIKey,
-	req anthropicMessagesRequest,
-) (RoutedCall, bool) {
+func (s *Server) startAnthropicRoutedCall(w http.ResponseWriter, r *http.Request, project Project, key APIKey, req anthropicMessagesRequest) (RoutedCall, bool) {
 	admittedAt := time.Now().UTC()
-	call, err := s.store.StartCall(r.Context(), project, key, req.Model)
+	call, err := s.store.StartCall(r.Context(), project, key, req.Model, anthropicTokenReservation(req))
 	call.Stream = req.Stream
 	if err != nil {
 		requestID := s.finishRejectedCall(r, admittedAt, project, key, req.Model, req.Stream, err, req.Raw)
@@ -163,18 +157,19 @@ func (s *Server) startAnthropicRoutedCall(
 		return RoutedCall{}, false
 	}
 	w.Header().Set("x-request-id", call.RequestID)
+	writeRateLimitHeaders(w.Header(), call.RateLimitHeaders)
 	if call.requestContext != nil {
 		*r = *r.WithContext(call.requestContext)
 	}
 	routes, err := s.store.SelectRouteCandidates(req.Model)
 	if err != nil {
-		s.finishFailedRoutedCall(r, RoutedCall{Call: call}, nil, err, req.Raw)
+		s.finishFailedRoutedCall(r, RoutedCall{Call: call}, nil, Usage{}, err, req.Raw)
 		writeAnthropicError(w, r, err)
 		return RoutedCall{}, false
 	}
 	affinity, err := s.anthropicCacheLocalityAffinity(key.ID, req.Model, r.Header, req.Raw)
 	if err != nil {
-		s.finishFailedRoutedCall(r, RoutedCall{Call: call}, nil, err, req.Raw)
+		s.finishFailedRoutedCall(r, RoutedCall{Call: call}, nil, Usage{}, err, req.Raw)
 		writeAnthropicError(w, r, err)
 		return RoutedCall{}, false
 	}
@@ -927,7 +922,7 @@ func (s *Server) doNativeAnthropicRequest(
 	}
 	// The native path builds its own request but must follow the same streaming
 	// policy as the adapter: a total deadline would truncate a live stream.
-	adapter, _ := s.adapters[ProviderAnthropic].(AnthropicAdapter)
+	adapter, _ := resolveTypedAdapter[AnthropicAdapter](s.adapterRegistry, ProviderAnthropic)
 	resp, err := sendUpstream(adapter.Client, adapter.StreamClient, adapter.StreamIdleTimeout, req, stream)
 	if err != nil {
 		return nil, err
@@ -956,7 +951,7 @@ func (s *Server) handleAnthropicMessagesStream(
 ) {
 	compatible, compatibilityErr := compatibleAnthropicRoutes(routed, req)
 	if compatibilityErr != nil {
-		s.finishFailedRoutedCall(r, routed, nil, compatibilityErr, req.Raw)
+		s.finishFailedRoutedCall(r, routed, nil, Usage{}, compatibilityErr, req.Raw)
 		writeAnthropicError(w, r, compatibilityErr)
 		return
 	}
@@ -1004,6 +999,7 @@ func (s *Server) handleAnthropicMessagesStream(
 		s.store.MarkRouteUsed(route.Route.ID)
 		s.store.MarkProviderResourceUsed(routeResourceID(route))
 	}
+	routed.Call.StreamOutputCommitted = tracker.WroteData()
 	s.finishRoutedCall(r, GatewayCallCompletion{
 		Call:            routed.Call,
 		Route:           route,

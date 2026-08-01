@@ -1070,6 +1070,12 @@ func sameAPIKey(left server.APIKey, right server.APIKey) bool {
 	if right.Limits != (server.QuotaLimits{}) && !reflect.DeepEqual(left.Limits, right.Limits) {
 		return false
 	}
+	if right.RateLimitRPM != nil && !reflect.DeepEqual(left.RateLimitRPM, right.RateLimitRPM) {
+		return false
+	}
+	if right.TokenLimitTPM != nil && !reflect.DeepEqual(left.TokenLimitTPM, right.TokenLimitTPM) {
+		return false
+	}
 	if right.ExpiresAt != nil && !reflect.DeepEqual(left.ExpiresAt, right.ExpiresAt) {
 		return false
 	}

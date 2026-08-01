@@ -42,6 +42,14 @@ When issuing an API Key, select the actual user in **Owner User**. The issuer re
 
 Each new usage record snapshots the attributed user, so later ownership changes or Key deletion do not rewrite that recorded history. Records created before this field existed fall back to the Key's current owner, then its legacy issuer, then the project owner, and finally `unknown`. The individual ranking shows distinct used Keys and currently owned non-revoked Keys separately.
 
+## Per-Key RPM and TPM Limits
+
+Each API Key can have optional requests-per-minute (RPM) and tokens-per-minute (TPM) limits. An unset or `null` value inherits the applicable global, project, and team policies. A value of `0` adds no Key-specific cap but cannot bypass an upper-level limit, while a positive value adds a Key-specific cap. When several positive limits apply, TokenHub enforces the strictest one. Disabling a Key rejects every request regardless of its limit values.
+
+RPM is consumed before a Provider is invoked. TPM is reserved at the same point from the request's estimated input and maximum output; text requests without an explicit maximum reserve 4,096 output tokens. After the request finishes, the reservation is settled to the Provider's reported total tokens, or to prompt plus completion tokens when a total is unavailable. Cached and reasoning tokens are already included in those totals and are not added again. Failed or interrupted requests return the unused reservation.
+
+An exceeded limit returns HTTP 429 with `api_key_rpm_exceeded` or `api_key_tpm_exceeded`, plus `Retry-After` and the relevant `X-RateLimit-Limit-*`, `X-RateLimit-Remaining-*`, and `X-RateLimit-Reset-*` headers. Minute buckets are database-backed and shared across TokenHub instances on both SQLite and PostgreSQL. Metrics expose only a short hashed Key reference, never the complete API Key.
+
 ## Provider Catalog Availability
 
 TokenHub stores the last known-good provider catalog in the database. On every backend startup, it validates and loads the configured local `provider-catalog.json`, then atomically replaces the database snapshot. Ordinary **Provider Channels** requests only read the database snapshot, and administrators can manually refresh the same local catalog. If local catalog reading, parsing, or completeness validation fails, TokenHub keeps using the last known-good snapshot.
@@ -136,6 +144,7 @@ TokenHub can expose Prometheus metrics at `GET /metrics`. Collection is off by d
 | `tokenhub_gateway_requests_in_flight` | gauge | Model API requests currently being served. Admin traffic and scrapes are excluded. |
 | `tokenhub_gateway_tokens_total` | counter | Tokens by kind: `prompt`, `completion`, `cached`, `cache_write`, `reasoning`. |
 | `tokenhub_gateway_cost_usd_total` | counter | Unified external billing estimate from Model Directory prices. Provider actual cost remains in privileged request audit rather than this metric. |
+| `tokenhub_gateway_rate_limit_hits_total` | counter | Rejected requests by effective policy scope and limit type. `key_ref` is a short hash only for `api_key` limits; inherited global, project, and team limits use `none` to bound series cardinality. |
 | `tokenhub_gateway_trace_completions_total` | counter | Finished calls by what trace export did with them: `converted` or `dropped`. Only present when tracing is on. |
 | `tokenhub_gateway_trace_spans_total` | counter | Spans by what the OTLP exporter did with them: `exported` or `failed`. Only present when tracing is on. |
 

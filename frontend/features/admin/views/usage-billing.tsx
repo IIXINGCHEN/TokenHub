@@ -285,6 +285,8 @@ export function ExecutiveMemberTable({ rows, totalTokens }: { rows: ExecutiveMem
             <th>{tx("Key（已用/归属）")}</th>
             <th>{tx("请求")}</th>
             <th>{tx("输入 Token")}</th>
+            <th>{tx("缓存读")}</th>
+            <th>{tx("缓存命中率")}</th>
             <th>{tx("输出 Token")}</th>
             <th>{tx("总 Token")}</th>
             <th>{tx("占比")}</th>
@@ -302,6 +304,8 @@ export function ExecutiveMemberTable({ rows, totalTokens }: { rows: ExecutiveMem
                 <td>{formatNumber(row.used_key_count ?? 0)} / {formatNumber(row.owned_key_count ?? 0)}</td>
                 <td>{formatNumber(row.request_count)}</td>
                 <td>{compactNumber(row.input_tokens)}</td>
+                <td>{compactNumber(row.cached_input_tokens ?? 0)}</td>
+                <td>{cacheHitRate(row.cached_input_tokens ?? 0, row.input_tokens)}</td>
                 <td>{compactNumber(row.output_tokens)}</td>
                 <td><strong>{compactNumber(row.total_tokens)}</strong></td>
                 <td>{percent.toFixed(percent >= 10 ? 0 : 1)}%</td>

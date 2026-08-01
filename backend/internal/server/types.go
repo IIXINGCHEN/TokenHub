@@ -65,7 +65,8 @@ type HTTPError struct {
 	Status         int
 	Code           string
 	Message        string
-	UpstreamStatus int `json:"-"`
+	UpstreamStatus int               `json:"-"`
+	Headers        map[string]string `json:"-"`
 }
 
 func (e *HTTPError) Error() string {
@@ -132,6 +133,10 @@ type APIKey struct {
 	IPAllowlist   []string          `json:"ip_allowlist,omitempty" gorm:"serializer:json"`
 	Limits        QuotaLimits       `json:"limits" gorm:"embedded;embeddedPrefix:limit_"`
 	LimitsSet     bool              `json:"-" gorm:"-"`
+	RateLimitRPM  *int64            `json:"rate_limit_rpm,omitempty"`
+	RateLimitSet  bool              `json:"-" gorm:"-"`
+	TokenLimitTPM *int64            `json:"token_limit_tpm,omitempty"`
+	TokenLimitSet bool              `json:"-" gorm:"-"`
 	Status        string            `json:"status"`
 	ExpiresAt     *time.Time        `json:"expires_at,omitempty"`
 	RotatedFromID string            `json:"rotated_from_id,omitempty" gorm:"index"`
@@ -142,6 +147,8 @@ type APIKey struct {
 }
 
 type QuotaLimits struct {
+	RateLimitRPM    int64   `json:"rate_limit_rpm,omitempty"`
+	TokenLimitTPM   int64   `json:"token_limit_tpm,omitempty"`
 	DailyRequests   int64   `json:"daily_requests"`
 	MonthlyRequests int64   `json:"monthly_requests"`
 	DailyTokens     int64   `json:"daily_tokens"`
@@ -406,6 +413,10 @@ type Usage struct {
 	ModelETag                string      `json:"model_etag,omitempty"`
 	Transport                string      `json:"transport,omitempty"`
 	ResponseHeaders          http.Header `json:"-"`
+	// RateLimitTokens is the total metered across every invoked failover attempt.
+	// It is internal quota state: billing, request logs and provider attribution
+	// continue to use the usage reported by the final route only.
+	RateLimitTokens int64 `json:"-" gorm:"-"`
 }
 
 type UsageRecord struct {
@@ -753,8 +764,6 @@ type ChatMessage struct {
 	RedactedReasoningContent string `json:"redacted_reasoning_content,omitempty"`
 	raw                      map[string]json.RawMessage
 }
-
-type ReasoningOptions = ResponsesReasoning
 
 type ChatCompletionRequest struct {
 	Model             string         `json:"model"`
@@ -1116,6 +1125,14 @@ type CallContext struct {
 	// -240000ms). time.Now keeps its monotonic reading here, so the measurement
 	// also survives wall-clock adjustments on this host.
 	measuredAt time.Time
+	// RateLimitHeaders is calculated atomically with minute-bucket admission so
+	// every compatible HTTP surface reports the same effective limits.
+	RateLimitHeaders map[string]string
+	TokenLimitBucket string
+	ReservedTokens   int64
+	// StreamOutputCommitted keeps the reservation when a stream delivered data but
+	// ended before an authoritative usage event was received.
+	StreamOutputCommitted bool
 	// Stream records whether the client asked for a streamed response. It only
 	// labels observability output and never influences routing.
 	Stream         bool
@@ -1167,10 +1184,6 @@ func NewID(prefix string) string {
 		return fmt.Sprintf("%s_%d", prefix, time.Now().UnixNano())
 	}
 	return prefix + "_" + base64.RawURLEncoding.EncodeToString(buf[:])
-}
-
-func GenerateAPIKey() string {
-	return GenerateAPIKeyWithOptions(DefaultAPIKeyPrefix, DefaultAPIKeyRandomLength)
 }
 
 func GenerateAPIKeyWithOptions(prefix string, randomLength int) string {

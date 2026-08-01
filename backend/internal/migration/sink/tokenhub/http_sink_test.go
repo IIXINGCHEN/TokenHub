@@ -323,6 +323,77 @@ func TestHTTPSinkApplyUserCreatesAndUpdates(t *testing.T) {
 	}
 }
 
+func TestHTTPSinkApplyAPIKeyMinuteLimits(t *testing.T) {
+	ts := newHTTPMigrationTestServer(t)
+	defer ts.Close()
+
+	client := NewAdminAPIClient(ts.URL, "test-admin-token", http.DefaultClient)
+	sink := NewHTTPSink(client, bundle.StaticResolver{})
+	rpm, tpm := int64(60), int64(10_000)
+	migrationBundle := &bundle.CanonicalMigrationBundle{
+		SchemaVersion: bundle.SchemaVersion,
+		Source:        bundle.Source{Adapter: "tokenhub", AdapterVersion: "1.0.0"},
+		GeneratedAt:   time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC),
+		Projects: []bundle.ProjectRef{{
+			ExternalRef: bundle.ExternalRef{System: "tokenhub", ID: "project/limited"},
+			Spec:        server.Project{Name: "Limited Project", Status: server.StatusActive},
+		}},
+		APIKeys: []bundle.APIKeyRef{{
+			ExternalRef: bundle.ExternalRef{System: "tokenhub", ID: "key/limited"},
+			ProjectRef:  "project/limited",
+			Spec: server.APIKey{
+				Name: "Limited Key", Status: server.StatusActive,
+				RateLimitRPM: &rpm, TokenLimitTPM: &tpm,
+			},
+		}},
+	}
+
+	result, err := sink.Apply(context.Background(), migrationBundle)
+	if err != nil {
+		t.Fatalf("create limited API key: %v", err)
+	}
+	if result.Report.Created != 2 {
+		t.Fatalf("expected project and API key creates, got %+v", result.Report)
+	}
+	assertLimits := func(wantRPM, wantTPM int64) {
+		t.Helper()
+		keys, err := client.ListAPIKeys(context.Background())
+		if err != nil {
+			t.Fatalf("list API keys: %v", err)
+		}
+		for _, key := range keys {
+			if key.Name != "Limited Key" {
+				continue
+			}
+			if key.RateLimitRPM == nil || *key.RateLimitRPM != wantRPM ||
+				key.TokenLimitTPM == nil || *key.TokenLimitTPM != wantTPM {
+				t.Fatalf("API key minute limits = rpm %v, tpm %v; want %d/%d", key.RateLimitRPM, key.TokenLimitTPM, wantRPM, wantTPM)
+			}
+			return
+		}
+		t.Fatal("limited API key not found")
+	}
+	assertLimits(rpm, tpm)
+
+	rpm, tpm = 120, 20_000
+	result, err = sink.Apply(context.Background(), migrationBundle)
+	if err != nil {
+		t.Fatalf("update limited API key: %v", err)
+	}
+	if result.Report.Updated != 1 {
+		t.Fatalf("expected one API key update, got %+v", result.Report)
+	}
+	assertLimits(rpm, tpm)
+
+	verify, err := NewHTTPSink(client, bundle.StaticResolver{}).Verify(context.Background(), migrationBundle)
+	if err != nil {
+		t.Fatalf("verify limited API key: %v", err)
+	}
+	if !verify.OK {
+		t.Fatalf("expected minute limits to verify, got %+v", verify.Issues)
+	}
+}
+
 func TestHTTPSinkReturnsCheckpointAfterPartialApplyFailure(t *testing.T) {
 	ts := newHTTPMigrationTestServerWithoutSMTP(t)
 	defer ts.Close()

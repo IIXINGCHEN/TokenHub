@@ -2,8 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -378,22 +376,6 @@ func catalogModelParameters(raw map[string]any, model ProviderCatalogModel) []st
 	return catalogUniqueStrings(parameters)
 }
 
-func ProviderCatalogModelRoute(providerID string, model ProviderCatalogModel) ModelRoute {
-	modelName := firstNonEmpty(model.CanonicalName, canonicalModelName(model.ID, model.DisplayName), model.ID)
-	return ModelRoute{
-		ID:            stableCatalogRouteID(providerID, model.ID),
-		ModelName:     modelName,
-		ProviderID:    providerID,
-		ProviderModel: model.ID,
-		Priority:      1,
-		Weight:        100,
-		Status:        StatusActive,
-		QualityScore:  60,
-		CostScore:     60,
-		Strategy:      RouteStrategyBalanced,
-	}
-}
-
 func builtinProviderCatalog(includeModels bool) []ProviderCatalogEntry {
 	entries := []ProviderCatalogEntry{
 		builtinCatalogEntry("openai", "OpenAI", ProviderOpenAI, "https://api.openai.com/v1", "https://platform.openai.com/docs/models", []string{"gpt-5", "gpt-5-mini", "gpt-4.1-mini", "text-embedding-3-small"}),
@@ -418,14 +400,10 @@ func deepSeekBuiltinCatalogEntry() ProviderCatalogEntry {
 		"deepseek",
 		"https://api.deepseek.com",
 		"https://api-docs.deepseek.com",
-		[]string{"deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"},
+		[]string{"deepseek-v4-flash", "deepseek-v4-pro"},
 	)
 	for index := range entry.Models {
 		model := &entry.Models[index]
-		model.InputModalities = []string{"text"}
-		model.OutputModalities = []string{"text"}
-		model.Capabilities = []string{"chat", "reasoning", "tools", "structured_outputs"}
-		model.SupportedParameters = []string{"temperature", "top_p", "tools", "tool_choice", "response_format", "reasoning"}
 		switch model.ID {
 		case "deepseek-v4-flash":
 			model.DisplayName = "DeepSeek V4 Flash"
@@ -459,7 +437,13 @@ func deepSeekBuiltinCatalogEntry() ProviderCatalogEntry {
 				"tool_call":                "true",
 				"vision":                   "false",
 			}
+		default:
+			continue
 		}
+		model.InputModalities = []string{"text"}
+		model.OutputModalities = []string{"text"}
+		model.Capabilities = []string{"chat", "reasoning", "tools", "structured_outputs"}
+		model.SupportedParameters = []string{"temperature", "top_p", "tools", "tool_choice", "response_format", "reasoning"}
 	}
 	return entry
 }
@@ -870,11 +854,6 @@ func catalogCategorySummary(models []ProviderCatalogModel) ([]string, map[string
 	}
 	sort.Strings(categories)
 	return categories, counts
-}
-
-func stableCatalogRouteID(providerID string, modelID string) string {
-	sum := sha256.Sum256([]byte(providerID + ":" + modelID))
-	return "route_catalog_" + hex.EncodeToString(sum[:])[:16]
 }
 
 func sanitizeIdentifier(value string) string {

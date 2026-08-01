@@ -156,7 +156,7 @@ type Store interface {
 	SelectRouteCandidates(modelName string) ([]RouteSelection, error)
 	MarkRouteUsed(routeID string)
 	MarkProviderResourceUsed(resourceID string)
-	StartCall(ctx context.Context, project Project, key APIKey, modelName string) (CallContext, error)
+	StartCall(ctx context.Context, project Project, key APIKey, modelName string, tokenReservation int64) (CallContext, error)
 	FinishCall(call CallContext, route RouteSelection, usage Usage, statusCode int, errorCode string, clientIP string, userAgent string)
 	RecordPlaygroundRequest(call CallContext, route RouteSelection, statusCode int, errorCode string, clientIP string, userAgent string)
 	RecordRouteAttempts(requestID string, attempts []RouteAttempt)
@@ -173,10 +173,6 @@ type Store interface {
 	ListImageAssets(jobID string) []ImageAsset
 	GetImageAsset(id string) (ImageAsset, bool)
 	ListUsageRecords() []UsageRecord
-	UsageSummary() map[string]any
-	UsageBreakdown() map[string]any
-	UsageBreakdownForPeriod(period string) map[string]any
-	UsageTimeseries(days int) []map[string]any
 	GenerateBillingPeriod(period string) (map[string]any, error)
 	ListRequestLogs() []RequestLog
 	ListProviderObservations(since time.Time) []ProviderObservation
@@ -233,6 +229,9 @@ type Store interface {
 	GetDatabaseStatus() (map[string]interface{}, error)
 	Ping(ctx context.Context) error
 }
+
+var _ Store = (*GormStore)(nil)
+
 type GormStore struct {
 	db                   *gorm.DB
 	mu                   *sync.Mutex
