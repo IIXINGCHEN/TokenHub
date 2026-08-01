@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"math"
 	"net/http"
@@ -11,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 type countingRateLimitAdapter struct {
@@ -441,6 +444,25 @@ func TestQuotaPolicyMinuteLimitsRejectInvalidValues(t *testing.T) {
 				t.Fatalf("invalid quota policy returned %d: %s", response.Code, response.Body)
 			}
 		})
+	}
+}
+
+func TestStartCallFailsClosedWhenQuotaPolicyReadFails(t *testing.T) {
+	store, _ := newRateLimitedGateway(t, APIKey{})
+	project := store.ListProjects()[0]
+	key := store.ListAPIKeys()[0]
+	callbackName := "test:fail-quota-policy-read"
+	if err := store.db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement != nil && tx.Statement.Table == "admin_resources" {
+			tx.AddError(errors.New("quota policy read failed"))
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.db.Callback().Query().Remove(callbackName) })
+
+	if _, err := store.StartCall(context.Background(), project, key, "gpt-4.1-mini", 0); err == nil || !strings.Contains(err.Error(), "quota policy read failed") {
+		t.Fatalf("StartCall must fail closed on quota policy read error, got %v", err)
 	}
 }
 

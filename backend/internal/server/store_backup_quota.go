@@ -451,10 +451,12 @@ type MinuteLimitScopes struct {
 	TPM string
 }
 
-func quotaPolicyLimits(tx *gorm.DB, project Project, key APIKey) (QuotaLimits, MinuteLimitScopes) {
+func quotaPolicyLimits(tx *gorm.DB, project Project, key APIKey) (QuotaLimits, MinuteLimitScopes, error) {
 	var resources []AdminResource
-	_ = tx.Where("kind = ? AND status = ?", "quota-policies", StatusActive).
-		Order("created_at asc, id asc").Find(&resources).Error
+	if err := tx.Where("kind = ? AND status = ?", "quota-policies", StatusActive).
+		Order("created_at asc, id asc").Find(&resources).Error; err != nil {
+		return QuotaLimits{}, MinuteLimitScopes{}, err
+	}
 	var limits QuotaLimits
 	var scopes MinuteLimitScopes
 	for _, resource := range resources {
@@ -485,7 +487,7 @@ func quotaPolicyLimits(tx *gorm.DB, project Project, key APIKey) (QuotaLimits, M
 		}
 		limits = mergeQuotaLimits(limits, candidate)
 	}
-	return limits, scopes
+	return limits, scopes, nil
 }
 
 func validateQuotaPolicyMinuteLimits(fields map[string]any) error {

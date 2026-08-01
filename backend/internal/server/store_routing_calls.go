@@ -514,7 +514,10 @@ func (s *GormStore) StartCall(ctx context.Context, project Project, key APIKey, 
 		if privateKey.TokenLimitTPM != nil {
 			keyLimits.TokenLimitTPM = *privateKey.TokenLimitTPM
 		}
-		policyLimits, minuteLimitScopes := quotaPolicyLimits(tx, project, privateKey)
+		policyLimits, minuteLimitScopes, err := quotaPolicyLimits(tx, project, privateKey)
+		if err != nil {
+			return err
+		}
 		if strictLimitChanged(policyLimits.RateLimitRPM, keyLimits.RateLimitRPM) {
 			minuteLimitScopes.RPM = "api_key"
 		}
