@@ -158,7 +158,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 			"provider_capability_not_supported",
 			"Responses are not supported",
 		)
-		s.finishFailedRoutedCall(r, routed, nil, err, req)
+		s.finishFailedRoutedCall(r, routed, nil, Usage{}, err, req)
 		writeError(w, r, err)
 		return
 	}
@@ -190,7 +190,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	if !codexAffinityApplied {
 		affinity, err = s.responsesCacheLocalityAffinity(key.ID, r.Header, req)
 		if err != nil {
-			s.finishFailedRoutedCall(r, routed, nil, err, req)
+			s.finishFailedRoutedCall(r, routed, nil, Usage{}, err, req)
 			writeError(w, r, err)
 			return
 		}
