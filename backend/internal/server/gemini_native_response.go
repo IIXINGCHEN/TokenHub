@@ -173,7 +173,7 @@ func (s *codexGeminiStreamSink) ToolStart(key string, id string, name string) er
 func (s *codexGeminiStreamSink) ToolArguments(key string, delta string) error {
 	tool := s.tools[key]
 	if tool == nil {
-		return fmt.Errorf("Gemini stream received arguments for unknown tool %q", key)
+		return fmt.Errorf("gemini stream received arguments for unknown tool %q", key)
 	}
 	tool.arguments.WriteString(delta)
 	return nil
@@ -182,7 +182,7 @@ func (s *codexGeminiStreamSink) ToolArguments(key string, delta string) error {
 func (s *codexGeminiStreamSink) ToolDone(key string) error {
 	tool := s.tools[key]
 	if tool == nil {
-		return fmt.Errorf("Gemini stream completed unknown tool %q", key)
+		return fmt.Errorf("gemini stream completed unknown tool %q", key)
 	}
 	arguments := map[string]any{}
 	if raw := strings.TrimSpace(tool.arguments.String()); raw != "" {
