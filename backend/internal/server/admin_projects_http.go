@@ -846,15 +846,16 @@ func (s *Server) personalAPIKeyProject(user AdminUser) (Project, error) {
 
 func (s *Server) handleAdminAPIKeyCreate(w http.ResponseWriter, r *http.Request, user AdminUser, projectID string) {
 	var req struct {
-		Name          string      `json:"name"`
-		Group         string      `json:"group"`
-		OwnerUserID   string      `json:"owner_user_id"`
-		AllowedModels []string    `json:"allowed_models"`
-		IPAllowlist   []string    `json:"ip_allowlist"`
-		Limits        QuotaLimits `json:"limits"`
-		RateLimitRPM  *int64      `json:"rate_limit_rpm"`
-		TokenLimitTPM *int64      `json:"token_limit_tpm"`
-		ExpiresAt     *time.Time  `json:"expires_at"`
+		Name            string      `json:"name"`
+		Group           string      `json:"group"`
+		OwnerUserID     string      `json:"owner_user_id"`
+		AllowedModels   []string    `json:"allowed_models"`
+		ModelAccessMode string      `json:"model_access_mode"`
+		IPAllowlist     []string    `json:"ip_allowlist"`
+		Limits          QuotaLimits `json:"limits"`
+		RateLimitRPM    *int64      `json:"rate_limit_rpm"`
+		TokenLimitTPM   *int64      `json:"token_limit_tpm"`
+		ExpiresAt       *time.Time  `json:"expires_at"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, r, NewHTTPError(400, "invalid_request", err.Error()))
@@ -866,17 +867,18 @@ func (s *Server) handleAdminAPIKeyCreate(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	payload := map[string]any{
-		"project_id":       projectID,
-		"name":             req.Name,
-		"group":            req.Group,
-		"owner_user_id":    ownerUserID,
-		"allowed_models":   req.AllowedModels,
-		"ip_allowlist":     req.IPAllowlist,
-		"limits":           req.Limits,
-		"rate_limit_rpm":   req.RateLimitRPM,
-		"token_limit_tpm":  req.TokenLimitTPM,
-		"expires_at":       req.ExpiresAt,
-		"requested_action": "api_key_create",
+		"project_id":        projectID,
+		"name":              req.Name,
+		"group":             req.Group,
+		"owner_user_id":     ownerUserID,
+		"allowed_models":    req.AllowedModels,
+		"model_access_mode": req.ModelAccessMode,
+		"ip_allowlist":      req.IPAllowlist,
+		"limits":            req.Limits,
+		"rate_limit_rpm":    req.RateLimitRPM,
+		"token_limit_tpm":   req.TokenLimitTPM,
+		"expires_at":        req.ExpiresAt,
+		"requested_action":  "api_key_create",
 	}
 	if approval, required := s.approvalRequired(user, "api_key_create", "api_key", "", payload); required {
 		s.recordAdminAudit(r, user, "request_approval", "api_key", approval.ID, "", approval)
@@ -884,16 +886,17 @@ func (s *Server) handleAdminAPIKeyCreate(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	key, secret, err := s.store.CreateAPIKey(projectID, APIKey{
-		Name:          req.Name,
-		Group:         req.Group,
-		OwnerUserID:   ownerUserID,
-		Allowed:       req.AllowedModels,
-		IPAllowlist:   req.IPAllowlist,
-		Limits:        req.Limits,
-		RateLimitRPM:  req.RateLimitRPM,
-		TokenLimitTPM: req.TokenLimitTPM,
-		ExpiresAt:     req.ExpiresAt,
-		Status:        StatusActive,
+		Name:            req.Name,
+		Group:           req.Group,
+		OwnerUserID:     ownerUserID,
+		Allowed:         req.AllowedModels,
+		ModelAccessMode: req.ModelAccessMode,
+		IPAllowlist:     req.IPAllowlist,
+		Limits:          req.Limits,
+		RateLimitRPM:    req.RateLimitRPM,
+		TokenLimitTPM:   req.TokenLimitTPM,
+		ExpiresAt:       req.ExpiresAt,
+		Status:          StatusActive,
 		Metadata: map[string]string{
 			"created_by":      user.ID,
 			"created_by_role": normalizeAdminRole(user.Role),
@@ -905,6 +908,7 @@ func (s *Server) handleAdminAPIKeyCreate(w http.ResponseWriter, r *http.Request,
 	}
 	s.recordAdminAudit(r, user, "create", "api_key", key.ID, "", map[string]any{
 		"project_id": key.ProjectID, "name": key.Name, "owner_user_id": key.OwnerUserID,
+		"model_access_mode": key.ModelAccessMode, "allowed_models": key.Allowed,
 		"rate_limit_rpm": key.RateLimitRPM, "token_limit_tpm": key.TokenLimitTPM,
 	})
 	writeJSON(w, http.StatusCreated, map[string]any{
@@ -913,6 +917,8 @@ func (s *Server) handleAdminAPIKeyCreate(w http.ResponseWriter, r *http.Request,
 		"name":                    key.Name,
 		"project_id":              key.ProjectID,
 		"owner_user_id":           key.OwnerUserID,
+		"model_access_mode":       key.ModelAccessMode,
+		"allowed_models":          key.Allowed,
 		"rate_limit_rpm":          key.RateLimitRPM,
 		"token_limit_tpm":         key.TokenLimitTPM,
 		"plain_text_visible_once": true,
@@ -958,6 +964,14 @@ func (s *Server) handleAdminAPIKeyItem(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.recordAdminAudit(r, user, "rotate", "api_key", keyID, "", map[string]any{"new_key_id": key.ID})
+		for _, policyResource := range s.store.ListResources(routingPolicyResourceKind) {
+			policy := scopedRoutingPolicy(policyResource)
+			if policy.Scope == RoutingPolicyScopeAPIKey && policy.ScopeID == key.ID {
+				s.recordAdminAudit(r, user, "rotate_bind", routingPolicyResourceKind, policy.ID,
+					map[string]any{"rotated_from_key_id": keyID}, policyResource)
+				break
+			}
+		}
 		writeJSON(w, http.StatusCreated, map[string]any{
 			"id":                      key.ID,
 			"api_key":                 secret,
@@ -965,6 +979,8 @@ func (s *Server) handleAdminAPIKeyItem(w http.ResponseWriter, r *http.Request) {
 			"project_id":              key.ProjectID,
 			"owner_user_id":           key.OwnerUserID,
 			"rotated_from_id":         key.RotatedFromID,
+			"model_access_mode":       key.ModelAccessMode,
+			"allowed_models":          key.Allowed,
 			"plain_text_visible_once": true,
 		})
 		return
@@ -972,33 +988,35 @@ func (s *Server) handleAdminAPIKeyItem(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPatch:
 		var req struct {
-			Name          string             `json:"name"`
-			Group         string             `json:"group"`
-			OwnerUserID   *string            `json:"owner_user_id"`
-			AllowedModels []string           `json:"allowed_models"`
-			IPAllowlist   []string           `json:"ip_allowlist"`
-			Limits        *QuotaLimits       `json:"limits"`
-			RateLimitRPM  nullableInt64Patch `json:"rate_limit_rpm"`
-			TokenLimitTPM nullableInt64Patch `json:"token_limit_tpm"`
-			Status        string             `json:"status"`
-			ExpiresAt     *time.Time         `json:"expires_at"`
+			Name            string             `json:"name"`
+			Group           string             `json:"group"`
+			OwnerUserID     *string            `json:"owner_user_id"`
+			AllowedModels   []string           `json:"allowed_models"`
+			ModelAccessMode string             `json:"model_access_mode"`
+			IPAllowlist     []string           `json:"ip_allowlist"`
+			Limits          *QuotaLimits       `json:"limits"`
+			RateLimitRPM    nullableInt64Patch `json:"rate_limit_rpm"`
+			TokenLimitTPM   nullableInt64Patch `json:"token_limit_tpm"`
+			Status          string             `json:"status"`
+			ExpiresAt       *time.Time         `json:"expires_at"`
 		}
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, r, NewHTTPError(400, "invalid_request", err.Error()))
 			return
 		}
 		patch := APIKey{
-			Name:          req.Name,
-			Group:         req.Group,
-			Allowed:       req.AllowedModels,
-			IPAllowlist:   req.IPAllowlist,
-			LimitsSet:     req.Limits != nil,
-			RateLimitRPM:  req.RateLimitRPM.Value,
-			RateLimitSet:  req.RateLimitRPM.Set,
-			TokenLimitTPM: req.TokenLimitTPM.Value,
-			TokenLimitSet: req.TokenLimitTPM.Set,
-			Status:        req.Status,
-			ExpiresAt:     req.ExpiresAt,
+			Name:            req.Name,
+			Group:           req.Group,
+			Allowed:         req.AllowedModels,
+			ModelAccessMode: req.ModelAccessMode,
+			IPAllowlist:     req.IPAllowlist,
+			LimitsSet:       req.Limits != nil,
+			RateLimitRPM:    req.RateLimitRPM.Value,
+			RateLimitSet:    req.RateLimitRPM.Set,
+			TokenLimitTPM:   req.TokenLimitTPM.Value,
+			TokenLimitSet:   req.TokenLimitTPM.Set,
+			Status:          req.Status,
+			ExpiresAt:       req.ExpiresAt,
 		}
 		if req.Limits != nil {
 			patch.Limits = *req.Limits

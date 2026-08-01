@@ -13,7 +13,21 @@ import (
 func (s *GormStore) CreateResource(kind string, resource AdminResource) AdminResource {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	resource, _ = s.createResourceLocked(kind, resource, true)
+	return resource
+}
 
+func (s *GormStore) CreateRoutingPolicy(resource AdminResource) (AdminResource, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	resource, err := s.createResourceLocked(routingPolicyResourceKind, resource, false)
+	if err != nil {
+		return AdminResource{}, writeConflict(err, "routing_policy_binding_conflict", "A routing policy is already bound to this scope")
+	}
+	return resource, nil
+}
+
+func (s *GormStore) createResourceLocked(kind string, resource AdminResource, upsert bool) (AdminResource, error) {
 	now := time.Now().UTC()
 	if resource.ID == "" {
 		resource.ID = NewID(resourcePrefix(kind))
@@ -25,12 +39,19 @@ func (s *GormStore) CreateResource(kind string, resource AdminResource) AdminRes
 		resource.Fields = map[string]any{}
 	}
 	resource.Kind = kind
+	resource.RoutingPolicyBindingKey = nil
+	if kind == routingPolicyResourceKind {
+		resource.RoutingPolicyBindingKey = routingPolicyBindingKey(resource.Fields)
+	}
 	if resource.CreatedAt.IsZero() {
 		resource.CreatedAt = now
 	}
 	resource.UpdatedAt = now
-	_ = s.db.Clauses(clause.OnConflict{UpdateAll: true}).Create(&resource).Error
-	return resource
+	query := s.db
+	if upsert {
+		query = query.Clauses(clause.OnConflict{UpdateAll: true})
+	}
+	return resource, query.Create(&resource).Error
 }
 
 func (s *GormStore) ListResources(kind string) []AdminResource {
@@ -57,8 +78,16 @@ func (s *GormStore) UpdateResource(kind string, id string, patch AdminResource) 
 	if patch.Fields != nil {
 		resource.Fields = patch.Fields
 	}
+	resource.RoutingPolicyBindingKey = nil
+	if kind == routingPolicyResourceKind {
+		resource.RoutingPolicyBindingKey = routingPolicyBindingKey(resource.Fields)
+	}
 	resource.UpdatedAt = time.Now().UTC()
-	return resource, s.db.Save(&resource).Error
+	err := s.db.Save(&resource).Error
+	if kind == routingPolicyResourceKind {
+		err = writeConflict(err, "routing_policy_binding_conflict", "A routing policy is already bound to this scope")
+	}
+	return resource, err
 }
 
 func (s *GormStore) DeleteResource(kind string, id string) error {

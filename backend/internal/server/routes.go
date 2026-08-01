@@ -60,6 +60,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/admin/models/restore-defaults", s.handleAdminModelsRestoreDefaults)
 	s.mux.HandleFunc("/api/admin/models/", s.handleAdminModelItem)
 	s.mux.HandleFunc("/api/admin/model-routing-policies/", s.handleAdminModelRoutingPolicy)
+	s.mux.HandleFunc("/api/admin/routing-policies/simulate", s.handleAdminRoutingPolicySimulation)
+	s.mux.HandleFunc("/api/admin/routing-policies/", s.handleAdminRoutingPolicyAction)
 	s.mux.HandleFunc("/api/admin/routing-rules", s.handleAdminRoutes)
 	s.mux.HandleFunc("/api/admin/routing-rules/", s.handleAdminRouteItem)
 	s.mux.HandleFunc("/api/admin/resources/", s.handleAdminResources)

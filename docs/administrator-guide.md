@@ -93,6 +93,18 @@ For a private-project boundary, create an internal Provider route with scope `in
 
 Project route scope also controls model discovery: `GET /v1/models` includes an external model only when the calling API key's project has at least one active eligible route, in addition to the normal model and API-key allowlist checks.
 
+### Scoped Routing Policies
+
+Use **Scoped Policies** to bind an independent routing policy to the global gateway, a project, or an API Key. TokenHub resolves exactly one effective policy in this order: API Key, then project, then global. Finding a higher-priority binding ends resolution even when that policy is disabled, conflicting, or leaves no eligible candidate; the router fails closed and never falls back to a lower scope. Only one policy may be bound to a given target, while unbound definitions can be prepared without affecting traffic.
+
+Model access is evaluated before routing. Projects and API Keys each support `inherit` and `restricted` access modes. A restricted list is intersected with every upper-level list, so an API Key cannot expand project access; a restricted empty list denies every model. For compatibility, records created before access modes existed that have a blank mode and an empty list continue to inherit. `GET /v1/models` applies the same effective access scope and requires a route allowed by the effective routing policy.
+
+A scoped policy can constrain model names, Providers, Provider Resources, required route tags, resource regions, and resource environments, and can override the routing strategy. Configure tags on model routes and region/environment metadata on Provider Resources. Existing route-level project scopes are intersected with these constraints. Traffic allocation, session/cache affinity, half-open recovery, and failover run only after filtering and can never add an excluded route back to the candidate pool. This makes an internal-only policy fail safely instead of silently crossing to an external Provider.
+
+The preview/simulation panel accepts a project, API Key, and model and displays the effective policy, access decision, selected route, and a safe allow/exclude reason for every candidate. Policy failures use diagnostic codes such as `routing_policy_unavailable`, `routing_policy_conflict`, and `routing_policy_no_candidate` without exposing credentials. Request logs record `routing_policy_id`, `routing_policy_scope`, and `routing_policy_priority`; generic policy create/update/delete operations and explicit bind/unbind operations also write administrator audit events.
+
+The management API uses generic resource CRUD at `/api/admin/resources/routing-policies`, plus `POST /api/admin/routing-policies/{id}/bind`, `POST /api/admin/routing-policies/{id}/unbind`, and `POST /api/admin/routing-policies/simulate`. The same enforcement applies to OpenAI-compatible model requests, Anthropic Messages, image generation, and the administrator playground.
+
 ## Provider Resource Recovery
 
 A provider resource that fails `TOKENHUB_RESOURCE_FAILURE_THRESHOLD` times in a row is parked: it stops receiving traffic and enters a cooldown. Recovery is automatic and needs no admin action.

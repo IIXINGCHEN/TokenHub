@@ -138,6 +138,13 @@ export function loadPlanForView(user: AdminUser, view: ViewKey): LoadPlan {
       plan.routes = true;
       plan.providerModels = true;
       break;
+    case "routing-policies":
+      plan.overview = true;
+      plan.keys = true;
+      plan.routes = true;
+      plan.providerResources = true;
+      addResourceDependency(plan, "routing-policies");
+      break;
     case "projects":
       plan.overview = true;
       plan.logs = true;

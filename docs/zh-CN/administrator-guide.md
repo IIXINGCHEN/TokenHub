@@ -93,6 +93,18 @@ Provider 连接信息和项目限制仍按线路配置。编辑单条 Provider �
 
 项目作用域也会影响模型发现：除了模型启用状态和 API Key 模型白名单外，只有调用方 API Key 所属项目至少存在一条已启用且符合项目作用域的路由时，对外模型才会出现在 `GET /v1/models` 中。
 
+### 作用域路由策略
+
+可在「作用域策略」中为全局网关、项目或 API Key 绑定独立路由策略。TokenHub 按 API Key、项目、全局的顺序解析且只选择一个有效策略。一旦命中更高优先级的绑定，即使该策略已停用、存在冲突或筛选后无合格候选，也会安全拒绝而不会回退到低优先级作用域。每个作用域对象最多绑定一个策略；未绑定的策略定义可以提前准备，不影响流量。
+
+模型访问权先于路由执行。项目和 API Key 均支持 `inherit`（继承）与 `restricted`（限制）模式。限制列表会与所有上层列表取交集，因此 API Key 不能扩大项目权限；`restricted` 且列表为空表示禁止全部模型。为保持兼容，在访问模式上线前创建、且模式与列表均为空的记录仍按继承处理。`GET /v1/models` 使用同一有效访问范围，并要求至少存在一条被有效路由策略允许的路由。
+
+作用域策略可约束模型名、Provider、Provider Resource、必需路由标签、资源地域和资源环境，也可覆盖路由算法。路由标签在模型路由上配置，地域与环境在 Provider Resource 上配置。已有的路由项目作用域会与这些约束取交集。流量分配、会话/缓存亲和、半开恢复和故障转移都在筛选之后运行，不会把已排除路由重新加回候选池。因此内部模型专属策略会安全失败，而不会静默跨界到外部 Provider。
+
+策略预览/模拟面板接收项目、API Key 和模型，展示有效策略、访问判定、最终路由，以及每个候选的安全允许/排除原因。策略失败使用 `routing_policy_unavailable`、`routing_policy_conflict` 和 `routing_policy_no_candidate` 等可诊断错误码，不暴露凭据。请求日志记录 `routing_policy_id`、`routing_policy_scope` 和 `routing_policy_priority`；通用策略创建/更新/删除以及显式绑定/解绑操作也会写入管理员审计事件。
+
+管理 API 通过 `/api/admin/resources/routing-policies` 提供通用资源 CRUD，并提供 `POST /api/admin/routing-policies/{id}/bind`、`POST /api/admin/routing-policies/{id}/unbind` 和 `POST /api/admin/routing-policies/simulate`。同一执行规则适用于 OpenAI 兼容模型请求、Anthropic Messages、图像生成和管理员 Playground。
+
 ## Provider 资源自动恢复
 
 连续失败达到 `TOKENHUB_RESOURCE_FAILURE_THRESHOLD` 次的 Provider 资源会被摘除：停止接收流量并进入冷却。恢复过程全自动，无需管理员介入。

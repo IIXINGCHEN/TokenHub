@@ -81,6 +81,7 @@ func createRouteRecord(db *gorm.DB, route ModelRoute) (ModelRoute, error) {
 		route.Strategy = RouteStrategyBalanced
 	}
 	route.ProjectScope, route.ProjectIDs = normalizeRouteProjectScope(route.ProjectScope, route.ProjectIDs)
+	route.Tags = uniqueStrings(route.Tags)
 	if route.CreatedAt.IsZero() {
 		route.CreatedAt = time.Now().UTC()
 	}

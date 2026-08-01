@@ -137,3 +137,30 @@ func TestAPIKeyUpdateOmitsUnownedQuotaLimits(t *testing.T) {
 		t.Fatalf("expected monthly_cost_usd=100, got %v", limits)
 	}
 }
+
+func TestAPIKeyUpdateCarriesExplicitModelAccessMode(t *testing.T) {
+	var payload map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"key-1","name":"restricted"}`))
+	}))
+	defer ts.Close()
+
+	client := NewAdminAPIClient(ts.URL, "test-admin-token", http.DefaultClient)
+	if _, err := client.UpdateAPIKey(context.Background(), "key-1", server.APIKey{
+		Name: "restricted", Status: server.StatusActive,
+		ModelAccessMode: server.ModelAccessModeRestricted, Allowed: []string{},
+	}); err != nil {
+		t.Fatalf("update API key: %v", err)
+	}
+	if payload["model_access_mode"] != server.ModelAccessModeRestricted {
+		t.Fatalf("model_access_mode missing from update payload: %+v", payload)
+	}
+	allowed, ok := payload["allowed_models"].([]any)
+	if !ok || len(allowed) != 0 {
+		t.Fatalf("restricted-empty allowed_models must be explicit: %+v", payload)
+	}
+}

@@ -992,6 +992,9 @@ func (s *Server) canAccessQuotaPolicy(user AdminUser, item AdminResource) bool {
 }
 
 func (s *Server) validateScopedResourceMutation(user AdminUser, kind string, resourceID string, req AdminResource) error {
+	if kind == routingPolicyResourceKind {
+		return s.validateScopedRoutingPolicyMutation(resourceID, req)
+	}
 	if kind == "project-members" {
 		return s.validateProjectMemberMutation(user, resourceID, req)
 	}
@@ -1196,6 +1199,9 @@ func normalizeScopeValue(value string) string {
 }
 
 func adminResourcePermission(path string) string {
+	if strings.Contains(path, "/routing-policies") {
+		return "routing"
+	}
 	if strings.Contains(path, "/quota-policies") {
 		return "quota"
 	}

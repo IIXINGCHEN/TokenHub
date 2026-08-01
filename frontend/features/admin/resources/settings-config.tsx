@@ -9,6 +9,7 @@ import { adminUserConfig, alertDeliveryConfig, alertEventConfig, alertRuleConfig
 import { adminDelete, adminFetch, adminMutate, identityProviderPayload, notificationChannelPayload } from "./payloads";
 import { apiKeyConfig, projectConfig, projectMemberConfig } from "./project-key-config";
 import { modelConfig, providerConfig, routeConfig } from "./provider-model-config";
+import { routingPolicyConfig } from "./routing-policy-config";
 import { StatusPill } from "../shared/ui";
 import { identityProviderIconOptions, identityProviderInitialFormValues, identityProviderTemplateOptions } from "../shell/auth";
 
@@ -24,6 +25,7 @@ function createResourceConfigs(): Partial<Record<ViewKey, ResourceConfig<any>>> 
   providers: providerConfig(),
   models: modelConfig(),
   routes: routeConfig(),
+  "routing-policies": routingPolicyConfig(),
   projects: projectConfig(),
   "project-members": projectMemberConfig(),
   "api-keys": apiKeyConfig(),

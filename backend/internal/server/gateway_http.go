@@ -328,11 +328,21 @@ func (s *Server) startRoutedCall(w http.ResponseWriter, r *http.Request, project
 	}
 	routes, err := s.store.SelectRouteCandidates(model)
 	if err != nil {
+		err = s.annotateRoutingPolicyForCandidateError(&call, err)
 		s.finishFailedRoutedCall(r, RoutedCall{Call: call}, nil, Usage{}, err, requestPayload)
 		writeError(w, r, err)
 		return RoutedCall{}, false
 	}
 	routes, err = s.filterCodexRoutesByModel(r.Context(), model, routes)
+	if err != nil {
+		err = s.annotateRoutingPolicyForCandidateError(&call, err)
+		s.finishFailedRoutedCall(r, RoutedCall{Call: call}, nil, Usage{}, err, requestPayload)
+		writeError(w, r, err)
+		return RoutedCall{}, false
+	}
+	var resolution RoutingPolicyResolution
+	routes, resolution, err = s.resolveScopedRoutingPolicy(call, routes)
+	applyRoutingPolicyResolution(&call, resolution)
 	if err != nil {
 		s.finishFailedRoutedCall(r, RoutedCall{Call: call}, nil, Usage{}, err, requestPayload)
 		writeError(w, r, err)
@@ -525,16 +535,6 @@ func (s *Server) handleAdminPlaygroundChat(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	routes, err := s.store.SelectRouteCandidates(req.Model)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
-	routes, err = s.filterCodexRoutesByModel(r.Context(), req.Model, routes)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
 	requestID := NewID("pg")
 	startedAt := time.Now()
 	routed := RoutedCall{
@@ -549,6 +549,38 @@ func (s *Server) handleAdminPlaygroundChat(w http.ResponseWriter, r *http.Reques
 			StartedAt:  startedAt.UTC(),
 			measuredAt: startedAt,
 		},
+	}
+	finishRoutingFailure := func(routeErr error) {
+		routeErr = s.annotateRoutingPolicyForCandidateError(&routed.Call, routeErr)
+		httpErr := AsHTTPError(routeErr)
+		s.finishRoutedCall(r, GatewayCallCompletion{
+			Kind: CompletionKindPlayground, Call: routed.Call, StatusCode: httpErr.Status,
+			ErrorCode: httpErr.Code, ErrorMessage: httpErr.Message, RequestPayload: req,
+			ResponsePayload: auditErrorPayload(routeErr, requestID),
+		})
+		writeError(w, r, routeErr)
+	}
+	routes, err := s.store.SelectRouteCandidates(req.Model)
+	if err != nil {
+		finishRoutingFailure(err)
+		return
+	}
+	routes, err = s.filterCodexRoutesByModel(r.Context(), req.Model, routes)
+	if err != nil {
+		finishRoutingFailure(err)
+		return
+	}
+	routes, resolution, err := s.resolveScopedRoutingPolicy(routed.Call, routes)
+	applyRoutingPolicyResolution(&routed.Call, resolution)
+	if err != nil {
+		httpErr := AsHTTPError(err)
+		s.finishRoutedCall(r, GatewayCallCompletion{
+			Kind: CompletionKindPlayground, Call: routed.Call, StatusCode: httpErr.Status,
+			ErrorCode: httpErr.Code, ErrorMessage: httpErr.Message, RequestPayload: req,
+			ResponsePayload: auditErrorPayload(err, requestID),
+		})
+		writeError(w, r, err)
+		return
 	}
 	routed.Routes = s.planRouteOrder(routed.Call, routes)
 	resp, route, usage, attempts, err := s.executeRoutedPlaygroundChat(r, routed, req)
