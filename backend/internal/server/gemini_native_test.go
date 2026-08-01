@@ -172,6 +172,13 @@ func TestGeminiNativeModelsAndCountTokensUseGoogleAPIKeyHeader(t *testing.T) {
 	if models.Code != http.StatusOK || !strings.Contains(models.Body, `"name":"models/gpt-5.5"`) {
 		t.Fatalf("models failed: %d %s", models.Code, models.Body)
 	}
+	if strings.Contains(models.Body, "chat-only-model") {
+		t.Fatalf("Gemini catalog advertised a model without a compatible Codex Responses route: %s", models.Body)
+	}
+	chatOnly := doGeminiJSON(t, server.Handler(), http.MethodGet, "/v1beta/models/chat-only-model", nil, secret)
+	if chatOnly.Code != http.StatusNotFound {
+		t.Fatalf("chat-only model lookup status = %d, want 404: %s", chatOnly.Code, chatOnly.Body)
+	}
 	count := doGeminiJSON(t, server.Handler(), http.MethodPost, "/v1beta/models/gpt-5.5:countTokens", map[string]any{
 		"contents": []any{map[string]any{"role": "user", "parts": []any{map[string]any{"text": "count these tokens"}}}},
 	}, secret)
@@ -184,11 +191,45 @@ func TestGeminiNativeModelsAndCountTokensUseGoogleAPIKeyHeader(t *testing.T) {
 	}
 }
 
+func TestGeminiNativeCallsEmitGatewayTraces(t *testing.T) {
+	server, secret := newGeminiCodexTestServer(t, func(map[string]any) string {
+		return geminiCodexTestSSE(map[string]any{
+			"type": "response.completed",
+			"response": map[string]any{
+				"id": "resp_gemini_trace", "status": "completed",
+				"output": []any{map[string]any{
+					"type": "message", "role": "assistant",
+					"content": []any{map[string]any{"type": "output_text", "text": "trace me"}},
+				}},
+				"usage": map[string]any{"input_tokens": 4, "output_tokens": 2, "total_tokens": 6},
+			},
+		})
+	})
+	emitter := &recordingTraceEmitter{}
+	server.traceEmitter = emitter
+	payload := map[string]any{
+		"contents": []any{map[string]any{"role": "user", "parts": []any{map[string]any{"text": "trace this"}}}},
+	}
+	for _, path := range []string{
+		"/v1beta/models/gpt-5.5:generateContent",
+		"/v1beta/models/gpt-5.5:streamGenerateContent?alt=sse",
+	} {
+		response := doGeminiJSON(t, server.Handler(), http.MethodPost, path, payload, secret)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s failed: %d %s", path, response.Code, response.Body)
+		}
+		completions := emitter.take()
+		if len(completions) != 1 || completions[0].StatusCode != http.StatusOK || completions[0].Usage.TotalTokens != 6 {
+			t.Fatalf("%s emitted unexpected completions: %+v", path, completions)
+		}
+	}
+}
+
 func newGeminiCodexTestServer(t *testing.T, responder func(map[string]any) string) (*Server, string) {
 	t.Helper()
 	store := NewMemoryStore()
 	project := store.CreateProject(Project{Name: "Gemini CLI Project", Status: StatusActive})
-	_, secret, err := store.CreateAPIKey(project.ID, APIKey{Name: "Gemini CLI Key", Allowed: []string{geminiCodexTestModel}, Status: StatusActive}, "thk_gemini_cli_test")
+	_, secret, err := store.CreateAPIKey(project.ID, APIKey{Name: "Gemini CLI Key", Allowed: []string{geminiCodexTestModel, "chat-only-model"}, Status: StatusActive}, "thk_gemini_cli_test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +245,12 @@ func newGeminiCodexTestServer(t *testing.T, responder func(map[string]any) strin
 	}
 	store.AddModel(Model{Name: geminiCodexTestModel, Modality: "chat", ContextWindow: 128000, Status: StatusActive})
 	store.AddRoute(ModelRoute{ID: "route_gemini_codex", ModelName: geminiCodexTestModel, ProviderID: provider.ID, ProviderResourceID: resource.ID, ProviderModel: geminiCodexTestModel, Status: StatusActive})
+	const chatOnlyProviderType = "gemini_chat_only"
+	chatProvider := store.AddProvider(Provider{ID: "prv_gemini_chat_only", Name: "Chat Only", Type: chatOnlyProviderType, Status: StatusActive, Healthy: true})
+	store.AddModel(Model{Name: "chat-only-model", Modality: "chat", Status: StatusActive})
+	store.AddRoute(ModelRoute{ID: "route_gemini_chat_only", ModelName: "chat-only-model", ProviderID: chatProvider.ID, ProviderModel: "chat-only-model", Status: StatusActive})
 	server := New(store)
+	server.adapterRegistry.Register(chatOnlyProviderType, MockAdapter{}, AdapterCapabilityChat, AdapterCapabilityChatStream)
 	server.codexSubscription.Client = &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
 		if request.URL.Path != "/backend-api/codex/responses" {
 			t.Fatalf("unexpected Codex path: %s", request.URL)

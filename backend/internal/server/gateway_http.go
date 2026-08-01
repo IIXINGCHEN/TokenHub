@@ -42,7 +42,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	routed, err = compatibleChatRoutes(routed, req)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, nil, err, req)
+		s.finishFailedRoutedCall(r, routed, nil, Usage{}, err, req)
 		writeError(w, r, err)
 		return
 	}

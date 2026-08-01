@@ -24,12 +24,9 @@ func (s *Server) handleGeminiModels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	models := s.store.AccessibleModels(key)
+	models := s.geminiAccessibleModels(key)
 	items := make([]any, 0, len(models))
 	for _, model := range models {
-		if model.Modality == "image" || model.Modality == "embedding" {
-			continue
-		}
 		items = append(items, geminiModelObject(model))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"models": items})
@@ -65,7 +62,7 @@ func (s *Server) handleGeminiModelGet(w http.ResponseWriter, r *http.Request, mo
 		writeError(w, r, err)
 		return
 	}
-	for _, model := range s.store.AccessibleModels(key) {
+	for _, model := range s.geminiAccessibleModels(key) {
 		if model.Name == modelName || model.ID == modelName {
 			writeJSON(w, http.StatusOK, geminiModelObject(model))
 			return
@@ -80,7 +77,7 @@ func (s *Server) handleGeminiCountTokens(w http.ResponseWriter, r *http.Request,
 		writeError(w, r, err)
 		return
 	}
-	if !geminiModelAllowed(s.store.AccessibleModels(key), model) {
+	if !geminiModelAllowed(s.geminiAccessibleModels(key), model) {
 		writeError(w, r, ErrModelNotAllowed)
 		return
 	}
@@ -129,13 +126,13 @@ func (s *Server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request) {
 	routed.Routes = s.routesWithAdapterCapability(routed.Routes, capability)
 	if len(routed.Routes) == 0 {
 		err := NewHTTPError(http.StatusNotImplemented, "provider_capability_not_supported", "No route supports the Gemini CLI compatibility protocol")
-		s.finishFailedRoutedCall(r, routed, nil, err, payload)
+		s.finishFailedRoutedCall(r, routed, nil, Usage{}, err, payload)
 		writeError(w, r, err)
 		return
 	}
 	affinity, err := s.geminiGatewayAffinity(key.ID, r.Header, payload, routed.Routes)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, nil, err, payload)
+		s.finishFailedRoutedCall(r, routed, nil, Usage{}, err, payload)
 		writeError(w, r, err)
 		return
 	}
@@ -150,17 +147,19 @@ func (s *Server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	response, route, usage, attempts, err := s.executeRoutedGemini(r, routed, request, payload)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, attempts, err, payload)
+		s.finishFailedRoutedCall(r, routed, attempts, usage, err, payload)
 		writeError(w, r, err)
 		return
 	}
 	converted, err := codexResponsesToGemini(response, model, usage, reverseNames)
 	if err != nil {
-		s.finishFailedRoutedCall(r, routed, attempts, err, payload)
+		s.finishFailedRoutedCall(r, routed, attempts, usage, err, payload)
 		writeError(w, r, err)
 		return
 	}
-	s.finishSuccessfulGeminiCall(r, routed, route, usage, attempts, payload, converted)
+	s.store.MarkRouteUsed(route.Route.ID)
+	s.store.MarkProviderResourceUsed(routeResourceID(route))
+	s.finishSuccessfulRoutedCall(r, routed, route, usage, attempts, payload, converted)
 	w.Header().Set("x-request-id", routed.Call.RequestID)
 	s.writeRouteHeaders(w, routed.Call, route, len(attempts))
 	writeJSON(w, http.StatusOK, converted)
@@ -220,22 +219,22 @@ func (s *Server) handleStreamingGemini(w http.ResponseWriter, r *http.Request, r
 		s.store.MarkRouteUsed(route.Route.ID)
 		s.store.MarkProviderResourceUsed(routeResourceID(route))
 	}
-	s.store.RecordRouteAttempts(routed.Call.RequestID, attempts)
-	s.store.FinishCall(routed.Call, route, usage, status, code, s.clientIP(r), r.UserAgent())
-	s.recordRequestPayload(routed.Call.RequestID, payload, auditStreamPayload(status, code, streamErr))
+	s.finishRoutedCall(r, GatewayCallCompletion{
+		Call:            routed.Call,
+		Route:           route,
+		Usage:           usage,
+		Attempts:        attempts,
+		StatusCode:      status,
+		ErrorCode:       code,
+		ErrorMessage:    errorMessageOrEmpty(streamErr),
+		RequestPayload:  payload,
+		ResponsePayload: auditStreamPayload(status, code, streamErr),
+	})
 	if streamErr != nil && !tracker.Wrote() {
 		w.Header().Del("cache-control")
 		s.writeRouteHeaders(w, routed.Call, lastAttemptRoute(attempts), len(attempts))
 		writeError(w, r, streamErr)
 	}
-}
-
-func (s *Server) finishSuccessfulGeminiCall(r *http.Request, routed RoutedCall, route RouteSelection, usage Usage, attempts []RouteAttempt, request any, response any) {
-	s.store.MarkRouteUsed(route.Route.ID)
-	s.store.MarkProviderResourceUsed(routeResourceID(route))
-	s.store.RecordRouteAttempts(routed.Call.RequestID, attempts)
-	s.store.FinishCall(routed.Call, route, usage, http.StatusOK, "", s.clientIP(r), r.UserAgent())
-	s.recordRequestPayload(routed.Call.RequestID, request, response)
 }
 
 func (s *Server) geminiGatewayAffinity(apiKeyID string, headers http.Header, payload map[string]any, routes []RouteSelection) (*RequestAffinity, error) {
@@ -288,6 +287,33 @@ func geminiModelAllowed(models []Model, name string) bool {
 		}
 	}
 	return false
+}
+
+// geminiAccessibleModels only advertises models that this native Gemini
+// surface can actually execute. AccessibleModels deliberately answers the
+// broader gateway question and may include chat-only routes; Gemini requests
+// are translated to Responses and, by contract, are backed by Codex
+// subscription resources.
+func (s *Server) geminiAccessibleModels(key APIKey) []Model {
+	models := s.store.AccessibleModels(key)
+	compatible := make([]Model, 0, len(models))
+	for _, model := range models {
+		if model.Modality == "image" || model.Modality == "embedding" {
+			continue
+		}
+		routes, err := s.store.SelectRouteCandidates(model.Name)
+		if err != nil {
+			continue
+		}
+		routes = s.routesWithAdapterCapability(routes, AdapterCapabilityResponses)
+		for _, route := range routes {
+			if route.Provider.Type == ProviderOpenAICodex && routeMatchesProject(route.Route, key.ProjectID) {
+				compatible = append(compatible, model)
+				break
+			}
+		}
+	}
+	return compatible
 }
 
 func geminiModelObject(model Model) map[string]any {
