@@ -159,6 +159,10 @@ TokenHub can expose Prometheus metrics at `GET /metrics`. Collection is off by d
 | --- | --- | --- |
 | `tokenhub_gateway_requests_total` | counter | Logical model API requests. A request that failed over across several candidates counts once. |
 | `tokenhub_gateway_request_duration_seconds` | histogram | End-to-end latency including failover attempts. Buckets run to 300s. |
+| `tokenhub_gateway_route_attempts_total` | counter | Physical candidate attempts. The ratio `rate(route_attempts_total) / rate(routed_requests_total)` is the average failover depth; `routed_requests_total` counts only requests that made an attempt, so refusals that never reached a provider cannot dilute it. Labels include `invoked` so capacity-skipped candidates are visible separately. `status_code` is the gateway-mapped status (an upstream 401 is reported as 502); the raw upstream status is in the `RouteAttemptLog`. |
+| `tokenhub_gateway_attempt_duration_seconds` | histogram | Duration of one invoked routed attempt, measured around the whole attempt: upstream transport, stream translation, and writing to the client. Streaming calls therefore include slow-client backpressure; gateway overhead is reported separately in `overhead_seconds`. Excludes candidates skipped for capacity. |
+| `tokenhub_gateway_routed_requests_total` | counter | Logical requests that made at least one candidate attempt — the attempt-bearing denominator for the failover-depth ratio. Its `provider_type` label is the last candidate attempted, so when a request fails over across providers, aggregate the depth ratio by `model` rather than by `provider_type`. |
+| `tokenhub_gateway_overhead_seconds` | histogram | Approximate gateway overhead: elapsed end-to-end time minus the sum of invoked attempt durations. Clamped at zero. A request admitted for routing that fails before any attempt contributes its full elapsed time. For image jobs the elapsed time includes queue wait, so overhead there is an upper bound. |
 | `tokenhub_gateway_requests_in_flight` | gauge | Model API requests currently being served. Admin traffic and scrapes are excluded. |
 | `tokenhub_gateway_tokens_total` | counter | Tokens by kind: `prompt`, `completion`, `cached`, `cache_write`, `reasoning`. |
 | `tokenhub_gateway_cost_usd_total` | counter | Unified external billing estimate from Model Directory prices. Provider actual cost remains in privileged request audit rather than this metric. |
@@ -170,9 +174,28 @@ Go runtime and process metrics are exposed alongside them.
 
 **Token kinds are not a partition and must not be summed.** `prompt` already contains the `cached` and `cache_write` tokens, and `reasoning` is a subset of `completion`. Summing the kinds double-counts.
 
-Requests refused before routing — a bad API key, an exhausted quota, an unknown model — increment the request counter only. They never reached a provider, so they contribute no tokens, cost or duration. A model name that the catalog does not know is reported as `unknown` rather than verbatim, so a client looping over invented model names cannot inflate the series count.
+Requests refused before routing — a bad API key, an exhausted quota, an unknown model — increment the request counter only. They never reached a provider, so they contribute no tokens, cost or duration. The attempt-bearing counterpart `routed_requests_total` counts only requests that reached at least one candidate, so a rejection burst does not dilute the failover-depth ratio. A model name that the catalog does not know is reported as `unknown` rather than verbatim, so a client looping over invented model names cannot inflate the series count.
 
 Labels are `model`, `provider_type`, `provider_id`, `resource_id`, `status_code`, `error_code` and `stream`. Upstream failures no longer report a single `provider_error` at `status_code="502"`; they carry the codes and statuses listed under Upstream Error Classification, so dashboards and alerts that match on the old pair need updating. Upstream failures no longer report a single `provider_error` at `status_code="502"`; they carry the codes and statuses listed under Upstream Error Classification, so dashboards and alerts that match on the old pair need updating. Setting `TOKENHUB_METRICS_PROJECT_LABEL=true` adds `project_id`, which multiplies the series count of every gateway metric by the number of active projects; leave it off unless you need per-project dashboards, and use the usage reports for per-key attribution instead.
+
+Useful PromQL examples:
+
+```promql
+# Average failover depth per model.
+sum by (model) (rate(tokenhub_gateway_route_attempts_total[5m]))
+/
+sum by (model) (rate(tokenhub_gateway_routed_requests_total[5m]))
+
+# 99th percentile gateway overhead. Histograms must be aggregated by bucket
+# before calling histogram_quantile; subtracting aggregated percentiles is
+# mathematically invalid.
+histogram_quantile(
+  0.99,
+  sum by (le, stream) (rate(tokenhub_gateway_overhead_seconds_bucket[5m]))
+)
+```
+
+When running multiple gateway instances, histogram quantiles can be computed from `sum(rate(..._bucket)) by (le)` across all instances because each bucket is a counter. `tokenhub_gateway_requests_in_flight` is a gauge and should be aggregated with `instance` if you want per-instance concurrency; summing it across instances gives total in-flight requests.
 
 To push metrics instead of having them scraped, point an OpenTelemetry Collector's `prometheus` receiver at this endpoint and forward from there. Traces are a separate signal and are pushed directly; see below.
 
