@@ -122,6 +122,30 @@ func TestMetricsRecordAPIKeyRateLimitHitsWithMaskedIdentifier(t *testing.T) {
 	}
 }
 
+func TestMetricsRecordInheritedRateLimitScopeWithoutPerKeySeries(t *testing.T) {
+	store, server, secret := newMetricsTestServer(t, false)
+	project := store.ListProjects()[0]
+	store.CreateResource("quota-policies", AdminResource{
+		Name:   "Project RPM",
+		Status: StatusActive,
+		Fields: map[string]any{
+			"scope":          "project",
+			"scope_id":       project.ID,
+			"rate_limit_rpm": int64(1),
+		},
+	})
+	app := server.Handler()
+	if code := chatOnce(t, app, secret, false); code != http.StatusOK {
+		t.Fatalf("first chat failed: %d", code)
+	}
+	if code := chatOnce(t, app, secret, false); code != http.StatusTooManyRequests {
+		t.Fatalf("second chat should be rate limited: %d", code)
+	}
+	if got := testutil.ToFloat64(server.metrics.rateLimitHits.WithLabelValues("project", "rpm", metricsLabelUnset)); got != 1 {
+		t.Fatalf("expected one project RPM limit hit without a key reference, got %v", got)
+	}
+}
+
 // The cost reported to Prometheus must be the priced value, which is only computed
 // inside FinishCall — instrumenting earlier would have reported zero.
 func TestMetricsCostMatchesUsageRecord(t *testing.T) {

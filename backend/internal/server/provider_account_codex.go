@@ -400,15 +400,26 @@ func (s *Server) handleStreamingResponses(w http.ResponseWriter, r *http.Request
 		}
 		return response, usage, nil
 	})
+	routed.Call.StreamOutputCommitted = streamStarted
 	if err != nil {
 		if streamStarted {
+			// The client already has a 200 and part of the stream, so the usage the
+			// upstream reported before failing is real and must not be discarded.
 			httpErr := AsHTTPError(err)
-			s.store.RecordRouteAttempts(routed.Call.RequestID, attempts)
-			s.store.FinishCall(routed.Call, route, usage, httpErr.Status, httpErr.Code, s.clientIP(r), r.UserAgent())
+			s.finishRoutedCall(r, GatewayCallCompletion{
+				Call:            routed.Call,
+				Route:           route,
+				Usage:           usage,
+				Attempts:        attempts,
+				StatusCode:      httpErr.Status,
+				ErrorCode:       httpErr.Code,
+				ErrorMessage:    httpErr.Message,
+				RequestPayload:  request,
+				ResponsePayload: auditErrorPayload(err, routed.Call.RequestID),
+			})
 		} else {
-			s.finishFailedRoutedCall(r, routed, attempts, usage, err)
+			s.finishFailedRoutedCall(r, routed, attempts, usage, err, request)
 		}
-		s.recordRequestPayload(routed.Call.RequestID, request, auditErrorPayload(err, routed.Call.RequestID))
 		if !streamStarted {
 			writeError(w, r, err)
 		}
@@ -419,9 +430,7 @@ func (s *Server) handleStreamingResponses(w http.ResponseWriter, r *http.Request
 	}
 	s.store.MarkRouteUsed(route.Route.ID)
 	s.store.MarkProviderResourceUsed(routeResourceID(route))
-	s.store.RecordRouteAttempts(routed.Call.RequestID, attempts)
-	s.store.FinishCall(routed.Call, route, usage, http.StatusOK, "", s.clientIP(r), r.UserAgent())
-	s.recordRequestPayload(routed.Call.RequestID, request, response)
+	s.finishSuccessfulRoutedCall(r, routed, route, usage, attempts, request, response)
 }
 
 func codexStreamEventError(event map[string]any) error {

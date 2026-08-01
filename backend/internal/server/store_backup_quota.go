@@ -349,7 +349,7 @@ func (s *GormStore) quotaBucketForUpdate(tx *gorm.DB, keyID, scope, bucket strin
 
 func priceUsage(model Model, usage Usage) Usage {
 	if usage.TotalTokens == 0 {
-		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+		usage.TotalTokens = saturatingAddNonNegative(usage.PromptTokens, usage.CompletionTokens)
 	}
 	usage.CachedInputTokens = minInt64(maxInt64(usage.CachedInputTokens, 0), usage.PromptTokens)
 	if usage.CostUSD == 0 {
@@ -445,10 +445,17 @@ func raiseQuotaAlerts(tx *gorm.DB, key APIKey, dayCounter, monthCounter *QuotaCo
 	return nil
 }
 
-func quotaPolicyLimits(tx *gorm.DB, project Project, key APIKey) QuotaLimits {
+type MinuteLimitScopes struct {
+	RPM string
+	TPM string
+}
+
+func quotaPolicyLimits(tx *gorm.DB, project Project, key APIKey) (QuotaLimits, MinuteLimitScopes) {
 	var resources []AdminResource
-	_ = tx.Where("kind = ? AND status = ?", "quota-policies", StatusActive).Find(&resources).Error
+	_ = tx.Where("kind = ? AND status = ?", "quota-policies", StatusActive).
+		Order("created_at asc, id asc").Find(&resources).Error
 	var limits QuotaLimits
+	var scopes MinuteLimitScopes
 	for _, resource := range resources {
 		scope := strings.ToLower(strings.TrimSpace(stringField(resource.Fields, "scope")))
 		if scope == "" {
@@ -458,7 +465,7 @@ func quotaPolicyLimits(tx *gorm.DB, project Project, key APIKey) QuotaLimits {
 		if !quotaPolicyApplies(scope, scopeID, project, key) {
 			continue
 		}
-		limits = mergeQuotaLimits(limits, QuotaLimits{
+		candidate := QuotaLimits{
 			RateLimitRPM:    int64Field(resource.Fields, "rate_limit_rpm"),
 			TokenLimitTPM:   int64Field(resource.Fields, "token_limit_tpm"),
 			DailyRequests:   int64Field(resource.Fields, "daily_requests"),
@@ -468,9 +475,33 @@ func quotaPolicyLimits(tx *gorm.DB, project Project, key APIKey) QuotaLimits {
 			DailyCostUSD:    float64Field(resource.Fields, "daily_cost_usd"),
 			MonthlyCostUSD:  float64Field(resource.Fields, "monthly_cost_usd"),
 			MaxConcurrency:  int64Field(resource.Fields, "max_concurrency"),
-		})
+		}
+		if strictLimitChanged(limits.RateLimitRPM, candidate.RateLimitRPM) {
+			scopes.RPM = normalizedQuotaPolicyScope(scope)
+		}
+		if strictLimitChanged(limits.TokenLimitTPM, candidate.TokenLimitTPM) {
+			scopes.TPM = normalizedQuotaPolicyScope(scope)
+		}
+		limits = mergeQuotaLimits(limits, candidate)
 	}
-	return limits
+	return limits, scopes
+}
+
+func strictLimitChanged(current int64, candidate int64) bool {
+	return candidate > 0 && (current <= 0 || candidate < current)
+}
+
+func normalizedQuotaPolicyScope(scope string) string {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "project":
+		return "project"
+	case "team":
+		return "team"
+	case "api_key", "key":
+		return "api_key"
+	default:
+		return "global"
+	}
 }
 
 func quotaPolicyApplies(scope string, scopeID string, project Project, key APIKey) bool {

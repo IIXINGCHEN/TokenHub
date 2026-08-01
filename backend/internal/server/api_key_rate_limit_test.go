@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -34,6 +35,12 @@ type usageFailFirstRateLimitAdapter struct {
 	calls atomic.Int64
 }
 
+type partialStreamRateLimitAdapter struct {
+	MockAdapter
+	wrote chan struct{}
+	calls atomic.Int64
+}
+
 func (a *failFirstRateLimitAdapter) Chat(ctx context.Context, provider Provider, providerModel string, req ChatCompletionRequest) (any, Usage, error) {
 	if a.calls.Add(1) == 1 {
 		return nil, Usage{}, NewHTTPError(http.StatusBadGateway, "upstream_failed", "upstream failed")
@@ -57,6 +64,16 @@ func (a *blockingTPMAdapter) ChatStream(ctx context.Context, provider Provider, 
 	case <-a.release:
 		return a.MockAdapter.ChatStream(ctx, provider, providerModel, req, w)
 	}
+}
+
+func (a *partialStreamRateLimitAdapter) ChatStream(ctx context.Context, provider Provider, providerModel string, req ChatCompletionRequest, w io.Writer) (Usage, error) {
+	a.calls.Add(1)
+	if _, err := io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"); err != nil {
+		return Usage{}, err
+	}
+	close(a.wrote)
+	<-ctx.Done()
+	return Usage{}, ctx.Err()
 }
 
 func (a *countingRateLimitAdapter) Chat(ctx context.Context, provider Provider, providerModel string, req ChatCompletionRequest) (any, Usage, error) {
@@ -317,6 +334,23 @@ func TestAPIKeyTPMSettlesUsageAcrossFailoverAttempts(t *testing.T) {
 	if calls := adapter.calls.Load(); calls != 2 {
 		t.Fatalf("TPM-rejected request reached provider: calls=%d", calls)
 	}
+	records := store.ListUsageRecords()
+	_, expectedUsage, err := (MockAdapter{}).Chat(context.Background(), Provider{}, "mock-chat", ChatCompletionRequest{
+		Messages: []ChatMessage{{Role: "user", Content: "a"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("failover request usage records=%+v, want exactly one", records)
+	}
+	var successfulAttempt RouteAttemptLog
+	if err := store.db.Where("request_id = ? AND status_code = ? AND invoked = ?", records[0].RequestID, http.StatusOK, true).First(&successfulAttempt).Error; err != nil {
+		t.Fatal(err)
+	}
+	if records[0].ProviderID != successfulAttempt.ProviderID || records[0].TotalTokens != expectedUsage.TotalTokens {
+		t.Fatalf("final provider usage attribution was polluted by failed attempts: records=%+v expected_total=%d", records, expectedUsage.TotalTokens)
+	}
 }
 
 func TestAPIKeyTPMSettlesReservationToActualUsage(t *testing.T) {
@@ -558,6 +592,41 @@ func TestAPIKeyMinuteLimitResetsAtWindowBoundary(t *testing.T) {
 	}
 }
 
+func TestAPIKeyMinuteBucketsPruneExpiredHistory(t *testing.T) {
+	store, _ := newRateLimitedGateway(t, APIKey{RateLimitRPM: int64Pointer(10)})
+	project := store.ListProjects()[0]
+	key := store.ListAPIKeys()[0]
+	now, err := store.databaseNow(store.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldBucket := minuteBucket(now.Add(-apiKeyMinuteBucketRetention - time.Minute))
+	currentBucket := minuteBucket(now)
+	for _, bucket := range []QuotaBucket{
+		{KeyID: key.ID, Scope: "minute", Bucket: oldBucket, QuotaCounter: QuotaCounter{Requests: 99}},
+		{KeyID: key.ID, Scope: "minute", Bucket: currentBucket},
+	} {
+		if err := store.db.Create(&bucket).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	call, err := store.StartCall(context.Background(), project, key, "gpt-4.1-mini", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.FinishCall(call, RouteSelection{}, Usage{}, http.StatusOK, "", "127.0.0.1", "retention-test")
+	var oldCount, currentCount int64
+	if err := store.db.Model(&QuotaBucket{}).Where("key_id = ? AND scope = ? AND bucket = ?", key.ID, "minute", oldBucket).Count(&oldCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.Model(&QuotaBucket{}).Where("key_id = ? AND scope = ? AND bucket = ?", key.ID, "minute", currentBucket).Count(&currentCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if oldCount != 0 || currentCount != 1 {
+		t.Fatalf("minute bucket retention old=%d current=%d, want 0 and 1", oldCount, currentCount)
+	}
+}
+
 func TestAPIKeyTPMReturnsReservationAfterStreamingInterruption(t *testing.T) {
 	store, secret := newRateLimitedGateway(t, APIKey{TokenLimitTPM: int64Pointer(10)})
 	release := make(chan struct{})
@@ -593,6 +662,61 @@ func TestAPIKeyTPMReturnsReservationAfterStreamingInterruption(t *testing.T) {
 	}, secret)
 	if retried.Code != http.StatusOK {
 		t.Fatalf("stream interruption reservation was not returned, got %d: %s", retried.Code, retried.Body)
+	}
+}
+
+func TestAPIKeyTPMKeepsReservationAfterPartialStreamInterruption(t *testing.T) {
+	store, secret := newRateLimitedGateway(t, APIKey{TokenLimitTPM: int64Pointer(10)})
+	adapter := &partialStreamRateLimitAdapter{wrote: make(chan struct{})}
+	server := New(store)
+	server.adapterRegistry.Register(ProviderMock, adapter, AdapterCapabilityChat, AdapterCapabilityChatStream)
+	app := server.Handler()
+	requestContext, cancel := context.WithCancel(context.Background())
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-4.1-mini","stream":true,"max_tokens":2,"messages":[{"role":"user","content":"a"}]}`)).WithContext(requestContext)
+	request.Header.Set("content-type", "application/json")
+	request.Header.Set("authorization", "Bearer "+secret)
+	done := make(chan struct{})
+	go func() {
+		app.ServeHTTP(httptest.NewRecorder(), request)
+		close(done)
+	}()
+	select {
+	case <-adapter.wrote:
+	case <-t.Context().Done():
+		t.Fatal("streaming request did not write partial output")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-t.Context().Done():
+		t.Fatal("partially streamed request did not finish")
+	}
+	server.adapterRegistry.Register(ProviderMock, MockAdapter{}, AdapterCapabilityChat, AdapterCapabilityChatStream)
+	retried := doJSON(t, app, http.MethodPost, "/v1/chat/completions", map[string]any{
+		"model":      "gpt-4.1-mini",
+		"max_tokens": 1,
+		"messages":   []map[string]any{{"role": "user", "content": "b"}},
+	}, secret)
+	if retried.Code != http.StatusTooManyRequests || !strings.Contains(retried.Body, "api_key_tpm_exceeded") {
+		t.Fatalf("partial stream should keep its TPM reservation, got %d: %s", retried.Code, retried.Body)
+	}
+}
+
+func TestAPIKeyTPMSaturatesOversizedTokenReservation(t *testing.T) {
+	store, secret := newRateLimitedGateway(t, APIKey{TokenLimitTPM: int64Pointer(100)})
+	adapter := &countingRateLimitAdapter{}
+	server := New(store)
+	server.adapterRegistry.Register(ProviderMock, adapter, AdapterCapabilityChat)
+	response := doJSON(t, server.Handler(), http.MethodPost, "/v1/chat/completions", map[string]any{
+		"model":                 "gpt-4.1-mini",
+		"max_completion_tokens": int64(math.MaxInt64),
+		"messages":              []map[string]any{{"role": "user", "content": "overflow"}},
+	}, secret)
+	if response.Code != http.StatusTooManyRequests || !strings.Contains(response.Body, "api_key_tpm_exceeded") {
+		t.Fatalf("oversized reservation should be rejected, got %d: %s", response.Code, response.Body)
+	}
+	if calls := adapter.calls.Load(); calls != 0 {
+		t.Fatalf("overflowing reservation reached provider: calls=%d", calls)
 	}
 }
 

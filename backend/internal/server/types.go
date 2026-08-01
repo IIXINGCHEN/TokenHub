@@ -138,8 +138,8 @@ type APIKey struct {
 }
 
 type QuotaLimits struct {
-	RateLimitRPM    int64   `json:"rate_limit_rpm"`
-	TokenLimitTPM   int64   `json:"token_limit_tpm"`
+	RateLimitRPM    int64   `json:"rate_limit_rpm,omitempty"`
+	TokenLimitTPM   int64   `json:"token_limit_tpm,omitempty"`
 	DailyRequests   int64   `json:"daily_requests"`
 	MonthlyRequests int64   `json:"monthly_requests"`
 	DailyTokens     int64   `json:"daily_tokens"`
@@ -404,6 +404,10 @@ type Usage struct {
 	ModelETag                string      `json:"model_etag,omitempty"`
 	Transport                string      `json:"transport,omitempty"`
 	ResponseHeaders          http.Header `json:"-"`
+	// RateLimitTokens is the total metered across every invoked failover attempt.
+	// It is internal quota state: billing, request logs and provider attribution
+	// continue to use the usage reported by the final route only.
+	RateLimitTokens int64 `json:"-" gorm:"-"`
 }
 
 type UsageRecord struct {
@@ -516,19 +520,38 @@ type ImageAsset struct {
 }
 
 type RouteAttemptLog struct {
-	ID                 string    `json:"id" gorm:"primaryKey"`
-	RequestID          string    `json:"request_id" gorm:"index"`
-	AttemptIndex       int       `json:"attempt_index"`
-	RouteID            string    `json:"route_id,omitempty" gorm:"index;index:idx_route_attempt_adaptive,priority:1"`
-	ProviderID         string    `json:"provider_id,omitempty" gorm:"index"`
-	ProviderResourceID string    `json:"provider_resource_id,omitempty" gorm:"index"`
-	ProviderModel      string    `json:"provider_model,omitempty"`
-	StatusCode         int       `json:"status_code"`
-	ErrorCode          string    `json:"error_code,omitempty"`
-	ErrorMessage       string    `json:"error_message,omitempty"`
-	Invoked            bool      `json:"invoked" gorm:"index;index:idx_route_attempt_adaptive,priority:2"`
-	LatencyMS          int64     `json:"latency_ms,omitempty"`
-	CreatedAt          time.Time `json:"created_at" gorm:"index:idx_route_attempt_adaptive,priority:3"`
+	ID                       string  `json:"id" gorm:"primaryKey"`
+	RequestID                string  `json:"request_id" gorm:"index"`
+	AttemptIndex             int     `json:"attempt_index"`
+	RouteID                  string  `json:"route_id,omitempty" gorm:"index;index:idx_route_attempt_adaptive,priority:1"`
+	ProviderID               string  `json:"provider_id,omitempty" gorm:"index"`
+	ProviderResourceID       string  `json:"provider_resource_id,omitempty" gorm:"index"`
+	ProviderModel            string  `json:"provider_model,omitempty"`
+	StatusCode               int     `json:"status_code"`
+	ErrorCode                string  `json:"error_code,omitempty"`
+	ErrorMessage             string  `json:"error_message,omitempty"`
+	Invoked                  bool    `json:"invoked" gorm:"index;index:idx_route_attempt_adaptive,priority:2"`
+	LatencyMS                int64   `json:"latency_ms,omitempty"`
+	ServedModel              string  `json:"served_model,omitempty"`
+	UpstreamRequestID        string  `json:"upstream_request_id,omitempty"`
+	Transport                string  `json:"transport,omitempty"`
+	InputTokens              int64   `json:"input_tokens,omitempty"`
+	CachedInputTokens        int64   `json:"cached_input_tokens,omitempty"`
+	CacheWriteTokens         int64   `json:"cache_write_input_tokens,omitempty"`
+	InputAudioTokens         int64   `json:"input_audio_tokens,omitempty"`
+	OutputTokens             int64   `json:"output_tokens,omitempty"`
+	ReasoningTokens          int64   `json:"reasoning_output_tokens,omitempty"`
+	OutputAudioTokens        int64   `json:"output_audio_tokens,omitempty"`
+	AcceptedPredictionTokens int64   `json:"accepted_prediction_tokens,omitempty"`
+	RejectedPredictionTokens int64   `json:"rejected_prediction_tokens,omitempty"`
+	TotalTokens              int64   `json:"total_tokens,omitempty"`
+	CostUSD                  float64 `json:"estimated_cost_usd,omitempty"`
+	// StartedAt and EndedAt record when this candidate was actually invoked. CreatedAt
+	// cannot substitute: every attempt of a request is written in one batch and so
+	// shares a single CreatedAt.
+	StartedAt time.Time `json:"started_at,omitzero"`
+	EndedAt   time.Time `json:"ended_at,omitzero"`
+	CreatedAt time.Time `json:"created_at" gorm:"index:idx_route_attempt_adaptive,priority:3"`
 }
 
 type AlertEvent struct {
@@ -1027,8 +1050,23 @@ type RouteAttempt struct {
 	Status    int            `json:"status"`
 	ErrorCode string         `json:"error_code,omitempty"`
 	Error     string         `json:"error,omitempty"`
-	Invoked   bool           `json:"invoked"`
-	LatencyMS int64          `json:"latency_ms,omitempty"`
+	// Invoked reports that this candidate entered the invocation path, not that a
+	// request necessarily reached the upstream: acquiring credentials or resolving an
+	// adapter can still fail first. It is the boundary that distinguishes a candidate
+	// that was tried from one skipped for lack of capacity.
+	Invoked   bool  `json:"invoked"`
+	LatencyMS int64 `json:"latency_ms,omitempty"`
+	// Usage is what this candidate alone consumed, priced with the requested model.
+	// A failed attempt keeps whatever the upstream reported before failing: those
+	// tokens were billed regardless of the request failing over afterwards.
+	//
+	// Only invoked attempts have usage. A candidate skipped because capacity could
+	// not be acquired never reached a provider.
+	Usage Usage `json:"usage,omitzero"`
+	// StartedAt and EndedAt bound the upstream invocation. They are zero for a
+	// candidate that was never invoked.
+	StartedAt time.Time `json:"started_at,omitzero"`
+	EndedAt   time.Time `json:"ended_at,omitzero"`
 }
 
 type RoutedCall struct {
@@ -1048,6 +1086,9 @@ type CallContext struct {
 	RateLimitHeaders map[string]string
 	TokenLimitBucket string
 	ReservedTokens   int64
+	// StreamOutputCommitted keeps the reservation when a stream delivered data but
+	// ended before an authoritative usage event was received.
+	StreamOutputCommitted bool
 	// Stream records whether the client asked for a streamed response. It only
 	// labels observability output and never influences routing.
 	Stream         bool

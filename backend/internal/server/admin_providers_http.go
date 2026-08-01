@@ -539,7 +539,7 @@ func (s *Server) handleAdminProviderResourceNested(w http.ResponseWriter, r *htt
 	if !ok {
 		return
 	}
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/admin/provider-resources/"), "/")
+	parts := splitNestedEscapedAdminPath(r.URL.EscapedPath(), "/api/admin/provider-resources/", providerResourceActions)
 	if len(parts) == 1 && parts[0] == "bulk" {
 		s.handleAdminProviderResourceBulk(w, r, user)
 		return
@@ -575,7 +575,8 @@ func (s *Server) handleAdminProviderResourceNested(w http.ResponseWriter, r *htt
 		}
 		return
 	}
-	if len(parts) != 2 || (parts[1] != "health" && parts[1] != "test" && parts[1] != "refresh-token" && parts[1] != "quota") {
+	// splitNestedAdminPath guarantees parts[1] is a known action here.
+	if len(parts) != 2 {
 		writeError(w, r, NewHTTPError(404, "not_found", "Not found"))
 		return
 	}
@@ -979,17 +980,14 @@ func (s *Server) handleAdminRouteItem(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/admin/routing-rules/"), "/"), "/")
-	routeID := parts[0]
-	if routeID == "" || len(parts) > 2 {
+	parts := splitNestedEscapedAdminPath(r.URL.EscapedPath(), "/api/admin/routing-rules/", routingRuleActions)
+	if len(parts) == 0 || parts[0] == "" || len(parts) > 2 {
 		writeError(w, r, NewHTTPError(404, "not_found", "Not found"))
 		return
 	}
+	routeID := parts[0]
 	if len(parts) == 2 {
-		if parts[1] != "explain" {
-			writeError(w, r, NewHTTPError(404, "not_found", "Not found"))
-			return
-		}
+		// splitNestedAdminPath guarantees parts[1] == "explain" here.
 		if r.Method != http.MethodGet {
 			writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
 			return

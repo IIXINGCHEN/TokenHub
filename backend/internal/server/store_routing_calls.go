@@ -14,6 +14,8 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+const apiKeyMinuteBucketRetention = 24 * time.Hour
+
 func (s *GormStore) TestProvider(id string) (Provider, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -512,12 +514,22 @@ func (s *GormStore) StartCall(ctx context.Context, project Project, key APIKey, 
 		if privateKey.TokenLimitTPM != nil {
 			keyLimits.TokenLimitTPM = *privateKey.TokenLimitTPM
 		}
-		effectiveLimits := mergeQuotaLimits(keyLimits, quotaPolicyLimits(tx, project, privateKey))
+		policyLimits, minuteLimitScopes := quotaPolicyLimits(tx, project, privateKey)
+		if strictLimitChanged(policyLimits.RateLimitRPM, keyLimits.RateLimitRPM) {
+			minuteLimitScopes.RPM = "api_key"
+		}
+		if strictLimitChanged(policyLimits.TokenLimitTPM, keyLimits.TokenLimitTPM) {
+			minuteLimitScopes.TPM = "api_key"
+		}
+		effectiveLimits := mergeQuotaLimits(keyLimits, policyLimits)
 		now, err := s.databaseNow(tx)
 		if err != nil {
 			return err
 		}
-		minuteCounter, err := s.consumeAPIKeyMinuteRequest(tx, privateKey.ID, effectiveLimits, tokenReservation, now)
+		if err := pruneAPIKeyMinuteBuckets(tx, privateKey.ID, now); err != nil {
+			return err
+		}
+		minuteCounter, err := s.consumeAPIKeyMinuteRequest(tx, privateKey.ID, effectiveLimits, minuteLimitScopes, tokenReservation, now)
 		if err != nil {
 			return err
 		}
@@ -577,7 +589,12 @@ func (s *GormStore) StartCall(ctx context.Context, project Project, key APIKey, 
 	return call, nil
 }
 
-func (s *GormStore) consumeAPIKeyMinuteRequest(tx *gorm.DB, keyID string, limits QuotaLimits, tokenReservation int64, now time.Time) (QuotaCounter, error) {
+func pruneAPIKeyMinuteBuckets(tx *gorm.DB, keyID string, now time.Time) error {
+	cutoff := minuteBucket(now.Add(-apiKeyMinuteBucketRetention))
+	return tx.Where("key_id = ? AND scope = ? AND bucket < ?", keyID, "minute", cutoff).Delete(&QuotaBucket{}).Error
+}
+
+func (s *GormStore) consumeAPIKeyMinuteRequest(tx *gorm.DB, keyID string, limits QuotaLimits, scopes MinuteLimitScopes, tokenReservation int64, now time.Time) (QuotaCounter, error) {
 	if limits.RateLimitRPM <= 0 && limits.TokenLimitTPM <= 0 {
 		return QuotaCounter{}, nil
 	}
@@ -586,7 +603,7 @@ func (s *GormStore) consumeAPIKeyMinuteRequest(tx *gorm.DB, keyID string, limits
 		return QuotaCounter{}, err
 	}
 	if limits.RateLimitRPM > 0 && bucket.Requests >= limits.RateLimitRPM {
-		s.metrics.ObserveRateLimitHit(keyID, "rpm")
+		s.metrics.ObserveRateLimitHit(keyID, "rpm", scopes.RPM)
 		return QuotaCounter{}, apiKeyRateLimitError(
 			"api_key_rpm_exceeded",
 			"API key requests per minute limit exceeded",
@@ -596,8 +613,8 @@ func (s *GormStore) consumeAPIKeyMinuteRequest(tx *gorm.DB, keyID string, limits
 		)
 	}
 	tokenReservation = maxInt64(tokenReservation, 0)
-	if limits.TokenLimitTPM > 0 && bucket.TotalTokens+tokenReservation > limits.TokenLimitTPM {
-		s.metrics.ObserveRateLimitHit(keyID, "tpm")
+	if limits.TokenLimitTPM > 0 && saturatingAddNonNegative(bucket.TotalTokens, tokenReservation) > limits.TokenLimitTPM {
+		s.metrics.ObserveRateLimitHit(keyID, "tpm", scopes.TPM)
 		return QuotaCounter{}, apiKeyRateLimitError(
 			"api_key_tpm_exceeded",
 			"API key tokens per minute limit exceeded",
@@ -610,7 +627,7 @@ func (s *GormStore) consumeAPIKeyMinuteRequest(tx *gorm.DB, keyID string, limits
 		bucket.Requests++
 	}
 	if limits.TokenLimitTPM > 0 {
-		bucket.TotalTokens += tokenReservation
+		bucket.TotalTokens = saturatingAddNonNegative(bucket.TotalTokens, tokenReservation)
 	}
 	if err := tx.Save(&bucket).Error; err != nil {
 		return QuotaCounter{}, err
@@ -692,7 +709,15 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 	}
 	var key APIKey
 	if err := tx.First(&key, "id = ?", call.Key.ID).Error; err == nil {
-		if err := s.reconcileAPIKeyMinuteTokens(tx, call, meteredTokens(usage)); err != nil {
+		providerTokens := meteredTokens(usage)
+		actualTokens := usage.RateLimitTokens
+		if actualTokens <= 0 {
+			actualTokens = providerTokens
+		}
+		if call.StreamOutputCommitted && providerTokens == 0 && actualTokens < call.ReservedTokens {
+			actualTokens = call.ReservedTokens
+		}
+		if err := s.reconcileAPIKeyMinuteTokens(tx, call, actualTokens); err != nil {
 			return err
 		}
 		dayCounter, err := s.quotaBucketForUpdate(tx, key.ID, "day", dayBucket(now))
@@ -795,9 +820,17 @@ func (s *GormStore) reconcileAPIKeyMinuteTokens(tx *gorm.DB, call CallContext, a
 	if err != nil {
 		return err
 	}
-	bucket.TotalTokens += maxInt64(actualTokens, 0) - maxInt64(call.ReservedTokens, 0)
-	if bucket.TotalTokens < 0 {
-		bucket.TotalTokens = 0
+	actualTokens = maxInt64(actualTokens, 0)
+	reservedTokens := maxInt64(call.ReservedTokens, 0)
+	if actualTokens >= reservedTokens {
+		bucket.TotalTokens = saturatingAddNonNegative(bucket.TotalTokens, actualTokens-reservedTokens)
+	} else {
+		refund := reservedTokens - actualTokens
+		if refund >= bucket.TotalTokens {
+			bucket.TotalTokens = 0
+		} else {
+			bucket.TotalTokens -= refund
+		}
 	}
 	return tx.Save(&bucket).Error
 }
@@ -831,21 +864,7 @@ func (s *GormStore) RecordRouteAttempts(requestID string, attempts []RouteAttemp
 	now := time.Now().UTC()
 	items := make([]RouteAttemptLog, 0, len(attempts))
 	for index, attempt := range attempts {
-		items = append(items, RouteAttemptLog{
-			ID:                 NewID("rat"),
-			RequestID:          requestID,
-			AttemptIndex:       index + 1,
-			RouteID:            attempt.Selection.Route.ID,
-			ProviderID:         attempt.Selection.Provider.ID,
-			ProviderResourceID: routeResourceID(attempt.Selection),
-			ProviderModel:      attempt.Selection.ProviderModel,
-			StatusCode:         attempt.Status,
-			ErrorCode:          attempt.ErrorCode,
-			ErrorMessage:       attempt.Error,
-			Invoked:            attempt.Invoked,
-			LatencyMS:          attempt.LatencyMS,
-			CreatedAt:          now,
-		})
+		items = append(items, newRouteAttemptLog(requestID, index, attempt, now))
 	}
 	_ = s.db.Create(&items).Error
 }
@@ -1172,4 +1191,43 @@ func (s *GormStore) GetImageAsset(id string) (ImageAsset, bool) {
 		return ImageAsset{}, false
 	}
 	return asset, true
+}
+
+// newRouteAttemptLog is the persisted form of one routing attempt.
+//
+// It lives next to nothing else on purpose: the mapping is long, it belongs to the
+// RouteAttempt type rather than to the store, and keeping it here means adding a
+// field to an attempt touches one function instead of the store's largest file.
+func newRouteAttemptLog(requestID string, index int, attempt RouteAttempt, now time.Time) RouteAttemptLog {
+	return RouteAttemptLog{
+		ID:                       NewID("rat"),
+		RequestID:                requestID,
+		AttemptIndex:             index + 1,
+		RouteID:                  attempt.Selection.Route.ID,
+		ProviderID:               attempt.Selection.Provider.ID,
+		ProviderResourceID:       routeResourceID(attempt.Selection),
+		ProviderModel:            attempt.Selection.ProviderModel,
+		StatusCode:               attempt.Status,
+		ErrorCode:                attempt.ErrorCode,
+		ErrorMessage:             attempt.Error,
+		Invoked:                  attempt.Invoked,
+		LatencyMS:                attempt.LatencyMS,
+		ServedModel:              attempt.Usage.ServedModel,
+		UpstreamRequestID:        attempt.Usage.UpstreamRequestID,
+		Transport:                attempt.Usage.Transport,
+		InputTokens:              attempt.Usage.PromptTokens,
+		CachedInputTokens:        attempt.Usage.CachedInputTokens,
+		CacheWriteTokens:         attempt.Usage.CacheWriteInputTokens,
+		InputAudioTokens:         attempt.Usage.InputAudioTokens,
+		OutputTokens:             attempt.Usage.CompletionTokens,
+		ReasoningTokens:          attempt.Usage.ReasoningOutputTokens,
+		OutputAudioTokens:        attempt.Usage.OutputAudioTokens,
+		AcceptedPredictionTokens: attempt.Usage.AcceptedPredictionTokens,
+		RejectedPredictionTokens: attempt.Usage.RejectedPredictionTokens,
+		TotalTokens:              attempt.Usage.TotalTokens,
+		CostUSD:                  attempt.Usage.CostUSD,
+		StartedAt:                attempt.StartedAt,
+		EndedAt:                  attempt.EndedAt,
+		CreatedAt:                now,
+	}
 }
