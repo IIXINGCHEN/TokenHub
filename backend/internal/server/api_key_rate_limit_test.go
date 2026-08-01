@@ -665,6 +665,56 @@ func TestAPIKeyTPMReturnsReservationAfterStreamingInterruption(t *testing.T) {
 	}
 }
 
+func TestAPIKeyTPMReturnsCodexReservationWhenStreamHasNoBody(t *testing.T) {
+	store := NewMemoryStore()
+	project := store.CreateProject(Project{Name: "Codex Empty Stream", Status: StatusActive})
+	tokenLimit := int64(10)
+	key, secret, err := store.CreateAPIKey(project.ID, APIKey{
+		Name: "codex-empty-stream", Allowed: []string{"gpt-codex-empty"},
+		TokenLimitTPM: &tokenLimit, Status: StatusActive,
+	}, "thk_codex_empty_stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := store.AddProvider(Provider{
+		Name: "Codex Empty Stream", Type: ProviderOpenAICodex, BaseURL: openAICodexBaseURL,
+		Status: StatusActive, Healthy: true,
+	})
+	resource, err := store.AddProviderResource(ProviderResource{
+		ProviderID: provider.ID, Name: "Codex Empty Account", ResourceType: ProviderResourceOpenAISubscription,
+		Status: StatusActive, Healthy: true, Options: codexCapabilityOptionsForTest("gpt-codex-empty"),
+		Credentials: &ProviderResourceCredentials{AccessToken: "access_empty", AccountID: "account_empty"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.AddModel(Model{Name: "gpt-codex-empty", Modality: "chat", Status: StatusActive})
+	store.AddRoute(ModelRoute{
+		ModelName: "gpt-codex-empty", ProviderID: provider.ID, ProviderResourceID: resource.ID,
+		ProviderModel: "gpt-codex-empty", Status: StatusActive,
+	})
+	server := New(store)
+	server.codexSubscription.Client = &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK, Header: make(http.Header),
+			Body: io.NopCloser(strings.NewReader("")), Request: req,
+		}, nil
+	})}
+	response := doJSON(t, server.Handler(), http.MethodPost, "/v1/responses", map[string]any{
+		"model": "gpt-codex-empty", "input": "a", "stream": true, "max_output_tokens": 2,
+	}, secret)
+	if response.Code != http.StatusOK {
+		t.Fatalf("empty Codex stream returned %d: %s", response.Code, response.Body)
+	}
+	var bucket QuotaBucket
+	if err := store.db.First(&bucket, "key_id = ? AND scope = ?", key.ID, "minute").Error; err != nil {
+		t.Fatal(err)
+	}
+	if bucket.TotalTokens != 0 {
+		t.Fatalf("empty Codex stream kept %d reserved tokens, want 0", bucket.TotalTokens)
+	}
+}
+
 func TestAPIKeyTPMKeepsReservationAfterPartialStreamInterruption(t *testing.T) {
 	store, secret := newRateLimitedGateway(t, APIKey{TokenLimitTPM: int64Pointer(10)})
 	adapter := &partialStreamRateLimitAdapter{wrote: make(chan struct{})}
