@@ -1325,7 +1325,7 @@ export function ProviderUpsertModal({
             ) : null}
             {mode === "create" && createStep === 1 ? (
               quickAPIConnect ? (
-                <ProviderAPIQuickConnect
+                <ProviderAPIQuickConnect api={api}
                   key={catalogID}
                   catalogID={catalogID}
                   entry={selectedEntry}
