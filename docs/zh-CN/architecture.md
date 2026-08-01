@@ -107,7 +107,8 @@ Provider 类型与主要能力如下：
 
 | Provider 类型 | 适配器与能力 |
 | --- | --- |
-| `openai`、`openai_compatible`、`deepseek`、`qwen`、`local` | OpenAI 兼容；Chat、流式 Chat、Responses、Embeddings、探测 |
+| `openai`、`openai_compatible`、`qwen`、`local` | OpenAI 兼容；Chat、流式 Chat、Responses、Embeddings、探测 |
+| `deepseek` | OpenAI 兼容；Chat、流式 Chat、Embeddings、探测。Responses 与流式 Responses 按模型声明，当前仅对 `deepseek-v4-flash` 开放 |
 | `azure_openai` | Chat、流式 Chat、Embeddings、探测 |
 | `anthropic` | Chat、流式 Chat、探测 |
 | `gemini` | Chat、流式 Chat、Embeddings、探测 |
