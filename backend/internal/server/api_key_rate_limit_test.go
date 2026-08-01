@@ -454,7 +454,7 @@ func TestStartCallFailsClosedWhenQuotaPolicyReadFails(t *testing.T) {
 	callbackName := "test:fail-quota-policy-read"
 	if err := store.db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
 		if tx.Statement != nil && tx.Statement.Table == "admin_resources" {
-			tx.AddError(errors.New("quota policy read failed"))
+			_ = tx.AddError(errors.New("quota policy read failed"))
 		}
 	}); err != nil {
 		t.Fatal(err)
