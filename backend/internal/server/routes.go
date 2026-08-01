@@ -34,6 +34,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/admin/auth/oauth/callback", s.handleAdminOAuthCallback)
 	s.mux.HandleFunc("/api/admin/overview", s.handleAdminOverview)
 	s.mux.HandleFunc("/api/admin/playground/chat", s.handleAdminPlaygroundChat)
+	s.mux.HandleFunc("/api/admin/playground/chat/stream", s.handleAdminPlaygroundChatStream)
 	s.mux.HandleFunc("/api/admin/projects", s.handleAdminProjects)
 	s.mux.HandleFunc("/api/admin/projects/", s.handleAdminProjectNested)
 	s.mux.HandleFunc("/api/admin/users", s.handleAdminUsers)
