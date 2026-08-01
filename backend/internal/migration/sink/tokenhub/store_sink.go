@@ -878,6 +878,21 @@ func sameProviderResource(existing server.ProviderResource, desired server.Provi
 		reflect.DeepEqual(normalizeStringMap(existing.Options), normalizeStringMap(desired.Options))
 }
 
+// metadataContains reports whether every key the bundle declares is present on
+// the target with the same value. The target owns metadata keys of its own —
+// it stamps directory_role onto a migrated model, for instance — so comparing
+// the maps for equality would report drift forever and make every re-apply an
+// update that changes nothing.
+func metadataContains(existing map[string]string, desired map[string]string) bool {
+	current := normalizeStringMap(existing)
+	for key, want := range normalizeStringMap(desired) {
+		if got, ok := current[key]; !ok || got != want {
+			return false
+		}
+	}
+	return true
+}
+
 func sameModel(left server.Model, right server.Model) bool {
 	keepsString := func(current, desired string) bool {
 		desired = strings.TrimSpace(desired)
@@ -916,7 +931,7 @@ func sameModel(left server.Model, right server.Model) bool {
 	if right.SupportedParameters != nil && !reflect.DeepEqual(normalizeStringSlice(left.SupportedParameters), normalizeStringSlice(right.SupportedParameters)) {
 		return false
 	}
-	if right.Metadata != nil && !reflect.DeepEqual(normalizeStringMap(left.Metadata), normalizeStringMap(right.Metadata)) {
+	if right.Metadata != nil && !metadataContains(left.Metadata, right.Metadata) {
 		return false
 	}
 	// ID, Category and CreatedAt are not mutable through PATCH /api/admin/models

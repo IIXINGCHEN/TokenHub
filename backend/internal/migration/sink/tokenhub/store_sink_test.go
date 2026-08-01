@@ -462,3 +462,52 @@ func TestStoreSinkVerifyReportsMissingTeam(t *testing.T) {
 		t.Fatalf("expected verification to pass after apply, got %+v", after.Issues)
 	}
 }
+
+// TestSameModelIgnoresTargetOwnedMetadata pins the convergence rule that a
+// real migration exposed: the target stamps its own metadata keys onto a
+// migrated model, so comparing the maps for equality reported drift forever
+// and made every re-apply an update that changed nothing.
+func TestSameModelIgnoresTargetOwnedMetadata(t *testing.T) {
+	existing := server.Model{
+		Name: "gpt-4o-mini", Family: "openai", Modality: "text", Status: server.StatusActive,
+		ContextWindow: 128000,
+		Metadata:      map[string]string{"mode": "chat", "directory_role": "external"},
+	}
+	desired := server.Model{
+		Name: "gpt-4o-mini", Family: "openai", Modality: "text", Status: server.StatusActive,
+		Metadata: map[string]string{"mode": "chat"},
+	}
+	if !sameModel(existing, desired) {
+		t.Fatal("expected a model carrying extra target-owned metadata to converge")
+	}
+
+	// A key the bundle does own must still be compared.
+	drifted := desired
+	drifted.Metadata = map[string]string{"mode": "embedding"}
+	if sameModel(existing, drifted) {
+		t.Fatal("expected a drifted bundle-owned metadata value to be reported")
+	}
+}
+
+// TestSameProviderIgnoresTargetDefaults covers the same rule for providers:
+// the target fills Healthy and Priority on create.
+func TestSameProviderIgnoresTargetDefaults(t *testing.T) {
+	existing := server.Provider{
+		ID: "prv-1", Name: "openai", Type: "openai", BaseURL: "https://api.openai.com/v1",
+		Status: server.StatusActive,
+		// Defaults the target fills in on create.
+		Healthy: true, Priority: 10,
+	}
+	desired := server.Provider{
+		ID: "prv-1", Name: "openai", Type: "openai", BaseURL: "https://api.openai.com/v1",
+		Status: server.StatusActive,
+	}
+	if !sameProvider(existing, desired) {
+		t.Fatal("expected target-filled Healthy/Priority defaults to converge")
+	}
+	drifted := desired
+	drifted.BaseURL = "https://other.example.com/v1"
+	if sameProvider(existing, drifted) {
+		t.Fatal("expected a drifted base URL to be reported")
+	}
+}

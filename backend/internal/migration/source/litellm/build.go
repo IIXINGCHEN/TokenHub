@@ -392,7 +392,11 @@ func buildModelArtifacts(config *Config, b *bundle.CanonicalMigrationBundle, idS
 				Priority:      100,
 				Weight:        defaultWeight(item.LitellmParams.Weight),
 				Status:        "active",
-				Strategy:      "weighted",
+				// The route carries both a priority and a weight, so it maps
+				// onto the priority_weighted strategy. "weighted" is not one
+				// of the strategies TokenHub accepts and the Admin API
+				// rejects it outright.
+				Strategy: server.RouteStrategyPriorityWeighted,
 			},
 		}
 		if hasResource {
