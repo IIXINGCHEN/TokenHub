@@ -718,6 +718,7 @@
 .playground-attempts > div.failed { border-left-color: #d34b40; }
 .playground-attempts strong { color: var(--text); }
 .playground-attempts em { font-style: normal; }
+.playground-attempts .playground-attempt-usage { grid-column: 2 / -1; }
 .playground-attempts p { grid-column: 2 / -1; margin: 0; color: #a72d24; }
 
 .playground-payload-grid {

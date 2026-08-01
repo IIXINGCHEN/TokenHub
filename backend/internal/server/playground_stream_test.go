@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -66,6 +67,32 @@ func newPlaygroundTestServer(t *testing.T) (*Server, *GormStore) {
 	return New(store), store
 }
 
+func newPlaygroundTestSink() *playgroundDeltaSink {
+	return newPlaygroundDeltaSink(newPlaygroundEventStream(httptest.NewRecorder(), "pg_test"), "pg_test")
+}
+
+func TestPlaygroundDeltaSinkRejectsOversizedUnterminatedEvent(t *testing.T) {
+	sink := newPlaygroundTestSink()
+	line := []byte("data: " + strings.Repeat("x", 1024) + "\n")
+	var err error
+	for err == nil {
+		_, err = sink.Write(line)
+	}
+	if httpErr := AsHTTPError(err); httpErr.Code != "provider_invalid_response" {
+		t.Fatalf("expected provider_invalid_response, got %#v", httpErr)
+	}
+}
+
+func TestPlaygroundDeltaSinkRejectsMalformedJSONFrame(t *testing.T) {
+	sink := newPlaygroundTestSink()
+	if _, err := sink.Write([]byte("data: {not-json}\n\n")); AsHTTPError(err).Code != "provider_invalid_response" {
+		t.Fatalf("expected malformed frame to fail, got %v", err)
+	}
+	if _, err := newPlaygroundTestSink().Write([]byte("data: {\"type\":\"future.event\"}\n\n")); err != nil {
+		t.Fatalf("unknown valid JSON events should remain forward-compatible: %v", err)
+	}
+}
+
 func TestAdminPlaygroundStreamEmitsDeltasAndDiagnostics(t *testing.T) {
 	server, _ := newPlaygroundTestServer(t)
 	response := doJSON(t, server.Handler(), http.MethodPost, "/api/admin/playground/chat/stream", map[string]any{
@@ -119,6 +146,10 @@ func TestAdminPlaygroundStreamEmitsDeltasAndDiagnostics(t *testing.T) {
 	attempt, _ := attempts[0].(map[string]any)
 	if attempt["invoked"] != true || attempt["started_at"] == nil || attempt["ended_at"] == nil {
 		t.Fatalf("attempt should include invocation timeline: %#v", attempt)
+	}
+	attemptUsage, _ := attempt["usage"].(map[string]any)
+	if attemptUsage["prompt_tokens"] == nil || attemptUsage["completion_tokens"] == nil || attemptUsage["estimated_cost_usd"] == nil {
+		t.Fatalf("attempt should include priced usage: %#v", attemptUsage)
 	}
 }
 

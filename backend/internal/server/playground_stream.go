@@ -82,6 +82,7 @@ type playgroundDeltaSink struct {
 	mode      string
 	buffer    []byte
 	dataLines []string
+	eventSize int
 	text      strings.Builder
 	firstAt   time.Time
 	lastAt    time.Time
@@ -94,17 +95,27 @@ func newPlaygroundDeltaSink(events *playgroundEventStream, requestID string) *pl
 
 func (s *playgroundDeltaSink) Write(data []byte) (int, error) {
 	originalLength := len(data)
-	s.buffer = append(s.buffer, data...)
-	for {
-		newline := bytes.IndexByte(s.buffer, '\n')
+	for len(data) > 0 {
+		newline := bytes.IndexByte(data, '\n')
 		if newline < 0 {
+			if s.eventSize+len(s.buffer)+len(data) > maxSSEEventBytes {
+				return 0, invalidProviderResponseError("provider sent a stream event that exceeds the size limit")
+			}
+			s.buffer = append(s.buffer, data...)
 			break
 		}
-		line := strings.TrimSuffix(string(s.buffer[:newline]), "\r")
-		s.buffer = s.buffer[newline+1:]
+		lineSize := len(s.buffer) + newline + 1
+		if s.eventSize+lineSize > maxSSEEventBytes {
+			return 0, invalidProviderResponseError("provider sent a stream event that exceeds the size limit")
+		}
+		lineBytes := append(s.buffer, data[:newline]...)
+		s.buffer = nil
+		s.eventSize += lineSize
+		line := strings.TrimSuffix(string(lineBytes), "\r")
 		if err := s.consumeLine(line); err != nil {
 			return 0, err
 		}
+		data = data[newline+1:]
 	}
 	return originalLength, nil
 }
@@ -131,7 +142,9 @@ func (s *playgroundDeltaSink) finish() error {
 
 func (s *playgroundDeltaSink) consumeLine(line string) error {
 	if line == "" {
-		return s.consumeEvent()
+		err := s.consumeEvent()
+		s.eventSize = 0
+		return err
 	}
 	if strings.HasPrefix(line, "data:") {
 		s.dataLines = append(s.dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
@@ -150,7 +163,7 @@ func (s *playgroundDeltaSink) consumeEvent() error {
 	}
 	var frame map[string]any
 	if err := json.Unmarshal([]byte(data), &frame); err != nil {
-		return nil
+		return invalidProviderResponseError("provider sent a malformed stream event")
 	}
 	if frame["type"] == "response.output_text.delta" {
 		if delta, ok := frame["delta"].(string); ok {

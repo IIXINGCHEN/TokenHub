@@ -25,13 +25,17 @@ import {
   apiExampleLanguages,
   apiExampleScripts,
   extractAssistantText,
-  formatMoney,
-  formatNumber,
   playgroundModels,
   routeStrategyLabel,
   uniqueUIID,
 } from "../domain/formatting";
-import { streamPlaygroundChat } from "../domain/playground-stream";
+import {
+  clampPlaygroundMaxTokens,
+  hasPlaygroundUsage,
+  playgroundMaxTokenLimit,
+  selectPlaygroundCandidateBranch,
+} from "../domain/playground-logic";
+import { playgroundMissingStreamBodyCode, streamPlaygroundChat } from "../domain/playground-stream";
 import { activeLanguage, countWithUnit, defaultPlaygroundSystemPrompt, isDefaultPlaygroundSystemPrompt, languageLocale, tx } from "../i18n/runtime";
 import { isAuthExpiredError } from "../resources/payloads";
 import { DetailField } from "./audit";
@@ -80,6 +84,9 @@ const playgroundClockOptions: Intl.DateTimeFormatOptions = {
 
 const playgroundDateTimeFormatters = new Map<string, Intl.DateTimeFormat>();
 const playgroundClockFormatters = new Map<string, Intl.DateTimeFormat>();
+const playgroundIntegerFormatters = new Map<string, Intl.NumberFormat>();
+const playgroundDecimalFormatters = new Map<string, Intl.NumberFormat>();
+const playgroundUSDFormatters = new Map<string, Intl.NumberFormat>();
 
 function playgroundFormatter(cache: Map<string, Intl.DateTimeFormat>, options: Intl.DateTimeFormatOptions) {
   const locale = languageLocale();
@@ -88,6 +95,39 @@ function playgroundFormatter(cache: Map<string, Intl.DateTimeFormat>, options: I
   const formatter = new Intl.DateTimeFormat(locale, options);
   cache.set(locale, formatter);
   return formatter;
+}
+
+function playgroundNumberFormatter(cache: Map<string, Intl.NumberFormat>, options: Intl.NumberFormatOptions) {
+  const locale = languageLocale();
+  const cached = cache.get(locale);
+  if (cached) return cached;
+  const formatter = new Intl.NumberFormat(locale, options);
+  cache.set(locale, formatter);
+  return formatter;
+}
+
+function formatPlaygroundInteger(value?: number) {
+  return value === undefined || !Number.isFinite(value)
+    ? "-"
+    : playgroundNumberFormatter(playgroundIntegerFormatters, { maximumFractionDigits: 0 }).format(value);
+}
+
+function formatPlaygroundDecimal(value?: number) {
+  return value === undefined || !Number.isFinite(value)
+    ? "-"
+    : playgroundNumberFormatter(playgroundDecimalFormatters, { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value);
+}
+
+function formatPlaygroundUSD(value?: number) {
+  return value === undefined || !Number.isFinite(value)
+    ? "-"
+    : playgroundNumberFormatter(playgroundUSDFormatters, {
+      style: "currency",
+      currency: "USD",
+      currencyDisplay: "narrowSymbol",
+      minimumFractionDigits: 6,
+      maximumFractionDigits: 6,
+    }).format(value);
 }
 
 function selectedCandidate(turn: PlaygroundTurn) {
@@ -121,12 +161,12 @@ function requestMessagesForRerun(turns: PlaygroundTurn[], turnIndex: number, sys
 
 function formatDuration(milliseconds?: number) {
   if (milliseconds === undefined || !Number.isFinite(milliseconds)) return "-";
-  if (milliseconds < 1000) return `${Math.max(0, Math.round(milliseconds))}ms`;
-  return `${(milliseconds / 1000).toFixed(milliseconds < 10_000 ? 1 : 1)}s`;
+  if (milliseconds < 1000) return `${formatPlaygroundInteger(Math.max(0, milliseconds))}ms`;
+  return `${formatPlaygroundDecimal(milliseconds / 1000)}s`;
 }
 
 function formatRate(value?: number) {
-  return value === undefined || !Number.isFinite(value) ? "-" : `${value.toFixed(1)} tok/s`;
+  return value === undefined || !Number.isFinite(value) ? "-" : `${formatPlaygroundDecimal(value)} tok/s`;
 }
 
 function formatClock(value?: string) {
@@ -194,7 +234,9 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
   const selectedModel = models.find((model) => model.name === modelName);
   const selectedModelRouteCount = canViewRoutes && selectedModel ? activeRouteCount(selectedModel.name, data) : 0;
   const contextWindow = selectedModel?.context_window ?? 0;
-  const maxTokenLimit = Math.max(4096, Math.min(Number(selectedModel?.metadata?.max_output_tokens) || contextWindow || 32768, 200000));
+  const maxTokenLimit = playgroundMaxTokenLimit(selectedModel?.metadata?.max_output_tokens, contextWindow);
+  const maxTokenMinimum = Math.min(128, maxTokenLimit);
+  const maxTokenStep = maxTokenLimit < 128 ? 1 : 128;
   const inputPrice = selectedModel?.input_price_usd_per_1m ?? 0;
   const outputPrice = selectedModel?.output_price_usd_per_1m ?? 0;
   const supportedParameters = new Set(selectedModel?.supported_parameters ?? []);
@@ -215,9 +257,11 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
   }, [languageVersion]);
 
   useEffect(() => {
-    const parsed = Number(maxTokens);
-    if (Number.isFinite(parsed) && parsed > maxTokenLimit) setMaxTokens(String(maxTokenLimit));
+    const clamped = clampPlaygroundMaxTokens(numericParameter(maxTokens), maxTokenLimit);
+    if (String(clamped) !== maxTokens) setMaxTokens(String(clamped));
   }, [maxTokenLimit, maxTokens]);
+
+  useEffect(() => () => activeRequestRef.current?.abort(), []);
 
   useEffect(() => {
     if (!loading) return;
@@ -249,7 +293,7 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
     const payload: Record<string, unknown> = {
       model: requestModel,
       messages,
-      max_tokens: Math.max(1, Math.round(numericParameter(maxTokens) ?? 4096)),
+      max_tokens: clampPlaygroundMaxTokens(numericParameter(maxTokens), maxTokenLimit),
     };
     if (supports("temperature")) payload.temperature = numericParameter(temperature);
     if (supports("top_p")) payload.top_p = numericParameter(topP);
@@ -308,7 +352,11 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
     } catch (caught) {
       if (isAuthExpiredError(caught)) return;
       const cancelled = controller.signal.aborted || (caught instanceof DOMException && caught.name === "AbortError");
-      const message = cancelled ? tx("已停止生成，保留部分输出") : caught instanceof Error ? caught.message : tx("演练请求失败");
+      const message = cancelled
+        ? tx("已停止生成，保留部分输出")
+        : caught instanceof Error && caught.message === playgroundMissingStreamBodyCode
+          ? tx("浏览器未提供流式响应体")
+          : caught instanceof Error ? caught.message : tx("演练请求失败");
       updateCandidate(turnID, candidateID, (candidate) => ({
         ...candidate,
         status: cancelled ? "cancelled" : "failed",
@@ -368,7 +416,7 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
   }
 
   function selectCandidate(turnID: string, candidateID: string) {
-    setTurns((current) => current.map((turn) => turn.id === turnID ? { ...turn, selectedCandidateID: candidateID } : turn));
+    setTurns((current) => selectPlaygroundCandidateBranch(current, turnID, candidateID));
   }
 
   function requestModelChange(nextModelName: string) {
@@ -452,7 +500,7 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
             <span>{tx("系统提示")}</span>
             <textarea value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} disabled={loading} />
           </label>
-          <PlaygroundConfigSlider label="max_tokens" value={maxTokens} onChange={setMaxTokens} min={128} max={maxTokenLimit} step={128} />
+          <PlaygroundConfigSlider label="max_tokens" value={maxTokens} onChange={setMaxTokens} min={maxTokenMinimum} max={maxTokenLimit} step={maxTokenStep} />
           {supports("temperature") ? <PlaygroundConfigSlider label="temperature" value={temperature} onChange={setTemperature} min={0} max={2} step={0.1} /> : null}
           {supportsReasoningEffort ? (
             <label className="playground-field">
@@ -499,8 +547,8 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
               <Copy size={13} />
             </button>
             <span>
-              {contextWindow ? `${formatNumber(contextWindow)} ${tx("上下文")}` : `${tx("上下文")} -`}
-              <em />${formatMoney(inputPrice)}/Mt {tx("输入")}<em />${formatMoney(outputPrice)}/Mt {tx("输出")}
+              {contextWindow ? `${formatPlaygroundInteger(contextWindow)} ${tx("上下文")}` : `${tx("上下文")} -`}
+              <em />{formatPlaygroundUSD(inputPrice)}/Mt {tx("输入")}<em />{formatPlaygroundUSD(outputPrice)}/Mt {tx("输出")}
               {canViewRoutes ? <><em />{countWithUnit(selectedModelRouteCount, "条启用路由", "active route", "件の有効ルート")}</> : null}
             </span>
           </div>
@@ -533,7 +581,7 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
           <div className="playground-detail-strip">
             <DetailField label={tx("类型")} value={selectedModel ? modelCategoryLabel(modelCategory(selectedModel)) : "-"} />
             <DetailField label={tx("能力")} value={selectedModel?.modality || "chat"} />
-            <DetailField label={tx("上下文")} value={contextWindow ? formatNumber(contextWindow) : "-"} />
+            <DetailField label={tx("上下文")} value={contextWindow ? formatPlaygroundInteger(contextWindow) : "-"} />
             <DetailField label={tx("最近路由")} value={routeHasDetails(lastResult) ? `${lastResult?.route?.provider_name || lastResult?.route?.provider_id} / ${lastResult?.route?.provider_model}` : tx("仅授权角色可见")} />
           </div>
         ) : null}
@@ -562,7 +610,7 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
                   <div>
                     {turn.candidates.length > 1 ? turn.candidates.map((item, index) => (
                       <button type="button" className={item.id === turn.selectedCandidateID ? "active" : ""} key={item.id} onClick={() => selectCandidate(turn.id, item.id)} disabled={loading}>
-                        {index + 1}
+                        {formatPlaygroundInteger(index + 1)}
                       </button>
                     )) : null}
                     <button type="button" onClick={() => rerunTurn(turn.id)} disabled={loading} title={tx("从这一轮重新生成，并移除后续分支")}>
@@ -588,7 +636,7 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
             <span className="playground-ephemeral">{tx("会话仅保存在当前页面，按需导出")}</span>
             <div className="playground-foot">
               {lastResult?.request_id ? <span>{lastResult.request_id}</span> : null}
-              {lastResult?.usage ? <span>{tx("输入")} {formatNumber(lastResult.usage.prompt_tokens ?? 0)} · {tx("输出")} {formatNumber(lastResult.usage.completion_tokens ?? 0)}</span> : null}
+              {hasPlaygroundUsage(lastResult?.usage) ? <span>{tx("输入")} {formatPlaygroundInteger(lastResult?.usage?.prompt_tokens ?? 0)} · {tx("输出")} {formatPlaygroundInteger(lastResult?.usage?.completion_tokens ?? 0)}</span> : null}
             </div>
             {loading ? (
               <button className="playground-stop-button" type="button" onClick={() => activeRequestRef.current?.abort()} title={tx("停止生成")}><Square size={16} /></button>
@@ -609,6 +657,7 @@ function PlaygroundCandidateCard({ candidate, nowMS, canViewRoutes, turnIndex }:
   const isStreaming = candidate.status === "streaming";
   const elapsedMS = Math.max(0, nowMS - candidate.localStartedMS);
   const rate = timing?.output_tokens_per_second ?? timing?.end_to_end_tokens_per_second;
+  const usageKnown = hasPlaygroundUsage(usage);
   const modeLabel = (timing?.mode ?? candidate.mode) === "buffered" ? tx("非流式 · 缓冲返回") : tx("流式");
   const statusLabel = candidate.status === "cancelled" ? tx("已取消") : candidate.status === "failed" ? tx("失败") : tx("已完成");
   return (
@@ -631,10 +680,14 @@ function PlaygroundCandidateCard({ candidate, nowMS, canViewRoutes, turnIndex }:
           </div>
           {usage || timing ? (
             <div className="playground-usage-summary">
-              <span>{tx("输入")} {formatNumber(usage?.prompt_tokens ?? 0)}</span>
-              <span>{tx("输出")} {formatNumber(usage?.completion_tokens ?? 0)}</span>
-              <span>{tx("估算")} ${formatMoney(usage?.estimated_cost_usd ?? 0)}</span>
-              <span>{formatClock(timing?.completed_at)}</span>
+              {usageKnown ? (
+                <>
+                  <span>{tx("输入")} {formatPlaygroundInteger(usage?.prompt_tokens)}</span>
+                  <span>{tx("输出")} {formatPlaygroundInteger(usage?.completion_tokens)}</span>
+                  <span>{tx("估算")} {formatPlaygroundUSD(usage?.estimated_cost_usd)}</span>
+                </>
+              ) : <span>{tx("用量不可用")}</span>}
+              {timing?.completed_at ? <span>{formatClock(timing.completed_at)}</span> : null}
             </div>
           ) : null}
           {candidate.error ? <div className="playground-candidate-error">{candidate.error}</div> : null}
@@ -648,6 +701,7 @@ function PlaygroundCandidateCard({ candidate, nowMS, canViewRoutes, turnIndex }:
 function PlaygroundDiagnostics({ payload, canViewRoutes, turnIndex }: { payload: PlaygroundChatPayload; canViewRoutes: boolean; turnIndex: number }) {
   const timing = payload.timing;
   const usage = payload.usage;
+  const usageKnown = hasPlaygroundUsage(usage);
   const route = payload.route;
   return (
     <details className="playground-diagnostics">
@@ -655,17 +709,17 @@ function PlaygroundDiagnostics({ payload, canViewRoutes, turnIndex }: { payload:
       <div className="playground-diagnostics-body">
         <div className="playground-diagnostic-grid">
           <DetailField label="Request ID" value={payload.request_id || "-"} />
-          <DetailField label={tx("轮次")} value={String(turnIndex + 1)} />
+          <DetailField label={tx("轮次")} value={formatPlaygroundInteger(turnIndex + 1)} />
           <DetailField label={tx("开始时间")} value={formatDateTime(timing?.started_at)} />
           <DetailField label={tx("完成时间")} value={formatDateTime(timing?.completed_at)} />
           <DetailField label="TTFT" value={timing?.mode === "buffered" ? tx("不适用（上游非流式）") : formatDuration(timing?.ttft_ms)} />
           <DetailField label={tx("生成耗时")} value={formatDuration(timing?.generation_ms)} />
           <DetailField label={tx("总耗时")} value={formatDuration(timing?.total_ms)} />
           <DetailField label={tx("吞吐")} value={formatRate(timing?.output_tokens_per_second ?? timing?.end_to_end_tokens_per_second)} />
-          <DetailField label={tx("输入 Tokens")} value={formatNumber(usage?.prompt_tokens ?? 0)} />
-          <DetailField label={tx("缓存输入 Tokens")} value={formatNumber(usage?.cached_input_tokens ?? 0)} />
-          <DetailField label={tx("输出 Tokens")} value={formatNumber(usage?.completion_tokens ?? 0)} />
-          <DetailField label={tx("估算成本")} value={`$${formatMoney(usage?.estimated_cost_usd ?? 0)}`} />
+          <DetailField label={tx("输入 Tokens")} value={usageKnown ? formatPlaygroundInteger(usage?.prompt_tokens) : tx("不适用")} />
+          <DetailField label={tx("缓存输入 Tokens")} value={usageKnown ? formatPlaygroundInteger(usage?.cached_input_tokens) : tx("不适用")} />
+          <DetailField label={tx("输出 Tokens")} value={usageKnown ? formatPlaygroundInteger(usage?.completion_tokens) : tx("不适用")} />
+          <DetailField label={tx("估算成本")} value={usageKnown ? formatPlaygroundUSD(usage?.estimated_cost_usd) : tx("不适用")} />
         </div>
         {canViewRoutes && routeHasDetails(payload) ? (
           <section className="playground-route-diagnostics">
@@ -693,15 +747,23 @@ function PlaygroundAttemptTimeline({ attempts }: { attempts: PlaygroundRouteAtte
   if (attempts.length === 0) return null;
   return (
     <div className="playground-attempts">
-      {attempts.map((attempt, index) => (
-        <div className={attempt.status >= 200 && attempt.status < 300 ? "success" : "failed"} key={`${attempt.route?.route_id || "attempt"}-${index}`}>
-          <span>{index + 1}</span>
-          <strong>{attempt.route?.provider_name || attempt.route?.provider_id || tx("已隐藏路由")}</strong>
-          <em>{attempt.invoked ? tx("已调用") : tx("未调用")}</em>
-          <small>{attempt.status || "-"}{attempt.upstream_status ? ` / ${tx("上游")} ${attempt.upstream_status}` : ""} · {formatDuration(attempt.latency_ms)}</small>
-          {attempt.error ? <p>{attempt.code || tx("错误")} · {attempt.error}</p> : null}
-        </div>
-      ))}
+      {attempts.map((attempt, index) => {
+        const usageKnown = hasPlaygroundUsage(attempt.usage);
+        return (
+          <div className={attempt.status >= 200 && attempt.status < 300 ? "success" : "failed"} key={`${attempt.route?.route_id || "attempt"}-${index}`}>
+            <span>{formatPlaygroundInteger(index + 1)}</span>
+            <strong>{attempt.route?.provider_name || attempt.route?.provider_id || tx("已隐藏路由")}</strong>
+            <em>{attempt.invoked ? tx("已调用") : tx("未调用")}</em>
+            <small>{attempt.status || "-"}{attempt.upstream_status ? ` / ${tx("上游")} ${attempt.upstream_status}` : ""} · {formatDuration(attempt.latency_ms)}</small>
+            {usageKnown ? (
+              <small className="playground-attempt-usage">
+                {tx("输入")} {formatPlaygroundInteger(attempt.usage?.prompt_tokens)} · {tx("输出")} {formatPlaygroundInteger(attempt.usage?.completion_tokens)} · {tx("估算")} {formatPlaygroundUSD(attempt.usage?.estimated_cost_usd)}
+              </small>
+            ) : null}
+            {attempt.error ? <p>{attempt.code || tx("错误")} · {attempt.error}</p> : null}
+          </div>
+        );
+      })}
     </div>
   );
 }

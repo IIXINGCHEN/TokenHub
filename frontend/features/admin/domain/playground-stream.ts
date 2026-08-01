@@ -4,6 +4,8 @@ import { adminFetch } from "../resources/payloads";
 
 type PlaygroundEventHandler = (name: string, event: PlaygroundStreamEvent) => void;
 
+export const playgroundMissingStreamBodyCode = "playground_missing_stream_body";
+
 function consumeSSEBlock(block: string, onEvent: PlaygroundEventHandler) {
   let name = "message";
   const data: string[] = [];
@@ -34,7 +36,7 @@ export async function streamPlaygroundChat(
     throw new Error(await readAPIError(response));
   }
   if (!response.body) {
-    throw new Error("浏览器未提供流式响应体");
+    throw new Error(playgroundMissingStreamBodyCode);
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
