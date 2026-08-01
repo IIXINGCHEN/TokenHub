@@ -18,7 +18,7 @@ func TestGeminiNativeGenerateContentUsesCodexSubscription(t *testing.T) {
 			t.Fatalf("unexpected Codex envelope: %#v", request)
 		}
 		input, _ := anySlice(request["input"])
-		if len(input) != 1 || localCodexCompatMap(t, input[0], "input")["role"] != "user" {
+		if len(input) != 1 || geminiTestMap(t, input[0], "input")["role"] != "user" {
 			t.Fatalf("unexpected Codex input: %#v", request["input"])
 		}
 		return geminiCodexTestSSE(map[string]any{
@@ -44,14 +44,14 @@ func TestGeminiNativeGenerateContentUsesCodexSubscription(t *testing.T) {
 	if err := json.Unmarshal([]byte(response.Body), &body); err != nil {
 		t.Fatal(err)
 	}
-	candidates := localCodexCompatSlice(t, body["candidates"], "candidates")
-	candidate := localCodexCompatMap(t, candidates[0], "candidate")
-	content := localCodexCompatMap(t, candidate["content"], "content")
-	parts := localCodexCompatSlice(t, content["parts"], "parts")
-	if localCodexCompatMap(t, parts[0], "text part")["text"] != "TOKENHUB_GEMINI_OK" || candidate["finishReason"] != "STOP" {
+	candidates := geminiTestSlice(t, body["candidates"], "candidates")
+	candidate := geminiTestMap(t, candidates[0], "candidate")
+	content := geminiTestMap(t, candidate["content"], "content")
+	parts := geminiTestSlice(t, content["parts"], "parts")
+	if geminiTestMap(t, parts[0], "text part")["text"] != "TOKENHUB_GEMINI_OK" || candidate["finishReason"] != "STOP" {
 		t.Fatalf("unexpected Gemini response: %#v", body)
 	}
-	usage := localCodexCompatMap(t, body["usageMetadata"], "usage")
+	usage := geminiTestMap(t, body["usageMetadata"], "usage")
 	if usage["totalTokenCount"] != float64(23) {
 		t.Fatalf("unexpected Gemini usage: %#v", usage)
 	}
@@ -60,8 +60,8 @@ func TestGeminiNativeGenerateContentUsesCodexSubscription(t *testing.T) {
 func TestGeminiNativeStreamGenerateContentEmitsToolCall(t *testing.T) {
 	longName := "read_workspace_file_with_a_long_gemini_cli_specific_function_name"
 	server, secret := newGeminiCodexTestServer(t, func(request map[string]any) string {
-		tools := localCodexCompatSlice(t, request["tools"], "Codex tools")
-		upstreamTool := localCodexCompatMap(t, tools[0], "Codex tool")
+		tools := geminiTestSlice(t, request["tools"], "Codex tools")
+		upstreamTool := geminiTestMap(t, tools[0], "Codex tool")
 		shortName, _ := upstreamTool["name"].(string)
 		if shortName == "" || len(shortName) > codexIdentifierLimit {
 			t.Fatalf("invalid upstream tool name: %q", shortName)
@@ -124,18 +124,18 @@ func TestGeminiNativeReplaysFunctionResultAndCodexSignature(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wire := localCodexCompatResponsesRequestMap(t, request)
-	input := localCodexCompatSlice(t, wire["input"], "input")
+	wire := geminiTestResponsesRequestMap(t, request)
+	input := geminiTestSlice(t, wire["input"], "input")
 	want := []string{"message", "reasoning", "function_call", "function_call_output"}
 	if len(input) != len(want) {
 		t.Fatalf("input = %#v", input)
 	}
 	for index, kind := range want {
-		if localCodexCompatMap(t, input[index], "input item")["type"] != kind {
+		if geminiTestMap(t, input[index], "input item")["type"] != kind {
 			t.Fatalf("input[%d] = %#v", index, input[index])
 		}
 	}
-	if localCodexCompatMap(t, input[1], "reasoning")["encrypted_content"] != "opaque-codex-state" {
+	if geminiTestMap(t, input[1], "reasoning")["encrypted_content"] != "opaque-codex-state" {
 		t.Fatalf("Codex reasoning signature was not replayed: %#v", input[1])
 	}
 }
@@ -153,15 +153,15 @@ func TestGeminiNativeNormalizesCLIUppercaseToolSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tool := localCodexCompatMap(t, tools[0], "tool")
-	schema := localCodexCompatMap(t, tool["parameters"], "schema")
+	tool := geminiTestMap(t, tools[0], "tool")
+	schema := geminiTestMap(t, tool["parameters"], "schema")
 	if schema["type"] != "object" {
 		t.Fatalf("root type = %#v", schema["type"])
 	}
-	properties := localCodexCompatMap(t, schema["properties"], "properties")
-	path := localCodexCompatMap(t, properties["path"], "path")
-	anyOf := localCodexCompatSlice(t, path["anyOf"], "anyOf")
-	if localCodexCompatMap(t, anyOf[0], "string branch")["type"] != "string" || localCodexCompatMap(t, anyOf[1], "null branch")["type"] != "null" {
+	properties := geminiTestMap(t, schema["properties"], "properties")
+	path := geminiTestMap(t, properties["path"], "path")
+	anyOf := geminiTestSlice(t, path["anyOf"], "anyOf")
+	if geminiTestMap(t, anyOf[0], "string branch")["type"] != "string" || geminiTestMap(t, anyOf[1], "null branch")["type"] != "null" {
 		t.Fatalf("nested types were not normalized: %#v", anyOf)
 	}
 }
@@ -258,4 +258,35 @@ func geminiCodexTestSSE(events ...map[string]any) string {
 		result.WriteString("\n\n")
 	}
 	return result.String()
+}
+
+func geminiTestMap(t *testing.T, value any, label string) map[string]any {
+	t.Helper()
+	result, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("%s is not an object: %#v", label, value)
+	}
+	return result
+}
+
+func geminiTestSlice(t *testing.T, value any, label string) []any {
+	t.Helper()
+	result, ok := value.([]any)
+	if !ok {
+		t.Fatalf("%s is not an array: %#v", label, value)
+	}
+	return result
+}
+
+func geminiTestResponsesRequestMap(t *testing.T, request ResponsesRequest) map[string]any {
+	t.Helper()
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(encoded, &result); err != nil {
+		t.Fatal(err)
+	}
+	return result
 }
