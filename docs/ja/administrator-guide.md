@@ -26,6 +26,16 @@ Language: [English](../administrator-guide.md) | [简体中文](../zh-CN/adminis
 7. Model Playground と Request Logs でフローを検証します。
 8. Key を広く発行する前に利用量配賦を確認します。
 
+## Model Playground の診断
+
+コンソールの **Model Playground** では、通常のゲートウェイトラフィックと同じルーティングおよび Provider adapter を使ってモデルを検証できます。各 assistant ターンには、配信モード、ゲートウェイ計測の Time to First Token（TTFT）、出力スループット、総所要時間、コンテキスト全体の input tokens、output tokens、推定コスト、ローカル完了時刻、Request ID の要約が残ります。**診断詳細**を開くと、ミリ秒単位の時刻と実レスポンスの詳細を確認できます。明示的にエクスポートしない限り、セッションは現在のブラウザページだけに保持されます。
+
+TokenHub は Playground に統一 SSE イベントを返します。選択した上流がストリーミングに対応する場合、TTFT はゲートウェイがリクエストを受け付けてから最初の content delta まで、出力スループットは最初から最後の content delta までの時間で計測します。上流が buffered response のみに対応する場合は自動的に buffered mode へフォールバックし、TTFT を「該当なし」と表示して、架空の first-token 値ではなく end-to-end の出力スループットを示します。停止時は部分出力を保持して候補を cancelled とし、Provider が返した場合だけ正式な Token 数を表示します。
+
+assistant ターンを再実行すると、そのターンに新しい候補を作成し、後続ターンを削除します。これにより、新しい分岐が古いコンテキストを暗黙に再利用しません。モデル変更はデフォルトで新しいセッションになり、既存コンテキストを引き継ぐには明示的な選択が必要です。パラメーター UI は選択モデルの `supported_parameters` に従い、モデルカタログで非対応とされた値を送信しません。
+
+Playground の利用を許可されたすべてのユーザーは、性能、利用量、Request ID、自分のレスポンス詳細を確認できます。Provider、resource、上流 Request ID、ルート試行の詳細は routing-read 権限を持つロールだけに表示されます。コストは上流請求書ではなく外部モデルの設定価格を使うため、「推定」と明記されます。
+
 ## API Key の帰属と利用量配賦
 
 API Key を発行するときは、**帰属ユーザー**で実際の利用者を選択します。発行者は監査メタデータに残りますが、Key の利用量は帰属ユーザーに計上されます。プラットフォーム管理者は任意の有効ユーザー、チームリーダーは自チームの有効ユーザーを選択でき、一般ユーザーは自分だけを指定できます。

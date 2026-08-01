@@ -377,19 +377,46 @@ export type PlaygroundRouteSummary = {
 export type PlaygroundUsage = {
   prompt_tokens?: number;
   cached_input_tokens?: number;
+  cache_write_input_tokens?: number;
   completion_tokens?: number;
+  reasoning_output_tokens?: number;
   total_tokens?: number;
   estimated_cost_usd?: number;
+  upstream_request_id?: string;
+  served_model?: string;
+  model_etag?: string;
+  transport?: string;
 };
 
 export type PlaygroundRouteAttempt = {
-  route: PlaygroundRouteSummary;
+  route?: PlaygroundRouteSummary;
   status: number;
+  upstream_status?: number;
   code?: string;
   error?: string;
+  invoked?: boolean;
+  latency_ms?: number;
+  usage?: PlaygroundUsage;
+  started_at?: string;
+  ended_at?: string;
+};
+
+export type PlaygroundTiming = {
+  mode: "stream" | "buffered";
+  started_at: string;
+  first_token_at?: string;
+  last_token_at?: string;
+  completed_at: string;
+  ttft_ms?: number;
+  generation_ms?: number;
+  total_ms: number;
+  output_tokens_per_second?: number;
+  end_to_end_tokens_per_second?: number;
 };
 
 export type PlaygroundChatPayload = {
+  type?: "completed" | "failed" | "cancelled";
+  status?: "completed" | "failed" | "cancelled";
   response?: {
     choices?: Array<{
       message?: {
@@ -404,8 +431,27 @@ export type PlaygroundChatPayload = {
   route?: PlaygroundRouteSummary;
   usage?: PlaygroundUsage;
   attempts?: PlaygroundRouteAttempt[];
+  timing?: PlaygroundTiming;
   request_id?: string;
+  code?: string;
+  error?: string;
 };
+
+export type PlaygroundStreamEvent =
+  | {
+    type: "started";
+    request_id: string;
+    model: string;
+    started_at: string;
+  }
+  | {
+    type: "delta";
+    request_id: string;
+    mode: "stream" | "buffered";
+    delta: string;
+    received_at: string;
+  }
+  | PlaygroundChatPayload;
 
 export type ApiExampleLanguage = "python" | "typescript" | "java" | "go";
 
