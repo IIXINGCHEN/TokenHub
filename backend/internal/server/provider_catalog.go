@@ -418,14 +418,10 @@ func deepSeekBuiltinCatalogEntry() ProviderCatalogEntry {
 		"deepseek",
 		"https://api.deepseek.com",
 		"https://api-docs.deepseek.com",
-		[]string{"deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"},
+		[]string{"deepseek-v4-flash", "deepseek-v4-pro"},
 	)
 	for index := range entry.Models {
 		model := &entry.Models[index]
-		model.InputModalities = []string{"text"}
-		model.OutputModalities = []string{"text"}
-		model.Capabilities = []string{"chat", "reasoning", "tools", "structured_outputs"}
-		model.SupportedParameters = []string{"temperature", "top_p", "tools", "tool_choice", "response_format", "reasoning"}
 		switch model.ID {
 		case "deepseek-v4-flash":
 			model.DisplayName = "DeepSeek V4 Flash"
@@ -459,7 +455,13 @@ func deepSeekBuiltinCatalogEntry() ProviderCatalogEntry {
 				"tool_call":                "true",
 				"vision":                   "false",
 			}
+		default:
+			continue
 		}
+		model.InputModalities = []string{"text"}
+		model.OutputModalities = []string{"text"}
+		model.Capabilities = []string{"chat", "reasoning", "tools", "structured_outputs"}
+		model.SupportedParameters = []string{"temperature", "top_p", "tools", "tool_choice", "response_format", "reasoning"}
 	}
 	return entry
 }
