@@ -18,7 +18,7 @@ Language: [English](../administrator-guide.md) | [简体中文](../zh-CN/adminis
 ## 本番設定順序
 
 1. 少なくとも 1 つの ID プロバイダーを設定し、管理者アカウントを保持します。
-2. `OpenAI Production`、`Azure East US`、`Internal Model Gateway` などの上流 Provider を追加し、提供可能な上流モデルを取り込みます。
+2. `OpenAI Production`、`Azure East US`、`Internal Model Gateway` などの上流 Provider を追加します。保存前に **接続テスト** で Base URL と API Key を検証し、実測された応答時間を確認してから、提供可能な上流モデルを取り込みます。
 3. 取り込んだ各 Provider モデルに、監査用の実際の入力、キャッシュ読み取り、出力コストを記録します。
 4. アプリケーションへ公開する外部モデルを作成し、統一された顧客向け価格を設定します。
 5. 各外部モデルから、1 つ以上の取り込み済み Provider モデルへのルートを追加します。
