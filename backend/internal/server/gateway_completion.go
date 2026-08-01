@@ -153,11 +153,12 @@ func (s *Server) finishSuccessfulRoutedCall(r *http.Request, routed RoutedCall, 
 // finishFailedRoutedCall completes a call whose routing never produced a usable
 // response. The reported route is the last candidate attempted, so the failure is
 // attributed to something rather than to nothing.
-func (s *Server) finishFailedRoutedCall(r *http.Request, routed RoutedCall, attempts []RouteAttempt, err error, requestPayload any) {
+func (s *Server) finishFailedRoutedCall(r *http.Request, routed RoutedCall, attempts []RouteAttempt, usage Usage, err error, requestPayload any) {
 	httpErr := AsHTTPError(err)
 	s.finishRoutedCall(r, GatewayCallCompletion{
 		Call:            routed.Call,
 		Route:           lastAttemptRoute(attempts),
+		Usage:           usage,
 		Attempts:        attempts,
 		StatusCode:      httpErr.Status,
 		ErrorCode:       httpErr.Code,

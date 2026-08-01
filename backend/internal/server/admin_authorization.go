@@ -1026,6 +1026,11 @@ func (s *Server) validateScopedResourceMutation(user AdminUser, kind string, res
 	if kind == "project-members" {
 		return s.validateProjectMemberMutation(user, resourceID, req)
 	}
+	if kind == "quota-policies" {
+		if err := validateQuotaPolicyMinuteLimits(req.Fields); err != nil {
+			return err
+		}
+	}
 	if normalizeAdminRole(user.Role) != "team_leader" || kind != "quota-policies" {
 		return nil
 	}

@@ -115,6 +115,14 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	})
 }
 
+func writeRateLimitHeaders(header http.Header, values map[string]string) {
+	for key, value := range values {
+		if strings.TrimSpace(value) != "" {
+			header.Set(key, value)
+		}
+	}
+}
+
 // errorResponseHeaders installs the headers every error response carries and
 // returns the request ID its body has to repeat. Retry-After among them: the
 // upstream already said how long to wait, and answering 429 without it leaves the
@@ -125,6 +133,7 @@ func errorResponseHeaders(w http.ResponseWriter, err error) string {
 		requestID = NewID("req")
 	}
 	w.Header().Set("x-request-id", requestID)
+	writeRateLimitHeaders(w.Header(), AsHTTPError(err).Headers)
 	if retryAfter := providerErrorRetryAfter(err); retryAfter > 0 &&
 		AsHTTPError(err).Status == http.StatusTooManyRequests &&
 		w.Header().Get("retry-after") == "" {

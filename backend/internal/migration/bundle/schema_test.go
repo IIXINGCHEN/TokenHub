@@ -101,6 +101,98 @@ func TestValidateJSONRejectsProviderSpecUnknownFields(t *testing.T) {
 	}
 }
 
+func TestValidateJSONAcceptsMinuteRateLimits(t *testing.T) {
+	payload, err := json.Marshal(map[string]any{
+		"schema_version": SchemaVersion,
+		"source": map[string]any{
+			"adapter":         "tokenhub",
+			"adapter_version": "1.0.0",
+		},
+		"generated_at": "2026-08-01T10:00:00Z",
+		"api_keys": []map[string]any{{
+			"external_ref": map[string]any{"system": "tokenhub", "id": "key/limited"},
+			"spec": map[string]any{
+				"name":            "Limited Key",
+				"rate_limit_rpm":  int64(60),
+				"token_limit_tpm": int64(10_000),
+			},
+		}},
+		"quota_policies": []map[string]any{{
+			"external_ref": map[string]any{"system": "tokenhub", "id": "policy/project"},
+			"name":         "Project limits",
+			"limits": map[string]any{
+				"rate_limit_rpm":  int64(600),
+				"token_limit_tpm": int64(100_000),
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := ValidateJSON(payload); err != nil {
+		t.Fatalf("minute rate limits should validate: %v", err)
+	}
+}
+
+func TestValidateJSONRejectsInvalidQuotaPolicyMinuteLimits(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value any
+	}{
+		{name: "negative", value: int64(-1)},
+		{name: "overflow", value: json.Number("18446744073709551616")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			payload, err := json.Marshal(map[string]any{
+				"schema_version": SchemaVersion,
+				"source": map[string]any{
+					"adapter":         "tokenhub",
+					"adapter_version": "1.0.0",
+				},
+				"generated_at": "2026-08-01T10:00:00Z",
+				"quota_policies": []map[string]any{{
+					"external_ref": map[string]any{"system": "tokenhub", "id": "policy/project"},
+					"name":         "Project limits",
+					"limits":       map[string]any{"rate_limit_rpm": test.value},
+				}},
+			})
+			if err != nil {
+				t.Fatalf("marshal payload: %v", err)
+			}
+			if err := ValidateJSON(payload); err == nil {
+				t.Fatalf("expected %s quota policy minute limit validation to fail", test.name)
+			}
+		})
+	}
+}
+
+func TestValidateJSONRejectsNestedAPIKeyMinuteRateLimits(t *testing.T) {
+	payload, err := json.Marshal(map[string]any{
+		"schema_version": SchemaVersion,
+		"source": map[string]any{
+			"adapter":         "tokenhub",
+			"adapter_version": "1.0.0",
+		},
+		"generated_at": "2026-08-01T10:00:00Z",
+		"api_keys": []map[string]any{{
+			"external_ref": map[string]any{"system": "tokenhub", "id": "key/limited"},
+			"spec": map[string]any{
+				"name": "Limited Key",
+				"limits": map[string]any{
+					"rate_limit_rpm":  int64(60),
+					"token_limit_tpm": int64(10_000),
+				},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := ValidateJSON(payload); err == nil {
+		t.Fatal("expected nested API key minute rate limit validation to fail")
+	}
+}
+
 func TestValidateJSONRejectsUserMissingRequiredFields(t *testing.T) {
 	payload, err := json.Marshal(map[string]any{
 		"schema_version": SchemaVersion,

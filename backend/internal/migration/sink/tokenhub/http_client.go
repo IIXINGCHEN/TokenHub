@@ -456,6 +456,8 @@ type apiKeyWriteRequest struct {
 	AllowedModels []string            `json:"allowed_models"`
 	IPAllowlist   []string            `json:"ip_allowlist"`
 	Limits        *server.QuotaLimits `json:"limits,omitempty"`
+	RateLimitRPM  *int64              `json:"rate_limit_rpm,omitempty"`
+	TokenLimitTPM *int64              `json:"token_limit_tpm,omitempty"`
 	Status        string              `json:"status,omitempty"`
 	ExpiresAt     *time.Time          `json:"expires_at,omitempty"`
 }
@@ -466,6 +468,8 @@ func (c *AdminAPIClient) UpdateAPIKey(ctx context.Context, id string, req server
 		Group:         req.Group,
 		AllowedModels: req.Allowed,
 		IPAllowlist:   req.IPAllowlist,
+		RateLimitRPM:  req.RateLimitRPM,
+		TokenLimitTPM: req.TokenLimitTPM,
 		Status:        req.Status,
 		ExpiresAt:     req.ExpiresAt,
 	}
