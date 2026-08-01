@@ -370,6 +370,69 @@ func TestAPIKeyMinuteLimitUsesStrictestApplicablePolicy(t *testing.T) {
 	}
 }
 
+func TestProjectMinuteLimitsApplyIndependentlyPerKeyUnderConcurrency(t *testing.T) {
+	for _, test := range []struct {
+		name             string
+		policyField      string
+		tokenReservation int64
+		limitHeader      string
+		remainingHeader  string
+	}{
+		{name: "rpm", policyField: "rate_limit_rpm", limitHeader: "X-RateLimit-Limit-Requests", remainingHeader: "X-RateLimit-Remaining-Requests"},
+		{name: "tpm", policyField: "token_limit_tpm", tokenReservation: 1, limitHeader: "X-RateLimit-Limit-Tokens", remainingHeader: "X-RateLimit-Remaining-Tokens"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, _ := newRateLimitedGateway(t, APIKey{})
+			project := store.ListProjects()[0]
+			keys := store.ListAPIKeys()
+			for range 4 {
+				key, _, err := store.CreateAPIKey(project.ID, APIKey{
+					Name:    "concurrent-project-limit",
+					Allowed: []string{"gpt-4.1-mini"},
+					Status:  StatusActive,
+				}, "thk_concurrent_"+NewID("test"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				keys = append(keys, key)
+			}
+			store.CreateResource("quota-policies", AdminResource{
+				Name:   "Concurrent project " + test.name,
+				Status: StatusActive,
+				Fields: map[string]any{
+					"scope":          "project",
+					"scope_id":       project.ID,
+					test.policyField: int64(1),
+				},
+			})
+			type admissionResult struct {
+				call CallContext
+				err  error
+			}
+			start := make(chan struct{})
+			results := make(chan admissionResult, len(keys))
+			for _, key := range keys {
+				go func() {
+					<-start
+					call, err := store.StartCall(context.Background(), project, key, "gpt-4.1-mini", test.tokenReservation)
+					results <- admissionResult{call: call, err: err}
+				}()
+			}
+			close(start)
+			for range keys {
+				result := <-results
+				if result.err != nil {
+					t.Fatalf("all five keys should receive their own project %s allowance: %v", test.name, result.err)
+				}
+				if result.call.RateLimitHeaders[test.limitHeader] != "1" || result.call.RateLimitHeaders[test.remainingHeader] != "0" {
+					t.Fatalf("unexpected %s headers: %+v", test.name, result.call.RateLimitHeaders)
+				}
+				store.FinishCall(result.call, RouteSelection{}, Usage{TotalTokens: test.tokenReservation}, http.StatusOK, "", "127.0.0.1", "concurrency-test")
+			}
+		})
+	}
+}
+
 func TestAPIKeyRPMIsSharedAcrossCompatibleEndpoints(t *testing.T) {
 	store, secret := newRateLimitedGateway(t, APIKey{RateLimitRPM: int64Pointer(2)})
 	app := New(store).Handler()
