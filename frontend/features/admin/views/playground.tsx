@@ -32,7 +32,7 @@ import {
   uniqueUIID,
 } from "../domain/formatting";
 import { streamPlaygroundChat } from "../domain/playground-stream";
-import { activeLanguage, countWithUnit, defaultPlaygroundSystemPrompt, isDefaultPlaygroundSystemPrompt, tx } from "../i18n/runtime";
+import { activeLanguage, countWithUnit, defaultPlaygroundSystemPrompt, isDefaultPlaygroundSystemPrompt, languageLocale, tx } from "../i18n/runtime";
 import { isAuthExpiredError } from "../resources/payloads";
 import { DetailField } from "./audit";
 
@@ -62,7 +62,7 @@ type PlaygroundTurn = {
 
 type PlaygroundRequestMessage = { role: "system" | "user" | "assistant"; content: string };
 
-const playgroundDateTime = new Intl.DateTimeFormat(undefined, {
+const playgroundDateTimeOptions: Intl.DateTimeFormatOptions = {
   year: "numeric",
   month: "2-digit",
   day: "2-digit",
@@ -70,13 +70,25 @@ const playgroundDateTime = new Intl.DateTimeFormat(undefined, {
   minute: "2-digit",
   second: "2-digit",
   timeZoneName: "short",
-});
+};
 
-const playgroundClock = new Intl.DateTimeFormat(undefined, {
+const playgroundClockOptions: Intl.DateTimeFormatOptions = {
   hour: "2-digit",
   minute: "2-digit",
   second: "2-digit",
-});
+};
+
+const playgroundDateTimeFormatters = new Map<string, Intl.DateTimeFormat>();
+const playgroundClockFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function playgroundFormatter(cache: Map<string, Intl.DateTimeFormat>, options: Intl.DateTimeFormatOptions) {
+  const locale = languageLocale();
+  const cached = cache.get(locale);
+  if (cached) return cached;
+  const formatter = new Intl.DateTimeFormat(locale, options);
+  cache.set(locale, formatter);
+  return formatter;
+}
 
 function selectedCandidate(turn: PlaygroundTurn) {
   return turn.candidates.find((candidate) => candidate.id === turn.selectedCandidateID) ?? turn.candidates.at(-1);
@@ -120,13 +132,13 @@ function formatRate(value?: number) {
 function formatClock(value?: string) {
   if (!value) return "-";
   const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? "-" : playgroundClock.format(parsed);
+  return Number.isNaN(parsed.getTime()) ? "-" : playgroundFormatter(playgroundClockFormatters, playgroundClockOptions).format(parsed);
 }
 
 function formatDateTime(value?: string) {
   if (!value) return "-";
   const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? "-" : playgroundDateTime.format(parsed);
+  return Number.isNaN(parsed.getTime()) ? "-" : playgroundFormatter(playgroundDateTimeFormatters, playgroundDateTimeOptions).format(parsed);
 }
 
 function prettyJSON(value: unknown) {
@@ -542,11 +554,11 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
             return (
               <div className="playground-turn" key={turn.id}>
                 <div className="playground-message user">
-                  <span>User · {formatClock(turn.userCreatedAt)}</span>
+                  <span>{tx("用户")} · {formatClock(turn.userCreatedAt)}</span>
                   <p>{turn.userContent}</p>
                 </div>
                 <div className="playground-candidate-head">
-                  <span>Assistant · {candidate.model} · {formatClock(candidate.startedAt)}</span>
+                  <span>{tx("助手")} · {candidate.model} · {formatClock(candidate.startedAt)}</span>
                   <div>
                     {turn.candidates.length > 1 ? turn.candidates.map((item, index) => (
                       <button type="button" className={item.id === turn.selectedCandidateID ? "active" : ""} key={item.id} onClick={() => selectCandidate(turn.id, item.id)} disabled={loading}>
@@ -576,7 +588,7 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
             <span className="playground-ephemeral">{tx("会话仅保存在当前页面，按需导出")}</span>
             <div className="playground-foot">
               {lastResult?.request_id ? <span>{lastResult.request_id}</span> : null}
-              {lastResult?.usage ? <span>{formatNumber(lastResult.usage.prompt_tokens ?? 0)} in · {formatNumber(lastResult.usage.completion_tokens ?? 0)} out</span> : null}
+              {lastResult?.usage ? <span>{tx("输入")} {formatNumber(lastResult.usage.prompt_tokens ?? 0)} · {tx("输出")} {formatNumber(lastResult.usage.completion_tokens ?? 0)}</span> : null}
             </div>
             {loading ? (
               <button className="playground-stop-button" type="button" onClick={() => activeRequestRef.current?.abort()} title={tx("停止生成")}><Square size={16} /></button>
@@ -619,8 +631,8 @@ function PlaygroundCandidateCard({ candidate, nowMS, canViewRoutes, turnIndex }:
           </div>
           {usage || timing ? (
             <div className="playground-usage-summary">
-              <span>{tx("上下文")} {formatNumber(usage?.prompt_tokens ?? 0)} in</span>
-              <span>{formatNumber(usage?.completion_tokens ?? 0)} out</span>
+              <span>{tx("输入")} {formatNumber(usage?.prompt_tokens ?? 0)}</span>
+              <span>{tx("输出")} {formatNumber(usage?.completion_tokens ?? 0)}</span>
               <span>{tx("估算")} ${formatMoney(usage?.estimated_cost_usd ?? 0)}</span>
               <span>{formatClock(timing?.completed_at)}</span>
             </div>
@@ -686,7 +698,7 @@ function PlaygroundAttemptTimeline({ attempts }: { attempts: PlaygroundRouteAtte
           <span>{index + 1}</span>
           <strong>{attempt.route?.provider_name || attempt.route?.provider_id || tx("已隐藏路由")}</strong>
           <em>{attempt.invoked ? tx("已调用") : tx("未调用")}</em>
-          <small>{attempt.status || "-"}{attempt.upstream_status ? ` / upstream ${attempt.upstream_status}` : ""} · {formatDuration(attempt.latency_ms)}</small>
+          <small>{attempt.status || "-"}{attempt.upstream_status ? ` / ${tx("上游")} ${attempt.upstream_status}` : ""} · {formatDuration(attempt.latency_ms)}</small>
           {attempt.error ? <p>{attempt.code || tx("错误")} · {attempt.error}</p> : null}
         </div>
       ))}

@@ -34,6 +34,7 @@ Run the repository gates from the repository root. These enforce the change guid
 ```bash
 node --test tools/*.test.mjs
 node tools/check-doc-translations.mjs
+node tools/check-ui-translations.mjs
 node tools/check-env-contract.mjs
 node tools/check-source-lines.mjs
 ```
@@ -70,6 +71,9 @@ Use a workflow only when the user explicitly names it; otherwise follow the norm
 - Never commit real credentials, local `.env` files, SQLite databases, generated backups, or runtime logs.
 - Keep environment variable additions synchronized across relevant `.env.example` files, `deploy/docker-compose.yml`, `start.sh`, and deployment documentation.
 - Keep user-facing documentation synchronized across English, Simplified Chinese, and Japanese when changing shared behavior.
+- Treat Simplified Chinese as the canonical UI copy passed to `tx("...")`; every literal UI key must have both English and Japanese entries. Keep protocol names, identifiers, units, and user/provider content untranslated when they are data rather than interface copy.
+- Do not hard-code user-visible prose in React views. Add it to the translation catalog in the same change; `node --test tools/ui-translations.test.mjs` enforces literal `tx("...")` coverage.
+- Build dynamic sentences with locale-aware helpers or complete translated templates rather than concatenating translated fragments. Format user-visible dates, times, numbers, and currencies with `languageLocale()` and `Intl` so they follow the selected application language.
 - `frontend/app/page.tsx` and `frontend/app/globals.css` are intentionally large. Avoid broad formatting or unrelated restructuring when making a targeted UI fix.
 - Next.js may rewrite `frontend/next-env.d.ts` during development or production builds. Do not commit incidental mode-dependent changes to that generated file.
 - Keep `data/model-catalog.yaml` tracked; other files under runtime data directories are intentionally ignored.
