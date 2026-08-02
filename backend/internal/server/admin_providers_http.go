@@ -1218,5 +1218,8 @@ func mergedModelRoute(current ModelRoute, patch ModelRoute) ModelRoute {
 		current.ProjectScope = patch.ProjectScope
 		current.ProjectIDs = patch.ProjectIDs
 	}
+	if patch.Tags != nil {
+		current.Tags = patch.Tags
+	}
 	return current
 }

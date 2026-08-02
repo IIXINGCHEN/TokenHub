@@ -33,6 +33,7 @@ import { OverviewView } from "../views/overview";
 import { PlaygroundPage } from "../views/playground";
 import { ProviderUpsertModal } from "../views/provider-editor";
 import { ProjectWorkspace, type ProjectWorkspaceDraft, type ProjectWorkspaceMode, ProjectWorkspaceSaveError, saveProjectWorkspaceDraft } from "../views/project-workspace";
+import { RoutingPolicySimulator } from "../views/routing-policy-simulator";
 import { EditModal, SettingsView, usePagination } from "../views/settings-table";
 import { BillingView, UsageView } from "../views/usage-billing";
 
@@ -871,7 +872,9 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
               onExport={(dataset) => void exportReportDataset(dataset)}
             />
           ) : activeConfig ? (
-            <CrudView
+            <>
+              {activeView === "routing-policies" ? <RoutingPolicySimulator api={api} data={data} /> : null}
+              <CrudView
               config={activeConfig}
               data={data}
               api={api}
@@ -902,7 +905,8 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
               onAction={(action, item) => void runResourceAction(action, item, data)}
               onProjectOpen={(project) => setProjectWorkspace({ mode: "view", projectID: project.id })}
               onToolbarAction={(action) => void runToolbarAction(action, filteredItems)}
-            />
+              />
+            </>
           ) : null}
         </div>
       </section>

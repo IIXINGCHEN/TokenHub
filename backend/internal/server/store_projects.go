@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"net/http"
 	"sort"
 	"strconv"
@@ -25,6 +26,11 @@ func (s *GormStore) CreateProjectChecked(project Project) (Project, error) {
 }
 
 func (s *GormStore) createProject(project Project, requireActiveTeam bool) (Project, error) {
+	mode, allowed, err := normalizeModelAccess(project.ModelAccessMode, project.AllowedModels)
+	if err != nil {
+		return Project{}, err
+	}
+	project.ModelAccessMode, project.AllowedModels = mode, allowed
 	now := time.Now().UTC()
 	if project.ID == "" {
 		project.ID = NewID("prj")
@@ -37,7 +43,10 @@ func (s *GormStore) createProject(project Project, requireActiveTeam bool) (Proj
 	}
 	project.UpdatedAt = now
 	project.Teams = nil
-	err := s.db.Transaction(func(tx *gorm.DB) error {
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		if err := validateConfiguredModels(tx, project.AllowedModels); err != nil {
+			return err
+		}
 		if strings.TrimSpace(project.TeamID) != "" {
 			team, err := lockTeamForMutation(tx, project.TeamID)
 			if err != nil {
@@ -71,6 +80,9 @@ func (s *GormStore) createProject(project Project, requireActiveTeam bool) (Proj
 func (s *GormStore) ListProjects() []Project {
 	var items []Project
 	_ = s.db.Order("created_at asc").Find(&items).Error
+	for index := range items {
+		hydrateProject(&items[index])
+	}
 	_ = s.loadProjectTeamsFor(items)
 	return items
 }
@@ -105,6 +117,16 @@ func (s *GormStore) UpdateProject(id string, patch Project) (Project, error) {
 		if patch.Status != "" {
 			project.Status = patch.Status
 		}
+		if patch.ModelAccessMode != "" || patch.AllowedModels != nil {
+			mode, allowed, err := normalizeModelAccess(patch.ModelAccessMode, patch.AllowedModels)
+			if err != nil {
+				return err
+			}
+			if err := validateConfiguredModels(tx, allowed); err != nil {
+				return err
+			}
+			project.ModelAccessMode, project.AllowedModels = mode, allowed
+		}
 		project.DefaultQuotaRef = patch.DefaultQuotaRef
 		project.UpdatedAt = time.Now().UTC()
 		if err := tx.Save(&project).Error; err != nil {
@@ -124,6 +146,7 @@ func (s *GormStore) UpdateProject(id string, patch Project) (Project, error) {
 	if err != nil {
 		return Project{}, err
 	}
+	hydrateProject(&project)
 	_ = s.loadProjectTeams(&project)
 	return project, nil
 }
@@ -168,6 +191,7 @@ func (s *GormStore) GetProject(id string) (Project, bool) {
 	if err := s.db.First(&project, "id = ?", id).Error; err != nil {
 		return Project{}, false
 	}
+	hydrateProject(&project)
 	_ = s.loadProjectTeams(&project)
 	return project, true
 }
@@ -390,6 +414,16 @@ func (s *GormStore) CreateAPIKey(projectID string, key APIKey, rawSecret string)
 	if err := validateAPIKeyMinuteLimits(key.RateLimitRPM, key.TokenLimitTPM); err != nil {
 		return APIKey{}, "", err
 	}
+	mode, allowed, err := normalizeModelAccess(key.ModelAccessMode, key.Allowed)
+	if err != nil {
+		return APIKey{}, "", err
+	}
+	if strings.TrimSpace(key.ModelAccessMode) != "" {
+		if err := validateConfiguredModels(s.db, allowed); err != nil {
+			return APIKey{}, "", err
+		}
+	}
+	key.ModelAccessMode, key.Allowed = mode, allowed
 	if rawSecret == "" {
 		rawSecret = s.generateAPIKeySecret()
 	}
@@ -410,9 +444,6 @@ func (s *GormStore) CreateAPIKey(projectID string, key APIKey, rawSecret string)
 	key.KeySuffix = suffix
 	if key.CreatedAt.IsZero() {
 		key.CreatedAt = now
-	}
-	if key.Allowed == nil {
-		key.Allowed = []string{}
 	}
 	key.AllowedModels = AllowedModelSet(key.Allowed)
 	if err := s.db.Create(&key).Error; err != nil {
@@ -486,8 +517,24 @@ func (s *GormStore) UpdateAPIKey(id string, patch APIKey) (APIKey, error) {
 		key.Status = patch.Status
 	}
 	if patch.Allowed != nil {
-		key.Allowed = patch.Allowed
-		key.AllowedModels = AllowedModelSet(patch.Allowed)
+		mode, allowed, err := normalizeModelAccess(patch.ModelAccessMode, patch.Allowed)
+		if err != nil {
+			return APIKey{}, err
+		}
+		if strings.TrimSpace(patch.ModelAccessMode) != "" {
+			if err := validateConfiguredModels(s.db, allowed); err != nil {
+				return APIKey{}, err
+			}
+		}
+		key.ModelAccessMode, key.Allowed = mode, allowed
+		key.AllowedModels = AllowedModelSet(allowed)
+	} else if patch.ModelAccessMode != "" {
+		mode, allowed, err := normalizeModelAccess(patch.ModelAccessMode, key.Allowed)
+		if err != nil {
+			return APIKey{}, err
+		}
+		key.ModelAccessMode, key.Allowed = mode, allowed
+		key.AllowedModels = AllowedModelSet(allowed)
 	}
 	if patch.IPAllowlist != nil {
 		key.IPAllowlist = patch.IPAllowlist
@@ -508,6 +555,19 @@ func (s *GormStore) UpdateAPIKey(id string, patch APIKey) (APIKey, error) {
 		return APIKey{}, err
 	}
 	return publicKey(key), nil
+}
+
+func validateConfiguredModels(db *gorm.DB, modelNames []string) error {
+	for _, modelName := range modelNames {
+		var count int64
+		if err := db.Model(&Model{}).Where("name = ? AND status = ?", modelName, StatusActive).Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			return NewHTTPError(http.StatusNotFound, "model_not_found", "Model not found")
+		}
+	}
+	return nil
 }
 
 func validateAPIKeyMinuteLimits(rpm *int64, tpm *int64) error {
@@ -555,12 +615,34 @@ func (s *GormStore) RotateAPIKey(id string, graceUntil *time.Time) (APIKey, stri
 		if err := tx.Save(&oldKey).Error; err != nil {
 			return err
 		}
-		return tx.Create(&newKey).Error
+		if err := tx.Create(&newKey).Error; err != nil {
+			return err
+		}
+		return cloneRotatedAPIKeyRoutingPolicy(tx, oldKey.ID, newKey.ID, now)
 	})
 	if err != nil {
 		return APIKey{}, "", err
 	}
 	return publicKey(newKey), newSecret, nil
+}
+
+func cloneRotatedAPIKeyRoutingPolicy(tx *gorm.DB, oldKeyID string, newKeyID string, now time.Time) error {
+	oldBindingKey := RoutingPolicyScopeAPIKey + ":" + oldKeyID
+	var policy AdminResource
+	if err := tx.First(&policy, "kind = ? AND routing_policy_binding_key = ?", routingPolicyResourceKind, oldBindingKey).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	policy.ID = NewID(resourcePrefix(routingPolicyResourceKind))
+	policy.Fields = cloneFields(policy.Fields)
+	policy.Fields["scope"] = RoutingPolicyScopeAPIKey
+	policy.Fields["scope_id"] = newKeyID
+	policy.RoutingPolicyBindingKey = routingPolicyBindingKey(policy.Fields)
+	policy.CreatedAt = now
+	policy.UpdatedAt = now
+	return tx.Create(&policy).Error
 }
 
 func (s *GormStore) DeleteAPIKey(id string) error {

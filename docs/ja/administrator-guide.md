@@ -26,6 +26,16 @@ Language: [English](../administrator-guide.md) | [简体中文](../zh-CN/adminis
 7. Model Playground と Request Logs でフローを検証します。
 8. Key を広く発行する前に利用量配賦を確認します。
 
+## Model Playground の診断
+
+コンソールの **Model Playground** では、通常のゲートウェイトラフィックと同じルーティングおよび Provider adapter を使ってモデルを検証できます。各 assistant ターンには、配信モード、ゲートウェイ計測の Time to First Token（TTFT）、出力スループット、総所要時間、コンテキスト全体の input tokens、output tokens、推定コスト、ローカル完了時刻、Request ID の要約が残ります。**診断詳細**を開くと、ミリ秒単位の時刻と実レスポンスの詳細を確認できます。明示的にエクスポートしない限り、セッションは現在のブラウザページだけに保持されます。
+
+TokenHub は Playground に統一 SSE イベントを返します。選択した上流がストリーミングに対応する場合、TTFT はゲートウェイがリクエストを受け付けてから最初の content delta まで、出力スループットは最初から最後の content delta までの時間で計測します。上流が buffered response のみに対応する場合は自動的に buffered mode へフォールバックし、TTFT を「該当なし」と表示して、架空の first-token 値ではなく end-to-end の出力スループットを示します。停止時は部分出力を保持して候補を cancelled とし、Provider が返した場合だけ正式な Token 数を表示します。
+
+assistant ターンを再実行すると、そのターンに新しい候補を作成し、後続ターンを削除します。これにより、新しい分岐が古いコンテキストを暗黙に再利用しません。モデル変更はデフォルトで新しいセッションになり、既存コンテキストを引き継ぐには明示的な選択が必要です。パラメーター UI は選択モデルの `supported_parameters` に従い、モデルカタログで非対応とされた値を送信しません。
+
+Playground の利用を許可されたすべてのユーザーは、性能、利用量、Request ID、自分のレスポンス詳細を確認できます。Provider、resource、上流 Request ID、ルート試行の詳細は routing-read 権限を持つロールだけに表示されます。コストは上流請求書ではなく外部モデルの設定価格を使うため、「推定」と明記されます。
+
 ## API Key の帰属と利用量配賦
 
 API Key を発行するときは、**帰属ユーザー**で実際の利用者を選択します。発行者は監査メタデータに残りますが、Key の利用量は帰属ユーザーに計上されます。プラットフォーム管理者は任意の有効ユーザー、チームリーダーは自チームの有効ユーザーを選択でき、一般ユーザーは自分だけを指定できます。
@@ -88,6 +98,18 @@ Provider の接続情報とプロジェクト制限は、引き続きルート�
 プライベートプロジェクトを内部モデルだけに限定するには、内部 Provider のルートを `include` にして対象のプライベートプロジェクトを選択します。対応する外部 Provider のルートは `exclude` にして同じプロジェクトを選択します。これにより、プライベートプロジェクトは内部ルートだけを使用し、その他のプロジェクトは外部 Provider を引き続き使用できます。
 
 プロジェクトスコープはモデル検出にも反映されます。通常のモデル有効状態と API Key の許可リストに加え、呼び出し元 API Key のプロジェクトに対して有効なルートが 1 つ以上ある場合にだけ、その外部モデルが `GET /v1/models` に含まれます。
+
+### スコープルーティングポリシー
+
+「スコープポリシー」で、Global ゲートウェイ、Project、API Key に個別のルーティングポリシーをバインドできます。TokenHub は API Key、Project、Global の順に解決し、1 つの有効ポリシーだけを選びます。上位のバインドが見つかった時点で解決は終了し、そのポリシーが無効、競合、または適格候補なしでも下位スコープへフォールバックせず、フェイルクローズします。各スコープ対象にバインドできるポリシーは 1 つです。未バインドの定義はトラフィックに影響させず事前に準備できます。
+
+モデルアクセスはルーティングより先に評価されます。Project と API Key はそれぞれ `inherit` と `restricted` のモードを持ちます。制限リストはすべての上位リストとの共通部分になるため、API Key は Project アクセスを拡張できません。`restricted` で空リストの場合は全モデルを拒否します。互換性のため、アクセスモード導入前に作成され、モードとリストの両方が空のレコードは引き続き継承として扱われます。`GET /v1/models` も同じ有効アクセス範囲を使用し、有効なルーティングポリシーが許可するルートを必要とします。
+
+スコープポリシーは、モデル名、Provider、Provider Resource、必須ルートタグ、リソースのリージョンと環境を制約し、ルーティング戦略を上書きできます。ルートタグはモデルルートに、リージョンと環境は Provider Resource に設定します。既存のルート単位 Project スコープはこれらの制約と積集合で組み合わされます。トラフィック分配、セッション/キャッシュアフィニティ、ハーフオープン復旧、フェイルオーバーは絞り込み後の候補内でのみ動作し、除外されたルートを戻しません。これにより、内部モデル専用ポリシーは外部 Provider へ暗黙に跨境せず、安全に失敗します。
+
+ポリシープレビュー/シミュレーションは Project、API Key、モデルを受け取り、有効ポリシー、アクセス判定、選択ルート、各候補の安全な許可/除外理由を表示します。ポリシー失敗は認証情報を公開せず、`routing_policy_unavailable`、`routing_policy_conflict`、`routing_policy_no_candidate` などの診断コードを使用します。リクエストログは `routing_policy_id`、`routing_policy_scope`、`routing_policy_priority` を記録し、汎用ポリシーの作成/更新/削除と明示的なバインド/解除操作も管理監査イベントに記録されます。
+
+管理 API は `/api/admin/resources/routing-policies` で汎用リソース CRUD を提供し、加えて `POST /api/admin/routing-policies/{id}/bind`、`POST /api/admin/routing-policies/{id}/unbind`、`POST /api/admin/routing-policies/simulate` を提供します。同じ強制は OpenAI 互換モデルリクエスト、Anthropic Messages、画像生成、管理者 Playground に適用されます。
 
 ## Provider リソースの自動復旧
 

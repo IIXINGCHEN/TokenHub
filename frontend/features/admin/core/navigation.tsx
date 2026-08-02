@@ -78,6 +78,8 @@ export const adminNavGroups: NavGroup[] = [
       { view: "providers", label: "Provider 渠道", icon: Server },
       { view: "models", label: "模型目录", icon: Boxes },
       { view: "routes", label: "路由策略", icon: Gauge },
+      { view: "playground", label: "模型演练场", icon: Send },
+      { view: "routing-policies", label: "作用域策略", icon: ShieldCheck },
     ],
   },
   {
@@ -198,6 +200,10 @@ export const standaloneViewMeta: Partial<Record<ViewKey, { title: string; descri
     title: "审批记录",
     description: "处理 Key 发放、额度提升和模型开通等治理审批。",
   },
+  "routing-policies": {
+    title: "作用域路由策略",
+    description: "按 API Key、项目和全局优先级限制 Provider、资源、模型、标签与部署边界。",
+  },
 };
 
 export const roleViewAccess: Record<AppRole, ViewKey[]> = {
@@ -254,7 +260,7 @@ export function defaultViewForRole(user: AdminUser): ViewKey {
 }
 
 export const topSearchPreferredViews: Record<AppRole, ViewKey[]> = {
-  admin: ["overview", "providers", "routes", "models", "projects", "api-keys", "usage", "settings"],
+  admin: ["overview", "providers", "routes", "routing-policies", "models", "projects", "api-keys", "usage", "settings"],
   security: ["overview", "audit", "alert-events", "security-policies", "usage", "gateway"],
   team_leader: ["overview", "projects", "api-keys", "usage", "billing", "gateway"],
   user: ["overview", "gateway", "playground", "models", "api-keys", "usage"],

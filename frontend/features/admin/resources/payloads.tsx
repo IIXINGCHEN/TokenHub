@@ -69,6 +69,8 @@ export function providerResourcePayload(values: Record<string, string>) {
     base_url: values.base_url,
     api_key: isOpenAIAccount ? values.access_token : values.api_key,
     group: values.group || "default",
+    region: values.region,
+    environment: values.environment,
     status: values.status || "active",
     healthy: values.healthy !== "false",
     priority: numberOr(values.priority, 1),
@@ -131,6 +133,8 @@ export function providerResourceToForm(item: ProviderResource) {
     rate_limit_rpm: String(item.rate_limit_rpm ?? ""),
     token_limit_tpm: String(item.token_limit_tpm ?? ""),
     max_concurrency: String(item.max_concurrency ?? ""),
+    region: item.region ?? "",
+    environment: item.environment ?? "",
     status: item.status,
     healthy: String(item.healthy),
   };
@@ -175,6 +179,7 @@ export function routePayload(values: Record<string, string>) {
     strategy: values.strategy,
     project_scope: values.project_scope || "all",
     project_ids: splitList(values.project_ids),
+    tags: splitList(values.tags),
     sticky_session: values.sticky_session === "true",
     priority: numberOr(values.priority, 0),
     weight: numberOr(values.weight, 0),
@@ -392,7 +397,7 @@ export function defaultFormValues<T>(config: ResourceConfig<T>, data: AppData, c
     if (field.key === "weight") values[field.key] = "100";
     if (field.key === "quality_score") values[field.key] = "50";
     if (field.key === "cost_score") values[field.key] = "50";
-    if (field.key === "strategy") values[field.key] = config.view === "routes" ? "priority_weighted" : "balanced";
+    if (field.key === "strategy") values[field.key] = config.view === "routes" ? "priority_weighted" : config.view === "routing-policies" ? "inherit" : "balanced";
     if (field.key === "project_scope") values[field.key] = "all";
     if (field.key === "provider_id") values[field.key] = firstActiveProvider(data)?.id ?? "";
     if (field.key === "model_name") values[field.key] = firstActiveModel(data)?.name ?? "";
@@ -403,6 +408,7 @@ export function defaultFormValues<T>(config: ResourceConfig<T>, data: AppData, c
     if (field.key === "owner_user_id" && config.view === "api-keys") values[field.key] = currentUser && appRole(currentUser.role) !== "admin" ? currentUser.id : "";
     if (field.key === "team_id") values[field.key] = firstActiveTeam(data)?.id ?? "";
     if (field.key === "allowed_models") values[field.key] = "";
+    if (field.key === "model_access_mode") values[field.key] = "inherit";
     if (field.key === "daily_requests") values[field.key] = "1000";
     if (field.key === "monthly_requests") values[field.key] = "30000";
     if (field.key === "daily_tokens") values[field.key] = config.view === "api-keys" ? "100000000" : "1000000";
@@ -462,6 +468,7 @@ export function keyCreatePayload(values: Record<string, string>) {
     name: values.name,
     group: values.group || "default",
     owner_user_id: values.owner_user_id,
+    model_access_mode: values.model_access_mode || "inherit",
     allowed_models: splitList(values.allowed_models),
     ip_allowlist: splitList(values.ip_allowlist),
     rate_limit_rpm: minuteLimitValue(values.rate_limit_rpm, false),
@@ -475,6 +482,7 @@ export function keyPatchPayload(values: Record<string, string>) {
     name: values.name,
     group: values.group || "default",
     owner_user_id: values.owner_user_id,
+    model_access_mode: values.model_access_mode || "inherit",
     status: values.status || "active",
     allowed_models: splitList(values.allowed_models),
     ip_allowlist: splitList(values.ip_allowlist),

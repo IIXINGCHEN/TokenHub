@@ -23,6 +23,12 @@ Language: [English](../user-guide.md) | [简体中文](../zh-CN/user-guide.md) |
 4. モデル ID を選び、`POST /v1/chat/completions`、`POST /v1/messages`、`POST /v1/responses`、`POST /v1/embeddings` を呼び出します。
 5. **Usage Analytics** と **Request Logs** でリクエスト、Token、コスト、エラーを確認します。
 
+## Playground でモデルをテストする
+
+コンソールの **Model Playground** を開くと、API スクリプトを作成せずに利用可能な chat model をテストできます。各レスポンスには streaming / buffered mode、計測可能な場合の TTFT、出力スループット、総所要時間、コンテキスト全体の input tokens、output tokens、推定コスト、ローカル完了時刻、Request ID が表示されます。レスポンスを展開すると、実レスポンスの詳細を確認できます。Provider と route の内部情報は routing-read 権限を持つロールだけに表示されます。
+
+セッションは一時的で、**Export Playground** を選ばない限り現在のページだけに保持されます。**Stop** は部分出力を残します。**Rerun** はそのターンから別候補を作り、後続ターンを削除します。モデル変更はデフォルトで新しいセッションになり、既存コンテキストを保持するには明示的な選択が必要です。上流がストリーミング非対応の場合、画面は buffered mode を使い、TTFT を「該当なし」と表示します。
+
 ## モデル一覧
 
 ```bash

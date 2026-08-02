@@ -44,7 +44,7 @@ func TestStoreSinkApplyIdempotent(t *testing.T) {
 			ModelRef:            "model/gpt-4o-mini",
 			ProviderRef:         "provider/openai",
 			ProviderResourceRef: "resource/openai/default",
-			Spec:                server.ModelRoute{ID: "route_litellm_openai_gpt4omini", ProviderModel: "gpt-4o-mini", Status: server.StatusActive, Weight: 100, Priority: 1},
+			Spec:                server.ModelRoute{ID: "route_litellm_openai_gpt4omini", ProviderModel: "gpt-4o-mini", Status: server.StatusActive, Weight: 100, Priority: 1, Tags: []string{"internal", "compliant"}},
 		}},
 		Users: []bundle.UserRef{{
 			ExternalRef: bundle.ExternalRef{System: "litellm", ID: "user/admin"},
@@ -52,12 +52,15 @@ func TestStoreSinkApplyIdempotent(t *testing.T) {
 		}},
 		Projects: []bundle.ProjectRef{{
 			ExternalRef: bundle.ExternalRef{System: "litellm", ID: "project/default"},
-			Spec:        server.Project{Name: "Default Project", Status: server.StatusActive, OwnerUserID: "user/admin"},
+			Spec: server.Project{
+				Name: "Default Project", Status: server.StatusActive, OwnerUserID: "user/admin",
+				ModelAccessMode: server.ModelAccessModeRestricted, AllowedModels: []string{"gpt-4o-mini"},
+			},
 		}},
 		APIKeys: []bundle.APIKeyRef{{
 			ExternalRef: bundle.ExternalRef{System: "litellm", ID: "key/default"},
 			ProjectRef:  "project/default",
-			Spec:        server.APIKey{Name: "Default Key", Status: server.StatusActive},
+			Spec:        server.APIKey{Name: "Default Key", Status: server.StatusActive, ModelAccessMode: server.ModelAccessModeRestricted, Allowed: []string{}},
 			KeySecret:   &bundle.SecretRef{Ref: "CLIENT_API_KEY"},
 		}},
 	}
@@ -76,6 +79,15 @@ func TestStoreSinkApplyIdempotent(t *testing.T) {
 	}
 	if len(store.ListProviders()) != 1 || len(store.ListProviderResources()) != 1 || len(store.ListModels()) != 1 || len(store.ListRoutes()) != 1 || len(store.ListAdminUsers()) != 1 || len(store.ListProjects()) != 1 || len(store.ListAPIKeys()) != 1 {
 		t.Fatal("expected all resources to be created once")
+	}
+	if project := store.ListProjects()[0]; project.ModelAccessMode != server.ModelAccessModeRestricted || !slices.Equal(project.AllowedModels, []string{"gpt-4o-mini"}) {
+		t.Fatalf("project model access was not migrated: %+v", project)
+	}
+	if key := store.ListAPIKeys()[0]; key.ModelAccessMode != server.ModelAccessModeRestricted || len(key.Allowed) != 0 {
+		t.Fatalf("restricted-empty API key access was not migrated: %+v", key)
+	}
+	if route := store.ListRoutes()[0]; !slices.Equal(route.Tags, []string{"internal", "compliant"}) {
+		t.Fatalf("route tags were not migrated: %+v", route)
 	}
 	verifyFirst, err := sink.Verify(migrationBundle)
 	if err != nil {
@@ -150,6 +162,30 @@ func TestStoreSinkApplyRejectsSecretBackedAPIKeyUpdate(t *testing.T) {
 	}
 	if _, err := sink.Apply(second); err == nil {
 		t.Fatal("expected secret-backed api key update to be rejected")
+	}
+}
+
+func TestStoreSinkRejectsProjectAllowlistWithUnknownModel(t *testing.T) {
+	store := server.NewMemoryStore()
+	sink := NewStoreSink(store, bundle.StaticResolver{})
+	b := &bundle.CanonicalMigrationBundle{
+		SchemaVersion: bundle.SchemaVersion,
+		Source:        bundle.Source{Adapter: "tokenhub", AdapterVersion: "1.1.0"},
+		GeneratedAt:   time.Date(2026, 8, 2, 1, 0, 0, 0, time.UTC),
+		Projects: []bundle.ProjectRef{{
+			ExternalRef: bundle.ExternalRef{System: "tokenhub", ID: "project/invalid-model"},
+			Spec: server.Project{
+				Name: "Invalid Model Project", Status: server.StatusActive,
+				ModelAccessMode: server.ModelAccessModeRestricted, AllowedModels: []string{"missing-model"},
+			},
+		}},
+	}
+
+	if _, err := sink.Apply(b); err == nil {
+		t.Fatal("expected unknown project allowlist model to fail migration")
+	}
+	if len(store.ListProjects()) != 0 {
+		t.Fatalf("failed project migration must not persist a project: %+v", store.ListProjects())
 	}
 }
 

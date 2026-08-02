@@ -243,7 +243,10 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 		); err != nil {
 			return err
 		}
-		return backfillTeamRelationships(db)
+		if err := backfillTeamRelationships(db); err != nil {
+			return err
+		}
+		return backfillRoutingPolicyBindingKeys(db)
 	}
 	if err := runSchemaMigrationLocked(sqlDB, driver, migrate); err != nil {
 		return nil, err
@@ -267,6 +270,25 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 		clusterLockTTL:       time.Duration(defaultInt(config.ClusterLockTTLSeconds, 180)) * time.Second,
 		imageCapabilityRetry: time.Duration(defaultInt(config.ImageCapabilityRetrySecs, 86400)) * time.Second,
 	}, nil
+}
+
+func backfillRoutingPolicyBindingKeys(db *gorm.DB) error {
+	var policies []AdminResource
+	if err := db.Where("kind = ?", routingPolicyResourceKind).Find(&policies).Error; err != nil {
+		return err
+	}
+	for _, policy := range policies {
+		bindingKey := routingPolicyBindingKey(policy.Fields)
+		if bindingKey == nil {
+			continue
+		}
+		if err := db.Model(&AdminResource{}).
+			Where("kind = ? AND id = ?", routingPolicyResourceKind, policy.ID).
+			Update("routing_policy_binding_key", *bindingKey).Error; err != nil {
+			return fmt.Errorf("backfill routing policy binding %q: %w", policy.ID, err)
+		}
+	}
+	return nil
 }
 
 func backfillTeamRelationships(db *gorm.DB) error {

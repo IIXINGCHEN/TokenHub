@@ -206,6 +206,9 @@ func (s *GormStore) UpdateRoute(id string, patch ModelRoute) (ModelRoute, error)
 	if patch.ProjectScope != "" || patch.ProjectIDs != nil {
 		route.ProjectScope, route.ProjectIDs = normalizeRouteProjectScope(patch.ProjectScope, patch.ProjectIDs)
 	}
+	if patch.Tags != nil {
+		route.Tags = uniqueStrings(patch.Tags)
+	}
 	return route, s.db.Save(&route).Error
 }
 
@@ -498,11 +501,16 @@ func (s *GormStore) StartCall(ctx context.Context, project Project, key APIKey, 
 			return ErrInvalidAPIKey
 		}
 		hydrateAPIKey(&privateKey)
+		var privateProject Project
+		if err := tx.First(&privateProject, "id = ?", privateKey.ProjectID).Error; err != nil {
+			return ErrInvalidAPIKey
+		}
+		hydrateProject(&privateProject)
 		var model Model
 		if err := tx.First(&model, "name = ? AND status = ?", modelName, StatusActive).Error; err != nil {
 			return ErrModelNotAllowed
 		}
-		if len(privateKey.AllowedModels) > 0 && !privateKey.AllowedModels[modelName] {
+		if !modelAllowedByScopes(privateProject, privateKey, modelName) {
 			return ErrModelNotAllowed
 		}
 		keyLimits := privateKey.Limits
@@ -514,7 +522,7 @@ func (s *GormStore) StartCall(ctx context.Context, project Project, key APIKey, 
 		if privateKey.TokenLimitTPM != nil {
 			keyLimits.TokenLimitTPM = *privateKey.TokenLimitTPM
 		}
-		policyLimits, minuteLimitScopes, err := quotaPolicyLimits(tx, project, privateKey)
+		policyLimits, minuteLimitScopes, err := quotaPolicyLimits(tx, privateProject, privateKey)
 		if err != nil {
 			return err
 		}
@@ -560,7 +568,7 @@ func (s *GormStore) StartCall(ctx context.Context, project Project, key APIKey, 
 			exceedsCostQuota(effectiveLimits, &dayCounter.QuotaCounter, &monthCounter.QuotaCounter) {
 			return ErrQuotaExceeded
 		}
-		if err := s.checkRuntimeBudget(tx, project); err != nil {
+		if err := s.checkRuntimeBudget(tx, privateProject); err != nil {
 			return err
 		}
 		dayCounter.Requests++
@@ -573,7 +581,7 @@ func (s *GormStore) StartCall(ctx context.Context, project Project, key APIKey, 
 		}
 		call = CallContext{
 			RequestID:        requestID,
-			Project:          project,
+			Project:          privateProject,
 			Key:              publicKey(privateKey),
 			Model:            model,
 			StartedAt:        now,
@@ -752,24 +760,27 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 		}
 	}
 	if err := tx.Create(&RequestLog{
-		ID:                 NewID("log"),
-		RequestID:          call.RequestID,
-		ProjectID:          call.Project.ID,
-		APIKeyID:           call.Key.ID,
-		ModelName:          call.Model.Name,
-		ProviderID:         route.Provider.ID,
-		ProviderResourceID: routeResourceID(route),
-		ProviderModel:      route.ProviderModel,
-		UpstreamRequestID:  usage.UpstreamRequestID,
-		ServedModel:        usage.ServedModel,
-		ModelETag:          usage.ModelETag,
-		Transport:          usage.Transport,
-		StatusCode:         statusCode,
-		ErrorCode:          errorCode,
-		LatencyMS:          elapsed.Milliseconds(),
-		ClientIP:           clientIP,
-		UserAgent:          userAgent,
-		CreatedAt:          now,
+		ID:                    NewID("log"),
+		RequestID:             call.RequestID,
+		ProjectID:             call.Project.ID,
+		APIKeyID:              call.Key.ID,
+		ModelName:             call.Model.Name,
+		ProviderID:            route.Provider.ID,
+		ProviderResourceID:    routeResourceID(route),
+		ProviderModel:         route.ProviderModel,
+		RoutingPolicyID:       call.RoutingPolicyID,
+		RoutingPolicyScope:    call.RoutingPolicyScope,
+		RoutingPolicyPriority: call.RoutingPolicyPriority,
+		UpstreamRequestID:     usage.UpstreamRequestID,
+		ServedModel:           usage.ServedModel,
+		ModelETag:             usage.ModelETag,
+		Transport:             usage.Transport,
+		StatusCode:            statusCode,
+		ErrorCode:             errorCode,
+		LatencyMS:             elapsed.Milliseconds(),
+		ClientIP:              clientIP,
+		UserAgent:             userAgent,
+		CreatedAt:             now,
 	}).Error; err != nil {
 		return err
 	}
@@ -849,20 +860,23 @@ func (s *GormStore) RecordPlaygroundRequest(call CallContext, route RouteSelecti
 	defer s.mu.Unlock()
 
 	_ = s.db.Create(&RequestLog{
-		ID:                 NewID("log"),
-		RequestID:          call.RequestID,
-		ProjectID:          call.Project.ID,
-		APIKeyID:           call.Key.ID,
-		ModelName:          call.Model.Name,
-		ProviderID:         route.Provider.ID,
-		ProviderResourceID: routeResourceID(route),
-		ProviderModel:      route.ProviderModel,
-		StatusCode:         statusCode,
-		ErrorCode:          errorCode,
-		LatencyMS:          elapsed.Milliseconds(),
-		ClientIP:           clientIP,
-		UserAgent:          userAgent,
-		CreatedAt:          time.Now().UTC(),
+		ID:                    NewID("log"),
+		RequestID:             call.RequestID,
+		ProjectID:             call.Project.ID,
+		APIKeyID:              call.Key.ID,
+		ModelName:             call.Model.Name,
+		ProviderID:            route.Provider.ID,
+		ProviderResourceID:    routeResourceID(route),
+		ProviderModel:         route.ProviderModel,
+		RoutingPolicyID:       call.RoutingPolicyID,
+		RoutingPolicyScope:    call.RoutingPolicyScope,
+		RoutingPolicyPriority: call.RoutingPolicyPriority,
+		StatusCode:            statusCode,
+		ErrorCode:             errorCode,
+		LatencyMS:             elapsed.Milliseconds(),
+		ClientIP:              clientIP,
+		UserAgent:             userAgent,
+		CreatedAt:             time.Now().UTC(),
 	}).Error
 }
 

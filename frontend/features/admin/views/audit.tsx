@@ -375,6 +375,8 @@ export function RequestDetailPanel({
         <DetailField label="最终 Provider" value={providerAuditLabel(data, log)} />
         <DetailField label="Provider 资源" value={providerResourceAuditLabel(data, log.provider_resource_id)} />
         <DetailField label="上游模型" value={log.provider_model || "-"} />
+        <DetailField label="作用域策略" value={log.routing_policy_id || tx("无绑定策略")} />
+        <DetailField label="策略作用域 / 优先级" value={log.routing_policy_id ? `${tx(log.routing_policy_scope || "-")} / P${log.routing_policy_priority || 0}` : "-"} />
         <DetailField label="客户端 IP" value={log.client_ip || "-"} />
       </div>
 

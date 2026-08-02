@@ -26,6 +26,16 @@ This guide is for platform administrators, security operators, and infrastructur
 7. Validate the flow with Model Playground and request logs.
 8. Review usage attribution before issuing keys broadly.
 
+## Model Playground Diagnostics
+
+Open **Model Playground** from the console to validate a model through the same routing and Provider adapters used by gateway traffic. Every assistant turn keeps its own compact diagnostic summary: delivery mode, gateway-measured time to first token (TTFT), output throughput, total duration, full-context input tokens, output tokens, estimated cost, local completion time, and request ID. Expand **Diagnostics** to inspect millisecond timestamps plus the actual response details. Sessions remain in the current browser page unless explicitly exported.
+
+TokenHub streams a unified SSE event format to the Playground. If the selected upstream supports streaming, TTFT is measured from gateway admission to the first content delta and output throughput is calculated over the first-to-last content interval. If the upstream supports only buffered responses, TokenHub automatically falls back to buffered mode, marks TTFT as not applicable, and reports end-to-end output throughput instead of inventing a first-token measurement. Stopping a request preserves the partial text and marks the candidate as cancelled; authoritative token counts are shown only when the Provider returns them.
+
+Rerunning an assistant turn creates another candidate for that turn and removes later turns so the new branch cannot silently reuse stale context. Changing models starts a new session by default; keeping the existing context requires an explicit choice. Parameter controls follow the selected model's declared `supported_parameters`, so the Playground does not send controls that the model catalog says are unsupported.
+
+All permitted Playground users can see performance, usage, request ID, and their response details. Provider, resource, upstream request ID, and per-attempt routing details are visible only to roles with routing-read permission. Cost is labelled as an estimate because it uses the external model's configured price rather than an upstream invoice.
+
 ## API Key Ownership and Usage Attribution
 
 When issuing an API Key, select the actual user in **Owner User**. The issuer remains in audit metadata, but the Key's usage is attributed to its owner. Platform administrators may select any active user; team leaders may select an active user in their own team; ordinary users can only assign Keys to themselves.
@@ -88,6 +98,18 @@ Provider connection details and project restrictions remain route-specific. Edit
 For a private-project boundary, create an internal Provider route with scope `include` and select the private projects. Create the corresponding external Provider route with scope `exclude` and select the same projects. The private projects can then use only the internal route, while other projects continue to use the external Provider.
 
 Project route scope also controls model discovery: `GET /v1/models` includes an external model only when the calling API key's project has at least one active eligible route, in addition to the normal model and API-key allowlist checks.
+
+### Scoped Routing Policies
+
+Use **Scoped Policies** to bind an independent routing policy to the global gateway, a project, or an API Key. TokenHub resolves exactly one effective policy in this order: API Key, then project, then global. Finding a higher-priority binding ends resolution even when that policy is disabled, conflicting, or leaves no eligible candidate; the router fails closed and never falls back to a lower scope. Only one policy may be bound to a given target, while unbound definitions can be prepared without affecting traffic.
+
+Model access is evaluated before routing. Projects and API Keys each support `inherit` and `restricted` access modes. A restricted list is intersected with every upper-level list, so an API Key cannot expand project access; a restricted empty list denies every model. For compatibility, records created before access modes existed that have a blank mode and an empty list continue to inherit. `GET /v1/models` applies the same effective access scope and requires a route allowed by the effective routing policy.
+
+A scoped policy can constrain model names, Providers, Provider Resources, required route tags, resource regions, and resource environments, and can override the routing strategy. Configure tags on model routes and region/environment metadata on Provider Resources. Existing route-level project scopes are intersected with these constraints. Traffic allocation, session/cache affinity, half-open recovery, and failover run only after filtering and can never add an excluded route back to the candidate pool. This makes an internal-only policy fail safely instead of silently crossing to an external Provider.
+
+The preview/simulation panel accepts a project, API Key, and model and displays the effective policy, access decision, selected route, and a safe allow/exclude reason for every candidate. Policy failures use diagnostic codes such as `routing_policy_unavailable`, `routing_policy_conflict`, and `routing_policy_no_candidate` without exposing credentials. Request logs record `routing_policy_id`, `routing_policy_scope`, and `routing_policy_priority`; generic policy create/update/delete operations and explicit bind/unbind operations also write administrator audit events.
+
+The management API uses generic resource CRUD at `/api/admin/resources/routing-policies`, plus `POST /api/admin/routing-policies/{id}/bind`, `POST /api/admin/routing-policies/{id}/unbind`, and `POST /api/admin/routing-policies/simulate`. The same enforcement applies to OpenAI-compatible model requests, Anthropic Messages, image generation, and the administrator playground.
 
 ## Provider Resource Recovery
 

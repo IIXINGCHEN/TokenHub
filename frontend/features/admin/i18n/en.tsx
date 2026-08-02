@@ -1,5 +1,6 @@
 export const enTranslations: Record<string, string> = {
     "请填写此字段": "Please fill out this field",
+    "继承上级": "Inherit from parent",
     "总览": "Overview",
     "网关概览": "Gateway Overview",
     "开始使用": "Get Started",

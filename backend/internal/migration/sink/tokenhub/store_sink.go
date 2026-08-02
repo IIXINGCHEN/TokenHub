@@ -676,7 +676,10 @@ func (s *StoreSink) applyProject(item bundle.ProjectRef) (Change, error) {
 			return Change{Resource: "project", ID: updated.ID, Action: ActionUpdate}, nil
 		}
 	}
-	created := s.store.CreateProject(spec)
+	created, err := s.store.CreateProjectChecked(spec)
+	if err != nil {
+		return Change{}, err
+	}
 	s.refIndex.projects[item.ExternalRef.ID] = created.ID
 	return Change{Resource: "project", ID: created.ID, Action: ActionCreate}, nil
 }
@@ -976,6 +979,9 @@ func mergeRouteUpdate(existing server.ModelRoute, desired server.ModelRoute) ser
 	merged.ProviderResourceID = desired.ProviderResourceID
 	merged.ResourceGroup = desired.ResourceGroup
 	merged.StickySession = desired.StickySession
+	if desired.Tags != nil {
+		merged.Tags = desired.Tags
+	}
 	// ProjectScope and ProjectIDs are deliberately left untouched: the bundle
 	// schema does not carry them, so the migration does not own them. Defaulting
 	// an unspecified scope to "all" here would widen project access on any
@@ -1005,7 +1011,8 @@ func sameRoute(existing server.ModelRoute, desired server.ModelRoute) bool {
 		existing.Status == merged.Status &&
 		existing.Strategy == merged.Strategy &&
 		existing.ProjectScope == merged.ProjectScope &&
-		slices.Equal(existing.ProjectIDs, merged.ProjectIDs)
+		slices.Equal(existing.ProjectIDs, merged.ProjectIDs) &&
+		slices.Equal(existing.Tags, merged.Tags)
 }
 
 // sameAdminUser reports whether applying desired onto existing would be a
@@ -1040,6 +1047,13 @@ func normalizeMigrationAdminRole(role string) string {
 }
 
 func sameProject(left server.Project, right server.Project) bool {
+	if strings.TrimSpace(right.ModelAccessMode) != "" || right.AllowedModels != nil {
+		leftMode, leftAllowed := normalizedMigrationModelAccess(left.ModelAccessMode, left.AllowedModels)
+		rightMode, rightAllowed := normalizedMigrationModelAccess(right.ModelAccessMode, right.AllowedModels)
+		if leftMode != rightMode || !slices.Equal(leftAllowed, rightAllowed) {
+			return false
+		}
+	}
 	return strings.TrimSpace(left.Name) == strings.TrimSpace(right.Name) &&
 		strings.TrimSpace(left.TeamID) == strings.TrimSpace(right.TeamID) &&
 		strings.TrimSpace(left.OwnerUserID) == strings.TrimSpace(right.OwnerUserID) &&
@@ -1063,6 +1077,13 @@ func sameAPIKey(left server.APIKey, right server.APIKey) bool {
 	}
 	if right.Allowed != nil && !reflect.DeepEqual(normalizeStringSlice(left.Allowed), normalizeStringSlice(right.Allowed)) {
 		return false
+	}
+	if strings.TrimSpace(right.ModelAccessMode) != "" {
+		leftMode, leftAllowed := normalizedMigrationModelAccess(left.ModelAccessMode, left.Allowed)
+		rightMode, rightAllowed := normalizedMigrationModelAccess(right.ModelAccessMode, right.Allowed)
+		if leftMode != rightMode || !slices.Equal(leftAllowed, rightAllowed) {
+			return false
+		}
 	}
 	if right.IPAllowlist != nil && !reflect.DeepEqual(normalizeStringSlice(left.IPAllowlist), normalizeStringSlice(right.IPAllowlist)) {
 		return false
@@ -1096,4 +1117,29 @@ func normalizeStringSlice(input []string) []string {
 		return nil
 	}
 	return input
+}
+
+func normalizedMigrationModelAccess(mode string, allowed []string) (string, []string) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	seen := map[string]bool{}
+	values := make([]string, 0, len(allowed))
+	for _, value := range allowed {
+		value = strings.TrimSpace(value)
+		if value != "" && !seen[value] {
+			seen[value] = true
+			values = append(values, value)
+		}
+	}
+	slices.Sort(values)
+	if mode == "" {
+		if len(values) > 0 {
+			mode = server.ModelAccessModeRestricted
+		} else {
+			mode = server.ModelAccessModeInherit
+		}
+	}
+	if mode == server.ModelAccessModeInherit {
+		values = nil
+	}
+	return mode, values
 }

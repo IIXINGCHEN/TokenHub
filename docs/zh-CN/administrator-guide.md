@@ -26,6 +26,16 @@ Language: [English](../administrator-guide.md) | 简体中文 | [日本語](../j
 7. 用 Model Playground 和请求日志验证链路。
 8. 在大规模发放 Key 前检查用量归因。
 
+## 模型演练场诊断
+
+从控制台打开「模型演练场」，可以通过与网关流量相同的路由和 Provider 适配器验证模型。每个 assistant 轮次都保留独立的紧凑诊断摘要，包括返回模式、网关实测首 Token 时间（TTFT）、输出吞吐、总耗时、完整上下文输入 Tokens、输出 Tokens、估算成本、本地完成时间和 Request ID。展开「诊断详情」可查看毫秒级时间及实际响应详情。除非用户明确导出，否则会话只保留在当前浏览器页面。
+
+TokenHub 会向演练场输出统一的 SSE 事件格式。所选上游支持流式时，TTFT 从网关接收请求计到首个内容增量，输出吞吐按首个到最后一个内容增量之间的时长计算。上游只支持非流式响应时，TokenHub 自动退化为缓冲模式，将 TTFT 标为不适用，并展示端到端输出吞吐，不伪造首 Token 指标。停止请求会保留已生成的部分文本并把候选标为已取消；只有 Provider 返回权威 Token 用量时才展示对应数值。
+
+重跑某个 assistant 轮次会为该轮创建新候选，并移除后续轮次，防止新分支悄悄复用旧上下文。切换模型默认新建会话；如需沿用上下文，必须显式选择。参数控件以所选模型声明的 `supported_parameters` 为准，避免发送模型目录已标记为不支持的参数。
+
+所有获准使用演练场的用户都能查看性能、用量、Request ID 以及自己的响应详情。Provider、资源、上游 Request ID 和逐次路由尝试仅对拥有路由读取权限的角色展示。成本会明确标为「估算」，因为它采用对外模型配置价格，而不是上游账单。
+
 ## API Key 归属与用量归因
 
 发放 API Key 时，应在「归属用户」中选择实际使用人。发放人仍保留在审计元数据中，但 Key 的用量会统计到归属用户。平台管理员可以选择任一启用用户；团队负责人只能选择本团队的启用用户；普通用户只能把 Key 归属给自己。
@@ -88,6 +98,18 @@ Provider 连接信息和项目限制仍按线路配置。编辑单条 Provider �
 如果私有项目只能调用内部模型，可为内部 Provider 路由设置 `include`，并选中这些私有项目；再为对应的外部 Provider 路由设置 `exclude`，选择同一批项目。这样私有项目只会命中内部线路，其他项目仍走外部 Provider。
 
 项目作用域也会影响模型发现：除了模型启用状态和 API Key 模型白名单外，只有调用方 API Key 所属项目至少存在一条已启用且符合项目作用域的路由时，对外模型才会出现在 `GET /v1/models` 中。
+
+### 作用域路由策略
+
+可在「作用域策略」中为全局网关、项目或 API Key 绑定独立路由策略。TokenHub 按 API Key、项目、全局的顺序解析且只选择一个有效策略。一旦命中更高优先级的绑定，即使该策略已停用、存在冲突或筛选后无合格候选，也会安全拒绝而不会回退到低优先级作用域。每个作用域对象最多绑定一个策略；未绑定的策略定义可以提前准备，不影响流量。
+
+模型访问权先于路由执行。项目和 API Key 均支持 `inherit`（继承）与 `restricted`（限制）模式。限制列表会与所有上层列表取交集，因此 API Key 不能扩大项目权限；`restricted` 且列表为空表示禁止全部模型。为保持兼容，在访问模式上线前创建、且模式与列表均为空的记录仍按继承处理。`GET /v1/models` 使用同一有效访问范围，并要求至少存在一条被有效路由策略允许的路由。
+
+作用域策略可约束模型名、Provider、Provider Resource、必需路由标签、资源地域和资源环境，也可覆盖路由算法。路由标签在模型路由上配置，地域与环境在 Provider Resource 上配置。已有的路由项目作用域会与这些约束取交集。流量分配、会话/缓存亲和、半开恢复和故障转移都在筛选之后运行，不会把已排除路由重新加回候选池。因此内部模型专属策略会安全失败，而不会静默跨界到外部 Provider。
+
+策略预览/模拟面板接收项目、API Key 和模型，展示有效策略、访问判定、最终路由，以及每个候选的安全允许/排除原因。策略失败使用 `routing_policy_unavailable`、`routing_policy_conflict` 和 `routing_policy_no_candidate` 等可诊断错误码，不暴露凭据。请求日志记录 `routing_policy_id`、`routing_policy_scope` 和 `routing_policy_priority`；通用策略创建/更新/删除以及显式绑定/解绑操作也会写入管理员审计事件。
+
+管理 API 通过 `/api/admin/resources/routing-policies` 提供通用资源 CRUD，并提供 `POST /api/admin/routing-policies/{id}/bind`、`POST /api/admin/routing-policies/{id}/unbind` 和 `POST /api/admin/routing-policies/simulate`。同一执行规则适用于 OpenAI 兼容模型请求、Anthropic Messages、图像生成和管理员 Playground。
 
 ## Provider 资源自动恢复
 

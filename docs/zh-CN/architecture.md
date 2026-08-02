@@ -129,8 +129,10 @@ sequenceDiagram
 
     C->>G: Bearer 项目 API Key + 模型请求
     G->>S: 校验 Key、项目、到期时间、IP 白名单
+    G->>G: 对项目与 API Key 模型权限取交集
     G->>S: 检查配额与并发租约，创建调用上下文
     G->>S: 查询活跃且健康的 Provider / Resource / Route
+    G->>G: 解析 API Key、项目或全局策略，筛选候选路由
     G->>G: 按策略、权重与会话亲和生成尝试顺序
     loop 可回退的候选路由
         G->>A: 统一请求 + 路由选择
@@ -143,6 +145,8 @@ sequenceDiagram
 ```
 
 路由筛选会跳过非活跃或不健康的 Provider、Provider Resource 和 Route，但有一个例外：冷却期已过的资源会作为半开候选重新进入候选池。第一个选中它的请求通过把冷却截止时间向后推进来占用这次试探，因此并发请求仍会被拒绝，而试探失败时下一个（更长的）冷却窗口已经就位。只有该次试探自身成功才会关闭熔断器并自动恢复资源，无需管理员介入——熔断触发时已经在途的请求无法把资源救活；反复失败则按指数退避加长窗口，上限为 `TOKENHUB_RESOURCE_COOLDOWN_MAX_SECONDS`。被管理员禁用的资源永远不会被重新纳入。非流式调用依次尝试候选路由。已开始输出的流无法安全切换到另一条上游路由；Responses 流式仅选择声明 `response_stream` 能力的适配器。对于 `openai_codex` 路由，系统可根据请求与 Key 派生会话亲和键，并持久化资源绑定以保持会话连续性。
+
+项目与 API Key 的模型访问是路由选择前的显式最小权限层：限制列表互相取交集，限制且空列表禁止全部模型，而旧记录的空模式仍保持继承。作用域路由策略以 `routing-policies` 种类的可审计 `AdminResource` 记录保存。运行时按 API Key → 项目 → 全局的严格优先级最多选择一个绑定，然后将其 Provider、资源、模型、标签、地域和环境约束与路由项目作用域取交集。已停用、冲突或候选为空的高优先级绑定会安全拒绝。策略覆盖、亲和、半开恢复和故障转移只在筛选后的候选中运行。有效策略 ID、作用域与优先级会复制到请求审计记录。
 
 ## 鉴权、网络与健康检查
 
@@ -159,7 +163,7 @@ Provider API Key、Provider Resource 凭证、账单连接器凭证和原始账�
 | 类别 | 核心实体 | 用途 |
 | --- | --- | --- |
 | 租户与凭证 | `Project`、`APIKey`、`AdminUser`、`AdminSession` | 项目归属、调用权限与管理会话 |
-| 路由配置 | `Provider`、`ProviderResource`、`ProviderModel`、`Model`、`ModelRoute` | 上游渠道、资源池、上游模型库存、对外模型和路由规则 |
+| 路由配置 | `Provider`、`ProviderResource`、`ProviderModel`、`Model`、`ModelRoute`、`AdminResource (routing-policies)` | 上游渠道、资源池、上游模型库存、对外模型、路由规则和作用域策略绑定 |
 | 治理与计量 | `QuotaBucket`、`UsageRecord`、`ProviderResourceBucket`、`InFlightLease` | 配额、Token 与成本计量、跨副本并发控制 |
 | 外部账单 | `BillingConnector`、`BillingRecord`、`BillingRawSnapshot`、`BillingSyncRun` | 云厂商账单采集、规范化、同步断点和运行历史 |
 | 多实例协调 | `ClusterLease`、`ClusterTaskState`、`AdapterSessionBinding` | 配置同步、集群操作与 Codex 会话资源绑定 |
