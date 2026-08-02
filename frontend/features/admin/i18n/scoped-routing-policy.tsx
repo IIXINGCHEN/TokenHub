@@ -7,8 +7,6 @@ const scopedRoutingPolicyKeys = {
   keyEmptyHelp: "restricted 且留空表示禁止此 Key 访问任何模型。",
   routeTagHelp: "作用域策略可要求候选路由同时具备这些标签。",
   projectSectionHelp: "项目允许列表先于路由执行，项目内 API Key 只能在此范围内进一步收窄。",
-  intersectionHelp: "Key 的允许列表会与项目范围取交集，不能扩大项目权限。",
-  emptyProjectHelp: "不选择任何模型表示禁止项目访问全部模型。",
 } as const;
 
 export const scopedRoutingPolicyTranslations = {
@@ -21,8 +19,8 @@ export const scopedRoutingPolicyTranslations = {
     [scopedRoutingPolicyKeys.keyEmptyHelp]: "Restricted with an empty list denies this Key access to every model.",
     [scopedRoutingPolicyKeys.routeTagHelp]: "A scoped policy can require every eligible route to have these tags.",
     [scopedRoutingPolicyKeys.projectSectionHelp]: "The project allowlist runs before routing, and project API Keys can only narrow this scope further.",
-    [scopedRoutingPolicyKeys.intersectionHelp]: "The Key allowlist is intersected with the project scope and cannot expand project permissions.",
-    [scopedRoutingPolicyKeys.emptyProjectHelp]: "Selecting no models denies the project access to every model.",
+    "Key 的允许列表会与项目范围取交集，不能扩大项目权限。": "The Key allowlist is intersected with the project scope and cannot expand project permissions.",
+    "不选择任何模型表示禁止项目访问全部模型。": "Selecting no models denies the project access to every model.",
     "作用域策略": "Scoped Policies", "作用域路由策略": "Scoped Routing Policies", "作用域策略列表": "Scoped Policy List", "新建作用域策略": "Create Scoped Policy",
     "作用域": "Scope", "绑定对象": "Bound Target", "路由算法": "Routing Strategy", "允许的 Provider": "Allowed Providers", "允许的 Provider 资源": "Allowed Provider Resources", "允许的模型": "Allowed Models",
     "必需路由标签，逗号分隔": "Required route tags, comma-separated", "允许地域，逗号分隔": "Allowed regions, comma-separated", "允许环境，逗号分隔": "Allowed environments, comma-separated",
@@ -42,8 +40,8 @@ export const scopedRoutingPolicyTranslations = {
     [scopedRoutingPolicyKeys.keyEmptyHelp]: "Restricted で空の場合、この Key の全モデルへのアクセスを拒否します。",
     [scopedRoutingPolicyKeys.routeTagHelp]: "スコープポリシーで、すべての候補ルートにこれらのタグを必須とすることができます。",
     [scopedRoutingPolicyKeys.projectSectionHelp]: "Project の許可リストはルーティングより先に適用され、Project API Key はこの範囲をさらに絞り込むことしかできません。",
-    [scopedRoutingPolicyKeys.intersectionHelp]: "Key の許可リストは Project 範囲との共通部分となり、Project の権限を拡張できません。",
-    [scopedRoutingPolicyKeys.emptyProjectHelp]: "モデルを選択しない場合、Project の全モデルへのアクセスを拒否します。",
+    "Key 的允许列表会与项目范围取交集，不能扩大项目权限。": "Key の許可リストは Project 範囲との共通部分となり、Project の権限を拡張できません。",
+    "不选择任何模型表示禁止项目访问全部模型。": "モデルを選択しない場合、Project の全モデルへのアクセスを拒否します。",
     "作用域策略": "スコープポリシー", "作用域路由策略": "スコープルーティングポリシー", "作用域策略列表": "スコープポリシー一覧", "新建作用域策略": "スコープポリシーを作成",
     "作用域": "スコープ", "绑定对象": "バインド対象", "路由算法": "ルーティング戦略", "允许的 Provider": "許可 Provider", "允许的 Provider 资源": "許可 Provider リソース", "允许的模型": "許可モデル",
     "必需路由标签，逗号分隔": "必須ルートタグ（カンマ区切り）", "允许地域，逗号分隔": "許可リージョン（カンマ区切り）", "允许环境，逗号分隔": "許可環境（カンマ区切り）",
