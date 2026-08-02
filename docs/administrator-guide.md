@@ -216,6 +216,16 @@ Manual synchronization may specify `from` and `to` RFC 3339 timestamps. Without 
 
 Connector credentials and raw billing snapshots are AES-GCM encrypted with `TOKENHUB_SECRET_KEY`. They are not returned by admin APIs or written to audit payloads. Keep that key stable across restarts and replicas. The relevant endpoints are `GET/POST /api/admin/billing/connectors`, `PATCH /api/admin/billing/connectors/{id}`, `POST /api/admin/billing/connectors/{id}/test`, `POST /api/admin/billing/connectors/{id}/sync`, `GET /api/admin/billing/records`, and `GET /api/admin/billing/sync-runs`.
 
+## Cost Reconciliation
+
+Platform administrators can compare synchronized Provider bills with TokenHub usage from **Cost Billing → Cost Reconciliation Rules**. A rule selects one billing connector, detail/hour/day/month granularity, matching dimensions, an IANA time zone, one ISO currency, absolute and ratio tolerances, a detail time window, a billing-delay window, and an optional schedule. Currency is always a matching dimension, so separate rules are required for separate currencies. Because TokenHub usage costs are stored in USD, each rule records a fixed `1 USD = target currency` exchange rate; USD rules require a rate of `1`. Optional Provider-side mappings normalize external Provider, resource-account, model, and project values to TokenHub identifiers. Detail rules require `request_id`; aggregate rules can group by Provider, resource account, model, project, and currency.
+
+Running a rule for a selected period produces matched, Provider-only, TokenHub-only, and amount-mismatch counts, totals for both sides, the difference, likely causes, and drill-down source record IDs. Monetary calculations use six-decimal fixed precision. Detail records with the same normalized dimensions are paired one-to-one by nearest time within the configured window, including TokenHub records just outside a period boundary when they match an in-period Provider bill. Provider records are selected by their usage time rather than ingestion time, so late-arriving bills remain attributable to the original period. Scheduled runs close the most recent complete hour, day, or month after the configured billing delay.
+
+Each result stores the complete rule snapshot, rule version and hash, input hash, actor, timestamps, and audit events. Recalculation uses the stored rule snapshot. If the source rows are unchanged, the input hash and classified amounts are reproducible. Lock a successful result to prevent later recalculation. CSV exports contain all difference rows and source references by default, without a silent row limit; Provider credentials and raw snapshots are never included, and resource-account identifiers are masked in both API and CSV output.
+
+The relevant endpoints are `GET/POST /api/admin/billing/reconciliation-rules`, `GET/PATCH /api/admin/billing/reconciliation-rules/{id}`, `POST /api/admin/billing/reconciliation-rules/{id}/run`, `GET /api/admin/billing/reconciliations`, `GET /api/admin/billing/reconciliations/{id}`, and the `{id}/lock`, `{id}/recalculate`, and `{id}/export` actions. These endpoints are restricted to platform administrators.
+
 ## Security Checklist
 
 | Control | Requirement |

@@ -14,10 +14,12 @@ func (s *Server) registerBillingRoutes() {
 	s.mux.HandleFunc("/api/admin/billing/connectors/", s.handleAdminBillingConnectorItem)
 	s.mux.HandleFunc("/api/admin/billing/records", s.handleAdminBillingRecords)
 	s.mux.HandleFunc("/api/admin/billing/sync-runs", s.handleAdminBillingSyncRuns)
+	s.registerReconciliationRoutes()
 }
 
 func (s *Server) StartBillingScheduler() {
 	s.billing.StartScheduler(30 * time.Second)
+	s.reconciliation.StartScheduler(30 * time.Second)
 }
 
 func (s *Server) handleAdminBillingConnectors(w http.ResponseWriter, r *http.Request) {

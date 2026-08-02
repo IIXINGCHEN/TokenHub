@@ -7,6 +7,7 @@ import { compactNumber, formatMoney, formatNumber } from "../domain/formatting";
 import { countWithUnit, displayText, languageLocale, tx } from "../i18n/runtime";
 import { adminFetch, readAdminError } from "../resources/payloads";
 import { DataSection, SimpleTable, StatusPill } from "../shared/ui";
+import { ReconciliationManager } from "./billing-reconciliation";
 
 export function UsageView({ data, user }: { data: AppData; user: AdminUser }) {
   const modelBreakdown = data.breakdown.models ?? [];
@@ -463,6 +464,7 @@ export function BillingView({
   return (
     <>
       {appRole(user.role) === "admin" ? <BillingConnectorManager api={api} data={data} loading={loading} onReload={onReload} /> : null}
+      {appRole(user.role) === "admin" ? <ReconciliationManager api={api} data={data} loading={loading} onReload={onReload} /> : null}
       {showMemberBreakdown ? (
         <div className="two-column">
           {costCenterSection}

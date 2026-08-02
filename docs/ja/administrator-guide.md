@@ -216,6 +216,16 @@ Aliyun では請求 RPC Base URL、AccessKey ID、AccessKey Secret、ソース�
 
 コネクター認証情報と生の請求スナップショットは `TOKENHUB_SECRET_KEY` から派生した AES-GCM で暗号化され、管理 API や監査 Payload には出力されません。再起動や複数レプリカ間でこのキーを安定して保持してください。関連エンドポイントは `GET/POST /api/admin/billing/connectors`、`PATCH /api/admin/billing/connectors/{id}`、`POST /api/admin/billing/connectors/{id}/test`、`POST /api/admin/billing/connectors/{id}/sync`、`GET /api/admin/billing/records`、`GET /api/admin/billing/sync-runs` です。
 
+## コスト照合
+
+プラットフォーム管理者は「コスト請求 → コスト照合ルール」で、同期済みの Provider 請求と TokenHub の使用量を比較できます。ルールでは、1 つの請求コネクター、明細/時間/日/月の粒度、照合ディメンション、IANA タイムゾーン、1 つの ISO 通貨、金額と比率の許容差、明細時間ウィンドウ、請求遅延ウィンドウ、任意のスケジュールを指定します。通貨は常に照合ディメンションであるため、通貨ごとに別のルールが必要です。TokenHub の使用量コストは USD で保存されるため、各ルールに固定の「1 USD = 対象通貨」レートを記録し、USD ルールでは `1` が必須です。任意の Provider 側マッピングで、外部の Provider、リソースアカウント、モデル、プロジェクト値を TokenHub 識別子に正規化できます。明細ルールには `request_id` が必須で、集計ルールは Provider、リソースアカウント、モデル、プロジェクト、通貨でグループ化できます。
+
+選択した請求期間でルールを実行すると、一致、Provider のみ、TokenHub のみ、金額不一致の 4 種類の件数、両側の合計、差異、考えられる原因、ドリルダウン可能なソースレコード ID が生成されます。金額計算には小数点以下 6 桁の固定精度を使用します。正規化ディメンションが同じ明細は、設定ウィンドウ内で最も近い時刻に基づいて 1 対 1 で照合されます。期間境界の外側にある TokenHub レコードも、期間内の Provider 請求と一致する場合は結果に含まれます。Provider レコードは取り込み時刻ではなく利用時刻で期間に配賦されるため、遅れて到着した請求も元の期間に含まれます。定期実行では、設定した請求遅延を待ってから直近の完了済み時間、日、または月を照合します。
+
+各結果には、完全なルールスナップショット、ルールのバージョンとハッシュ、入力ハッシュ、実行者、時刻、監査イベントが保存されます。再計算では保存済みのルールスナップショットを使用し、ソース行が変わらなければ入力ハッシュと分類金額を再現できます。成功した結果をロックすると、以後の再計算を禁止できます。CSV はデフォルトで全差異行とソース参照を暗黙の行数制限なしでエクスポートします。Provider 認証情報や生スナップショットは含まれず、リソースアカウント識別子は管理 API と CSV の両方でマスクされます。
+
+関連エンドポイントは `GET/POST /api/admin/billing/reconciliation-rules`、`GET/PATCH /api/admin/billing/reconciliation-rules/{id}`、`POST /api/admin/billing/reconciliation-rules/{id}/run`、`GET /api/admin/billing/reconciliations`、`GET /api/admin/billing/reconciliations/{id}`、および `{id}/lock`、`{id}/recalculate`、`{id}/export` アクションです。これらはプラットフォーム管理者だけが利用できます。
+
 ## セキュリティチェックリスト
 
 | コントロール | 要件 |
