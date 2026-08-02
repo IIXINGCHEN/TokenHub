@@ -28,7 +28,55 @@ func publicKeys(keys []APIKey) []APIKey {
 }
 
 func hydrateAPIKey(key *APIKey) {
+	mode, allowed, err := normalizeModelAccess(key.ModelAccessMode, key.Allowed)
+	if err != nil {
+		mode, allowed = ModelAccessModeRestricted, []string{}
+	}
+	key.ModelAccessMode = mode
+	key.Allowed = allowed
 	key.AllowedModels = AllowedModelSet(key.Allowed)
+}
+
+func hydrateProject(project *Project) {
+	mode, allowed, err := normalizeModelAccess(project.ModelAccessMode, project.AllowedModels)
+	if err != nil {
+		mode, allowed = ModelAccessModeRestricted, []string{}
+	}
+	project.ModelAccessMode = mode
+	project.AllowedModels = allowed
+}
+
+func normalizeModelAccess(mode string, allowed []string) (string, []string, error) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	allowed = uniqueStrings(allowed)
+	sort.Strings(allowed)
+	if mode == "" {
+		if len(allowed) > 0 {
+			mode = ModelAccessModeRestricted
+		} else {
+			mode = ModelAccessModeInherit
+		}
+	}
+	switch mode {
+	case ModelAccessModeInherit:
+		return mode, []string{}, nil
+	case ModelAccessModeRestricted:
+		return mode, allowed, nil
+	default:
+		return "", nil, NewHTTPError(400, "invalid_model_access_mode", "model_access_mode must be inherit or restricted")
+	}
+}
+
+func modelAllowedByScopes(project Project, key APIKey, modelName string) bool {
+	hydrateProject(&project)
+	hydrateAPIKey(&key)
+	if project.ModelAccessMode == ModelAccessModeRestricted && !AllowedModelSet(project.AllowedModels)[modelName] {
+		return false
+	}
+	if key.ModelAccessMode == ModelAccessModeRestricted && !key.AllowedModels[modelName] {
+		return false
+	}
+	return true
 }
 
 func publicKey(key APIKey) APIKey {

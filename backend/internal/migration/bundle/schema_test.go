@@ -134,6 +134,40 @@ func TestValidateJSONAcceptsMinuteRateLimits(t *testing.T) {
 	}
 }
 
+func TestValidateJSONAcceptsModelAccessModesAndRouteTags(t *testing.T) {
+	payload, err := json.Marshal(map[string]any{
+		"schema_version": SchemaVersion,
+		"source": map[string]any{
+			"adapter": "tokenhub", "adapter_version": "1.1.0",
+		},
+		"generated_at": "2026-08-02T01:00:00Z",
+		"projects": []map[string]any{{
+			"external_ref": map[string]any{"system": "tokenhub", "id": "project/internal"},
+			"spec": map[string]any{
+				"name": "Internal", "status": "active", "model_access_mode": "restricted", "allowed_models": []string{"internal-model"},
+			},
+		}},
+		"api_keys": []map[string]any{{
+			"external_ref": map[string]any{"system": "tokenhub", "id": "key/internal"},
+			"spec": map[string]any{
+				"name": "Internal", "status": "active", "model_access_mode": "restricted", "allowed_models": []string{},
+			},
+		}},
+		"routes": []map[string]any{{
+			"external_ref": map[string]any{"system": "tokenhub", "id": "route/internal"},
+			"spec": map[string]any{
+				"provider_model": "internal-model", "status": "active", "tags": []string{"internal", "compliant"},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := ValidateJSON(payload); err != nil {
+		t.Fatalf("model access modes and route tags should validate: %v", err)
+	}
+}
+
 func TestValidateJSONRejectsInvalidQuotaPolicyMinuteLimits(t *testing.T) {
 	for _, test := range []struct {
 		name  string

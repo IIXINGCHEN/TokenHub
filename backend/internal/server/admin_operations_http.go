@@ -54,7 +54,17 @@ func (s *Server) handleAdminResources(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusAccepted, map[string]any{"approval_required": true, "approval": approval})
 				return
 			}
-			resource := s.store.CreateResource(kind, req)
+			var resource AdminResource
+			if kind == routingPolicyResourceKind {
+				var err error
+				resource, err = s.store.CreateRoutingPolicy(req)
+				if err != nil {
+					writeError(w, r, err)
+					return
+				}
+			} else {
+				resource = s.store.CreateResource(kind, req)
+			}
 			s.recordAdminAudit(r, user, "create", kind, resource.ID, "", resource)
 			writeJSON(w, http.StatusCreated, resource)
 		default:

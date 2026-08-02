@@ -35,6 +35,8 @@ export type Project = {
   teams?: ProjectTeam[];
   owner_user_id?: string;
   cost_center?: string;
+  model_access_mode?: "inherit" | "restricted";
+  allowed_models?: string[];
   status: string;
   default_quota_ref?: string;
   created_at?: string;
@@ -49,6 +51,7 @@ export type APIKey = {
   key_prefix: string;
   key_suffix: string;
   allowed_models: string[];
+  model_access_mode?: "inherit" | "restricted";
   ip_allowlist?: string[];
   status: string;
   limits?: Record<string, number>;
@@ -332,6 +335,7 @@ export type ModelRoute = {
   strategy?: string;
   project_scope?: "all" | "include" | "exclude";
   project_ids?: string[];
+  tags?: string[];
   last_used_at?: string;
 };
 
@@ -562,6 +566,9 @@ export type RequestLog = {
   provider_id?: string;
   provider_resource_id?: string;
   provider_model?: string;
+  routing_policy_id?: string;
+  routing_policy_scope?: string;
+  routing_policy_priority?: number;
   status_code: number;
   error_code?: string;
   latency_ms: number;
@@ -695,6 +702,7 @@ export type ViewKey =
   | "providers"
   | "models"
   | "routes"
+  | "routing-policies"
   | "projects"
   | "project-members"
   | "api-keys"
@@ -728,6 +736,7 @@ export const viewRoutes: Record<ViewKey, string> = {
   providers: "/providers",
   models: "/models",
   routes: "/routes",
+  "routing-policies": "/routing-policies",
   projects: "/projects",
   "project-members": "/project-members",
   "api-keys": "/api-keys",

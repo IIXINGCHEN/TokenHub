@@ -518,6 +518,14 @@ func (s *Server) processImageJob(work imageJobWork) {
 	defer cancel()
 	routes, routeErr := s.imageRouteCandidates(job.Model)
 	if routeErr != nil {
+		routeErr = s.annotateRoutingPolicyForCandidateError(&work.call, routeErr)
+		httpErr := AsHTTPError(routeErr)
+		s.finishImageJobFailure(work, job, RouteSelection{}, Usage{}, httpErr.Status, httpErr.Code, httpErr.Message)
+		return
+	}
+	routes, resolution, routeErr := s.resolveScopedRoutingPolicy(work.call, routes)
+	applyRoutingPolicyResolution(&work.call, resolution)
+	if routeErr != nil {
 		httpErr := AsHTTPError(routeErr)
 		s.finishImageJobFailure(work, job, RouteSelection{}, Usage{}, httpErr.Status, httpErr.Code, httpErr.Message)
 		return

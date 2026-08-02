@@ -187,6 +187,7 @@ type Store interface {
 	ListAuditEvents() []AuditEvent
 	RecordAuditEvent(event AuditEvent)
 	CreateResource(kind string, resource AdminResource) AdminResource
+	CreateRoutingPolicy(resource AdminResource) (AdminResource, error)
 	ListResources(kind string) []AdminResource
 	UpdateResource(kind string, id string, patch AdminResource) (AdminResource, error)
 	DeleteResource(kind string, id string) error

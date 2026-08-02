@@ -10,3 +10,5 @@ Current contract notes:
   embedded as plaintext bundle fields.
 - `quota_policies` is reserved in the v1 bundle shape but is not yet
   consumed by the TokenHub sink.
+- Version 1.1 adds project/API-key model access modes and route tags while
+  preserving compatibility with 1.0 bundles that omit those fields.

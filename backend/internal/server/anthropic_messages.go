@@ -36,7 +36,6 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		writeAnthropicError(w, r, err)
 		return
 	}
-
 	routed, ok := s.startAnthropicRoutedCall(w, r, project, key, req)
 	if !ok {
 		return
@@ -45,7 +44,6 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		s.handleAnthropicMessagesStream(w, r, routed, req)
 		return
 	}
-
 	resp, route, usage, attempts, err := s.executeRoutedAnthropicMessages(r, routed, req)
 	if err != nil {
 		s.finishFailedRoutedCall(r, routed, attempts, usage, err, req.Raw)
@@ -161,6 +159,13 @@ func (s *Server) startAnthropicRoutedCall(w http.ResponseWriter, r *http.Request
 	}
 	routes, err := s.store.SelectRouteCandidates(req.Model)
 	if err != nil {
+		err = s.annotateRoutingPolicyForCandidateError(&call, err)
+		s.finishFailedRoutedCall(r, RoutedCall{Call: call}, nil, Usage{}, err, req.Raw)
+		writeAnthropicError(w, r, err)
+		return RoutedCall{}, false
+	}
+	routes, err = s.resolveScopedRoutingPolicyForCall(&call, routes)
+	if err != nil {
 		s.finishFailedRoutedCall(r, RoutedCall{Call: call}, nil, Usage{}, err, req.Raw)
 		writeAnthropicError(w, r, err)
 		return RoutedCall{}, false
@@ -174,7 +179,6 @@ func (s *Server) startAnthropicRoutedCall(w http.ResponseWriter, r *http.Request
 	call.Affinity = affinity
 	return RoutedCall{Call: call, Routes: s.planRouteOrder(call, routes), Affinity: affinity}, true
 }
-
 func (s *Server) executeRoutedAnthropicMessages(
 	r *http.Request,
 	routed RoutedCall,
