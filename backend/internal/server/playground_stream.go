@@ -236,6 +236,19 @@ func (s *Server) handleAdminPlaygroundChatStream(w http.ResponseWriter, r *http.
 
 	routed, err := s.preparePlaygroundRoutedCall(r.Context(), user, req, admittedAt)
 	if err != nil {
+		httpErr := AsHTTPError(err)
+		s.finishRoutedCall(r, GatewayCallCompletion{
+			Kind:            CompletionKindPlayground,
+			Call:            routed.Call,
+			StatusCode:      httpErr.Status,
+			ErrorCode:       httpErr.Code,
+			ErrorMessage:    httpErr.Message,
+			RequestPayload:  req,
+			ResponsePayload: auditErrorPayload(err, routed.Call.RequestID),
+		})
+		s.recordAdminAudit(r, user, "chat_failed", "playground", req.Model, "", map[string]any{
+			"model": req.Model, "attempts": []PlaygroundRouteAttempt{}, "error": httpErr.Code,
+		})
 		writeError(w, r, err)
 		return
 	}
@@ -307,14 +320,6 @@ func validatePlaygroundRequest(req *ChatCompletionRequest) error {
 }
 
 func (s *Server) preparePlaygroundRoutedCall(ctx context.Context, user AdminUser, req ChatCompletionRequest, startedAt time.Time) (RoutedCall, error) {
-	routes, err := s.store.SelectRouteCandidates(req.Model)
-	if err != nil {
-		return RoutedCall{}, err
-	}
-	routes, err = s.filterCodexRoutesByModel(ctx, req.Model, routes)
-	if err != nil {
-		return RoutedCall{}, err
-	}
 	call := CallContext{
 		RequestID:  NewID("pg"),
 		Project:    Project{ID: "admin_playground", Name: "Admin Playground", Status: StatusActive},
@@ -324,7 +329,23 @@ func (s *Server) preparePlaygroundRoutedCall(ctx context.Context, user AdminUser
 		measuredAt: startedAt,
 	}
 	routed := RoutedCall{Call: call}
-	routed.Routes = s.planRouteOrder(call, routes)
+	routes, err := s.store.SelectRouteCandidates(req.Model)
+	if err != nil {
+		err = s.annotateRoutingPolicyForCandidateError(&routed.Call, err)
+		return routed, err
+	}
+	routes, err = s.filterCodexRoutesByModel(ctx, req.Model, routes)
+	if err != nil {
+		err = s.annotateRoutingPolicyForCandidateError(&routed.Call, err)
+		return routed, err
+	}
+	var resolution RoutingPolicyResolution
+	routes, resolution, err = s.resolveScopedRoutingPolicy(routed.Call, routes)
+	applyRoutingPolicyResolution(&routed.Call, resolution)
+	if err != nil {
+		return routed, err
+	}
+	routed.Routes = s.planRouteOrder(routed.Call, routes)
 	return routed, nil
 }
 

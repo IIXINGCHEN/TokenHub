@@ -394,15 +394,17 @@ func TestPlaygroundGlobalRoutingPolicyAnnotatesMissingBaseCandidates(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp := doJSON(t, New(store).Handler(), http.MethodPost, "/api/admin/playground/chat", map[string]any{
-		"model": model.Name, "messages": []map[string]any{{"role": "user", "content": "no route"}},
-	}, "")
-	if resp.Code != http.StatusServiceUnavailable {
-		t.Fatalf("playground missing base routes: status=%d body=%s", resp.Code, resp.Body)
-	}
-	logs := store.ListRequestLogs()
-	if len(logs) == 0 || logs[len(logs)-1].RoutingPolicyID != policy.ID || logs[len(logs)-1].RoutingPolicyScope != RoutingPolicyScopeGlobal {
-		t.Fatalf("playground no-route log missing policy metadata: %+v", logs)
+	for _, path := range []string{"/api/admin/playground/chat", "/api/admin/playground/chat/stream"} {
+		resp := doJSON(t, New(store).Handler(), http.MethodPost, path, map[string]any{
+			"model": model.Name, "messages": []map[string]any{{"role": "user", "content": "no route"}},
+		}, "")
+		if resp.Code != http.StatusServiceUnavailable {
+			t.Fatalf("%s missing base routes: status=%d body=%s", path, resp.Code, resp.Body)
+		}
+		logs := store.ListRequestLogs()
+		if len(logs) == 0 || logs[len(logs)-1].RoutingPolicyID != policy.ID || logs[len(logs)-1].RoutingPolicyScope != RoutingPolicyScopeGlobal {
+			t.Fatalf("%s no-route log missing policy metadata: %+v", path, logs)
+		}
 	}
 }
 

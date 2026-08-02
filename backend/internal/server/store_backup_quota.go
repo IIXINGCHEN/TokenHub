@@ -336,9 +336,7 @@ func (s *GormStore) AccessibleModels(key APIKey) []Model {
 		return nil
 	}
 	items := make([]Model, 0, len(models))
-	for _, model := range models {
-		items = append(items, model)
-	}
+	items = append(items, models...)
 	return items
 }
 
@@ -365,29 +363,6 @@ func (s *GormStore) codexImageAllowedByPolicyLocked(project Project, key APIKey,
 			if len(routingPolicyCandidateReasons(call, route, policy)) == 0 {
 				return true
 			}
-		}
-	}
-	return false
-}
-
-func (s *GormStore) codexImageGenerationAvailableLocked() bool {
-	var providers []Provider
-	if err := s.db.Where("type = ? AND status = ? AND healthy = ?", ProviderOpenAICodex, StatusActive, true).
-		Find(&providers).Error; err != nil || len(providers) == 0 {
-		return false
-	}
-	providerIDs := make([]string, 0, len(providers))
-	for _, provider := range providers {
-		providerIDs = append(providerIDs, provider.ID)
-	}
-	var resources []ProviderResource
-	if err := s.db.Where("provider_id IN ? AND status = ? AND healthy = ?", providerIDs, StatusActive, true).
-		Find(&resources).Error; err != nil {
-		return false
-	}
-	for _, resource := range resources {
-		if s.codexImageResourceAvailable(resource) {
-			return true
 		}
 	}
 	return false
