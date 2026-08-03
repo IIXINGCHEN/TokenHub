@@ -80,6 +80,12 @@ func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) 
 		writeError(w, r, NewHTTPError(http.StatusBadRequest, "invalid_request", err.Error()))
 		return
 	}
+	originator := strings.ToLower(strings.TrimSpace(r.Header.Get("originator")))
+	if strings.TrimSpace(request.Model) == openAIImageModelName &&
+		(strings.TrimSpace(r.Header.Get("x-codex-image-turn-id")) != "" || strings.HasPrefix(originator, "codex")) {
+		request.Model = codexImageModelName
+		request.ResponseFormat = "b64_json"
+	}
 	if err := normalizeImageGenerationRequest(&request); err != nil {
 		writeError(w, r, err)
 		return
