@@ -274,6 +274,8 @@ func billingConnectorAllowedConfig(connectorType string) map[string]struct{} {
 		"currency":              {},
 		"max_retries":           {},
 		"page_size":             {},
+		"provider_id":           {},
+		"provider_resource_id":  {},
 		"rate_limit_per_second": {},
 		"retry_base_ms":         {},
 	}

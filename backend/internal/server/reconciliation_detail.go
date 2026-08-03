@@ -92,11 +92,12 @@ func calculateDetailReconciliation(
 		group := groups[key]
 		sortReconciliationDetailEntries(group.providers)
 		sortReconciliationDetailEntries(group.usages)
+		matchedUsages := matchReconciliationDetailEntries(group.providers, group.usages, window)
 		usedUsages := make([]bool, len(group.usages))
 		for providerIndex := range group.providers {
 			provider := group.providers[providerIndex]
-			usageIndex := nearestReconciliationUsage(provider, group.usages, usedUsages, window)
-			if usageIndex >= 0 {
+			usageIndex, matched := matchedUsages[providerIndex]
+			if matched {
 				usedUsages[usageIndex] = true
 				usage := group.usages[usageIndex]
 				bucket := reconciliationDetailBucket(key, &provider, &usage)
@@ -155,20 +156,65 @@ func sortReconciliationDetailEntries(entries []reconciliationDetailEntry) {
 	})
 }
 
-func nearestReconciliationUsage(provider reconciliationDetailEntry, usages []reconciliationDetailEntry, used []bool, window time.Duration) int {
-	bestIndex := -1
-	bestDistance := time.Duration(1<<63 - 1)
-	for index := range usages {
-		if used[index] {
-			continue
-		}
-		distance := absoluteReconciliationDuration(provider.occurredAt.Sub(usages[index].occurredAt))
-		if distance <= window && distance < bestDistance {
-			bestIndex = index
-			bestDistance = distance
+type reconciliationMatchScore struct {
+	count    int
+	distance int64
+}
+
+func matchReconciliationDetailEntries(providers []reconciliationDetailEntry, usages []reconciliationDetailEntry, window time.Duration) map[int]int {
+	scores := make([][]reconciliationMatchScore, len(providers)+1)
+	actions := make([][]byte, len(providers)+1)
+	for index := range scores {
+		scores[index] = make([]reconciliationMatchScore, len(usages)+1)
+		actions[index] = make([]byte, len(usages)+1)
+	}
+	for providerIndex := 1; providerIndex <= len(providers); providerIndex++ {
+		actions[providerIndex][0] = 'p'
+	}
+	for usageIndex := 1; usageIndex <= len(usages); usageIndex++ {
+		actions[0][usageIndex] = 'u'
+	}
+	for providerIndex := 1; providerIndex <= len(providers); providerIndex++ {
+		for usageIndex := 1; usageIndex <= len(usages); usageIndex++ {
+			best := scores[providerIndex-1][usageIndex]
+			action := byte('p')
+			if candidate := scores[providerIndex][usageIndex-1]; reconciliationMatchScoreBetter(candidate, best) {
+				best = candidate
+				action = 'u'
+			}
+			distance := absoluteReconciliationDuration(providers[providerIndex-1].occurredAt.Sub(usages[usageIndex-1].occurredAt))
+			if distance <= window {
+				candidate := scores[providerIndex-1][usageIndex-1]
+				candidate.count++
+				candidate.distance += int64(distance)
+				if reconciliationMatchScoreBetter(candidate, best) || candidate == best {
+					best = candidate
+					action = 'm'
+				}
+			}
+			scores[providerIndex][usageIndex] = best
+			actions[providerIndex][usageIndex] = action
 		}
 	}
-	return bestIndex
+
+	matches := map[int]int{}
+	for providerIndex, usageIndex := len(providers), len(usages); providerIndex > 0 || usageIndex > 0; {
+		switch actions[providerIndex][usageIndex] {
+		case 'm':
+			matches[providerIndex-1] = usageIndex - 1
+			providerIndex--
+			usageIndex--
+		case 'p':
+			providerIndex--
+		default:
+			usageIndex--
+		}
+	}
+	return matches
+}
+
+func reconciliationMatchScoreBetter(left reconciliationMatchScore, right reconciliationMatchScore) bool {
+	return left.count > right.count || left.count == right.count && left.distance < right.distance
 }
 
 func reconciliationEntryOutsideWindow(entry reconciliationDetailEntry, candidates []reconciliationDetailEntry, window time.Duration) bool {

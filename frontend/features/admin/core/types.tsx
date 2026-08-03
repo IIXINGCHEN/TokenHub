@@ -230,6 +230,9 @@ export type ReconciliationItem = {
 export type ReconciliationDetail = {
 	run: ReconciliationRun;
 	items: ReconciliationItem[];
+	total: number;
+	limit: number;
+	offset: number;
 };
 
 export type AdapterDescriptor = {

@@ -34,7 +34,7 @@ func (s *Server) handleAdminReconciliationRules(w http.ResponseWriter, r *http.R
 			writeError(w, r, err)
 			return
 		}
-		s.recordAdminAudit(r, user, "create", "reconciliation_rule", rule.ID, nil, rule)
+		s.recordAdminAudit(r, user, "create", "reconciliation_rule", rule.ID, nil, reconciliationRuleAuditSnapshot(rule))
 		writeJSON(w, http.StatusCreated, rule)
 	default:
 		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
@@ -58,11 +58,21 @@ func (s *Server) handleAdminReconciliationRuleItem(w http.ResponseWriter, r *htt
 		}
 		var request ReconciliationRunRequest
 		if err := decodeJSON(r, &request); err != nil {
-			writeError(w, r, NewHTTPError(http.StatusBadRequest, "invalid_reconciliation_run", "Invalid reconciliation run payload"))
+			httpErr := NewHTTPError(http.StatusBadRequest, "invalid_reconciliation_run", "Invalid reconciliation run payload")
+			s.recordAdminAuditWithStatus(r, user, "reconcile", "billing_reconciliation", parts[0], "failed", httpErr.Code, nil, map[string]any{"rule_id": parts[0], "error_code": httpErr.Code})
+			writeError(w, r, httpErr)
 			return
 		}
 		run, err := s.reconciliation.Run(r.Context(), parts[0], request, "manual", user.ID)
 		if err != nil {
+			httpErr := AsHTTPError(err)
+			resourceID := parts[0]
+			after := any(map[string]any{"rule_id": parts[0], "error_code": httpErr.Code})
+			if run.ID != "" {
+				resourceID = run.ID
+				after = reconciliationAuditSnapshot(run)
+			}
+			s.recordAdminAuditWithStatus(r, user, "reconcile", "billing_reconciliation", resourceID, "failed", httpErr.Code, nil, after)
 			writeError(w, r, err)
 			return
 		}
@@ -89,7 +99,7 @@ func (s *Server) handleAdminReconciliationRuleItem(w http.ResponseWriter, r *htt
 			writeError(w, r, err)
 			return
 		}
-		s.recordAdminAudit(r, user, "update", "reconciliation_rule", updated.ID, before, updated)
+		s.recordAdminAudit(r, user, "update", "reconciliation_rule", updated.ID, reconciliationRuleAuditSnapshot(before), reconciliationRuleAuditSnapshot(updated))
 		writeJSON(w, http.StatusOK, updated)
 	default:
 		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
@@ -128,12 +138,10 @@ func (s *Server) handleAdminReconciliationItem(w http.ResponseWriter, r *http.Re
 			writeError(w, r, err)
 			return
 		}
-		limit := -1
-		if r.URL.Query().Has("limit") {
-			limit = reconciliationListLimit(r, 1000, 5000)
-		}
-		items := s.store.ListReconciliationItems(runID, r.URL.Query().Get("status"), limit)
-		writeJSON(w, http.StatusOK, ReconciliationDetail{Run: run, Items: items})
+		limit := reconciliationListLimit(r, 100, 500)
+		offset := reconciliationListOffset(r)
+		items, total := s.store.ListReconciliationItems(runID, r.URL.Query().Get("status"), limit, offset)
+		writeJSON(w, http.StatusOK, ReconciliationDetail{Run: run, Items: items, Total: total, Limit: limit, Offset: offset})
 		return
 	}
 	switch parts[1] {
@@ -144,6 +152,8 @@ func (s *Server) handleAdminReconciliationItem(w http.ResponseWriter, r *http.Re
 		}
 		before, err := s.store.GetReconciliationRun(runID)
 		if err != nil {
+			httpErr := AsHTTPError(err)
+			s.recordAdminAuditWithStatus(r, user, "lock", "billing_reconciliation", runID, "failed", httpErr.Code, nil, map[string]any{"id": runID, "error_code": httpErr.Code})
 			writeError(w, r, err)
 			return
 		}
@@ -161,11 +171,19 @@ func (s *Server) handleAdminReconciliationItem(w http.ResponseWriter, r *http.Re
 		}
 		before, err := s.store.GetReconciliationRun(runID)
 		if err != nil {
+			httpErr := AsHTTPError(err)
+			s.recordAdminAuditWithStatus(r, user, "recalculate", "billing_reconciliation", runID, "failed", httpErr.Code, nil, map[string]any{"id": runID, "error_code": httpErr.Code})
 			writeError(w, r, err)
 			return
 		}
 		run, err := s.reconciliation.Recalculate(r.Context(), runID)
 		if err != nil {
+			httpErr := AsHTTPError(err)
+			after := any(map[string]any{"id": runID, "error_code": httpErr.Code})
+			if run.ID != "" {
+				after = reconciliationAuditSnapshot(run)
+			}
+			s.recordAdminAuditWithStatus(r, user, "recalculate", "billing_reconciliation", runID, "failed", httpErr.Code, reconciliationAuditSnapshot(before), after)
 			writeError(w, r, err)
 			return
 		}
@@ -182,18 +200,8 @@ func (s *Server) handleAdminReconciliationItem(w http.ResponseWriter, r *http.Re
 			return
 		}
 		status := strings.TrimSpace(r.URL.Query().Get("status"))
-		items := s.store.ListReconciliationItems(runID, status, -1)
-		if status == "" {
-			differences := items[:0]
-			for _, item := range items {
-				if item.Status != ReconciliationMatched {
-					differences = append(differences, item)
-				}
-			}
-			items = differences
-		}
 		s.recordAdminAudit(r, user, "export", "billing_reconciliation", run.ID, nil, reconciliationAuditSnapshot(run))
-		writeReconciliationCSV(w, run, items)
+		s.writeReconciliationCSV(w, run, status)
 	default:
 		writeError(w, r, NewHTTPError(http.StatusNotFound, "reconciliation_action_not_found", "Reconciliation action not found"))
 	}
@@ -215,18 +223,15 @@ func reconciliationListLimit(r *http.Request, fallback int, maximum int) int {
 	return limit
 }
 
-func reconciliationAuditSnapshot(run ReconciliationRun) map[string]any {
-	return map[string]any{
-		"id": run.ID, "rule_id": run.RuleID, "connector_id": run.ConnectorID,
-		"status": run.Status, "rule_version": run.RuleVersion, "rule_hash": run.RuleHash,
-		"input_hash": run.InputHash, "period_start": run.PeriodStart, "period_end": run.PeriodEnd,
-		"matched_count": run.MatchedCount, "provider_only_count": run.ProviderOnlyCount,
-		"tokenhub_only_count": run.TokenHubOnlyCount, "amount_mismatch_count": run.AmountMismatchCount,
-		"locked_at": run.LockedAt,
+func reconciliationListOffset(r *http.Request) int {
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	if offset < 0 {
+		return 0
 	}
+	return offset
 }
 
-func writeReconciliationCSV(w http.ResponseWriter, run ReconciliationRun, items []ReconciliationItem) {
+func (s *Server) writeReconciliationCSV(w http.ResponseWriter, run ReconciliationRun, status string) {
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="reconciliation-%s.csv"`, run.ID))
 	_, _ = w.Write([]byte{0xEF, 0xBB, 0xBF})
@@ -235,14 +240,22 @@ func writeReconciliationCSV(w http.ResponseWriter, run ReconciliationRun, items 
 		"status", "bucket_start", "bucket_end", "request_id", "provider", "resource_account", "model", "project", "currency",
 		"provider_amount", "tokenhub_amount", "difference_amount", "difference_ratio", "possible_reason", "provider_record_ids", "tokenhub_record_ids",
 	})
-	for _, item := range items {
-		_ = writer.Write([]string{
-			safeReconciliationCSVCell(item.Status), item.BucketStart.Format("2006-01-02T15:04:05Z07:00"), item.BucketEnd.Format("2006-01-02T15:04:05Z07:00"),
-			safeReconciliationCSVCell(item.RequestID), safeReconciliationCSVCell(item.Provider), safeReconciliationCSVCell(item.ResourceAccountMasked),
-			safeReconciliationCSVCell(item.Model), safeReconciliationCSVCell(item.Project), safeReconciliationCSVCell(item.Currency),
-			item.ProviderAmount, item.TokenHubAmount, item.DifferenceAmount, item.DifferenceRatio, safeReconciliationCSVCell(item.PossibleReason),
-			safeReconciliationCSVCell(strings.Join(item.ProviderRecordIDs, "|")), safeReconciliationCSVCell(strings.Join(item.TokenHubRecordIDs, "|")),
-		})
+	for afterID := ""; ; {
+		items := s.store.ListReconciliationItemBatch(run.ID, status, afterID, status == "", 500)
+		if len(items) == 0 {
+			break
+		}
+		for _, item := range items {
+			_ = writer.Write([]string{
+				safeReconciliationCSVCell(item.Status), item.BucketStart.Format("2006-01-02T15:04:05Z07:00"), item.BucketEnd.Format("2006-01-02T15:04:05Z07:00"),
+				safeReconciliationCSVCell(item.RequestID), safeReconciliationCSVCell(item.Provider), safeReconciliationCSVCell(item.ResourceAccountMasked),
+				safeReconciliationCSVCell(item.Model), safeReconciliationCSVCell(item.Project), safeReconciliationCSVCell(item.Currency),
+				item.ProviderAmount, item.TokenHubAmount, item.DifferenceAmount, item.DifferenceRatio, safeReconciliationCSVCell(item.PossibleReason),
+				safeReconciliationCSVCell(strings.Join(item.ProviderRecordIDs, "|")), safeReconciliationCSVCell(strings.Join(item.TokenHubRecordIDs, "|")),
+			})
+		}
+		afterID = items[len(items)-1].ID
+		writer.Flush()
 	}
 	writer.Flush()
 }

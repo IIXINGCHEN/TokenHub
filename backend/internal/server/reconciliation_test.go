@@ -190,7 +190,7 @@ func TestReconciliationAggregatesPreciseAmountsByCurrencyAndTimezone(t *testing.
 	}
 	cnyRuleResponse := doJSON(t, app, http.MethodPost, "/api/admin/billing/reconciliation-rules", map[string]any{
 		"name": "Daily CNY reconciliation", "connector_id": connector.ID, "granularity": ReconciliationGranularityDay,
-		"match_dimensions": []string{"model", "currency"}, "timezone": "Asia/Shanghai", "currency": "CNY", "usd_exchange_rate": "3.333333",
+		"match_dimensions": []string{"model", "currency"}, "timezone": "Asia/Shanghai", "currency": "CNY", "usd_exchange_rate": "3.333333", "amount_tolerance": "0.000001",
 	}, "")
 	if cnyRuleResponse.Code != http.StatusCreated {
 		t.Fatalf("create CNY reconciliation rule: %d %s", cnyRuleResponse.Code, cnyRuleResponse.Body)
@@ -209,6 +209,10 @@ func TestReconciliationAggregatesPreciseAmountsByCurrencyAndTimezone(t *testing.
 func TestDetailReconciliationMapsDimensionsAndMatchesPeriodBoundariesOneToOne(t *testing.T) {
 	store := NewMemoryStore()
 	connector := createReconciliationTestConnector(t, store, "bcon_reconciliation_mapping")
+	connector.Config = map[string]string{"provider_resource_id": "resource-local"}
+	if err := store.db.Save(&connector).Error; err != nil {
+		t.Fatal(err)
+	}
 	periodStart := time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC)
 	metadata := map[string]string{
 		"provider_id": "external-provider", "provider_resource_id": "external-account", "project_id": "external-project",
@@ -299,7 +303,7 @@ func TestScheduledReconciliationRespectsBillingDelay(t *testing.T) {
 
 func createReconciliationTestConnector(t *testing.T, store *GormStore, id string) BillingConnector {
 	t.Helper()
-	connector := BillingConnector{ID: id, Name: id, Type: BillingConnectorOneAPI, BaseURL: "https://billing.example.test", Status: StatusActive, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	connector := BillingConnector{ID: id, Name: id, Type: BillingConnectorOneAPI, BaseURL: "https://billing.example.test", Status: StatusActive, Config: map[string]string{"provider_id": BillingConnectorOneAPI}, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 	if err := store.db.Create(&connector).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -330,6 +334,11 @@ func createReconciliationBillingRecords(t *testing.T, store *GormStore, records 
 
 func createReconciliationUsageRecords(t *testing.T, store *GormStore, records []UsageRecord) {
 	t.Helper()
+	for index := range records {
+		if records[index].ProviderID == "" {
+			records[index].ProviderID = BillingConnectorOneAPI
+		}
+	}
 	if err := store.db.Create(&records).Error; err != nil {
 		t.Fatal(err)
 	}

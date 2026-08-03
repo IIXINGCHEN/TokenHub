@@ -164,8 +164,11 @@ type ReconciliationItem struct {
 }
 
 type ReconciliationDetail struct {
-	Run   ReconciliationRun    `json:"run"`
-	Items []ReconciliationItem `json:"items"`
+	Run    ReconciliationRun    `json:"run"`
+	Items  []ReconciliationItem `json:"items"`
+	Total  int64                `json:"total"`
+	Limit  int                  `json:"limit"`
+	Offset int                  `json:"offset"`
 }
 
 type ReconciliationStore interface {
@@ -179,7 +182,8 @@ type ReconciliationStore interface {
 	ReplaceReconciliationRun(run ReconciliationRun, items []ReconciliationItem) (ReconciliationRun, error)
 	ListReconciliationRuns(ruleID string, limit int) []ReconciliationRun
 	GetReconciliationRun(id string) (ReconciliationRun, error)
-	ListReconciliationItems(runID string, status string, limit int) []ReconciliationItem
+	ListReconciliationItems(runID string, status string, limit int, offset int) ([]ReconciliationItem, int64)
+	ListReconciliationItemBatch(runID string, status string, afterID string, excludeMatched bool, limit int) []ReconciliationItem
 	LockReconciliationRun(id string, actor string) (ReconciliationRun, error)
 	RecordScheduledReconciliationAudit(run ReconciliationRun)
 }

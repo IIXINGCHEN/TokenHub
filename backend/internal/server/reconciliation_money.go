@@ -8,7 +8,11 @@ import (
 	"strings"
 )
 
-const reconciliationScale int64 = 1_000_000
+const (
+	reconciliationScale       int64 = 1_000_000_000
+	reconciliationOutputScale int64 = 1_000_000
+	reconciliationOutputRatio int64 = reconciliationScale / reconciliationOutputScale
+)
 
 type reconciliationMoney int64
 
@@ -48,20 +52,40 @@ func reconciliationMoneyFromFloat(value float64) (reconciliationMoney, error) {
 	if math.IsNaN(value) || math.IsInf(value, 0) {
 		return 0, fmt.Errorf("invalid floating-point amount")
 	}
-	return parseReconciliationMoney(strconv.FormatFloat(value, 'f', 6, 64))
+	return parseReconciliationMoney(strconv.FormatFloat(value, 'f', 9, 64))
 }
 
 func (value reconciliationMoney) String() string {
+	return formatScaledReconciliationMoney(value, reconciliationScale, 9)
+}
+
+func (value reconciliationMoney) OutputString() string {
 	amount := int64(value)
 	negative := amount < 0
 	if negative {
 		amount = -amount
 	}
-	whole := amount / reconciliationScale
-	fraction := amount % reconciliationScale
+	quotient, remainder := amount/reconciliationOutputRatio, amount%reconciliationOutputRatio
+	if remainder*2 >= reconciliationOutputRatio {
+		quotient++
+	}
+	if negative {
+		quotient = -quotient
+	}
+	return formatScaledReconciliationMoney(reconciliationMoney(quotient), reconciliationOutputScale, 6)
+}
+
+func formatScaledReconciliationMoney(value reconciliationMoney, scale int64, precision int) string {
+	amount := int64(value)
+	negative := amount < 0
+	if negative {
+		amount = -amount
+	}
+	whole := amount / scale
+	fraction := amount % scale
 	formatted := strconv.FormatInt(whole, 10)
 	if fraction != 0 {
-		formatted += "." + strings.TrimRight(fmt.Sprintf("%06d", fraction), "0")
+		formatted += "." + strings.TrimRight(fmt.Sprintf("%0*d", precision, fraction), "0")
 	}
 	if negative && formatted != "0" {
 		return "-" + formatted

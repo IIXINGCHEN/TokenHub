@@ -162,23 +162,48 @@ func (s *GormStore) GetReconciliationRun(id string) (ReconciliationRun, error) {
 	return run, nil
 }
 
-func (s *GormStore) ListReconciliationItems(runID string, status string, limit int) []ReconciliationItem {
-	if limit == 0 || limit > 5000 {
-		limit = 1000
+func (s *GormStore) ListReconciliationItems(runID string, status string, limit int, offset int) ([]ReconciliationItem, int64) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
 	}
-	query := s.db.Where("run_id = ?", strings.TrimSpace(runID)).Order("status asc, bucket_start asc, id asc")
-	if limit > 0 {
-		query = query.Limit(limit)
+	if offset < 0 {
+		offset = 0
 	}
+	query := s.db.Model(&ReconciliationItem{}).Where("run_id = ?", strings.TrimSpace(runID))
 	if status = strings.TrimSpace(status); status != "" {
 		query = query.Where("status = ?", status)
 	}
+	var total int64
+	_ = query.Count(&total).Error
 	var items []ReconciliationItem
-	_ = query.Find(&items).Error
+	_ = query.Order("status asc, bucket_start asc, id asc").Limit(limit).Offset(offset).Find(&items).Error
+	maskReconciliationItems(items)
+	return items, total
+}
+
+func (s *GormStore) ListReconciliationItemBatch(runID string, status string, afterID string, excludeMatched bool, limit int) []ReconciliationItem {
+	if limit <= 0 || limit > 1000 {
+		limit = 500
+	}
+	query := s.db.Where("run_id = ?", strings.TrimSpace(runID))
+	if status = strings.TrimSpace(status); status != "" {
+		query = query.Where("status = ?", status)
+	} else if excludeMatched {
+		query = query.Where("status <> ?", ReconciliationMatched)
+	}
+	if afterID = strings.TrimSpace(afterID); afterID != "" {
+		query = query.Where("id > ?", afterID)
+	}
+	var items []ReconciliationItem
+	_ = query.Order("id asc").Limit(limit).Find(&items).Error
+	maskReconciliationItems(items)
+	return items
+}
+
+func maskReconciliationItems(items []ReconciliationItem) {
 	for index := range items {
 		items[index].ResourceAccountMasked = maskReconciliationIdentifier(items[index].ResourceAccount)
 	}
-	return items
 }
 
 func (s *GormStore) LockReconciliationRun(id string, actor string) (ReconciliationRun, error) {
@@ -214,7 +239,7 @@ func (s *GormStore) RecordScheduledReconciliationAudit(run ReconciliationRun) {
 		ResourceID:    run.ID,
 		Status:        status,
 		Message:       run.ErrorCode,
-		AfterSnapshot: snapshotJSON(run),
+		AfterSnapshot: snapshotJSON(reconciliationAuditSnapshot(run)),
 	})
 }
 

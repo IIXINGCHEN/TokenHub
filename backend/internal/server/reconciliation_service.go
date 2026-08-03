@@ -28,10 +28,14 @@ func (s *ReconciliationService) CreateRule(request ReconciliationRuleRequest, ac
 	rule := reconciliationRuleFromRequest(request)
 	rule.CreatedBy = strings.TrimSpace(actor)
 	rule.UpdatedBy = strings.TrimSpace(actor)
-	if _, err := s.store.GetBillingConnector(rule.ConnectorID, false); err != nil {
+	connector, err := s.store.GetBillingConnector(rule.ConnectorID, false)
+	if err != nil {
 		return ReconciliationRule{}, err
 	}
 	if err := normalizeAndValidateReconciliationRule(&rule); err != nil {
+		return ReconciliationRule{}, err
+	}
+	if err := validateReconciliationConnector(rule, connector); err != nil {
 		return ReconciliationRule{}, err
 	}
 	rule.Version = 1
@@ -48,6 +52,13 @@ func (s *ReconciliationService) UpdateRule(id string, request ReconciliationRule
 	applyReconciliationRulePatch(&rule, request)
 	rule.UpdatedBy = strings.TrimSpace(actor)
 	if err := normalizeAndValidateReconciliationRule(&rule); err != nil {
+		return before, ReconciliationRule{}, err
+	}
+	connector, err := s.store.GetBillingConnector(rule.ConnectorID, false)
+	if err != nil {
+		return before, ReconciliationRule{}, err
+	}
+	if err := validateReconciliationConnector(rule, connector); err != nil {
 		return before, ReconciliationRule{}, err
 	}
 	rule.Version = before.Version + 1
@@ -114,29 +125,50 @@ func (s *ReconciliationService) calculateAndSave(ctx context.Context, run Reconc
 		return run, err
 	}
 	window := time.Duration(run.TimeWindowMinutes) * time.Minute
-	bills, usages, err := s.store.LoadReconciliationInputs(run.ConnectorID, run.PeriodStart, run.PeriodEnd, window)
+	connector, err := s.store.GetBillingConnector(run.ConnectorID, false)
+	var bills []BillingRecord
+	var usages []UsageRecord
 	if err == nil {
+		err = validateReconciliationConnector(ReconciliationRule{Granularity: run.Granularity}, connector)
+	}
+	if err == nil {
+		bills, usages, err = s.store.LoadReconciliationInputs(run.ConnectorID, run.PeriodStart, run.PeriodEnd, window)
+	}
+	if err == nil {
+		usages = scopeReconciliationUsages(run, connector, bills, usages)
 		run, varItems, calculateErr := calculateReconciliation(run, bills, usages)
 		err = calculateErr
 		if err == nil {
 			if replace {
-				return s.store.ReplaceReconciliationRun(run, varItems)
+				var saved ReconciliationRun
+				saved, err = s.store.ReplaceReconciliationRun(run, varItems)
+				if err == nil {
+					return saved, nil
+				}
+			} else {
+				var saved ReconciliationRun
+				saved, err = s.store.SaveReconciliationRun(run, varItems)
+				if err == nil {
+					return saved, nil
+				}
 			}
-			return s.store.SaveReconciliationRun(run, varItems)
 		}
 	}
+	run = failedReconciliationRun(run, err)
+	if !replace {
+		_, _ = s.store.SaveReconciliationRun(run, nil)
+	}
+	return run, err
+}
+
+func failedReconciliationRun(run ReconciliationRun, err error) ReconciliationRun {
 	httpErr := AsHTTPError(err)
 	run.Status = ReconciliationRunFailed
 	run.ErrorCode = httpErr.Code
 	run.ErrorMessage = httpErr.Message
 	finishedAt := time.Now().UTC()
 	run.FinishedAt = &finishedAt
-	if replace {
-		_, _ = s.store.ReplaceReconciliationRun(run, nil)
-	} else {
-		_, _ = s.store.SaveReconciliationRun(run, nil)
-	}
-	return run, err
+	return run
 }
 
 func (s *ReconciliationService) RunDue(ctx context.Context, now time.Time) []ReconciliationRun {
@@ -369,6 +401,13 @@ func normalizeAndValidateReconciliationRule(rule *ReconciliationRule) error {
 	}
 	if len(rule.Currency) != 3 {
 		return NewHTTPError(http.StatusBadRequest, "invalid_reconciliation_currency", "currency must be a three-letter ISO code")
+	}
+	return nil
+}
+
+func validateReconciliationConnector(rule ReconciliationRule, connector BillingConnector) error {
+	if connector.Type == BillingConnectorNewAPI && rule.Granularity == ReconciliationGranularityDetail {
+		return NewHTTPError(http.StatusBadRequest, "reconciliation_detail_unsupported", "The selected billing connector does not provide request-level identifiers")
 	}
 	return nil
 }

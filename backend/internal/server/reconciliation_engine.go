@@ -165,7 +165,9 @@ func finishReconciliation(run ReconciliationRun, items []ReconciliationItem, row
 	if err != nil {
 		return run, nil, err
 	}
-	run.DifferenceAmount = (providerAmount - tokenHubAmount).String()
+	run.ProviderAmount = providerAmount.OutputString()
+	run.TokenHubAmount = tokenHubAmount.OutputString()
+	run.DifferenceAmount = (providerAmount - tokenHubAmount).OutputString()
 	run.Status = ReconciliationRunSucceeded
 	finishedAt := time.Now().UTC()
 	run.FinishedAt = &finishedAt
@@ -275,9 +277,7 @@ func reconciliationItemFromBucket(run ReconciliationRun, bucket reconciliationBu
 		}
 	case len(bucket.tokenHubRecordIDs) == 0:
 		status = ReconciliationProviderOnly
-		if reason == "" && bucket.dimensions["currency"] != "USD" {
-			reason = "currency_mismatch_or_missing_fx"
-		} else if reason == "" {
+		if reason == "" {
 			reason = "missing_tokenhub_usage_or_late_data"
 		}
 	case absoluteReconciliationMoney(difference) <= amountTolerance || ratio <= ratioTolerance:
@@ -308,10 +308,10 @@ func reconciliationItemFromBucket(run ReconciliationRun, bucket reconciliationBu
 		Model:                 bucket.dimensions["model"],
 		Project:               bucket.dimensions["project"],
 		Currency:              bucket.dimensions["currency"],
-		ProviderAmount:        bucket.providerAmount.String(),
-		TokenHubAmount:        bucket.tokenHubAmount.String(),
-		DifferenceAmount:      difference.String(),
-		DifferenceRatio:       ratio.String(),
+		ProviderAmount:        bucket.providerAmount.OutputString(),
+		TokenHubAmount:        bucket.tokenHubAmount.OutputString(),
+		DifferenceAmount:      difference.OutputString(),
+		DifferenceRatio:       ratio.OutputString(),
 		PossibleReason:        reason,
 		ProviderRecordIDs:     bucket.providerRecordIDs,
 		TokenHubRecordIDs:     bucket.tokenHubRecordIDs,
