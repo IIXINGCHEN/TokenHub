@@ -107,6 +107,7 @@ TokenHub 将日常模型使用、团队治理和平台运维拆成清晰的角�
 - PostgreSQL 支持多实例部署：通过远端 PostgreSQL 共享状态，实现前后端实例横向扩展，并提供连接池配置。参见[部署指南](docs/zh-CN/deployment.md)。
 - 管理后台支持英文、中文、日文切换。
 - TokenHub 还支持接入 OpenAI Codex 订阅账号资源，并通过可隔离、可恢复的 Codex Profile，让指定的本地 Codex CLI 或桌面端会话经过 TokenHub。参见 [Codex 接入指南](docs/zh-CN/codex-tokenhub-profile-quick-start.md)。
+- Gemini CLI 可以直接连接 TokenHub 的 Gemini 原生接口，并使用 Codex 订阅账号提供的 GPT 模型，不需要 CCswitch。参见 [Gemini CLI 接入指南](docs/zh-CN/gemini-cli-codex-subscription.md)。
 
 ## 快速开始
 

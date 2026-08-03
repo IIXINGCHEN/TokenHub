@@ -32,12 +32,14 @@ func splitEscapedAdminPath(escapedPath string, prefix string) []string {
 // naively on "/": the trailing segment is treated as an action only when it
 // appears in the route's table. Actions must not contain "/" themselves.
 var (
-	providerResourceActions = []string{"health", "test", "refresh-token", "quota"}
+	providerResourceActions = []string{"quota/reset-credits", "quota/reset", "health", "test", "refresh-token", "quota"}
 	routingRuleActions      = []string{"explain"}
 )
 
 // splitNestedAdminPath splits remainder into {id, action} when it ends with a
 // known "/<action>" suffix, otherwise the whole remainder is the resource ID.
+// An action may contain a slash when the complete nested suffix is explicitly
+// listed, as with the quota reset endpoints.
 func splitNestedAdminPath(remainder string, actions []string) []string {
 	if remainder == "" {
 		return nil

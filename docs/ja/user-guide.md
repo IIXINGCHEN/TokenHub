@@ -137,14 +137,18 @@ Responses の推論強度は OpenAI 互換、Anthropic、Gemini の各ルート�
 
 ストリーミングは上流のイベントを到着順に中継するため、最初のトークンまでの時間はレスポンス全体ではなくプロバイダーの応答速度を反映します。これらのルートで表現できないコンテンツ種別（音声パートなど）は破棄されず `400 unsupported_content_block` を返します。
 
+Codex Subscription アカウントへルーティングされる Chat Completions は内部で Responses プロトコルを使用し、同等のテキスト、画像、関数ツール、並列ツール、推論継続、ストリーミング機能を提供します。
+
+Codex サブスクリプションの上流は、クライアントのサンプリング、出力トークン上限、停止条件フィールドを受け付けません。TokenHub の互換エンドポイントはこれらのフィールドを受理しますが、サブスクリプション要求からは除外するため、Codex ルートでは `max_tokens`、`max_completion_tokens`、`temperature`、`top_p`、停止条件は強制されません。これらの制御が契約上必要な場合は、標準 API Provider を使用してください。
+
 ### 推論の継続
 
 Anthropic と Gemini では、複数ステップのツール呼び出しにおいて、推論ステップに付随する不透明な署名を次のターンでそのまま返す必要があります。OpenAI Chat Completions のスキーマには該当するフィールドがないため、TokenHub は拡張フィールドで返します。
 
 | フィールド | 対応するプロバイダーのデータ |
 | --- | --- |
-| `message.reasoning_content` | Anthropic の `thinking` テキスト、Gemini の thought パート |
-| `message.reasoning_signature` | Anthropic の `thinking.signature` |
+| `message.reasoning_content` | Anthropic の `thinking` テキスト、Gemini の thought パート、Codex の推論サマリー |
+| `message.reasoning_signature` | Anthropic の `thinking.signature`、Codex の暗号化推論 |
 | `message.redacted_reasoning_content` | Anthropic の `redacted_thinking.data` |
 | `message.tool_calls[].thought_signature` | Gemini の `thoughtSignature` |
 
@@ -171,6 +175,10 @@ curl --request POST \
 
 Anthropic ネイティブルートでは Anthropic content block と beta header を保持します。OpenAI 互換ルートではテキスト、画像、クライアントツール、ツール結果、並列ツール呼び出し、ストリーミング event を変換します。OpenAI 互換 Provider で表現できない Anthropic サーバーツールには `400 unsupported_tool` を返します。
 
+OpenAI Codex Subscription アカウントへルーティングされるモデルも、同じ Messages エンドポイントを利用できます。TokenHub が Messages を Responses プロトコルへ直接変換し、結果を Anthropic event に戻すため、Claude Code は CC-Switch などのローカルプロトコルプロキシなしで TokenHub に直接接続できます。Codex が発行した reasoning signature はツール実行ターン間で引き継がれ、同じ Claude Code セッションは同一の正常なサブスクリプションアカウントに固定されます。
+
+Codex ルートの Messages リクエストでは、サブスクリプション上流に対応するフィールドがないため、`max_tokens`、`temperature`、`top_p`、`stop_sequences`、Anthropic の構造化出力フォーマットを強制できません。
+
 `mid-conversation-system-2026-04-07` を有効にした Claude Code リクエストでは、`messages` 内に `system` エントリを含めることができます。TokenHub は Anthropic ネイティブルートではそのエントリを保持し、OpenAI 互換ルートでは順序を維持した system message に変換します。この beta がない場合、`messages` で使用できる role は引き続き `user` と `assistant` のみです。
 
 ローカル Claude Code には `/v1` suffix を付けず、TokenHub Host URL を設定します。
@@ -185,9 +193,13 @@ claude
 
 `ANTHROPIC_AUTH_TOKEN` は TokenHub Key を `Authorization: Bearer` で送信します。Authorization header がない場合は、`ANTHROPIC_API_KEY` の `x-api-key` も利用できます。Token 見積もりは Key とモデル権限を確認しますが、課金対象の推論レコードは作成しません。
 
+## Gemini CLI で Codex サブスクリプション GPT を使用する
+
+Gemini CLI は TokenHub の Gemini ネイティブ `v1beta` API に直接接続し、OpenAI Codex Subscription アカウントへルーティングされた GPT モデルを利用できます。`GEMINI_API_KEY` に TokenHub の Project Key、`GOOGLE_GEMINI_BASE_URL` に `/v1beta` を含まない TokenHub Host を設定し、対象 GPT モデルを選択します。CCswitch は不要です。分離起動、プロジェクト設定、対応エンドポイント、検証方法、制限については [Gemini CLI から Codex サブスクリプション GPT を使用する](gemini-cli-codex-subscription.md) を参照してください。
+
 ## Codex サブスクリプション画像生成
 
-`POST /v1/images/generations` は OpenAI 互換の `model`、`prompt`、`quality`、`size`、`n`、`response_format` を受け付けます。公開仮想モデル `model: "codex-gpt-image-2"` と `n: 1` を使用してください。`gpt-image-2` は別の標準 API モデルであり、Codex サブスクリプションには決してルーティングされません。`Prefer: respond-async` を付けると画像ジョブが返り、`GET /v1/image-jobs/{id}` でポーリングできます。
+`POST /v1/images/generations` は OpenAI 互換の `model`、`prompt`、`quality`、`size`、`n`、`response_format` を受け付けます。公開仮想モデル `model: "codex-gpt-image-2"` と `n: 1` を使用してください。`gpt-image-2` は通常、別の標準 API モデルのままです。限定的な互換処理として、Codex の `originator` または `x-codex-image-turn-id` ヘッダーが付いた生成リクエストは `codex-gpt-image-2` にマッピングされ、`b64_json` が返されます。API キーでは `codex-gpt-image-2` を許可する必要があります。`Prefer: respond-async` を付けると画像ジョブが返り、`GET /v1/image-jobs/{id}` でポーリングできます。
 
 `POST /v1/images/edits` は multipart の `image` または `image[]` で参照画像を受け付けます。`gpt-image-2` は単一の `mask` を OpenAI API に転送できますが、Codex サブスクリプションではマスク編集は利用できません。TokenHub は Codex CLI をインストールまたは起動せず、Codex サブスクリプションの Images エンドポイントを直接呼び出します。プロンプトはデータベースで暗号化され、入力画像と出力画像はサーバーに保持されます。署名付きダウンロード URL の有効期間は 24 時間です。URL の期限後もファイルは残り、ジョブを再取得すると新しい URL が発行されます。選択された Codex アカウントには画像生成権限が必要です。
 
@@ -195,7 +207,7 @@ claude
 
 TokenHub はアカウントの実際の呼び出し結果から画像生成機能を記録します。対応確認済みのアカウントを優先し、`403` を返したアカウントは一時的に除外します。未確認のアカウントは初回利用時の検出対象として残ります。`TOKENHUB_IMAGE_CAPABILITY_RETRY_SECONDS`（既定 24 時間）の経過後、非対応アカウントはモデル検出とルーティングの対象に戻り、次の実リクエストで低頻度に再試行されます。回復確認のための画像をバックグラウンドで自動生成することはありません。
 
-正常な接続済み Codex アカウントのうち、少なくとも1つが画像生成対応済み、または低頻度の再試行期間に入った場合、`codex-gpt-image-2` が `GET /v1/models` に表示されます。これはサブスクリプション型の仮想モデルであり、通常の Provider モデルルートは不要です。別の `gpt-image-2` モデルは OpenAI API Provider を使用し、Codex サブスクリプション枠を消費しません。
+正常な接続済み Codex アカウントのうち、少なくとも1つが画像生成対応済み、または低頻度の再試行期間に入った場合、`codex-gpt-image-2` が `GET /v1/models` に表示されます。これはサブスクリプション型の仮想モデルであり、通常の Provider モデルルートは不要です。上記の Codex クライアント互換マッピングを除き、別の `gpt-image-2` モデルは OpenAI API Provider を使用し、Codex サブスクリプション枠を消費しません。
 
 ## SDK 設定
 
