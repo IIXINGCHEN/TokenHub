@@ -21,6 +21,10 @@ func (s *Server) handleAdminResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kind := parts[0]
+	if kind == openAIAccountQuotaResetOperationKind {
+		writeError(w, r, NewHTTPError(http.StatusNotFound, "not_found", "Not found"))
+		return
+	}
 	if len(parts) == 1 {
 		switch r.Method {
 		case http.MethodGet:

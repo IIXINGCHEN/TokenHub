@@ -613,6 +613,14 @@ func (s *Server) handleAdminProviderResourceNested(w http.ResponseWriter, r *htt
 		writeError(w, r, NewHTTPError(404, "not_found", "Not found"))
 		return
 	}
+	if parts[1] == "quota/reset-credits" {
+		s.handleAdminOpenAIAccountQuotaResetCredits(w, r, user, parts[0])
+		return
+	}
+	if parts[1] == "quota/reset" {
+		s.handleAdminOpenAIAccountQuotaReset(w, r, user, parts[0])
+		return
+	}
 	if parts[1] == "quota" {
 		if r.Method != http.MethodGet {
 			writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))

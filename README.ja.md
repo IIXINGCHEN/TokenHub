@@ -107,6 +107,7 @@ TokenHub は、日常的なモデル利用、チームガバナンス、プラ�
 - PostgreSQL はマルチインスタンス構成に対応します。リモート PostgreSQL で状態を共有し、フロントエンドとバックエンドのレプリカを水平スケールできるほか、コネクションプールも設定できます。[デプロイガイド](docs/ja/deployment.md)を参照してください。
 - 管理コンソールは英語、中国語、日本語の切り替えに対応。
 - TokenHub は OpenAI Codex のサブスクリプションアカウントリソースにも接続できます。分離および復旧が可能な Codex Profile を使用し、指定したローカル Codex CLI またはデスクトップセッションを TokenHub 経由で実行できます。[Codex 接続ガイド](docs/ja/codex-tokenhub-profile-quick-start.md)を参照してください。
+- Gemini CLI は TokenHub の Gemini ネイティブ API に直接接続し、Codex サブスクリプションアカウントの GPT モデルを CCswitch なしで使用できます。[Gemini CLI 接続ガイド](docs/ja/gemini-cli-codex-subscription.md)を参照してください。
 
 ## クイックスタート
 

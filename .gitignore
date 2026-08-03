@@ -21,6 +21,9 @@ scripts/
 # already carry, so they are working files rather than deliverables.
 IMPLEMENTATION_PLAN.md
 
+# Local research materials
+/papers/
+
 # Go
 bin/
 .tmp/

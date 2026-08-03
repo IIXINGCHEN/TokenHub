@@ -17,7 +17,7 @@ func (s *Server) streamNativeAnthropicMessages(
 	headers http.Header,
 	writer io.Writer,
 ) (Usage, error) {
-	payload := cloneAnyMap(req.Raw)
+	payload := nativeAnthropicPayload(req.Raw)
 	payload["model"] = route.ProviderModel
 	payload["stream"] = true
 	resp, err := s.doNativeAnthropicRequest(ctx, route.Provider, "/v1/messages", payload, headers, true)

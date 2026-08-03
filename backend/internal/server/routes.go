@@ -8,8 +8,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/readyz", s.handleHealth)
 	s.mux.HandleFunc("/healthz", s.handleHealth)
 	s.mux.HandleFunc("/metrics", s.handleMetrics)
-	s.mux.HandleFunc("/v1/models", s.handleModels)
-	s.mux.HandleFunc("/v1/models/", s.handleModel)
+	s.registerModelRoutes()
 	// The in-flight gauge covers exactly the endpoints that route to an upstream, so
 	// it stays comparable with requests_total. Catalog lookups and count_tokens are
 	// local and never produce a request count, and admin traffic and scrapes are not
