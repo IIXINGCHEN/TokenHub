@@ -36,6 +36,116 @@ func TestReconciliationScopesUsageToBillingConnectorProvider(t *testing.T) {
 	}
 }
 
+func TestReconciliationRequiresExplicitConnectorScope(t *testing.T) {
+	store := NewMemoryStore()
+	connector := createReconciliationTestConnector(t, store, "bcon_reconciliation_missing_scope")
+	connector.Config = map[string]string{}
+	if err := store.db.Save(&connector).Error; err != nil {
+		t.Fatal(err)
+	}
+	response := doJSON(t, New(store).Handler(), http.MethodPost, "/api/admin/billing/reconciliation-rules", map[string]any{
+		"name": "Missing scope", "connector_id": connector.ID, "granularity": ReconciliationGranularityDay,
+		"match_dimensions": []string{"model", "currency"}, "timezone": "UTC",
+	}, "")
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body, "reconciliation_scope_required") {
+		t.Fatalf("connector without provider scope was accepted: %d %s", response.Code, response.Body)
+	}
+}
+
+func TestReconciliationKeepsScopedUsageWhenBillingPeriodIsEmpty(t *testing.T) {
+	store := NewMemoryStore()
+	connector := createReconciliationTestConnector(t, store, "bcon_reconciliation_empty_billing")
+	connector.Config = map[string]string{"provider_id": "provider-a"}
+	if err := store.db.Save(&connector).Error; err != nil {
+		t.Fatal(err)
+	}
+	periodStart := time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC)
+	createReconciliationUsageRecords(t, store, []UsageRecord{{
+		ID: "use_without_bill", ProviderID: "provider-a", ModelName: "model-scope", ProviderCostUSD: 1, CreatedAt: periodStart.Add(time.Minute),
+	}})
+	app := New(store).Handler()
+	rule := createReconciliationReviewRule(t, app, connector.ID, ReconciliationGranularityDay, []string{"model", "currency"})
+	run := runReconciliationTestRule(t, app, rule.ID, periodStart, periodStart.Add(24*time.Hour))
+	assertReconciliationCounts(t, run, 0, 0, 1, 0)
+	if run.ProviderRecordCount != 0 || run.TokenHubRecordCount != 1 || run.TokenHubAmount != "1" {
+		t.Fatalf("scoped usage disappeared when the billing period was empty: %#v", run)
+	}
+}
+
+func TestReconciliationSnapshotsScopeForMigrationAndRecalculation(t *testing.T) {
+	store := NewMemoryStore()
+	connector := createReconciliationTestConnector(t, store, "bcon_reconciliation_snapshot")
+	connector.Config = map[string]string{"provider_id": "provider-a", "provider_resource_id": "resource-a"}
+	if err := store.db.Save(&connector).Error; err != nil {
+		t.Fatal(err)
+	}
+	periodStart := time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC)
+	createReconciliationBillingRecords(t, store, []BillingRecord{{
+		ID: "bill_snapshot", ConnectorID: connector.ID, ExternalID: "external-snapshot", SourceType: BillingConnectorOneAPI,
+		Model: "model-snapshot", Currency: "USD", NetAmount: "1", UsageStartAt: periodStart.Add(time.Minute),
+	}})
+	createReconciliationUsageRecords(t, store, []UsageRecord{
+		{ID: "use_snapshot_a", ProviderID: "provider-a", ProviderResourceID: "resource-a", ModelName: "model-snapshot", ProviderCostUSD: 1, CreatedAt: periodStart.Add(time.Minute)},
+		{ID: "use_snapshot_b", ProviderID: "provider-b", ProviderResourceID: "resource-b", ModelName: "model-snapshot", ProviderCostUSD: 9, CreatedAt: periodStart.Add(time.Minute)},
+	})
+	app := New(store).Handler()
+	rule := createReconciliationReviewRule(t, app, connector.ID, ReconciliationGranularityDay, []string{"model", "currency"})
+	legacyHash := rule.RuleHash
+	if err := store.db.Model(&ReconciliationRule{}).Where("id = ?", rule.ID).Updates(map[string]any{
+		"connector_type": "", "provider_id": "", "provider_resource_id": "", "rule_hash": "legacy:without-scope",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	run := runReconciliationTestRule(t, app, rule.ID, periodStart, periodStart.Add(24*time.Hour))
+	storedRule, err := store.GetReconciliationRule(rule.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedRule.ConnectorType != BillingConnectorOneAPI || storedRule.ProviderID != "provider-a" || storedRule.ProviderResourceID != "resource-a" ||
+		storedRule.RuleHash != legacyHash || storedRule.RuleHash == "legacy:without-scope" {
+		t.Fatalf("legacy rule connector snapshot was not persisted: %#v", storedRule)
+	}
+	changedScope := storedRule
+	changedScope.ProviderID = "provider-b"
+	if reconciliationRuleHash(changedScope) == storedRule.RuleHash {
+		t.Fatal("provider scope was omitted from the reconciliation rule hash")
+	}
+	if run.ConnectorType != storedRule.ConnectorType || run.ProviderID != storedRule.ProviderID || run.ProviderResourceID != storedRule.ProviderResourceID ||
+		run.RuleHash != storedRule.RuleHash || run.TokenHubRecordCount != 1 {
+		t.Fatalf("run did not capture the migrated rule snapshot: rule=%#v run=%#v", storedRule, run)
+	}
+	if err := store.db.Delete(&BillingConnector{}, "id = ?", connector.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	response := doJSON(t, app, http.MethodPost, "/api/admin/billing/reconciliations/"+run.ID+"/recalculate", map[string]any{}, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("snapshot-based recalculation required the deleted connector: %d %s", response.Code, response.Body)
+	}
+	var recalculated ReconciliationRun
+	if err := json.Unmarshal([]byte(response.Body), &recalculated); err != nil {
+		t.Fatal(err)
+	}
+	if recalculated.RuleHash != run.RuleHash || recalculated.ProviderID != "provider-a" || recalculated.ProviderResourceID != "resource-a" || recalculated.TokenHubRecordCount != 1 {
+		t.Fatalf("recalculation changed the run connector snapshot: before=%#v after=%#v", run, recalculated)
+	}
+}
+
+func TestReconciliationRejectsMalformedCurrencyCodes(t *testing.T) {
+	for _, currency := range []string{"123", "1$!"} {
+		t.Run(currency, func(t *testing.T) {
+			store := NewMemoryStore()
+			connector := createReconciliationTestConnector(t, store, "bcon_reconciliation_currency_"+currency)
+			response := doJSON(t, New(store).Handler(), http.MethodPost, "/api/admin/billing/reconciliation-rules", map[string]any{
+				"name": "Invalid currency", "connector_id": connector.ID, "granularity": ReconciliationGranularityDay,
+				"match_dimensions": []string{"model", "currency"}, "timezone": "UTC", "currency": currency,
+			}, "")
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body, "invalid_reconciliation_currency") {
+				t.Fatalf("malformed currency %q was accepted: %d %s", currency, response.Code, response.Body)
+			}
+		})
+	}
+}
+
 func TestReconciliationAccumulatesSubMicroAmountsBeforeRounding(t *testing.T) {
 	store := NewMemoryStore()
 	connector := createReconciliationTestConnector(t, store, "bcon_reconciliation_precision")
@@ -128,6 +238,10 @@ func TestReconciliationFailureAuditPaginationAndRedaction(t *testing.T) {
 	app := New(store).Handler()
 	sensitiveSource := "sensitive-billing-account"
 	sensitiveTarget := "sensitive-tokenhub-resource"
+	connector.Config["provider_resource_id"] = sensitiveTarget
+	if err := store.db.Save(&connector).Error; err != nil {
+		t.Fatal(err)
+	}
 	created := doJSON(t, app, http.MethodPost, "/api/admin/billing/reconciliation-rules", map[string]any{
 		"name": "Audited reconciliation", "connector_id": connector.ID, "granularity": ReconciliationGranularityDay,
 		"match_dimensions": []string{"resource_account", "currency"}, "timezone": "UTC",

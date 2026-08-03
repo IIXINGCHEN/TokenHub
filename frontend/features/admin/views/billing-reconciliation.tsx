@@ -416,10 +416,15 @@ function formatMinutes(value: number) {
 
 function formatReconciliationMoney(value: string, currency: string) {
   const amount = Number(value);
-  if (!Number.isFinite(amount) || currency.length !== 3) return `${currency} ${value}`.trim();
-  return new Intl.NumberFormat(languageLocale(), {
-    style: "currency", currency, currencyDisplay: "code", minimumFractionDigits: 0, maximumFractionDigits: 6,
-  }).format(amount);
+  const normalizedCurrency = currency.trim().toUpperCase();
+  if (!Number.isFinite(amount) || !/^[A-Z]{3}$/.test(normalizedCurrency)) return `${currency} ${value}`.trim();
+  try {
+    return new Intl.NumberFormat(languageLocale(), {
+      style: "currency", currency: normalizedCurrency, currencyDisplay: "code", minimumFractionDigits: 0, maximumFractionDigits: 6,
+    }).format(amount);
+  } catch {
+    return `${currency} ${value}`.trim();
+  }
 }
 
 function shortHash(value: string) {
@@ -459,6 +464,8 @@ function reconciliationErrorCodeLabel(code: string) {
     case "invalid_reconciliation_timezone": return tx("对账时区无效");
     case "invalid_reconciliation_mapping": return tx("对账维度映射无效");
     case "reconciliation_detail_unsupported": return tx("所选账单连接器不支持请求级明细对账");
+    case "reconciliation_scope_required": return tx("请先为账单连接器配置 Provider 范围");
+    case "reconciliation_connector_snapshot_required": return tx("账单连接器配置不完整");
     case "invalid_reconciliation_run": return tx("对账执行参数无效");
     case "invalid_reconciliation_period": return tx("账期必须是非空且开始时间早于结束时间");
     case "reconciliation_period_too_large": return tx("账期不能超过 366 天");

@@ -34,6 +34,9 @@ type ReconciliationRule struct {
 	ID                      string                       `json:"id" gorm:"primaryKey"`
 	Name                    string                       `json:"name"`
 	ConnectorID             string                       `json:"connector_id" gorm:"index"`
+	ConnectorType           string                       `json:"connector_type"`
+	ProviderID              string                       `json:"provider_id"`
+	ProviderResourceID      string                       `json:"provider_resource_id,omitempty"`
 	Status                  string                       `json:"status" gorm:"index"`
 	Granularity             string                       `json:"granularity"`
 	MatchDimensions         []string                     `json:"match_dimensions" gorm:"serializer:json"`
@@ -96,6 +99,9 @@ type ReconciliationRun struct {
 	ID                  string                       `json:"id" gorm:"primaryKey"`
 	RuleID              string                       `json:"rule_id" gorm:"index"`
 	ConnectorID         string                       `json:"connector_id" gorm:"index"`
+	ConnectorType       string                       `json:"connector_type"`
+	ProviderID          string                       `json:"provider_id"`
+	ProviderResourceID  string                       `json:"provider_resource_id,omitempty"`
 	Trigger             string                       `json:"trigger" gorm:"index"`
 	Status              string                       `json:"status" gorm:"index"`
 	PeriodStart         time.Time                    `json:"period_start" gorm:"index"`
@@ -176,6 +182,7 @@ type ReconciliationStore interface {
 	ListReconciliationRules() []ReconciliationRule
 	GetReconciliationRule(id string) (ReconciliationRule, error)
 	UpdateReconciliationRule(rule ReconciliationRule) (ReconciliationRule, error)
+	BackfillReconciliationRuleConnectorSnapshot(id string, connectorType string, providerID string, providerResourceID string) (ReconciliationRule, error)
 	ListDueReconciliationRules(now time.Time, limit int) []ReconciliationRule
 	LoadReconciliationInputs(connectorID string, from time.Time, to time.Time, window time.Duration) ([]BillingRecord, []UsageRecord, error)
 	SaveReconciliationRun(run ReconciliationRun, items []ReconciliationItem) (ReconciliationRun, error)

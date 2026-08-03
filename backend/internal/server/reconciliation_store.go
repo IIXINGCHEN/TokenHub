@@ -66,6 +66,40 @@ func (s *GormStore) UpdateReconciliationRule(rule ReconciliationRule) (Reconcili
 	return rule, nil
 }
 
+func (s *GormStore) BackfillReconciliationRuleConnectorSnapshot(id string, connectorType string, providerID string, providerResourceID string) (ReconciliationRule, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var rule ReconciliationRule
+	if err := s.db.First(&rule, "id = ?", strings.TrimSpace(id)).Error; err != nil {
+		return ReconciliationRule{}, notFound(err, "reconciliation_rule_not_found", "Reconciliation rule not found")
+	}
+	if strings.TrimSpace(rule.ConnectorType) != "" && normalizeReconciliationScope(rule.ProviderID) != "" {
+		return rule, validateReconciliationConnectorSnapshot(rule.Granularity, rule.ConnectorType, rule.ProviderID)
+	}
+	rule.ConnectorType = strings.ToLower(strings.TrimSpace(connectorType))
+	rule.ProviderID = normalizeReconciliationScope(providerID)
+	rule.ProviderResourceID = normalizeReconciliationScope(providerResourceID)
+	if err := validateReconciliationConnectorSnapshot(rule.Granularity, rule.ConnectorType, rule.ProviderID); err != nil {
+		return ReconciliationRule{}, err
+	}
+	if rule.Version <= 0 {
+		rule.Version = 1
+	} else {
+		rule.Version++
+	}
+	rule.RuleHash = reconciliationRuleHash(rule)
+	rule.UpdatedAt = time.Now().UTC()
+	err := s.db.Model(&ReconciliationRule{}).Where("id = ?", rule.ID).Updates(map[string]any{
+		"connector_type":       rule.ConnectorType,
+		"provider_id":          rule.ProviderID,
+		"provider_resource_id": rule.ProviderResourceID,
+		"version":              rule.Version,
+		"rule_hash":            rule.RuleHash,
+		"updated_at":           rule.UpdatedAt,
+	}).Error
+	return rule, err
+}
+
 func (s *GormStore) ListDueReconciliationRules(now time.Time, limit int) []ReconciliationRule {
 	if limit <= 0 || limit > 100 {
 		limit = 25

@@ -16,7 +16,9 @@ func reconciliationRuleAuditSnapshot(rule ReconciliationRule) map[string]any {
 	}
 	return map[string]any{
 		"id": rule.ID, "name": rule.Name, "connector_id": rule.ConnectorID,
-		"status": rule.Status, "granularity": rule.Granularity, "match_dimensions": rule.MatchDimensions,
+		"connector_type": rule.ConnectorType, "provider_scope_configured": rule.ProviderID != "",
+		"provider_resource_scope_configured": rule.ProviderResourceID != "",
+		"status":                             rule.Status, "granularity": rule.Granularity, "match_dimensions": rule.MatchDimensions,
 		"dimension_mappings": mappings, "resource_account_mapping_count": resourceMappingCount,
 		"amount_tolerance": rule.AmountTolerance, "ratio_tolerance": rule.RatioTolerance,
 		"usd_exchange_rate": rule.USDExchangeRate, "time_window_minutes": rule.TimeWindowMinutes,
@@ -29,7 +31,9 @@ func reconciliationRuleAuditSnapshot(rule ReconciliationRule) map[string]any {
 func reconciliationAuditSnapshot(run ReconciliationRun) map[string]any {
 	return map[string]any{
 		"id": run.ID, "rule_id": run.RuleID, "connector_id": run.ConnectorID,
-		"status": run.Status, "trigger": run.Trigger, "rule_version": run.RuleVersion, "rule_hash": run.RuleHash,
+		"connector_type": run.ConnectorType, "provider_scope_configured": run.ProviderID != "",
+		"provider_resource_scope_configured": run.ProviderResourceID != "",
+		"status":                             run.Status, "trigger": run.Trigger, "rule_version": run.RuleVersion, "rule_hash": run.RuleHash,
 		"input_hash": run.InputHash, "period_start": run.PeriodStart, "period_end": run.PeriodEnd,
 		"matched_count": run.MatchedCount, "provider_only_count": run.ProviderOnlyCount,
 		"tokenhub_only_count": run.TokenHubOnlyCount, "amount_mismatch_count": run.AmountMismatchCount,

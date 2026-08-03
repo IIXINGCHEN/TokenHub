@@ -28,14 +28,14 @@ func (s *ReconciliationService) CreateRule(request ReconciliationRuleRequest, ac
 	rule := reconciliationRuleFromRequest(request)
 	rule.CreatedBy = strings.TrimSpace(actor)
 	rule.UpdatedBy = strings.TrimSpace(actor)
+	if err := normalizeAndValidateReconciliationRule(&rule); err != nil {
+		return ReconciliationRule{}, err
+	}
 	connector, err := s.store.GetBillingConnector(rule.ConnectorID, false)
 	if err != nil {
 		return ReconciliationRule{}, err
 	}
-	if err := normalizeAndValidateReconciliationRule(&rule); err != nil {
-		return ReconciliationRule{}, err
-	}
-	if err := validateReconciliationConnector(rule, connector); err != nil {
+	if err := snapshotReconciliationConnector(&rule, connector); err != nil {
 		return ReconciliationRule{}, err
 	}
 	rule.Version = 1
@@ -58,13 +58,42 @@ func (s *ReconciliationService) UpdateRule(id string, request ReconciliationRule
 	if err != nil {
 		return before, ReconciliationRule{}, err
 	}
-	if err := validateReconciliationConnector(rule, connector); err != nil {
+	if err := snapshotReconciliationConnector(&rule, connector); err != nil {
 		return before, ReconciliationRule{}, err
 	}
 	rule.Version = before.Version + 1
 	rule.RuleHash = reconciliationRuleHash(rule)
 	updated, err := s.store.UpdateReconciliationRule(rule)
 	return before, updated, err
+}
+
+func (s *ReconciliationService) ensureReconciliationRuleConnectorSnapshot(rule ReconciliationRule) (ReconciliationRule, error) {
+	if strings.TrimSpace(rule.ConnectorType) != "" && normalizeReconciliationScope(rule.ProviderID) != "" {
+		return rule, validateReconciliationConnectorSnapshot(rule.Granularity, rule.ConnectorType, rule.ProviderID)
+	}
+	connector, err := s.store.GetBillingConnector(rule.ConnectorID, false)
+	if err != nil {
+		return ReconciliationRule{}, err
+	}
+	if err := snapshotReconciliationConnector(&rule, connector); err != nil {
+		return ReconciliationRule{}, err
+	}
+	return s.store.BackfillReconciliationRuleConnectorSnapshot(rule.ID, rule.ConnectorType, rule.ProviderID, rule.ProviderResourceID)
+}
+
+func (s *ReconciliationService) ensureReconciliationRunConnectorSnapshot(run ReconciliationRun) (ReconciliationRun, error) {
+	if strings.TrimSpace(run.ConnectorType) != "" && normalizeReconciliationScope(run.ProviderID) != "" {
+		return run, validateReconciliationConnectorSnapshot(run.Granularity, run.ConnectorType, run.ProviderID)
+	}
+	connector, err := s.store.GetBillingConnector(run.ConnectorID, false)
+	if err != nil {
+		return ReconciliationRun{}, err
+	}
+	if err := snapshotReconciliationRunConnector(&run, connector); err != nil {
+		return ReconciliationRun{}, err
+	}
+	run.RuleHash = reconciliationRunRuleHash(run)
+	return run, nil
 }
 
 func (s *ReconciliationService) Run(ctx context.Context, ruleID string, request ReconciliationRunRequest, trigger string, actor string) (ReconciliationRun, error) {
@@ -78,6 +107,10 @@ func (s *ReconciliationService) Run(ctx context.Context, ruleID string, request 
 	}
 	if rule.Status != StatusActive {
 		return ReconciliationRun{}, NewHTTPError(http.StatusConflict, "reconciliation_rule_disabled", "Disabled reconciliation rules cannot be run")
+	}
+	rule, err = s.ensureReconciliationRuleConnectorSnapshot(rule)
+	if err != nil {
+		return ReconciliationRun{}, err
 	}
 	if request.PeriodStart.IsZero() || request.PeriodEnd.IsZero() || !request.PeriodStart.Before(request.PeriodEnd) {
 		return ReconciliationRun{}, NewHTTPError(http.StatusBadRequest, "invalid_reconciliation_period", "period_start and period_end must define a non-empty range")
@@ -100,6 +133,10 @@ func (s *ReconciliationService) Recalculate(ctx context.Context, runID string) (
 	}
 	if run.LockedAt != nil {
 		return ReconciliationRun{}, NewHTTPError(http.StatusConflict, "reconciliation_run_locked", "Locked reconciliation runs cannot be recalculated")
+	}
+	run, err = s.ensureReconciliationRunConnectorSnapshot(run)
+	if err != nil {
+		return ReconciliationRun{}, err
 	}
 	run.Trigger = "recalculation"
 	run.Status = ReconciliationRunRunning
@@ -125,17 +162,14 @@ func (s *ReconciliationService) calculateAndSave(ctx context.Context, run Reconc
 		return run, err
 	}
 	window := time.Duration(run.TimeWindowMinutes) * time.Minute
-	connector, err := s.store.GetBillingConnector(run.ConnectorID, false)
+	err := validateReconciliationConnectorSnapshot(run.Granularity, run.ConnectorType, run.ProviderID)
 	var bills []BillingRecord
 	var usages []UsageRecord
-	if err == nil {
-		err = validateReconciliationConnector(ReconciliationRule{Granularity: run.Granularity}, connector)
-	}
 	if err == nil {
 		bills, usages, err = s.store.LoadReconciliationInputs(run.ConnectorID, run.PeriodStart, run.PeriodEnd, window)
 	}
 	if err == nil {
-		usages = scopeReconciliationUsages(run, connector, bills, usages)
+		usages = scopeReconciliationUsages(run, usages)
 		run, varItems, calculateErr := calculateReconciliation(run, bills, usages)
 		err = calculateErr
 		if err == nil {
@@ -399,17 +433,22 @@ func normalizeAndValidateReconciliationRule(rule *ReconciliationRule) error {
 	if _, err := time.LoadLocation(rule.Timezone); err != nil {
 		return NewHTTPError(http.StatusBadRequest, "invalid_reconciliation_timezone", "timezone must be a valid IANA timezone")
 	}
-	if len(rule.Currency) != 3 {
+	if !isReconciliationCurrency(rule.Currency) {
 		return NewHTTPError(http.StatusBadRequest, "invalid_reconciliation_currency", "currency must be a three-letter ISO code")
 	}
 	return nil
 }
 
-func validateReconciliationConnector(rule ReconciliationRule, connector BillingConnector) error {
-	if connector.Type == BillingConnectorNewAPI && rule.Granularity == ReconciliationGranularityDetail {
-		return NewHTTPError(http.StatusBadRequest, "reconciliation_detail_unsupported", "The selected billing connector does not provide request-level identifiers")
+func isReconciliationCurrency(value string) bool {
+	if len(value) != 3 {
+		return false
 	}
-	return nil
+	for _, character := range value {
+		if character < 'A' || character > 'Z' {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeReconciliationDimensions(values []string) []string {
@@ -461,6 +500,9 @@ func normalizeReconciliationMappings(values map[string]map[string]string) (map[s
 func reconciliationRuleHash(rule ReconciliationRule) string {
 	payload, _ := json.Marshal(struct {
 		ConnectorID         string                       `json:"connector_id"`
+		ConnectorType       string                       `json:"connector_type"`
+		ProviderID          string                       `json:"provider_id"`
+		ProviderResourceID  string                       `json:"provider_resource_id"`
 		Granularity         string                       `json:"granularity"`
 		MatchDimensions     []string                     `json:"match_dimensions"`
 		DimensionMappings   map[string]map[string]string `json:"dimension_mappings"`
@@ -471,9 +513,20 @@ func reconciliationRuleHash(rule ReconciliationRule) string {
 		BillingDelayMinutes int                          `json:"billing_delay_minutes"`
 		Timezone            string                       `json:"timezone"`
 		Currency            string                       `json:"currency"`
-	}{rule.ConnectorID, rule.Granularity, rule.MatchDimensions, rule.DimensionMappings, rule.AmountTolerance, rule.RatioTolerance, rule.USDExchangeRate, rule.TimeWindowMinutes, rule.BillingDelayMinutes, rule.Timezone, rule.Currency})
+	}{rule.ConnectorID, rule.ConnectorType, rule.ProviderID, rule.ProviderResourceID, rule.Granularity, rule.MatchDimensions, rule.DimensionMappings, rule.AmountTolerance, rule.RatioTolerance, rule.USDExchangeRate, rule.TimeWindowMinutes, rule.BillingDelayMinutes, rule.Timezone, rule.Currency})
 	digest := sha256.Sum256(payload)
 	return "sha256:" + hex.EncodeToString(digest[:])
+}
+
+func reconciliationRunRuleHash(run ReconciliationRun) string {
+	return reconciliationRuleHash(ReconciliationRule{
+		ConnectorID: run.ConnectorID, ConnectorType: run.ConnectorType,
+		ProviderID: run.ProviderID, ProviderResourceID: run.ProviderResourceID,
+		Granularity: run.Granularity, MatchDimensions: run.MatchDimensions, DimensionMappings: run.DimensionMappings,
+		AmountTolerance: run.AmountTolerance, RatioTolerance: run.RatioTolerance, USDExchangeRate: run.USDExchangeRate,
+		TimeWindowMinutes: run.TimeWindowMinutes, BillingDelayMinutes: run.BillingDelayMinutes,
+		Timezone: run.Timezone, Currency: run.Currency,
+	})
 }
 
 func reconciliationRunFromRule(rule ReconciliationRule, request ReconciliationRunRequest, trigger string, actor string) ReconciliationRun {
@@ -481,6 +534,9 @@ func reconciliationRunFromRule(rule ReconciliationRule, request ReconciliationRu
 		ID:                  NewID("recon"),
 		RuleID:              rule.ID,
 		ConnectorID:         rule.ConnectorID,
+		ConnectorType:       rule.ConnectorType,
+		ProviderID:          rule.ProviderID,
+		ProviderResourceID:  rule.ProviderResourceID,
 		Trigger:             firstNonEmpty(trigger, "manual"),
 		Status:              ReconciliationRunRunning,
 		PeriodStart:         request.PeriodStart.UTC(),

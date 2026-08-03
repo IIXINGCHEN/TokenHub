@@ -209,7 +209,7 @@ func TestReconciliationAggregatesPreciseAmountsByCurrencyAndTimezone(t *testing.
 func TestDetailReconciliationMapsDimensionsAndMatchesPeriodBoundariesOneToOne(t *testing.T) {
 	store := NewMemoryStore()
 	connector := createReconciliationTestConnector(t, store, "bcon_reconciliation_mapping")
-	connector.Config = map[string]string{"provider_resource_id": "resource-local"}
+	connector.Config = map[string]string{"provider_id": "provider-local", "provider_resource_id": "resource-local"}
 	if err := store.db.Save(&connector).Error; err != nil {
 		t.Fatal(err)
 	}
