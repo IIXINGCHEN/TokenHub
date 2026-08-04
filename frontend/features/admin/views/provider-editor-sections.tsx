@@ -1,6 +1,10 @@
 import { providerTypeLabel } from "../domain/labels";
+import { providerReasoningFieldConfigs } from "../domain/provider-reasoning";
 import { tx } from "../i18n/runtime";
 import { providerTypeOptions } from "../shared/ui";
+import { ProviderInlineField } from "./provider-editor-fields";
+
+export { providerReasoningFormValues } from "../domain/provider-reasoning";
 
 type ProviderEditSectionProps = {
   values: Record<string, string>;
@@ -57,6 +61,23 @@ export function ProviderAdvancedFields({
           <input value={values.priority ?? "10"} type="number" onChange={(event) => onUpdate("priority", event.target.value)} />
         </label>
       </div>
+      <details className="provider-account-runtime">
+        <summary>
+          <strong>{tx("Claude Code 推理兼容")}</strong>
+          <span>{tx("配置推理强度值域、预算映射和 reasoning_content 多轮回传。")}</span>
+        </summary>
+        <div className="provider-account-fields">
+          {providerReasoningFieldConfigs().map((field) => (
+            <ProviderInlineField
+              key={field.key}
+              field={field}
+              value={values[field.key] ?? ""}
+              values={values}
+              onChange={(value) => onUpdate(field.key, value)}
+            />
+          ))}
+        </div>
+      </details>
     </section>
   );
 }
