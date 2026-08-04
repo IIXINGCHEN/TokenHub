@@ -577,6 +577,11 @@ func (s *Server) processImageJob(work imageJobWork) {
 		return imageRunResult{data: imageBytes, revisedPrompt: revisedPrompt}, responseUsage, nil
 	})
 	s.store.RecordRouteAttempts(work.call.RequestID, attempts)
+	// Thread the attempt outcomes into the call context so the shared observation
+	// point reports per-candidate counts and upstream latency for image jobs the
+	// same way it does for chat and embedding calls. Both completion paths below
+	// reach observeGatewayCall through call, which carries these attempts.
+	work.call.RouteAttempts = attempts
 	if invokeErr != nil {
 		if errors.Is(invokeErr, context.DeadlineExceeded) {
 			message := fmt.Sprintf("Image generation exceeded the configured %d second timeout", s.config.ImageJobTimeoutSeconds)

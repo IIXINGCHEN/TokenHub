@@ -159,6 +159,10 @@ TokenHub は `GET /metrics` で Prometheus メトリクスを公開できます�
 | --- | --- | --- |
 | `tokenhub_gateway_requests_total` | counter | 論理的なモデル API リクエスト数。複数候補へのフェイルオーバーが発生しても 1 回として数えます。 |
 | `tokenhub_gateway_request_duration_seconds` | histogram | フェイルオーバーを含むエンドツーエンドのレイテンシ。バケットは 300 秒まで。 |
+| `tokenhub_gateway_route_attempts_total` | counter | 物理的な候補試行数。`rate(route_attempts_total) / rate(routed_requests_total)` が平均フェイルオーバー深度です。`routed_requests_total` は試行を 1 回以上行ったリクエストのみを数えるため、Provider に到達しなかった拒否トラフィックで比率が希釈されることはありません。`invoked` ラベルで容量不足によりスキップされた候補を区別できます。`status_code` はゲートウェイがマッピングしたステータスです（上流の 401 は 502 として報告されます）。元の上流ステータスは `RouteAttemptLog` にあります。 |
+| `tokenhub_gateway_attempt_duration_seconds` | histogram | 呼び出された（invoked）1 試行の全所要時間。試行全体を囲む測定で、上流トランスポート・ストリーム変換・クライアントへの書き込みを含みます。ストリーミング呼び出しでは遅いクライアントの背圧を含むため、ゲートウェイのオーバーヘッドは `overhead_seconds` に別途報告されます。容量スキップ候補は含みません。 |
+| `tokenhub_gateway_routed_requests_total` | counter | 候補を 1 回以上試行した論理リクエスト数。フェイルオーバー深度比率の試行分母です。`provider_type` ラベルは最後に試行した候補です。Provider をまたぐフェイルオーバーでは、深度比率は `provider_type` ではなく `model` で集約してください。 |
+| `tokenhub_gateway_overhead_seconds` | histogram | ゲートウェイ自身のオーバーヘッドの近似値：エンドツーエンド所要時間から invoked な試行の所要時間合計を差し引き、負値は 0 にクリップします。ルーティングに受理されたものの試行前に失敗したリクエストは、その全所要時間をオーバーヘッドとして計上します。画像ジョブの所要時間にはキューの待機が含まれるため、画像のオーバーヘッドは上限値です。 |
 | `tokenhub_gateway_requests_in_flight` | gauge | 処理中のモデル API リクエスト数。管理トラフィックとスクレイプは含みません。 |
 | `tokenhub_gateway_tokens_total` | counter | 種別ごとの Token：`prompt`、`completion`、`cached`、`cache_write`、`reasoning`。 |
 | `tokenhub_gateway_cost_usd_total` | counter | Model Directory 価格による統一外部請求見積もり。Provider 実コストは権限付きリクエスト監査にのみ保持され、このメトリクスには含まれません。 |
@@ -170,9 +174,27 @@ TokenHub は `GET /metrics` で Prometheus メトリクスを公開できます�
 
 **Token の種別は排他的な分割ではないため、合計してはいけません。** `prompt` はすでに `cached` と `cache_write` を含み、`reasoning` は `completion` の一部です。合計すると二重計上になります。
 
-ルーティング前に拒否されたリクエスト（無効な API Key、クォータ超過、未知のモデル）はリクエスト数のみを増やします。Provider に到達していないため、Token・コスト・所要時間は記録しません。カタログに存在しないモデル名はそのまま記録せず `unknown` として扱うため、任意のモデル名を大量に送っても系列数を増やすことはできません。
+ルーティング前に拒否されたリクエスト（無効な API Key、クォータ超過、未知のモデル）はリクエスト数のみを増やします。Provider に到達していないため、Token・コスト・所要時間は記録しません。試行分母の `routed_requests_total` は候補に 1 回以上到達したリクエストのみを数えるため、拒否トラフィックの急増でフェイルオーバー深度の比率が希釈されることはありません。カタログに存在しないモデル名はそのまま記録せず `unknown` として扱うため、任意のモデル名を大量に送っても系列数を増やすことはできません。
 
 ラベルは `model`、`provider_type`、`provider_id`、`resource_id`、`status_code`、`error_code`、`stream` です。上流の失敗は `status_code="502"` と `provider_error` の 1 組にまとめて報告されなくなり、「上流エラーの分類」に記載のステータスとエラーコードを持ちます。旧来の値で一致させているダッシュボードやアラートは更新が必要です。`TOKENHUB_METRICS_PROJECT_LABEL=true` を設定すると `project_id` が追加され、各ゲートウェイメトリクスの系列数がアクティブなプロジェクト数だけ増加します。プロジェクト単位のダッシュボードが必要な場合を除き無効のままにし、Key 単位の集計には使用量レポートを利用してください。
+
+よく使う PromQL 例：
+
+```promql
+# モデルごとの平均フェイルオーバー深度。
+sum by (model) (rate(tokenhub_gateway_route_attempts_total[5m]))
+/
+sum by (model) (rate(tokenhub_gateway_routed_requests_total[5m]))
+
+# ゲートウェイオーバーヘッドの P99。histogram_quantile を呼ぶ前に bucket で
+# 集約する必要があります。集約後のパーセンタイル同士を引くのは数学的に無効です。
+histogram_quantile(
+  0.99,
+  sum by (le, stream) (rate(tokenhub_gateway_overhead_seconds_bucket[5m]))
+)
+```
+
+複数インスタンス構成では、各 bucket がカウンタなので全インスタンスの `sum(rate(..._bucket)) by (le)` からヒストグラムのパーセンタイルを計算できます。`tokenhub_gateway_requests_in_flight` は gauge なので、インスタンスごとの同時実行数が必要な場合は `instance` ラベルを保持して集約してください。インスタンスをまたいで合計すると総同時リクエスト数になります。
 
 メトリクスをスクレイプではなく push したい場合は、OpenTelemetry Collector の `prometheus` receiver でこのエンドポイントを収集して転送してください。トレースは別のシグナルで、ゲートウェイが直接送信します。次節を参照してください。
 
