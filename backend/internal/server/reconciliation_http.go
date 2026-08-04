@@ -22,7 +22,7 @@ func (s *Server) handleAdminReconciliationRules(w http.ResponseWriter, r *http.R
 	}
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, map[string]any{"data": s.store.ListReconciliationRules()})
+		writeJSON(w, http.StatusOK, map[string]any{"data": newReconciliationRuleResponses(s.store.ListReconciliationRules())})
 	case http.MethodPost:
 		var request ReconciliationRuleRequest
 		if err := decodeJSON(r, &request); err != nil {
@@ -35,7 +35,7 @@ func (s *Server) handleAdminReconciliationRules(w http.ResponseWriter, r *http.R
 			return
 		}
 		s.recordAdminAudit(r, user, "create", "reconciliation_rule", rule.ID, nil, reconciliationRuleAuditSnapshot(rule))
-		writeJSON(w, http.StatusCreated, rule)
+		writeJSON(w, http.StatusCreated, newReconciliationRuleResponse(rule))
 	default:
 		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
 	}
@@ -77,7 +77,7 @@ func (s *Server) handleAdminReconciliationRuleItem(w http.ResponseWriter, r *htt
 			return
 		}
 		s.recordAdminAudit(r, user, "reconcile", "billing_reconciliation", run.ID, nil, reconciliationAuditSnapshot(run))
-		writeJSON(w, http.StatusCreated, run)
+		writeJSON(w, http.StatusCreated, newReconciliationRunResponse(run))
 		return
 	}
 	switch r.Method {
@@ -87,7 +87,7 @@ func (s *Server) handleAdminReconciliationRuleItem(w http.ResponseWriter, r *htt
 			writeError(w, r, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, rule)
+		writeJSON(w, http.StatusOK, newReconciliationRuleResponse(rule))
 	case http.MethodPatch:
 		var request ReconciliationRulePatchRequest
 		if err := decodeJSON(r, &request); err != nil {
@@ -100,7 +100,7 @@ func (s *Server) handleAdminReconciliationRuleItem(w http.ResponseWriter, r *htt
 			return
 		}
 		s.recordAdminAudit(r, user, "update", "reconciliation_rule", updated.ID, reconciliationRuleAuditSnapshot(before), reconciliationRuleAuditSnapshot(updated))
-		writeJSON(w, http.StatusOK, updated)
+		writeJSON(w, http.StatusOK, newReconciliationRuleResponse(updated))
 	default:
 		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
 	}
@@ -114,7 +114,7 @@ func (s *Server) handleAdminReconciliations(w http.ResponseWriter, r *http.Reque
 		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": s.store.ListReconciliationRuns(r.URL.Query().Get("rule_id"), reconciliationListLimit(r, 100, 500))})
+	writeJSON(w, http.StatusOK, map[string]any{"data": newReconciliationRunResponses(s.store.ListReconciliationRuns(r.URL.Query().Get("rule_id"), reconciliationListLimit(r, 100, 500)))})
 }
 
 func (s *Server) handleAdminReconciliationItem(w http.ResponseWriter, r *http.Request) {
@@ -141,7 +141,7 @@ func (s *Server) handleAdminReconciliationItem(w http.ResponseWriter, r *http.Re
 		limit := reconciliationListLimit(r, 100, 500)
 		offset := reconciliationListOffset(r)
 		items, total := s.store.ListReconciliationItems(runID, r.URL.Query().Get("status"), limit, offset)
-		writeJSON(w, http.StatusOK, ReconciliationDetail{Run: run, Items: items, Total: total, Limit: limit, Offset: offset})
+		writeJSON(w, http.StatusOK, newReconciliationDetailResponse(ReconciliationDetail{Run: run, Items: items, Total: total, Limit: limit, Offset: offset}))
 		return
 	}
 	switch parts[1] {
@@ -163,7 +163,7 @@ func (s *Server) handleAdminReconciliationItem(w http.ResponseWriter, r *http.Re
 			return
 		}
 		s.recordAdminAudit(r, user, "lock", "billing_reconciliation", run.ID, reconciliationAuditSnapshot(before), reconciliationAuditSnapshot(run))
-		writeJSON(w, http.StatusOK, run)
+		writeJSON(w, http.StatusOK, newReconciliationRunResponse(run))
 	case "recalculate":
 		if r.Method != http.MethodPost {
 			writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
@@ -188,7 +188,7 @@ func (s *Server) handleAdminReconciliationItem(w http.ResponseWriter, r *http.Re
 			return
 		}
 		s.recordAdminAudit(r, user, "recalculate", "billing_reconciliation", run.ID, reconciliationAuditSnapshot(before), reconciliationAuditSnapshot(run))
-		writeJSON(w, http.StatusOK, run)
+		writeJSON(w, http.StatusOK, newReconciliationRunResponse(run))
 	case "export":
 		if r.Method != http.MethodGet {
 			writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))

@@ -245,8 +245,15 @@ func TestDetailReconciliationMapsDimensionsAndMatchesPeriodBoundariesOneToOne(t 
 	}
 	run := runReconciliationTestRule(t, app, rule.ID, periodStart, periodStart.Add(time.Hour))
 	assertReconciliationCounts(t, run, 2, 1, 0, 0)
-	if run.ProviderAmount != "6" || run.TokenHubAmount != "3" || run.TokenHubRecordCount != 2 || len(run.DimensionMappings) != 4 {
+	if run.ProviderAmount != "6" || run.TokenHubAmount != "3" || run.TokenHubRecordCount != 2 || len(run.DimensionMappings) != 3 {
 		t.Fatalf("mapped or boundary inputs were not captured correctly: %#v", run)
+	}
+	storedRun, err := store.GetReconciliationRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(storedRun.DimensionMappings) != 4 || storedRun.DimensionMappings["resource_account"]["external-account"] != "resource-local" {
+		t.Fatalf("resource account mapping was not retained in the run snapshot: %#v", storedRun.DimensionMappings)
 	}
 	detail := getReconciliationTestDetail(t, app, run.ID)
 	var sawBoundary, sawFar bool

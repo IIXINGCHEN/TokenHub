@@ -147,10 +147,13 @@ func TestReconciliationSnapshotsScopeForMigrationAndRecalculation(t *testing.T) 
 	}
 }
 
-func TestReconciliationAPIRedactsConnectorResourceScope(t *testing.T) {
+func TestReconciliationAPIRedactsResourceAccountIdentifiers(t *testing.T) {
 	store := NewMemoryStore()
 	connector := createReconciliationTestConnector(t, store, "bcon_reconciliation_api_redaction")
 	resourceScope := "resource-scope-must-stay-secret"
+	billingAccount := "billing-account-must-stay-secret"
+	tokenHubAccount := "tokenhub-account-must-stay-secret"
+	secrets := []string{resourceScope, billingAccount, tokenHubAccount}
 	connector.Config = map[string]string{"provider_id": "provider-redaction", "provider_resource_id": resourceScope}
 	if err := store.db.Save(&connector).Error; err != nil {
 		t.Fatal(err)
@@ -159,8 +162,12 @@ func TestReconciliationAPIRedactsConnectorResourceScope(t *testing.T) {
 	created := doJSON(t, app, http.MethodPost, "/api/admin/billing/reconciliation-rules", map[string]any{
 		"name": "Redacted scope", "connector_id": connector.ID, "granularity": ReconciliationGranularityDay,
 		"match_dimensions": []string{"model", "currency"}, "timezone": "UTC",
+		"dimension_mappings": map[string]map[string]string{
+			"provider":         {"external-provider": "provider-redaction"},
+			"resource_account": {billingAccount: tokenHubAccount},
+		},
 	}, "")
-	assertReconciliationScopeRedacted(t, "create rule", created, http.StatusCreated, resourceScope)
+	assertReconciliationResponseRedacted(t, "create rule", created, http.StatusCreated, secrets...)
 	var rule ReconciliationRule
 	if err := json.Unmarshal([]byte(created.Body), &rule); err != nil {
 		t.Fatal(err)
@@ -169,20 +176,28 @@ func TestReconciliationAPIRedactsConnectorResourceScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if storedRule.ProviderResourceID != resourceScope {
+	if _, exposed := rule.DimensionMappings["resource_account"]; exposed || rule.DimensionMappings["provider"]["external-provider"] != "provider-redaction" {
+		t.Fatalf("rule API did not selectively redact dimension mappings: %#v", rule.DimensionMappings)
+	}
+	if storedRule.ProviderResourceID != resourceScope || storedRule.DimensionMappings["resource_account"][billingAccount] != tokenHubAccount {
 		t.Fatalf("rule resource scope was not persisted: %#v", storedRule)
 	}
-	assertReconciliationScopeRedacted(t, "list rules", doJSON(t, app, http.MethodGet, "/api/admin/billing/reconciliation-rules", nil, ""), http.StatusOK, resourceScope)
-	assertReconciliationScopeRedacted(t, "get rule", doJSON(t, app, http.MethodGet, "/api/admin/billing/reconciliation-rules/"+rule.ID, nil, ""), http.StatusOK, resourceScope)
-	assertReconciliationScopeRedacted(t, "update rule", doJSON(t, app, http.MethodPatch, "/api/admin/billing/reconciliation-rules/"+rule.ID, map[string]any{
+	withoutResourceMapping := storedRule
+	withoutResourceMapping.DimensionMappings = reconciliationResponseDimensionMappings(storedRule.DimensionMappings)
+	if reconciliationRuleHash(withoutResourceMapping) == storedRule.RuleHash {
+		t.Fatal("resource account mapping was omitted from the persisted rule hash")
+	}
+	assertReconciliationResponseRedacted(t, "list rules", doJSON(t, app, http.MethodGet, "/api/admin/billing/reconciliation-rules", nil, ""), http.StatusOK, secrets...)
+	assertReconciliationResponseRedacted(t, "get rule", doJSON(t, app, http.MethodGet, "/api/admin/billing/reconciliation-rules/"+rule.ID, nil, ""), http.StatusOK, secrets...)
+	assertReconciliationResponseRedacted(t, "update rule", doJSON(t, app, http.MethodPatch, "/api/admin/billing/reconciliation-rules/"+rule.ID, map[string]any{
 		"name": "Still redacted scope",
-	}, ""), http.StatusOK, resourceScope)
+	}, ""), http.StatusOK, secrets...)
 
 	periodStart := time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC)
 	runResponse := doJSON(t, app, http.MethodPost, "/api/admin/billing/reconciliation-rules/"+rule.ID+"/run", map[string]any{
 		"period_start": periodStart.Format(time.RFC3339), "period_end": periodStart.Add(24 * time.Hour).Format(time.RFC3339),
 	}, "")
-	assertReconciliationScopeRedacted(t, "run rule", runResponse, http.StatusCreated, resourceScope)
+	assertReconciliationResponseRedacted(t, "run rule", runResponse, http.StatusCreated, secrets...)
 	var run ReconciliationRun
 	if err := json.Unmarshal([]byte(runResponse.Body), &run); err != nil {
 		t.Fatal(err)
@@ -191,22 +206,30 @@ func TestReconciliationAPIRedactsConnectorResourceScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if storedRun.ProviderResourceID != resourceScope {
+	if _, exposed := run.DimensionMappings["resource_account"]; exposed || run.DimensionMappings["provider"]["external-provider"] != "provider-redaction" {
+		t.Fatalf("run API did not selectively redact dimension mappings: %#v", run.DimensionMappings)
+	}
+	if storedRun.ProviderResourceID != resourceScope || storedRun.DimensionMappings["resource_account"][billingAccount] != tokenHubAccount || storedRun.RuleHash != storedRule.RuleHash {
 		t.Fatalf("run resource scope was not persisted: %#v", storedRun)
 	}
-	assertReconciliationScopeRedacted(t, "list runs", doJSON(t, app, http.MethodGet, "/api/admin/billing/reconciliations?rule_id="+rule.ID, nil, ""), http.StatusOK, resourceScope)
-	assertReconciliationScopeRedacted(t, "get run detail", doJSON(t, app, http.MethodGet, "/api/admin/billing/reconciliations/"+run.ID, nil, ""), http.StatusOK, resourceScope)
-	assertReconciliationScopeRedacted(t, "recalculate run", doJSON(t, app, http.MethodPost, "/api/admin/billing/reconciliations/"+run.ID+"/recalculate", map[string]any{}, ""), http.StatusOK, resourceScope)
-	assertReconciliationScopeRedacted(t, "lock run", doJSON(t, app, http.MethodPost, "/api/admin/billing/reconciliations/"+run.ID+"/lock", map[string]any{}, ""), http.StatusOK, resourceScope)
+	assertReconciliationResponseRedacted(t, "list runs", doJSON(t, app, http.MethodGet, "/api/admin/billing/reconciliations?rule_id="+rule.ID, nil, ""), http.StatusOK, secrets...)
+	assertReconciliationResponseRedacted(t, "get run detail", doJSON(t, app, http.MethodGet, "/api/admin/billing/reconciliations/"+run.ID, nil, ""), http.StatusOK, secrets...)
+	assertReconciliationResponseRedacted(t, "recalculate run", doJSON(t, app, http.MethodPost, "/api/admin/billing/reconciliations/"+run.ID+"/recalculate", map[string]any{}, ""), http.StatusOK, secrets...)
+	assertReconciliationResponseRedacted(t, "lock run", doJSON(t, app, http.MethodPost, "/api/admin/billing/reconciliations/"+run.ID+"/lock", map[string]any{}, ""), http.StatusOK, secrets...)
 }
 
-func assertReconciliationScopeRedacted(t *testing.T, action string, response responseBody, status int, resourceScope string) {
+func assertReconciliationResponseRedacted(t *testing.T, action string, response responseBody, status int, secrets ...string) {
 	t.Helper()
 	if response.Code != status {
 		t.Fatalf("%s: expected status %d, got %d %s", action, status, response.Code, response.Body)
 	}
-	if strings.Contains(response.Body, resourceScope) || strings.Contains(response.Body, `"provider_resource_id"`) {
+	if strings.Contains(response.Body, `"provider_resource_id"`) {
 		t.Fatalf("%s exposed connector resource scope: %s", action, response.Body)
+	}
+	for _, secret := range secrets {
+		if strings.Contains(response.Body, secret) {
+			t.Fatalf("%s exposed resource account mapping %q: %s", action, secret, response.Body)
+		}
 	}
 }
 
