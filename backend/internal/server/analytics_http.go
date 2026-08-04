@@ -2,11 +2,13 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,21 +16,34 @@ import (
 )
 
 const (
-	defaultTokenCostLimit   = 100
-	maximumTokenCostLimit   = 1000
-	maximumRawCostRange     = 31 * 24 * time.Hour
-	maximumGroupedCostRange = 366 * 24 * time.Hour
+	defaultTokenCostLimit         = 100
+	maximumTokenCostLimit         = 1000
+	maximumRawCostRange           = 31 * 24 * time.Hour
+	maximumGroupedCostRange       = 366 * 24 * time.Hour
+	maximumTokenCostQueryDuration = 10 * time.Second
 )
 
 type tokenCostCursor struct {
-	Version  int       `json:"v"`
-	AfterAt  time.Time `json:"after_at"`
-	AfterID  string    `json:"after_id"`
-	From     time.Time `json:"from"`
-	Through  time.Time `json:"through"`
-	Kind     string    `json:"kind"`
-	Offset   int       `json:"offset,omitempty"`
-	QueryKey string    `json:"query_key,omitempty"`
+	Version  int                  `json:"v"`
+	AfterAt  time.Time            `json:"after_at"`
+	AfterID  string               `json:"after_id"`
+	From     time.Time            `json:"from"`
+	Through  time.Time            `json:"through"`
+	Kind     string               `json:"kind"`
+	Offset   int                  `json:"offset,omitempty"`
+	QueryKey string               `json:"query_key,omitempty"`
+	Query    tokenCostCursorQuery `json:"query"`
+}
+
+type tokenCostCursorQuery struct {
+	ProjectID   string   `json:"project_id,omitempty"`
+	UserID      string   `json:"user_id,omitempty"`
+	APIKeyID    string   `json:"api_key_id,omitempty"`
+	ProviderID  string   `json:"provider_id,omitempty"`
+	Model       string   `json:"model,omitempty"`
+	Status      string   `json:"status,omitempty"`
+	Granularity string   `json:"granularity"`
+	GroupBy     []string `json:"group_by"`
 }
 
 func (s *Server) handleAdminAnalyticsCredentials(w http.ResponseWriter, r *http.Request) {
@@ -106,16 +121,18 @@ func (s *Server) handleTokenCostAnalytics(w http.ResponseWriter, r *http.Request
 		writeError(w, r, err)
 		return
 	}
-	rows, hasMore, err := s.store.QueryTokenCosts(r.Context(), query)
+	queryContext, cancelQuery := context.WithTimeout(r.Context(), maximumTokenCostQueryDuration)
+	defer cancelQuery()
+	rows, hasMore, err := s.store.QueryTokenCosts(queryContext, query)
 	if err != nil {
 		s.recordTokenCostAudit(r, credential, "failed", "analytics_query_failed", metadata)
-		writeError(w, r, err)
+		writeError(w, r, tokenCostStoreError(err))
 		return
 	}
-	watermarkAt, watermarkID, err := s.store.TokenCostWatermark(r.Context(), query)
+	watermarkAt, watermarkID, err := s.store.TokenCostWatermark(queryContext, query)
 	if err != nil {
 		s.recordTokenCostAudit(r, credential, "failed", "analytics_watermark_failed", metadata)
-		writeError(w, r, err)
+		writeError(w, r, tokenCostStoreError(err))
 		return
 	}
 	watermark := ""
@@ -125,6 +142,7 @@ func (s *Server) handleTokenCostAnalytics(w http.ResponseWriter, r *http.Request
 		watermark = encodeTokenCostCursor(tokenCostCursor{
 			Version: 1, AfterAt: watermarkAt, AfterID: watermarkID,
 			From: query.From, Through: query.To, Kind: "watermark", QueryKey: queryKey,
+			Query: tokenCostCursorQueryFrom(query),
 		})
 	} else if after := strings.TrimSpace(r.URL.Query().Get("after")); after != "" {
 		watermark = after
@@ -135,11 +153,13 @@ func (s *Server) handleTokenCostAnalytics(w http.ResponseWriter, r *http.Request
 		nextCursor = encodeTokenCostCursor(tokenCostCursor{
 			Version: 1, AfterAt: lastTime, AfterID: last.RequestID,
 			From: query.From, Through: query.To, Kind: "request", QueryKey: queryKey,
+			Query: tokenCostCursorQueryFrom(query),
 		})
 	} else if hasMore {
 		nextCursor = encodeTokenCostCursor(tokenCostCursor{
 			Version: 1, From: query.From, Through: query.To,
 			Kind: "aggregate", Offset: query.Offset + len(rows), QueryKey: queryKey,
+			Query: tokenCostCursorQueryFrom(query),
 		})
 	}
 	payload := TokenCostResponse{
@@ -173,6 +193,13 @@ func (s *Server) handleTokenCostAnalytics(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, payload)
 }
 
+func tokenCostStoreError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return NewHTTPError(http.StatusServiceUnavailable, "analytics_query_timeout", "Analytics query exceeded the 10 second execution limit")
+	}
+	return err
+}
+
 func (s *Server) parseTokenCostQuery(r *http.Request, credential AnalyticsCredential) (TokenCostQuery, TokenCostQueryMetadata, error) {
 	values := r.URL.Query()
 	now := time.Now().UTC()
@@ -199,13 +226,18 @@ func (s *Server) parseTokenCostQuery(r *http.Request, credential AnalyticsCreden
 		toFallback = pageCursor.Through
 	} else if afterValue != "" {
 		afterCursor, cursorErr = decodeTokenCostCursor(afterValue)
-		if cursorErr != nil || afterCursor.AfterAt.IsZero() || afterCursor.AfterID == "" {
+		if cursorErr != nil || afterCursor.Kind != "watermark" || afterCursor.AfterAt.IsZero() || afterCursor.AfterID == "" {
 			return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_cursor", "after watermark is invalid")
 		}
 		if strings.TrimSpace(values.Get("from")) != "" {
 			return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_cursor", "from cannot be combined with after")
 		}
 		fromFallback = afterCursor.AfterAt
+	}
+	if cursorValue != "" {
+		applyTokenCostCursorQuery(values, pageCursor.Query)
+	} else if afterValue != "" {
+		applyTokenCostCursorQuery(values, afterCursor.Query)
 	}
 	from, err := parseTokenCostTime(values.Get("from"), fromFallback, "from")
 	if err != nil {
@@ -298,6 +330,9 @@ func (s *Server) parseTokenCostQuery(r *http.Request, credential AnalyticsCreden
 		query.AfterID = pageCursor.AfterID
 		query.Offset = pageCursor.Offset
 	} else if afterValue != "" {
+		if afterCursor.QueryKey == "" || afterCursor.QueryKey != tokenCostQueryKey(credential, query) {
+			return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_cursor", "after watermark does not match the query")
+		}
 		query.AfterAt = afterCursor.AfterAt
 		query.AfterID = afterCursor.AfterID
 	}
@@ -306,6 +341,25 @@ func (s *Server) parseTokenCostQuery(r *http.Request, credential AnalyticsCreden
 		Granularity: granularity, GroupBy: groupBy, Filters: filters, Format: format, Limit: limit,
 	}
 	return query, metadata, nil
+}
+
+func applyTokenCostCursorQuery(values map[string][]string, query tokenCostCursorQuery) {
+	for key, value := range map[string]string{
+		"project_id":  query.ProjectID,
+		"user_id":     query.UserID,
+		"api_key_id":  query.APIKeyID,
+		"provider_id": query.ProviderID,
+		"model":       query.Model,
+		"status":      query.Status,
+		"granularity": query.Granularity,
+	} {
+		if _, present := values[key]; !present && value != "" {
+			values[key] = []string{value}
+		}
+	}
+	if _, present := values["group_by"]; !present && len(query.GroupBy) > 0 {
+		values["group_by"] = []string{strings.Join(query.GroupBy, ",")}
+	}
 }
 
 func tokenCostResponseFormat(r *http.Request) (string, error) {
@@ -377,7 +431,7 @@ func decodeTokenCostCursor(value string) (tokenCostCursor, error) {
 	if err := json.Unmarshal(data, &cursor); err != nil {
 		return tokenCostCursor{}, err
 	}
-	if cursor.Version != 1 || cursor.From.IsZero() || cursor.Through.IsZero() || !cursor.From.Before(cursor.Through) {
+	if cursor.Version != 1 || cursor.From.IsZero() || cursor.Through.IsZero() || !cursor.From.Before(cursor.Through) || cursor.Query.Granularity == "" {
 		return tokenCostCursor{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_cursor", "cursor is invalid")
 	}
 	switch cursor.Kind {
@@ -393,6 +447,19 @@ func decodeTokenCostCursor(value string) (tokenCostCursor, error) {
 		return tokenCostCursor{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_cursor", "cursor is invalid")
 	}
 	return cursor, nil
+}
+
+func tokenCostCursorQueryFrom(query TokenCostQuery) tokenCostCursorQuery {
+	return tokenCostCursorQuery{
+		ProjectID:   query.ProjectID,
+		UserID:      query.UserID,
+		APIKeyID:    query.APIKeyID,
+		ProviderID:  query.ProviderID,
+		Model:       query.Model,
+		Status:      query.Status,
+		Granularity: query.Granularity,
+		GroupBy:     append([]string(nil), query.GroupBy...),
+	}
 }
 
 func tokenCostQueryKey(credential AnalyticsCredential, query TokenCostQuery) string {

@@ -142,7 +142,7 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
 
 ## 分页与增量拉取
 
-当 `has_more` 为 true 时，用 `cursor=next_cursor` 再次调用。重复相同的过滤条件、`granularity` 和 `group_by`；可以省略 `from`、`to`，因为 Cursor 保存了原始快照区间。查询形状改变时 Cursor 会被拒绝。快照上界保持固定，因此分页期间新到达的请求不会挤动后续页面。
+当 `has_more` 为 true 时，用 `cursor=next_cursor` 再次调用。Cursor 会保存原始过滤条件、`granularity`、`group_by` 和快照区间，因此这些参数都可以省略；如果再次传入，则必须与 Cursor 一致。快照上界保持固定，因此分页期间新到达的请求不会挤动后续页面。
 
 响应中的 `watermark` 指向当前快照内最新的匹配请求。Agent 必须先处理所有页面，直到 `has_more` 为 false；确认数据处理成功后，再把 watermark 持久化。下一轮使用 `after=<已提交 watermark>`：
 
@@ -152,7 +152,7 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
   --data-urlencode "after=$TOKENHUB_COST_WATERMARK"
 ```
 
-`after` 位置为不包含边界。没有新记录时，TokenHub 返回空 `data` 并原样返回已提交 watermark，Agent 不会丢失检查点。
+Watermark 也会保存原始过滤条件和聚合形状。`after` 位置为不包含边界，复用 watermark 时修改查询参数会被拒绝。若要开始不同形状的报表，应使用新的 `from`、`to` 发起全新拉取。没有新记录时，TokenHub 返回空 `data` 并原样返回已提交 watermark，Agent 不会丢失检查点。
 
 ## CSV 导出
 
@@ -169,11 +169,21 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
 
 CSV 使用与 JSON 相同的过滤、限制、指标和分页规则。元数据通过 `X-TokenHub-Schema-Version`、`X-TokenHub-Has-More`、`X-TokenHub-Next-Cursor`、`X-TokenHub-Watermark` 响应头返回。
 
+## CLI 与 MCP 评估
+
+| 选项 | 决策 | 原因 |
+| --- | --- | --- |
+| 版本化 HTTP + CSV | 当前支持 | 可用于任意语言、Cron 或 Agent Runtime，无需额外分发二进制，并让认证与检查点保持显式 |
+| 专用 CLI | 暂缓 | CLI 主要只是包装 HTTP，却增加安装、升级和本地 Secret 配置；出现交互式凭证配置或定时报表打包需求时再评估 |
+| MCP Server/Tool | 暂缓 | MCP 会增加长期运行的信任边界和 Host 专属部署；当 Agent Host 需要工具发现或共享检查点管理，而不是直接 HTTP 时再评估 |
+
+未来任何 CLI 或 MCP 适配器都只能接收分析凭证，必须保留 Cursor/watermark 语义并暴露相同 Schema 版本，绝不能要求管理员会话或模型调用 API Key。
+
 ## 安全与运维
 
 - 只有平台管理员可以创建、列出或吊销分析凭证。
 - 每次成功查询、范围越权、非法查询和无效凭证尝试都会写入类型为 `token_cost_analytics` 的审计事件。
 - 查询响应和审计快照不会包含分析凭证或其 Hash。请把只显示一次的 Token 当作 Secret 保存。
-- 查询使用 `created_at` 与 `(project_id, created_at)` 索引，并受时间范围和页面大小约束。不要并发发起无界历史查询，应使用分页。
+- 分析读取使用与网关核心连接池分离的小型专用连接池。文件型 SQLite 会启用 WAL，避免读取阻塞网关写入；PostgreSQL 使用独立分析连接池。除 `created_at`、`(project_id, created_at)` 索引、时间范围和页面大小限制外，每次查询还有 10 秒执行期限。
 - 吊销从下一次请求立即生效。轮换时先创建新凭证、更新 Agent，再吊销旧凭证。
-- 稳定的 HTTP 与 CSV 契约是当前支持的本地 Agent 接口。未来的 CLI 或 MCP 适配器可包装此接口，无需获得管理员或模型调用权限。
+- 不要并发发起无界历史查询，应使用分页。超时会返回 `503 analytics_query_timeout`；重试前应缩短时间范围或减少聚合维度基数。

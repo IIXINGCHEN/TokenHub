@@ -142,7 +142,7 @@ Every JSON response declares `schema_version: "1.0"` and has this shape:
 
 ## Pagination and incremental pulls
 
-When `has_more` is true, call the endpoint again with `cursor=next_cursor`. Repeat the same filters, `granularity`, and `group_by`; `from` and `to` may be omitted because the cursor retains the original snapshot interval. A cursor is rejected if its query shape changes. The snapshot's upper bound remains fixed, so requests arriving during pagination do not shift later pages.
+When `has_more` is true, call the endpoint again with `cursor=next_cursor`. The cursor retains the original filters, `granularity`, `group_by`, and snapshot interval, so those parameters may be omitted. If they are supplied, they must match the cursor. The snapshot's upper bound remains fixed, so requests arriving during pagination do not shift later pages.
 
 The response `watermark` points to the newest matching request in that snapshot. Drain every page until `has_more` is false, process the rows successfully, and only then commit the watermark in the agent's durable state. Start the next run with `after=<committed watermark>`:
 
@@ -152,7 +152,7 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
   --data-urlencode "after=$TOKENHUB_COST_WATERMARK"
 ```
 
-The `after` position is exclusive. When no new records exist, TokenHub returns an empty `data` array and echoes the committed watermark, so the agent does not lose its checkpoint.
+The watermark also retains its original filters and aggregation shape. The `after` position is exclusive, and changing a query parameter while reusing a watermark is rejected. To start a differently shaped report, begin a new pull with `from` and `to`. When no new records exist, TokenHub returns an empty `data` array and echoes the committed watermark, so the agent does not lose its checkpoint.
 
 ## CSV export
 
@@ -169,11 +169,21 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
 
 CSV uses the same filters, limits, metrics, and pagination as JSON. Metadata is returned in `X-TokenHub-Schema-Version`, `X-TokenHub-Has-More`, `X-TokenHub-Next-Cursor`, and `X-TokenHub-Watermark` headers.
 
+## CLI and MCP assessment
+
+| Option | Decision | Reason |
+| --- | --- | --- |
+| Versioned HTTP + CSV | Supported now | Works from any language, cron runner, or Agent runtime; has no extra binary distribution; keeps authentication and checkpoints explicit |
+| Dedicated CLI | Deferred | A CLI would mainly wrap HTTP while adding installation, upgrade, and local secret-configuration work; reconsider when interactive credential setup or scheduled report packaging is requested |
+| MCP server/tool | Deferred | MCP would add another long-running trust boundary and host-specific deployment; reconsider when Agent hosts need tool discovery or shared checkpoint management rather than direct HTTP |
+
+Any future CLI or MCP adapter must accept only an analytics credential, preserve Cursor/watermark semantics, expose the same Schema version, and never request an administrator session or model-invocation API Key.
+
 ## Security and operations
 
 - Only platform administrators can create, list, or revoke analytics credentials.
 - Every successful query, rejected scope request, invalid query, and invalid credential attempt writes an audit event of type `token_cost_analytics`.
 - Analytics credentials and their hashes are excluded from query responses and audit snapshots. Store the one-time token as a secret.
-- Queries run directly against indexed `created_at` and `(project_id, created_at)` paths and are bounded by time range and page size. Use pagination instead of parallel unbounded history pulls.
+- Analytics reads use a dedicated small connection pool, separate from the gateway's core pool. File-backed SQLite enables WAL so readers do not hold up gateway writes; PostgreSQL uses an independent analytics pool. Every query has a 10-second execution deadline in addition to indexed `created_at` and `(project_id, created_at)` paths, time-range limits, and page-size limits.
 - Revocation takes effect on the next request. Rotate a credential by creating a replacement, updating the agent, and revoking the old credential.
-- The stable HTTP and CSV contracts are the supported local-agent interface. A future CLI or MCP adapter can wrap this API without receiving administrator or model-invocation privileges.
+- Use pagination instead of parallel unbounded history pulls. A timed-out query returns `503 analytics_query_timeout`; reduce the time range or grouping cardinality before retrying.

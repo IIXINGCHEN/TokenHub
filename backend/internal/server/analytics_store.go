@@ -86,10 +86,12 @@ func (s *GormStore) ValidateAnalyticsCredential(rawSecret string) (AnalyticsCred
 	if credential.ExpiresAt != nil && !credential.ExpiresAt.After(now) {
 		return AnalyticsCredential{}, NewHTTPError(http.StatusUnauthorized, "analytics_credential_expired", "Analytics credential has expired")
 	}
-	_ = s.db.Model(&AnalyticsCredential{}).Where("id = ?", credential.ID).Updates(map[string]any{
+	if err := s.db.Model(&AnalyticsCredential{}).Where("id = ?", credential.ID).Updates(map[string]any{
 		"last_used_at": now,
 		"updated_at":   now,
-	}).Error
+	}).Error; err != nil {
+		return AnalyticsCredential{}, err
+	}
 	credential.LastUsedAt = &now
 	credential.UpdatedAt = now
 	return credential, nil
@@ -146,7 +148,7 @@ func (s *GormStore) QueryTokenCosts(ctx context.Context, query TokenCostQuery) (
 }
 
 func (s *GormStore) tokenCostRequestQuery(ctx context.Context, query TokenCostQuery) *gorm.DB {
-	usage := s.db.WithContext(ctx).Table("usage_records").
+	usage := s.analyticsDB.WithContext(ctx).Table("usage_records").
 		Select(`request_id,
 			MAX(attributed_user_id) AS user_id,
 			SUM(input_tokens) AS input_tokens,
@@ -174,9 +176,10 @@ func (s *GormStore) tokenCostRequestQuery(ctx context.Context, query TokenCostQu
 		usage = usage.Where("model_name = ?", query.Model)
 	}
 
-	db := s.db.WithContext(ctx).Table("request_logs AS rl").
+	db := s.analyticsDB.WithContext(ctx).Table("request_logs AS rl").
 		Joins("LEFT JOIN (?) AS u ON u.request_id = rl.request_id", usage).
-		Where("rl.created_at >= ? AND rl.created_at < ?", query.From, query.To)
+		Where("rl.created_at >= ? AND rl.created_at < ?", query.From, query.To).
+		Where("rl.project_id <> ?", "admin_playground")
 	if query.ProjectID != "" {
 		db = db.Where("rl.project_id = ?", query.ProjectID)
 	}

@@ -142,7 +142,7 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
 
 ## ページングと差分取得
 
-`has_more` が true の場合は `cursor=next_cursor` で再度呼び出します。同じフィルター、`granularity`、`group_by` を繰り返してください。Cursor が元のスナップショット期間を保持するため、`from` と `to` は省略できます。クエリ形状を変えると Cursor は拒否されます。スナップショット上限は固定されるため、ページング中に到着したリクエストで後続ページがずれることはありません。
+`has_more` が true の場合は `cursor=next_cursor` で再度呼び出します。Cursor は元のフィルター、`granularity`、`group_by`、スナップショット期間を保持するため、これらのパラメーターは省略できます。再指定する場合は Cursor と一致する必要があります。スナップショット上限は固定されるため、ページング中に到着したリクエストで後続ページがずれることはありません。
 
 レスポンスの `watermark` は、そのスナップショットで最後に一致したリクエストを指します。`has_more` が false になるまですべてのページを処理し、処理成功後にだけ watermark を Agent の永続状態へコミットしてください。次回は `after=<committed watermark>` を使います。
 
@@ -152,7 +152,7 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
   --data-urlencode "after=$TOKENHUB_COST_WATERMARK"
 ```
 
-`after` の位置は含みません。新規レコードがない場合、TokenHub は空の `data` とコミット済み watermark をそのまま返すため、Agent はチェックポイントを失いません。
+Watermark も元のフィルターと集計形状を保持します。`after` の位置は含まず、watermark の再利用時にクエリパラメーターを変更すると拒否されます。異なる形状のレポートを開始する場合は、新しい `from` と `to` で取得を開始してください。新規レコードがない場合、TokenHub は空の `data` とコミット済み watermark をそのまま返すため、Agent はチェックポイントを失いません。
 
 ## CSV エクスポート
 
@@ -169,11 +169,21 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
 
 CSV は JSON と同じフィルター、上限、メトリクス、ページング規則を使います。メタデータは `X-TokenHub-Schema-Version`、`X-TokenHub-Has-More`、`X-TokenHub-Next-Cursor`、`X-TokenHub-Watermark` ヘッダーで返します。
 
+## CLI と MCP の評価
+
+| 選択肢 | 判断 | 理由 |
+| --- | --- | --- |
+| バージョン化 HTTP + CSV | 現在サポート | 任意の言語、Cron、Agent Runtime から利用でき、追加 Binary の配布がなく、認証とチェックポイントが明示的 |
+| 専用 CLI | 保留 | CLI は主に HTTP の Wrapper であり、インストール、更新、ローカル Secret 設定が増える。対話的な Credential 設定や定期レポートの Packaging が必要になった時点で再評価 |
+| MCP Server/Tool | 保留 | MCP は長時間稼働する新たな信頼境界と Host 固有のデプロイを追加する。直接 HTTP ではなく、Tool Discovery や共有チェックポイント管理が Agent Host に必要になった時点で再評価 |
+
+将来の CLI/MCP Adapter は分析 Credential だけを受け取り、Cursor/watermark の意味と同じ Schema version を維持し、管理者セッションやモデル呼び出し用 API Key を要求してはなりません。
+
 ## セキュリティと運用
 
 - 分析 Credential を作成、一覧表示、失効できるのはプラットフォーム管理者だけです。
 - 成功したクエリ、スコープ違反、不正なクエリ、無効 Credential の試行は、すべて `token_cost_analytics` 監査イベントとして記録されます。
 - 分析 Credential とその Hash はクエリレスポンスおよび監査スナップショットから除外されます。一度だけ表示される Token は Secret として保存してください。
-- クエリは `created_at` と `(project_id, created_at)` の Index を使い、期間とページサイズで制限されます。無制限の履歴取得を並列実行せず、ページングしてください。
+- 分析読み取りは、ゲートウェイの Core Pool とは別の小さな専用 Connection Pool を使います。ファイル型 SQLite は WAL を有効にして読み取りが Gateway Write を妨げないようにし、PostgreSQL は独立した分析 Pool を使います。`created_at` と `(project_id, created_at)` の Index、期間、ページサイズに加え、各クエリには 10 秒の実行期限があります。
 - 失効は次回リクエストから有効です。ローテーションは、代替 Credential の作成、Agent 更新、旧 Credential の失効の順で行います。
-- 安定した HTTP/CSV 契約が、現在サポートされるローカル Agent インターフェースです。将来の CLI/MCP Adapter は、管理者権限やモデル呼び出し権限なしでこの API をラップできます。
+- 無制限の履歴取得を並列実行せず、ページングしてください。タイムアウトは `503 analytics_query_timeout` を返します。再試行前に期間または Grouping Cardinality を減らしてください。

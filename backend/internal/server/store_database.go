@@ -202,6 +202,11 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 		if err := db.Exec("PRAGMA busy_timeout = 5000").Error; err != nil {
 			return nil, err
 		}
+		if sqliteSupportsWAL(dsn) {
+			if err := db.Exec("PRAGMA journal_mode = WAL").Error; err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	migrate := func() error {
@@ -256,9 +261,14 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 	if postgresMaxOpenConns > 0 {
 		sqlDB.SetMaxOpenConns(postgresMaxOpenConns)
 	}
+	analyticsDB, err := openAnalyticsDatabase(driver, dsn, config)
+	if err != nil {
+		return nil, err
+	}
 
 	return &GormStore{
 		db:                   db,
+		analyticsDB:          analyticsDB,
 		mu:                   &sync.Mutex{},
 		leaseHeartbeats:      &sync.Map{},
 		secretKey:            config.SecretKey,
@@ -272,6 +282,53 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 		clusterLockTTL:       time.Duration(defaultInt(config.ClusterLockTTLSeconds, 180)) * time.Second,
 		imageCapabilityRetry: time.Duration(defaultInt(config.ImageCapabilityRetrySecs, 86400)) * time.Second,
 	}, nil
+}
+
+func openAnalyticsDatabase(driver string, dsn string, config Config) (*gorm.DB, error) {
+	var dialector gorm.Dialector
+	switch driver {
+	case "sqlite":
+		dialector = sqlite.Open(dsn)
+	case "postgres":
+		dialector = postgres.Open(dsn)
+	default:
+		return nil, fmt.Errorf("unsupported analytics database driver: %s", driver)
+	}
+	db, err := gorm.Open(dialector, &gorm.Config{
+		TranslateError: true,
+		Logger:         gormlogger.Default.LogMode(gormlogger.Silent),
+	})
+	if err != nil {
+		return nil, err
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, err
+	}
+	if driver == "sqlite" {
+		sqlDB.SetMaxOpenConns(1)
+		sqlDB.SetMaxIdleConns(1)
+		if err := db.Exec("PRAGMA busy_timeout = 1000").Error; err != nil {
+			return nil, err
+		}
+		if err := db.Exec("PRAGMA query_only = ON").Error; err != nil {
+			return nil, err
+		}
+	} else {
+		poolSize := maxInt(1, defaultInt(config.DBMaxOpenConns, 25))
+		if poolSize > 2 {
+			poolSize = 2
+		}
+		sqlDB.SetMaxOpenConns(poolSize)
+		sqlDB.SetMaxIdleConns(1)
+		sqlDB.SetConnMaxLifetime(time.Duration(defaultInt(config.DBConnMaxLifetimeMinutes, 30)) * time.Minute)
+	}
+	return db, nil
+}
+
+func sqliteSupportsWAL(dsn string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(dsn))
+	return trimmed != "" && trimmed != ":memory:" && !strings.Contains(trimmed, "mode=memory")
 }
 
 func backfillRoutingPolicyBindingKeys(db *gorm.DB) error {

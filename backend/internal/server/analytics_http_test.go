@@ -286,6 +286,72 @@ func TestTokenCostCursorPaginatesSnapshotAndWatermarkSupportsIncrementalPull(t *
 	}
 }
 
+func TestTokenCostWatermarkPreservesOriginalFiltersAndAggregation(t *testing.T) {
+	store := NewMemoryStore()
+	project := store.CreateProject(Project{Name: "Watermark Query Project", Status: StatusActive})
+	app := New(store).Handler()
+	token := createAnalyticsCredentialToken(t, app, map[string]any{
+		"name": "watermark-query-agent", "scope_type": AnalyticsScopeOrganization,
+	})
+	base := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	createAnalyticsRequest(t, store, RequestLog{
+		ID: "log_watermark_initial", RequestID: "req_watermark_initial", ProjectID: project.ID,
+		ProviderID: "provider-watermark-a", ModelName: "gpt-watermark", StatusCode: http.StatusOK, CreatedAt: base,
+	}, &UsageRecord{
+		ID: "use_watermark_initial", RequestID: "req_watermark_initial", ProjectID: project.ID,
+		ProviderID: "provider-watermark-a", ModelName: "gpt-watermark", InputTokens: 1, TotalTokens: 1, CreatedAt: base,
+	})
+	initialQuery := url.Values{
+		"from":        {base.Add(-time.Minute).Format(time.RFC3339)},
+		"to":          {base.Add(time.Minute).Format(time.RFC3339)},
+		"provider_id": {"provider-watermark-a"},
+		"granularity": {"day"},
+		"group_by":    {"provider"},
+	}
+	initialResponse := doJSON(t, app, http.MethodGet, "/api/v1/analytics/token-costs?"+initialQuery.Encode(), nil, token)
+	if initialResponse.Code != http.StatusOK {
+		t.Fatalf("initial watermark query: %d %s", initialResponse.Code, initialResponse.Body)
+	}
+	var initial TokenCostResponse
+	if err := json.Unmarshal([]byte(initialResponse.Body), &initial); err != nil {
+		t.Fatal(err)
+	}
+	if initial.Watermark == "" {
+		t.Fatalf("initial query omitted watermark: %s", initialResponse.Body)
+	}
+
+	for index, providerID := range []string{"provider-watermark-a", "provider-watermark-b"} {
+		occurredAt := base.Add(time.Duration(index+2) * time.Minute)
+		requestID := "req_watermark_new_" + strconv.Itoa(index)
+		createAnalyticsRequest(t, store, RequestLog{
+			ID: "log_" + requestID, RequestID: requestID, ProjectID: project.ID,
+			ProviderID: providerID, ModelName: "gpt-watermark", StatusCode: http.StatusOK, CreatedAt: occurredAt,
+		}, &UsageRecord{
+			ID: "use_" + requestID, RequestID: requestID, ProjectID: project.ID,
+			ProviderID: providerID, ModelName: "gpt-watermark", InputTokens: 2, TotalTokens: 2, CreatedAt: occurredAt,
+		})
+	}
+	incremental := url.Values{
+		"after": {initial.Watermark},
+		"to":    {base.Add(10 * time.Minute).Format(time.RFC3339)},
+	}
+	incrementalResponse := doJSON(t, app, http.MethodGet, "/api/v1/analytics/token-costs?"+incremental.Encode(), nil, token)
+	if incrementalResponse.Code != http.StatusOK {
+		t.Fatalf("incremental watermark query: %d %s", incrementalResponse.Code, incrementalResponse.Body)
+	}
+	var pulled TokenCostResponse
+	if err := json.Unmarshal([]byte(incrementalResponse.Body), &pulled); err != nil {
+		t.Fatal(err)
+	}
+	if pulled.Query.Granularity != "day" || strings.Join(pulled.Query.GroupBy, ",") != "provider" ||
+		pulled.Query.Filters["provider_id"] != "provider-watermark-a" {
+		t.Fatalf("incremental query lost original shape: %#v", pulled.Query)
+	}
+	if len(pulled.Data) != 1 || pulled.Data[0].ProviderID != "provider-watermark-a" || pulled.Data[0].Metrics.RequestCount != 1 {
+		t.Fatalf("incremental query mixed unrelated records: %#v", pulled.Data)
+	}
+}
+
 func TestTokenCostAnalyticsExportsCSVWithStableSchemaHeaders(t *testing.T) {
 	store := NewMemoryStore()
 	project := store.CreateProject(Project{Name: "CSV Analytics Project", Status: StatusActive})
@@ -466,6 +532,34 @@ func TestTokenCostAnalyticsKeepsLargeQueriesIndexedAndPageBounded(t *testing.T) 
 	}
 }
 
+func TestTokenCostAnalyticsUsesAnIsolatedReadPool(t *testing.T) {
+	store := NewMemoryStore()
+	project := store.CreateProject(Project{Name: "Isolated Analytics Project", Status: StatusActive})
+	analyticsSQL, err := store.analyticsDB.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := analyticsSQL.Conn(t.Context())
+	if err != nil {
+		t.Fatalf("reserve analytics connection: %v", err)
+	}
+	defer connection.Close()
+
+	coreReadDone := make(chan bool, 1)
+	go func() {
+		_, ok := store.GetProject(project.ID)
+		coreReadDone <- ok
+	}()
+	select {
+	case ok := <-coreReadDone:
+		if !ok {
+			t.Fatal("core project read failed while analytics pool was busy")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("busy analytics pool blocked a core gateway database read")
+	}
+}
+
 func TestTokenCostAggregateMatchesAdminUsageMetrics(t *testing.T) {
 	store := NewMemoryStore()
 	project := store.CreateProject(Project{Name: "Parity Analytics Project", Status: StatusActive})
@@ -485,9 +579,14 @@ func TestTokenCostAggregateMatchesAdminUsageMetrics(t *testing.T) {
 		APIKeyID: "key_parity", ModelName: "gpt-parity", ProviderID: "provider-parity",
 		StatusCode: http.StatusBadGateway, CreatedAt: now.Add(time.Second),
 	}, nil)
+	createAnalyticsRequest(t, store, RequestLog{
+		ID: "log_parity_playground", RequestID: "req_parity_playground", ProjectID: "admin_playground",
+		ModelName: "gpt-parity", ProviderID: "provider-parity", StatusCode: http.StatusBadGateway,
+		CreatedAt: now.Add(2 * time.Second),
+	}, nil)
 
 	rows, hasMore, err := store.QueryTokenCosts(t.Context(), TokenCostQuery{
-		From: now.Add(-time.Minute), To: now.Add(time.Minute), ProjectID: project.ID,
+		From: now.Add(-time.Minute), To: now.Add(time.Minute),
 		Granularity: "none", Limit: 10,
 	})
 	if err != nil || hasMore || len(rows) != 1 {

@@ -242,6 +242,7 @@ var _ Store = (*GormStore)(nil)
 
 type GormStore struct {
 	db                   *gorm.DB
+	analyticsDB          *gorm.DB
 	mu                   *sync.Mutex
 	leaseHeartbeats      *sync.Map
 	secretKey            string
