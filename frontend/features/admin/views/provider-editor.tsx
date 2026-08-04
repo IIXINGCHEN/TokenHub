@@ -161,6 +161,7 @@ export function ProviderUpsertModal({
     type: mode === "edit" ? editingCodexSubscription ? "openai_codex" : provider?.type ?? "openai_compatible" : initialEntry?.type ?? "openai_compatible",
     base_url: mode === "edit" ? editingCodexSubscription ? codexProviderCatalogSummary.base_url ?? "" : provider?.base_url ?? "" : initialEntry?.base_url ?? "",
     api_key: "",
+    anthropic_auth_type: provider?.options?.anthropic_auth_type ?? "x-api-key",
     priority: String(provider?.priority ?? 10),
     status: provider?.status ?? "active",
     healthy: String(provider?.healthy ?? true),

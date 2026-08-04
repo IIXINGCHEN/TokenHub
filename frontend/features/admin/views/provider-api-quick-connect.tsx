@@ -6,6 +6,7 @@ import { formatModelPrice } from "../domain/formatting";
 import { clearCustomValidity, countWithUnit, handleRequiredFieldInvalid, tx } from "../i18n/runtime";
 import { adminFetch, isAuthExpiredError, readAdminError } from "../resources/payloads";
 import { providerTypeOptions } from "../shared/ui";
+import { AnthropicAuthTypeField } from "./provider-editor-sections";
 
 type ProviderConnectionTestState = {
   status: "idle" | "testing" | "success" | "error";
@@ -137,6 +138,7 @@ export function ProviderAPIQuickConnect({
           type: values.type,
           base_url: values.base_url,
           api_key: values.api_key,
+          anthropic_auth_type: values.type === "anthropic" ? values.anthropic_auth_type || "x-api-key" : "",
         }),
       });
       if (!resp.ok) throw new Error(await readAdminError(resp, tx("测试 Provider 连接")));
@@ -312,6 +314,7 @@ export function ProviderAPIQuickConnect({
                 {providerTypeOptions.map((option) => <option key={option} value={option}>{providerTypeLabel(option)}</option>)}
               </select>
             </label>
+            <AnthropicAuthTypeField values={values} onUpdate={onUpdate} />
             <label className="field">
               <span>{tx("优先级")}</span>
               <input value={values.priority ?? "10"} type="number" onChange={(event) => onUpdate("priority", event.target.value)} />

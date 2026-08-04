@@ -20,6 +20,7 @@ export function providerPayload(values: Record<string, string>) {
     status: values.status || "active",
     healthy: values.healthy !== "false",
     priority: numberOr(values.priority, 10),
+		anthropic_auth_type: values.type === "anthropic" ? values.anthropic_auth_type || "x-api-key" : "",
 		catalog_id: values.catalog_id,
 		model_category: values.model_category,
 		selected_models: splitList(values.selected_models),
