@@ -454,6 +454,7 @@ type RequestLog struct {
 	RequestID                string    `json:"request_id" gorm:"index"`
 	ProjectID                string    `json:"project_id" gorm:"index;index:idx_request_logs_project_created,priority:1"`
 	APIKeyID                 string    `json:"api_key_id" gorm:"index"`
+	AttributedUserID         string    `json:"attributed_user_id,omitempty" gorm:"index"`
 	ModelName                string    `json:"model" gorm:"index"`
 	ProviderID               string    `json:"provider_id,omitempty" gorm:"index"`
 	ProviderResourceID       string    `json:"provider_resource_id,omitempty" gorm:"index"`
@@ -500,6 +501,7 @@ type ImageJob struct {
 	ID                      string     `json:"id" gorm:"primaryKey"`
 	ProjectID               string     `json:"project_id" gorm:"index"`
 	APIKeyID                string     `json:"api_key_id" gorm:"index"`
+	AttributedUserID        string     `json:"attributed_user_id,omitempty" gorm:"index"`
 	RequestID               string     `json:"request_id,omitempty" gorm:"index"`
 	Status                  string     `json:"status" gorm:"index"`
 	Model                   string     `json:"model"`

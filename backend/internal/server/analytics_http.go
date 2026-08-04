@@ -123,18 +123,14 @@ func (s *Server) handleTokenCostAnalytics(w http.ResponseWriter, r *http.Request
 	}
 	queryContext, cancelQuery := context.WithTimeout(r.Context(), maximumTokenCostQueryDuration)
 	defer cancelQuery()
-	rows, hasMore, err := s.store.QueryTokenCosts(queryContext, query)
+	page, err := s.store.QueryTokenCostPage(queryContext, query)
 	if err != nil {
 		s.recordTokenCostAudit(r, credential, "failed", "analytics_query_failed", metadata)
 		writeError(w, r, tokenCostStoreError(err))
 		return
 	}
-	watermarkAt, watermarkID, err := s.store.TokenCostWatermark(queryContext, query)
-	if err != nil {
-		s.recordTokenCostAudit(r, credential, "failed", "analytics_watermark_failed", metadata)
-		writeError(w, r, tokenCostStoreError(err))
-		return
-	}
+	rows, hasMore := page.Rows, page.HasMore
+	watermarkAt, watermarkID := page.WatermarkAt, page.WatermarkID
 	watermark := ""
 	nextCursor := ""
 	queryKey := tokenCostQueryKey(credential, query)

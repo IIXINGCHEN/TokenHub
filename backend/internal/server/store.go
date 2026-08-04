@@ -178,8 +178,7 @@ type Store interface {
 	ListAnalyticsCredentials() []AnalyticsCredential
 	RevokeAnalyticsCredential(id string) (AnalyticsCredential, error)
 	ValidateAnalyticsCredential(rawSecret string) (AnalyticsCredential, error)
-	QueryTokenCosts(ctx context.Context, query TokenCostQuery) ([]TokenCostRow, bool, error)
-	TokenCostWatermark(ctx context.Context, query TokenCostQuery) (time.Time, string, error)
+	QueryTokenCostPage(ctx context.Context, query TokenCostQuery) (TokenCostPage, error)
 	GenerateBillingPeriod(period string) (map[string]any, error)
 	ListRequestLogs() []RequestLog
 	ListProviderObservations(since time.Time) []ProviderObservation

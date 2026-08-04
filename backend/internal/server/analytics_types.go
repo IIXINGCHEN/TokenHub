@@ -76,6 +76,15 @@ type TokenCostResponse struct {
 	Watermark     string                 `json:"watermark"`
 }
 
+// TokenCostPage keeps the exported rows and their checkpoint together so the
+// store can derive both from one consistent database snapshot.
+type TokenCostPage struct {
+	Rows        []TokenCostRow
+	HasMore     bool
+	WatermarkAt time.Time
+	WatermarkID string
+}
+
 type TokenCostQuery struct {
 	From        time.Time
 	To          time.Time

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"strings"
 	"time"
@@ -97,6 +98,42 @@ func (s *GormStore) ValidateAnalyticsCredential(rawSecret string) (AnalyticsCred
 	return credential, nil
 }
 
+// QueryTokenCostPage reads rows and their watermark in one transaction. SQLite
+// pins both statements to one read transaction; PostgreSQL additionally uses
+// repeatable read because its default read-committed mode takes a new snapshot
+// for every statement.
+func (s *GormStore) QueryTokenCostPage(ctx context.Context, query TokenCostQuery) (TokenCostPage, error) {
+	var page TokenCostPage
+	readSnapshot := func(tx *gorm.DB) error {
+		snapshotStore := *s
+		snapshotStore.analyticsDB = tx
+		rows, hasMore, err := snapshotStore.QueryTokenCosts(ctx, query)
+		if err != nil {
+			return err
+		}
+		watermarkAt, watermarkID, err := snapshotStore.TokenCostWatermark(ctx, query)
+		if err != nil {
+			return err
+		}
+		page = TokenCostPage{
+			Rows: rows, HasMore: hasMore,
+			WatermarkAt: watermarkAt, WatermarkID: watermarkID,
+		}
+		return nil
+	}
+	db := s.analyticsDB.WithContext(ctx)
+	var err error
+	if s.dbDriver == "postgres" {
+		err = db.Transaction(readSnapshot, &sql.TxOptions{
+			Isolation: sql.LevelRepeatableRead,
+			ReadOnly:  true,
+		})
+	} else {
+		err = db.Transaction(readSnapshot)
+	}
+	return page, err
+}
+
 type tokenCostDatabaseRow struct {
 	Bucket            string
 	RequestID         string
@@ -127,7 +164,7 @@ func (s *GormStore) QueryTokenCosts(ctx context.Context, query TokenCostQuery) (
 		Select(`rl.request_id,
 			rl.created_at AS occurred_at,
 			rl.project_id,
-			COALESCE(u.user_id, '') AS user_id,
+			COALESCE(NULLIF(rl.attributed_user_id, ''), u.user_id, '') AS user_id,
 			rl.api_key_id,
 			rl.provider_id,
 			rl.model_name AS model,
@@ -141,7 +178,7 @@ func (s *GormStore) QueryTokenCosts(ctx context.Context, query TokenCostQuery) (
 			COALESCE(u.estimated_cost_usd, 0) AS estimated_cost_usd`)
 	limit := normalizedTokenCostLimit(query.Limit)
 	var databaseRows []tokenCostDatabaseRow
-	if err := db.Order("rl.created_at ASC, rl.request_id ASC").Limit(limit + 1).Scan(&databaseRows).Error; err != nil {
+	if err := db.Order("rl.created_at ASC, rl.request_id ASC").Limit(limit + 1).Find(&databaseRows).Error; err != nil {
 		return nil, false, err
 	}
 	return tokenCostRows(databaseRows, limit, false)
@@ -162,9 +199,6 @@ func (s *GormStore) tokenCostRequestQuery(ctx context.Context, query TokenCostQu
 		Group("request_id")
 	if query.ProjectID != "" {
 		usage = usage.Where("project_id = ?", query.ProjectID)
-	}
-	if query.UserID != "" {
-		usage = usage.Where("attributed_user_id = ?", query.UserID)
 	}
 	if query.APIKeyID != "" {
 		usage = usage.Where("api_key_id = ?", query.APIKeyID)
@@ -187,7 +221,7 @@ func (s *GormStore) tokenCostRequestQuery(ctx context.Context, query TokenCostQu
 		db = db.Where("(rl.created_at > ? OR (rl.created_at = ? AND rl.request_id > ?))", query.AfterAt, query.AfterAt, query.AfterID)
 	}
 	if query.UserID != "" {
-		db = db.Where("COALESCE(u.user_id, '') = ?", query.UserID)
+		db = db.Where("COALESCE(NULLIF(rl.attributed_user_id, ''), u.user_id, '') = ?", query.UserID)
 	}
 	if query.APIKeyID != "" {
 		db = db.Where("rl.api_key_id = ?", query.APIKeyID)
@@ -237,7 +271,7 @@ func (s *GormStore) queryAggregatedTokenCosts(ctx context.Context, query TokenCo
 	}
 	limit := normalizedTokenCostLimit(query.Limit)
 	var databaseRows []tokenCostDatabaseRow
-	if err := db.Offset(query.Offset).Limit(limit + 1).Scan(&databaseRows).Error; err != nil {
+	if err := db.Offset(query.Offset).Limit(limit + 1).Find(&databaseRows).Error; err != nil {
 		return nil, false, err
 	}
 	return tokenCostRows(databaseRows, limit, true)
@@ -269,7 +303,8 @@ func tokenCostDimensionSQL(dimension string) (string, string) {
 	case "project":
 		return "rl.project_id", "rl.project_id AS project_id"
 	case "user":
-		return "COALESCE(u.user_id, '')", "COALESCE(u.user_id, '') AS user_id"
+		expression := "COALESCE(NULLIF(rl.attributed_user_id, ''), u.user_id, '')"
+		return expression, expression + " AS user_id"
 	case "api_key":
 		return "rl.api_key_id", "rl.api_key_id AS api_key_id"
 	case "provider":
@@ -335,6 +370,6 @@ func (s *GormStore) TokenCostWatermark(ctx context.Context, query TokenCostQuery
 		Select("rl.created_at AS occurred_at, rl.request_id").
 		Order("rl.created_at DESC, rl.request_id DESC").
 		Limit(1).
-		Scan(&row).Error
+		Find(&row).Error
 	return row.OccurredAt, row.RequestID, err
 }
