@@ -105,6 +105,7 @@ type ProviderObservation struct {
 
 type Store interface {
 	BillingStore
+	ReconciliationStore
 	CreateProject(project Project) Project
 	CreateProjectChecked(project Project) (Project, error)
 	ListProjects() []Project
