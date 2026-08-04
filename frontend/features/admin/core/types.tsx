@@ -150,7 +150,6 @@ export type ReconciliationRule = {
 	connector_id: string;
 	connector_type: string;
 	provider_id: string;
-	provider_resource_id?: string;
 	status: string;
 	granularity: "detail" | "hour" | "day" | "month";
 	match_dimensions: string[];
@@ -177,7 +176,6 @@ export type ReconciliationRun = {
 	connector_id: string;
 	connector_type: string;
 	provider_id: string;
-	provider_resource_id?: string;
 	trigger: string;
 	status: string;
 	period_start: string;

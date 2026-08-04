@@ -90,6 +90,9 @@ func TestReconciliationSnapshotsScopeForMigrationAndRecalculation(t *testing.T) 
 	})
 	app := New(store).Handler()
 	rule := createReconciliationReviewRule(t, app, connector.ID, ReconciliationGranularityDay, []string{"model", "currency"})
+	if rule.ProviderResourceID != "" {
+		t.Fatalf("rule API exposed connector resource scope: %#v", rule)
+	}
 	legacyHash := rule.RuleHash
 	if err := store.db.Model(&ReconciliationRule{}).Where("id = ?", rule.ID).Updates(map[string]any{
 		"connector_type": "", "provider_id": "", "provider_resource_id": "", "rule_hash": "legacy:without-scope",
@@ -97,6 +100,9 @@ func TestReconciliationSnapshotsScopeForMigrationAndRecalculation(t *testing.T) 
 		t.Fatal(err)
 	}
 	run := runReconciliationTestRule(t, app, rule.ID, periodStart, periodStart.Add(24*time.Hour))
+	if run.ProviderResourceID != "" {
+		t.Fatalf("run API exposed connector resource scope: %#v", run)
+	}
 	storedRule, err := store.GetReconciliationRule(rule.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -110,9 +116,13 @@ func TestReconciliationSnapshotsScopeForMigrationAndRecalculation(t *testing.T) 
 	if reconciliationRuleHash(changedScope) == storedRule.RuleHash {
 		t.Fatal("provider scope was omitted from the reconciliation rule hash")
 	}
-	if run.ConnectorType != storedRule.ConnectorType || run.ProviderID != storedRule.ProviderID || run.ProviderResourceID != storedRule.ProviderResourceID ||
-		run.RuleHash != storedRule.RuleHash || run.TokenHubRecordCount != 1 {
-		t.Fatalf("run did not capture the migrated rule snapshot: rule=%#v run=%#v", storedRule, run)
+	storedRun, err := store.GetReconciliationRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedRun.ConnectorType != storedRule.ConnectorType || storedRun.ProviderID != storedRule.ProviderID || storedRun.ProviderResourceID != storedRule.ProviderResourceID ||
+		storedRun.RuleHash != storedRule.RuleHash || storedRun.TokenHubRecordCount != 1 {
+		t.Fatalf("run did not persist the migrated rule snapshot: rule=%#v run=%#v", storedRule, storedRun)
 	}
 	if err := store.db.Delete(&BillingConnector{}, "id = ?", connector.ID).Error; err != nil {
 		t.Fatal(err)
@@ -125,8 +135,78 @@ func TestReconciliationSnapshotsScopeForMigrationAndRecalculation(t *testing.T) 
 	if err := json.Unmarshal([]byte(response.Body), &recalculated); err != nil {
 		t.Fatal(err)
 	}
-	if recalculated.RuleHash != run.RuleHash || recalculated.ProviderID != "provider-a" || recalculated.ProviderResourceID != "resource-a" || recalculated.TokenHubRecordCount != 1 {
-		t.Fatalf("recalculation changed the run connector snapshot: before=%#v after=%#v", run, recalculated)
+	if recalculated.ProviderResourceID != "" {
+		t.Fatalf("recalculation API exposed connector resource scope: %#v", recalculated)
+	}
+	storedRecalculated, err := store.GetReconciliationRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedRecalculated.RuleHash != run.RuleHash || storedRecalculated.ProviderID != "provider-a" || storedRecalculated.ProviderResourceID != "resource-a" || storedRecalculated.TokenHubRecordCount != 1 {
+		t.Fatalf("recalculation changed the persisted run connector snapshot: before=%#v after=%#v", storedRun, storedRecalculated)
+	}
+}
+
+func TestReconciliationAPIRedactsConnectorResourceScope(t *testing.T) {
+	store := NewMemoryStore()
+	connector := createReconciliationTestConnector(t, store, "bcon_reconciliation_api_redaction")
+	resourceScope := "resource-scope-must-stay-secret"
+	connector.Config = map[string]string{"provider_id": "provider-redaction", "provider_resource_id": resourceScope}
+	if err := store.db.Save(&connector).Error; err != nil {
+		t.Fatal(err)
+	}
+	app := New(store).Handler()
+	created := doJSON(t, app, http.MethodPost, "/api/admin/billing/reconciliation-rules", map[string]any{
+		"name": "Redacted scope", "connector_id": connector.ID, "granularity": ReconciliationGranularityDay,
+		"match_dimensions": []string{"model", "currency"}, "timezone": "UTC",
+	}, "")
+	assertReconciliationScopeRedacted(t, "create rule", created, http.StatusCreated, resourceScope)
+	var rule ReconciliationRule
+	if err := json.Unmarshal([]byte(created.Body), &rule); err != nil {
+		t.Fatal(err)
+	}
+	storedRule, err := store.GetReconciliationRule(rule.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedRule.ProviderResourceID != resourceScope {
+		t.Fatalf("rule resource scope was not persisted: %#v", storedRule)
+	}
+	assertReconciliationScopeRedacted(t, "list rules", doJSON(t, app, http.MethodGet, "/api/admin/billing/reconciliation-rules", nil, ""), http.StatusOK, resourceScope)
+	assertReconciliationScopeRedacted(t, "get rule", doJSON(t, app, http.MethodGet, "/api/admin/billing/reconciliation-rules/"+rule.ID, nil, ""), http.StatusOK, resourceScope)
+	assertReconciliationScopeRedacted(t, "update rule", doJSON(t, app, http.MethodPatch, "/api/admin/billing/reconciliation-rules/"+rule.ID, map[string]any{
+		"name": "Still redacted scope",
+	}, ""), http.StatusOK, resourceScope)
+
+	periodStart := time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC)
+	runResponse := doJSON(t, app, http.MethodPost, "/api/admin/billing/reconciliation-rules/"+rule.ID+"/run", map[string]any{
+		"period_start": periodStart.Format(time.RFC3339), "period_end": periodStart.Add(24 * time.Hour).Format(time.RFC3339),
+	}, "")
+	assertReconciliationScopeRedacted(t, "run rule", runResponse, http.StatusCreated, resourceScope)
+	var run ReconciliationRun
+	if err := json.Unmarshal([]byte(runResponse.Body), &run); err != nil {
+		t.Fatal(err)
+	}
+	storedRun, err := store.GetReconciliationRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedRun.ProviderResourceID != resourceScope {
+		t.Fatalf("run resource scope was not persisted: %#v", storedRun)
+	}
+	assertReconciliationScopeRedacted(t, "list runs", doJSON(t, app, http.MethodGet, "/api/admin/billing/reconciliations?rule_id="+rule.ID, nil, ""), http.StatusOK, resourceScope)
+	assertReconciliationScopeRedacted(t, "get run detail", doJSON(t, app, http.MethodGet, "/api/admin/billing/reconciliations/"+run.ID, nil, ""), http.StatusOK, resourceScope)
+	assertReconciliationScopeRedacted(t, "recalculate run", doJSON(t, app, http.MethodPost, "/api/admin/billing/reconciliations/"+run.ID+"/recalculate", map[string]any{}, ""), http.StatusOK, resourceScope)
+	assertReconciliationScopeRedacted(t, "lock run", doJSON(t, app, http.MethodPost, "/api/admin/billing/reconciliations/"+run.ID+"/lock", map[string]any{}, ""), http.StatusOK, resourceScope)
+}
+
+func assertReconciliationScopeRedacted(t *testing.T, action string, response responseBody, status int, resourceScope string) {
+	t.Helper()
+	if response.Code != status {
+		t.Fatalf("%s: expected status %d, got %d %s", action, status, response.Code, response.Body)
+	}
+	if strings.Contains(response.Body, resourceScope) || strings.Contains(response.Body, `"provider_resource_id"`) {
+		t.Fatalf("%s exposed connector resource scope: %s", action, response.Body)
 	}
 }
 

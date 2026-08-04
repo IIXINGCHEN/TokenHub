@@ -36,7 +36,7 @@ type ReconciliationRule struct {
 	ConnectorID             string                       `json:"connector_id" gorm:"index"`
 	ConnectorType           string                       `json:"connector_type"`
 	ProviderID              string                       `json:"provider_id"`
-	ProviderResourceID      string                       `json:"provider_resource_id,omitempty"`
+	ProviderResourceID      string                       `json:"-"`
 	Status                  string                       `json:"status" gorm:"index"`
 	Granularity             string                       `json:"granularity"`
 	MatchDimensions         []string                     `json:"match_dimensions" gorm:"serializer:json"`
@@ -101,7 +101,7 @@ type ReconciliationRun struct {
 	ConnectorID         string                       `json:"connector_id" gorm:"index"`
 	ConnectorType       string                       `json:"connector_type"`
 	ProviderID          string                       `json:"provider_id"`
-	ProviderResourceID  string                       `json:"provider_resource_id,omitempty"`
+	ProviderResourceID  string                       `json:"-"`
 	Trigger             string                       `json:"trigger" gorm:"index"`
 	Status              string                       `json:"status" gorm:"index"`
 	PeriodStart         time.Time                    `json:"period_start" gorm:"index"`
