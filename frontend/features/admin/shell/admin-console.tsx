@@ -739,7 +739,9 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
       <ResetPasswordView
         loading={loading}
         error={error}
+        language={language}
         theme={theme}
+        onLanguageChange={changeLanguage}
         onThemeToggle={toggleTheme}
         token={resetToken}
         onReset={(token, password) => void resetPassword(token, password)}
@@ -755,7 +757,9 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
         baseURL={baseURL}
         identityProviders={loginIdentityProviders}
         oauthReturnURL={oauthReturnURL}
+        language={language}
         theme={theme}
+        onLanguageChange={changeLanguage}
         onThemeToggle={toggleTheme}
         onLogin={(identity, password) => void login(identity, password)}
       />
@@ -783,7 +787,9 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
           activeView={activeView}
           data={data}
           user={currentUser}
+          language={language}
           theme={theme}
+          onLanguageChange={changeLanguage}
           onSelectView={selectView}
           onThemeToggle={toggleTheme}
         />
