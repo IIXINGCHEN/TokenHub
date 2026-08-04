@@ -1,0 +1,473 @@
+package server
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/csv"
+	"encoding/hex"
+	"encoding/json"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const (
+	defaultTokenCostLimit   = 100
+	maximumTokenCostLimit   = 1000
+	maximumRawCostRange     = 31 * 24 * time.Hour
+	maximumGroupedCostRange = 366 * 24 * time.Hour
+)
+
+type tokenCostCursor struct {
+	Version  int       `json:"v"`
+	AfterAt  time.Time `json:"after_at"`
+	AfterID  string    `json:"after_id"`
+	From     time.Time `json:"from"`
+	Through  time.Time `json:"through"`
+	Kind     string    `json:"kind"`
+	Offset   int       `json:"offset,omitempty"`
+	QueryKey string    `json:"query_key,omitempty"`
+}
+
+func (s *Server) handleAdminAnalyticsCredentials(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdmin(w, r, "analytics_credential", r.Method)
+	if !ok {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, map[string]any{"data": s.store.ListAnalyticsCredentials()})
+	case http.MethodPost:
+		var request struct {
+			Name      string     `json:"name"`
+			ScopeType string     `json:"scope_type"`
+			ProjectID string     `json:"project_id"`
+			ExpiresAt *time.Time `json:"expires_at"`
+		}
+		if err := decodeJSON(r, &request); err != nil {
+			writeError(w, r, NewHTTPError(http.StatusBadRequest, "invalid_request", err.Error()))
+			return
+		}
+		credential, token, err := s.store.CreateAnalyticsCredential(AnalyticsCredential{
+			Name: request.Name, ScopeType: request.ScopeType, ProjectID: request.ProjectID,
+			ExpiresAt: request.ExpiresAt, CreatedBy: user.ID,
+		}, "")
+		if err != nil {
+			writeError(w, r, err)
+			return
+		}
+		s.recordAdminAudit(r, user, "create", "analytics_credential", credential.ID, nil, credential)
+		w.Header().Set("cache-control", "no-store")
+		writeJSON(w, http.StatusCreated, map[string]any{"credential": credential, "token": token})
+	default:
+		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
+	}
+}
+
+func (s *Server) handleAdminAnalyticsCredentialItem(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdmin(w, r, "analytics_credential", r.Method)
+	if !ok {
+		return
+	}
+	if r.Method != http.MethodDelete {
+		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/admin/analytics/credentials/")
+	if id == "" || strings.Contains(id, "/") {
+		writeError(w, r, NewHTTPError(http.StatusNotFound, "analytics_credential_not_found", "Analytics credential not found"))
+		return
+	}
+	credential, err := s.store.RevokeAnalyticsCredential(id)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	s.recordAdminAudit(r, user, "revoke", "analytics_credential", credential.ID, nil, credential)
+	writeJSON(w, http.StatusOK, credential)
+}
+
+func (s *Server) handleTokenCostAnalytics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
+		return
+	}
+	credential, err := s.store.ValidateAnalyticsCredential(bearerToken(r))
+	if err != nil {
+		s.recordTokenCostAudit(r, AnalyticsCredential{}, "failed", AsHTTPError(err).Code, nil)
+		writeError(w, r, err)
+		return
+	}
+	query, metadata, err := s.parseTokenCostQuery(r, credential)
+	if err != nil {
+		s.recordTokenCostAudit(r, credential, "failed", AsHTTPError(err).Code, nil)
+		writeError(w, r, err)
+		return
+	}
+	rows, hasMore, err := s.store.QueryTokenCosts(r.Context(), query)
+	if err != nil {
+		s.recordTokenCostAudit(r, credential, "failed", "analytics_query_failed", metadata)
+		writeError(w, r, err)
+		return
+	}
+	watermarkAt, watermarkID, err := s.store.TokenCostWatermark(r.Context(), query)
+	if err != nil {
+		s.recordTokenCostAudit(r, credential, "failed", "analytics_watermark_failed", metadata)
+		writeError(w, r, err)
+		return
+	}
+	watermark := ""
+	nextCursor := ""
+	queryKey := tokenCostQueryKey(credential, query)
+	if !watermarkAt.IsZero() {
+		watermark = encodeTokenCostCursor(tokenCostCursor{
+			Version: 1, AfterAt: watermarkAt, AfterID: watermarkID,
+			From: query.From, Through: query.To, Kind: "watermark", QueryKey: queryKey,
+		})
+	} else if after := strings.TrimSpace(r.URL.Query().Get("after")); after != "" {
+		watermark = after
+	}
+	if hasMore && query.Granularity == "request" && len(rows) > 0 {
+		last := rows[len(rows)-1]
+		lastTime, _ := time.Parse(time.RFC3339Nano, last.OccurredAt)
+		nextCursor = encodeTokenCostCursor(tokenCostCursor{
+			Version: 1, AfterAt: lastTime, AfterID: last.RequestID,
+			From: query.From, Through: query.To, Kind: "request", QueryKey: queryKey,
+		})
+	} else if hasMore {
+		nextCursor = encodeTokenCostCursor(tokenCostCursor{
+			Version: 1, From: query.From, Through: query.To,
+			Kind: "aggregate", Offset: query.Offset + len(rows), QueryKey: queryKey,
+		})
+	}
+	payload := TokenCostResponse{
+		SchemaVersion: TokenCostSchemaVersion,
+		Object:        "token_cost.list",
+		GeneratedAt:   time.Now().UTC().Format(time.RFC3339Nano),
+		Query:         metadata,
+		Data:          rows,
+		HasMore:       hasMore,
+		NextCursor:    nextCursor,
+		Watermark:     watermark,
+	}
+	s.recordTokenCostAudit(r, credential, "success", "", map[string]any{
+		"query": metadata, "row_count": len(rows), "has_more": hasMore,
+	})
+	w.Header().Set("cache-control", "no-store")
+	w.Header().Set("x-tokenhub-schema-version", TokenCostSchemaVersion)
+	w.Header().Set("x-tokenhub-has-more", strconv.FormatBool(hasMore))
+	if watermark != "" {
+		w.Header().Set("x-tokenhub-watermark", watermark)
+	}
+	if nextCursor != "" {
+		w.Header().Set("x-tokenhub-next-cursor", nextCursor)
+	}
+	if metadata.Format == "csv" {
+		if err := writeTokenCostCSV(w, rows); err != nil {
+			writeError(w, r, err)
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, payload)
+}
+
+func (s *Server) parseTokenCostQuery(r *http.Request, credential AnalyticsCredential) (TokenCostQuery, TokenCostQueryMetadata, error) {
+	values := r.URL.Query()
+	now := time.Now().UTC()
+	format, err := tokenCostResponseFormat(r)
+	if err != nil {
+		return TokenCostQuery{}, TokenCostQueryMetadata{}, err
+	}
+	cursorValue := strings.TrimSpace(values.Get("cursor"))
+	afterValue := strings.TrimSpace(values.Get("after"))
+	if cursorValue != "" && afterValue != "" {
+		return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_cursor", "cursor and after cannot be combined")
+	}
+	var pageCursor tokenCostCursor
+	var afterCursor tokenCostCursor
+	var cursorErr error
+	fromFallback := now.Add(-24 * time.Hour)
+	toFallback := now
+	if cursorValue != "" {
+		pageCursor, cursorErr = decodeTokenCostCursor(cursorValue)
+		if cursorErr != nil || pageCursor.Kind == "watermark" {
+			return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_cursor", "cursor is invalid")
+		}
+		fromFallback = pageCursor.From
+		toFallback = pageCursor.Through
+	} else if afterValue != "" {
+		afterCursor, cursorErr = decodeTokenCostCursor(afterValue)
+		if cursorErr != nil || afterCursor.AfterAt.IsZero() || afterCursor.AfterID == "" {
+			return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_cursor", "after watermark is invalid")
+		}
+		if strings.TrimSpace(values.Get("from")) != "" {
+			return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_cursor", "from cannot be combined with after")
+		}
+		fromFallback = afterCursor.AfterAt
+	}
+	from, err := parseTokenCostTime(values.Get("from"), fromFallback, "from")
+	if err != nil {
+		return TokenCostQuery{}, TokenCostQueryMetadata{}, err
+	}
+	to, err := parseTokenCostTime(values.Get("to"), toFallback, "to")
+	if err != nil {
+		return TokenCostQuery{}, TokenCostQueryMetadata{}, err
+	}
+	if !from.Before(to) {
+		return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_time_range", "from must be earlier than to")
+	}
+	groupBy, err := parseTokenCostGroupBy(values["group_by"])
+	if err != nil {
+		return TokenCostQuery{}, TokenCostQueryMetadata{}, err
+	}
+	granularity := strings.ToLower(strings.TrimSpace(values.Get("granularity")))
+	if granularity == "" {
+		if len(groupBy) == 0 {
+			granularity = "request"
+		} else {
+			granularity = "none"
+		}
+	}
+	switch granularity {
+	case "request":
+		if len(groupBy) > 0 {
+			return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_grouping", "request granularity cannot be combined with group_by")
+		}
+		if to.Sub(from) > maximumRawCostRange {
+			return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusBadRequest, "analytics_time_range_too_large", "Request-level analytics queries are limited to 31 days")
+		}
+	case "none", "hour", "day", "month":
+		if to.Sub(from) > maximumGroupedCostRange {
+			return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusBadRequest, "analytics_time_range_too_large", "Aggregated analytics queries are limited to 366 days")
+		}
+	default:
+		return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_granularity", "granularity must be request, none, hour, day, or month")
+	}
+	limit := defaultTokenCostLimit
+	if rawLimit := strings.TrimSpace(values.Get("limit")); rawLimit != "" {
+		parsed, err := strconv.Atoi(rawLimit)
+		if err != nil || parsed <= 0 || parsed > maximumTokenCostLimit {
+			return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_limit", "limit must be between 1 and 1000")
+		}
+		limit = parsed
+	}
+	projectID := strings.TrimSpace(values.Get("project_id"))
+	if credential.ScopeType == AnalyticsScopeProject {
+		if projectID != "" && projectID != credential.ProjectID {
+			return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusForbidden, "analytics_scope_forbidden", "Analytics credential cannot access the requested project")
+		}
+		projectID = credential.ProjectID
+	}
+	status := strings.ToLower(strings.TrimSpace(values.Get("status")))
+	if status != "" && status != TokenCostStatusSuccess && status != TokenCostStatusError {
+		return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_status", "status must be success or error")
+	}
+	filters := map[string]string{}
+	for key, value := range map[string]string{
+		"project_id":  projectID,
+		"user_id":     strings.TrimSpace(values.Get("user_id")),
+		"api_key_id":  strings.TrimSpace(values.Get("api_key_id")),
+		"provider_id": strings.TrimSpace(values.Get("provider_id")),
+		"model":       strings.TrimSpace(values.Get("model")),
+		"status":      status,
+	} {
+		if value != "" {
+			filters[key] = value
+		}
+	}
+	query := TokenCostQuery{
+		From: from, To: to, ProjectID: projectID,
+		UserID: filters["user_id"], APIKeyID: filters["api_key_id"],
+		ProviderID: filters["provider_id"], Model: filters["model"], Status: status,
+		Granularity: granularity, GroupBy: groupBy, Limit: limit,
+	}
+	if cursorValue != "" {
+		if !from.Equal(pageCursor.From) || !to.Equal(pageCursor.Through) {
+			return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_cursor", "cursor time range does not match the query")
+		}
+		expectedKind := "aggregate"
+		if granularity == "request" {
+			expectedKind = "request"
+		}
+		if pageCursor.Kind != expectedKind || (pageCursor.QueryKey != "" && pageCursor.QueryKey != tokenCostQueryKey(credential, query)) {
+			return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_cursor", "cursor does not match the query")
+		}
+		query.AfterAt = pageCursor.AfterAt
+		query.AfterID = pageCursor.AfterID
+		query.Offset = pageCursor.Offset
+	} else if afterValue != "" {
+		query.AfterAt = afterCursor.AfterAt
+		query.AfterID = afterCursor.AfterID
+	}
+	metadata := TokenCostQueryMetadata{
+		From: from.Format(time.RFC3339Nano), To: to.Format(time.RFC3339Nano),
+		Granularity: granularity, GroupBy: groupBy, Filters: filters, Format: format, Limit: limit,
+	}
+	return query, metadata, nil
+}
+
+func tokenCostResponseFormat(r *http.Request) (string, error) {
+	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
+	if format == "" {
+		accept := strings.ToLower(r.Header.Get("accept"))
+		if strings.Contains(accept, "text/csv") {
+			format = "csv"
+		} else {
+			format = "json"
+		}
+	}
+	if format != "json" && format != "csv" {
+		return "", NewHTTPError(http.StatusBadRequest, "invalid_analytics_format", "format must be json or csv")
+	}
+	return format, nil
+}
+
+func parseTokenCostGroupBy(values []string) ([]string, error) {
+	result := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		for _, dimension := range strings.Split(value, ",") {
+			dimension = strings.ToLower(strings.TrimSpace(dimension))
+			if dimension == "" || seen[dimension] {
+				continue
+			}
+			switch dimension {
+			case "project", "user", "api_key", "provider", "model", "status":
+			default:
+				return nil, NewHTTPError(http.StatusBadRequest, "invalid_analytics_group_by", "group_by supports project, user, api_key, provider, model, and status")
+			}
+			seen[dimension] = true
+			result = append(result, dimension)
+		}
+	}
+	return result, nil
+}
+
+func parseTokenCostTime(value string, fallback time.Time, field string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_time", field+" must be an RFC3339 timestamp")
+	}
+	return parsed.UTC(), nil
+}
+
+func encodeTokenCostCursor(cursor tokenCostCursor) string {
+	data, err := json.Marshal(cursor)
+	if err != nil {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(data)
+}
+
+func decodeTokenCostCursor(value string) (tokenCostCursor, error) {
+	if len(value) > 8192 {
+		return tokenCostCursor{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_cursor", "cursor is invalid")
+	}
+	data, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return tokenCostCursor{}, err
+	}
+	var cursor tokenCostCursor
+	if err := json.Unmarshal(data, &cursor); err != nil {
+		return tokenCostCursor{}, err
+	}
+	if cursor.Version != 1 || cursor.From.IsZero() || cursor.Through.IsZero() || !cursor.From.Before(cursor.Through) {
+		return tokenCostCursor{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_cursor", "cursor is invalid")
+	}
+	switch cursor.Kind {
+	case "request", "watermark":
+		if cursor.AfterAt.IsZero() || cursor.AfterID == "" {
+			return tokenCostCursor{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_cursor", "cursor is invalid")
+		}
+	case "aggregate":
+		if cursor.Offset <= 0 {
+			return tokenCostCursor{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_cursor", "cursor is invalid")
+		}
+	default:
+		return tokenCostCursor{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_cursor", "cursor is invalid")
+	}
+	return cursor, nil
+}
+
+func tokenCostQueryKey(credential AnalyticsCredential, query TokenCostQuery) string {
+	data, _ := json.Marshal(struct {
+		CredentialID string
+		ProjectID    string
+		UserID       string
+		APIKeyID     string
+		ProviderID   string
+		Model        string
+		Status       string
+		Granularity  string
+		GroupBy      []string
+	}{
+		CredentialID: credential.ID,
+		ProjectID:    query.ProjectID,
+		UserID:       query.UserID,
+		APIKeyID:     query.APIKeyID,
+		ProviderID:   query.ProviderID,
+		Model:        query.Model,
+		Status:       query.Status,
+		Granularity:  query.Granularity,
+		GroupBy:      query.GroupBy,
+	})
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+func writeTokenCostCSV(w http.ResponseWriter, rows []TokenCostRow) error {
+	var buffer bytes.Buffer
+	writer := csv.NewWriter(&buffer)
+	if err := writer.Write([]string{
+		"bucket", "request_id", "occurred_at", "project_id", "user_id", "api_key_id",
+		"provider_id", "model", "status", "status_code", "request_count", "error_count",
+		"input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens",
+		"reasoning_output_tokens", "total_tokens", "estimated_cost_usd",
+	}); err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if err := writer.Write([]string{
+			row.Bucket, row.RequestID, row.OccurredAt, row.ProjectID, row.UserID, row.APIKeyID,
+			row.ProviderID, row.Model, row.Status, strconv.Itoa(row.StatusCode),
+			strconv.FormatInt(row.Metrics.RequestCount, 10), strconv.FormatInt(row.Metrics.ErrorCount, 10),
+			strconv.FormatInt(row.Metrics.InputTokens, 10), strconv.FormatInt(row.Metrics.CachedInputTokens, 10),
+			strconv.FormatInt(row.Metrics.CacheWriteTokens, 10), strconv.FormatInt(row.Metrics.OutputTokens, 10),
+			strconv.FormatInt(row.Metrics.ReasoningTokens, 10), strconv.FormatInt(row.Metrics.TotalTokens, 10),
+			strconv.FormatFloat(row.Metrics.EstimatedCostUSD, 'f', -1, 64),
+		}); err != nil {
+			return err
+		}
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		return err
+	}
+	w.Header().Set("content-type", "text/csv; charset=utf-8")
+	w.Header().Set("content-disposition", `attachment; filename="token-costs.csv"`)
+	w.WriteHeader(http.StatusOK)
+	_, err := w.Write(buffer.Bytes())
+	return err
+}
+
+func (s *Server) recordTokenCostAudit(r *http.Request, credential AnalyticsCredential, status string, message string, snapshot any) {
+	s.store.RecordAuditEvent(AuditEvent{
+		ActorUserID:   credential.ID,
+		ActorName:     credential.Name,
+		ActorRole:     "analytics_credential",
+		Action:        "query",
+		ResourceType:  "token_cost_analytics",
+		ResourceID:    firstNonEmpty(credential.ProjectID, credential.ScopeType),
+		Status:        status,
+		Message:       message,
+		AfterSnapshot: snapshotJSON(snapshot),
+		IP:            s.clientIP(r),
+		UserAgent:     r.UserAgent(),
+	})
+}

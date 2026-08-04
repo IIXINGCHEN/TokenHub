@@ -227,6 +227,7 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 			&providerAccountOAuthSessionRecord{},
 			&UsageRecord{},
 			&RequestLog{},
+			&AnalyticsCredential{},
 			&RequestPayloadLog{},
 			&ImageJob{},
 			&ImageAsset{},

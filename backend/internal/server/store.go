@@ -174,6 +174,12 @@ type Store interface {
 	ListImageAssets(jobID string) []ImageAsset
 	GetImageAsset(id string) (ImageAsset, bool)
 	ListUsageRecords() []UsageRecord
+	CreateAnalyticsCredential(credential AnalyticsCredential, rawSecret string) (AnalyticsCredential, string, error)
+	ListAnalyticsCredentials() []AnalyticsCredential
+	RevokeAnalyticsCredential(id string) (AnalyticsCredential, error)
+	ValidateAnalyticsCredential(rawSecret string) (AnalyticsCredential, error)
+	QueryTokenCosts(ctx context.Context, query TokenCostQuery) ([]TokenCostRow, bool, error)
+	TokenCostWatermark(ctx context.Context, query TokenCostQuery) (time.Time, string, error)
 	GenerateBillingPeriod(period string) (map[string]any, error)
 	ListRequestLogs() []RequestLog
 	ListProviderObservations(since time.Time) []ProviderObservation
