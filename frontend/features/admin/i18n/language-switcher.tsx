@@ -129,6 +129,7 @@ export function LanguageSelect({
       </button>
       {open && typeof document !== "undefined" ? createPortal(
         <div
+          aria-label={tx("界面语言")}
           className="language-select-options"
           data-theme={menuTheme}
           id={menuID}
