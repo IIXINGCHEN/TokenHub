@@ -15,21 +15,11 @@ export function AuditView({ api, data, user }: { api: ApiContext; data: AppData;
   const [activeAuditTab, setActiveAuditTab] = useState<"requests" | "admin">("requests");
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<AuditRequestStatus>("all");
-  const [requestLogs, setRequestLogs] = useState(data.logs);
+  const [requestLogs, setRequestLogs] = useState<RequestLogPage["data"]>([]);
   const [requestPage, setRequestPage] = useState(1);
   const [requestPageSize, setRequestPageSize] = useState(20);
-  const [requestPagination, setRequestPagination] = useState<RequestLogPagination>({
-    page: 1,
-    page_size: 20,
-    total: data.summary.request_count || data.logs.length,
-    total_pages: Math.ceil((data.summary.request_count || data.logs.length) / 20),
-  });
-  const [requestSummary, setRequestSummary] = useState<RequestLogSummary>({
-    all: data.summary.request_count || data.logs.length,
-    ok: Math.max(0, (data.summary.request_count || data.logs.length) - data.summary.errors),
-    error: data.summary.errors,
-    average_latency_ms: 0,
-  });
+  const [requestPagination, setRequestPagination] = useState<RequestLogPagination>(() => emptyRequestLogPagination(1, 20));
+  const [requestSummary, setRequestSummary] = useState<RequestLogSummary>(() => emptyRequestLogSummary());
   const [requestListLoading, setRequestListLoading] = useState(false);
   const [requestListError, setRequestListError] = useState("");
   const [selectedRequestID, setSelectedRequestID] = useState("");
@@ -48,9 +38,12 @@ export function AuditView({ api, data, user }: { api: ApiContext; data: AppData;
     if (activeAuditTab !== "requests") return;
     const controller = new AbortController();
     const delay = query.trim() ? 250 : 0;
+    setRequestListLoading(true);
+    setRequestListError("");
+    setRequestLogs([]);
+    setRequestPagination(emptyRequestLogPagination(requestPage, requestPageSize));
+    setRequestSummary(emptyRequestLogSummary());
     const timeout = window.setTimeout(() => {
-      setRequestListLoading(true);
-      setRequestListError("");
       adminFetch(api, auditRequestPagePath({
         page: requestPage,
         pageSize: requestPageSize,
@@ -239,7 +232,7 @@ export function AuditView({ api, data, user }: { api: ApiContext; data: AppData;
                   <span>{tx("请求列表")}</span>
                   <strong>{countWithUnit(requestPagination.total, "条", "record", "件")}</strong>
                 </div>
-                {requestListError && requestLogs.length === 0 ? (
+                {requestListError ? (
                   <div className="compact-empty">{requestListError}</div>
                 ) : requestListLoading && requestLogs.length === 0 ? (
                   <div className="compact-empty">{tx("加载中")}...</div>
@@ -305,6 +298,24 @@ export function AuditView({ api, data, user }: { api: ApiContext; data: AppData;
       )}
     </div>
   );
+}
+
+function emptyRequestLogPagination(page: number, pageSize: number): RequestLogPagination {
+  return {
+    page,
+    page_size: pageSize,
+    total: 0,
+    total_pages: 0,
+  };
+}
+
+function emptyRequestLogSummary(): RequestLogSummary {
+  return {
+    all: 0,
+    ok: 0,
+    error: 0,
+    average_latency_ms: 0,
+  };
 }
 
 export function RequestDetailPanel({
