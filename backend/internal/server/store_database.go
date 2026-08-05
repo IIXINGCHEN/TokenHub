@@ -696,8 +696,18 @@ func runSchemaMigrationLocked(sqlDB *sql.DB, driver string, migrate func() error
 	}
 	defer conn.Close()
 	const lockName = "tokenhub:schema-migration"
-	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock(hashtextextended($1, 0))", lockName); err != nil {
-		return err
+	// A blocking advisory-lock statement remains active while it waits. That
+	// would keep CREATE INDEX CONCURRENTLY in the lock holder waiting for this
+	// session, so poll with completed statements until the lock is available.
+	for {
+		var acquired bool
+		if err := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock(hashtextextended($1, 0))", lockName).Scan(&acquired); err != nil {
+			return err
+		}
+		if acquired {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	defer func() {
 		_, _ = conn.ExecContext(context.Background(), "SELECT pg_advisory_unlock(hashtextextended($1, 0))", lockName)
