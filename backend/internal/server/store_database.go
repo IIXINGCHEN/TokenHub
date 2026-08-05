@@ -414,11 +414,35 @@ func backfillRequestLogCommitSequence(db *gorm.DB, driver string) error {
 				return err
 			}
 			// A non-negative value marks a database that has not yet converted its
-			// legacy/event-order sequences. Existing rows form the initial snapshot
-			// and can share one synthetic transaction ID; new inserts use txid_current().
+			// legacy sequences. The one-time table lock separates the frozen history
+			// from inserts that will use txid_current() after this transaction commits.
 			if sequence.LastValue >= 0 {
-				if err := tx.Model(&RequestLog{}).Where("1 = 1").Update("commit_sequence", 1).Error; err != nil {
-					return fmt.Errorf("convert legacy request log commit sequence: %w", err)
+				if err := tx.Exec("LOCK TABLE request_logs IN SHARE ROW EXCLUSIVE MODE").Error; err != nil {
+					return fmt.Errorf("lock legacy request logs: %w", err)
+				}
+				var count int64
+				if err := tx.Model(&RequestLog{}).Count(&count).Error; err != nil {
+					return err
+				}
+				var transactionID int64
+				if err := tx.Raw("SELECT txid_current()::bigint").Scan(&transactionID).Error; err != nil {
+					return err
+				}
+				if count >= transactionID {
+					return fmt.Errorf("convert legacy request log commit sequence: %d rows do not fit below transaction %d", count, transactionID)
+				}
+				if count > 0 {
+					if err := tx.Exec(`
+WITH ranked AS (
+  SELECT id, ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC) AS sequence
+    FROM request_logs
+)
+UPDATE request_logs AS rl
+   SET commit_sequence = ranked.sequence
+  FROM ranked
+ WHERE rl.id = ranked.id`).Error; err != nil {
+						return fmt.Errorf("convert legacy request log commit sequence: %w", err)
+					}
 				}
 				if err := tx.Model(&AnalyticsSequence{}).
 					Where("name = ?", requestLogSequenceName).

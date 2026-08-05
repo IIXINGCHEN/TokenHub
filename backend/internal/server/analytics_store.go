@@ -231,7 +231,11 @@ func (s *GormStore) tokenCostRequestQuery(ctx context.Context, query TokenCostQu
 		usage = usage.Where("model_name = ?", query.Model)
 	}
 
-	db := s.analyticsDB.WithContext(ctx).Table("request_logs AS rl").
+	requestLogTable := "request_logs AS rl"
+	if s.dbDriver == "sqlite" && query.Incremental && query.ProjectID != "" {
+		requestLogTable += " INDEXED BY idx_request_logs_project_commit_sequence"
+	}
+	db := s.analyticsDB.WithContext(ctx).Table(requestLogTable).
 		Joins("LEFT JOIN (?) AS u ON u.request_id = rl.request_id", usage).
 		Where("rl.created_at >= ? AND rl.created_at < ?", query.From, query.To).
 		Where("rl.commit_sequence > ? AND rl.commit_sequence <= ?", query.AfterSequence, query.ThroughSequence)

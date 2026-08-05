@@ -16,7 +16,8 @@ const (
 )
 
 // AnalyticsSequence is SQLite's transactionally updated request-log checkpoint.
-// PostgreSQL uses full transaction IDs and snapshot low-water marks instead.
+// PostgreSQL only uses it as a migration marker; frozen history is event-ordered,
+// while new rows use full transaction IDs and snapshot low-water marks.
 type AnalyticsSequence struct {
 	Name      string `gorm:"primaryKey"`
 	LastValue int64  `gorm:"not null"`

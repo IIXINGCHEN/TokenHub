@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 func TestProjectAnalyticsCredentialQueriesOnlyScopedTokenCosts(t *testing.T) {
@@ -544,14 +546,25 @@ func TestTokenCostAnalyticsKeepsLargeQueriesIndexedAndPageBounded(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	query := TokenCostQuery{
+		From: now.Add(-365 * 24 * time.Hour), To: now.Add(time.Hour), ProjectID: project.ID,
+		Granularity: "request", Limit: 37, AfterSequence: checkpoint,
+		ThroughSequence: checkpoint, ThroughSequenceSet: true, Incremental: true,
+	}
+	var planRows []tokenCostDatabaseRow
+	dryRun := store.tokenCostRequestQuery(t.Context(), query).
+		Select("rl.request_id, rl.created_at AS occurred_at").
+		Order("rl.created_at ASC, rl.request_id ASC").
+		Limit(query.Limit + 1).
+		Session(&gorm.Session{DryRun: true}).
+		Find(&planRows)
+	if dryRun.Error != nil {
+		t.Fatal(dryRun.Error)
+	}
 	var plan []struct {
 		Detail string `gorm:"column:detail"`
 	}
-	if err := store.db.Raw(`EXPLAIN QUERY PLAN
-SELECT rl.request_id FROM request_logs AS rl
-WHERE rl.project_id = ? AND rl.commit_sequence > ? AND rl.commit_sequence <= ?
-  AND rl.created_at >= ? AND rl.created_at < ?`,
-		project.ID, checkpoint, checkpoint, now.Add(-365*24*time.Hour), now.Add(time.Hour)).Scan(&plan).Error; err != nil {
+	if err := store.db.Raw("EXPLAIN QUERY PLAN "+dryRun.Statement.SQL.String(), dryRun.Statement.Vars...).Scan(&plan).Error; err != nil {
 		t.Fatal(err)
 	}
 	usesProjectSequence := false
