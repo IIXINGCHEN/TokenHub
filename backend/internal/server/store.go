@@ -181,6 +181,7 @@ type Store interface {
 	QueryTokenCostPage(ctx context.Context, query TokenCostQuery) (TokenCostPage, error)
 	GenerateBillingPeriod(period string) (map[string]any, error)
 	ListRequestLogs() []RequestLog
+	QueryRequestLogs(query RequestLogQuery) (RequestLogPage, error)
 	ListProviderObservations(since time.Time) []ProviderObservation
 	RecordProviderObservation(observation ProviderObservation)
 	GetProviderResourceObservation(resourceID string) (ProviderResourceObservation, bool)
