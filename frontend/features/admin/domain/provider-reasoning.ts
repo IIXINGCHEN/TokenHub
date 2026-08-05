@@ -9,6 +9,23 @@ const reasoningOptionKeys = [
   "preserve_reasoning_content",
 ] as const;
 
+const anthropicReasoningProviderTypes = new Set([
+  "openai",
+  "openai_compatible",
+  "azure_openai",
+  "deepseek",
+  "qwen",
+  "local",
+]);
+
+export function providerSupportsAnthropicReasoning(providerType?: string) {
+  return anthropicReasoningProviderTypes.has(providerType?.trim().toLowerCase() ?? "");
+}
+
+export function providerHasReasoningOverrides(options?: Record<string, string>) {
+  return reasoningOptionKeys.some((key) => Object.prototype.hasOwnProperty.call(options ?? {}, key));
+}
+
 export function providerReasoningFieldConfigs(visible?: FieldConfig["visible"]): FieldConfig[] {
   return [
     {
@@ -64,27 +81,44 @@ export function providerReasoningFormValues(options?: Record<string, string>) {
   };
 }
 
+export function providerReasoningOverrideFormValues(
+  resourceOptions?: Record<string, string>,
+  providerOptions?: Record<string, string>,
+) {
+  const overridden = providerHasReasoningOverrides(resourceOptions);
+  const displayed = overridden ? resourceOptions : providerOptions;
+  return {
+    ...providerReasoningFormValues(displayed),
+    _existing_options: JSON.stringify(resourceOptions ?? {}),
+    _reasoning_override: overridden ? "true" : "false",
+  };
+}
+
 export function providerReasoningOptions(values: Record<string, string>, base?: Record<string, string>) {
   const options = { ...readExistingOptions(values._existing_options), ...base };
   for (const key of reasoningOptionKeys) delete options[key];
+
+  if (values._reasoning_override === "false") return options;
 
   const allowed = values.reasoning_effort_values
     ?.split(",")
     .map((value) => value.trim().toLowerCase())
     .filter(Boolean)
     .join(",");
-  if (allowed) options.reasoning_effort_values = allowed;
+  if (allowed || values._reasoning_override === "true") options.reasoning_effort_values = allowed;
 
   const effortMap = normalizedJSONObject(values.reasoning_effort_map, "推理强度映射");
-  if (effortMap) options.reasoning_effort_map = effortMap;
+  if (effortMap || values._reasoning_override === "true") options.reasoning_effort_map = effortMap;
 
   const unsupported = values.reasoning_effort_unsupported?.trim().toLowerCase();
-  if (unsupported && unsupported !== "omit") options.reasoning_effort_unsupported = unsupported;
+  if (unsupported && (unsupported !== "omit" || values._reasoning_override === "true")) options.reasoning_effort_unsupported = unsupported;
 
   const budgetMap = normalizedJSONObject(values.reasoning_budget_map, "推理预算映射");
-  if (budgetMap) options.reasoning_budget_map = budgetMap;
+  if (budgetMap || values._reasoning_override === "true") options.reasoning_budget_map = budgetMap;
 
-  if (values.preserve_reasoning_content === "true") options.preserve_reasoning_content = "true";
+  if (values.preserve_reasoning_content === "true" || values._reasoning_override === "true") {
+    options.preserve_reasoning_content = values.preserve_reasoning_content === "true" ? "true" : "false";
+  }
   return options;
 }
 

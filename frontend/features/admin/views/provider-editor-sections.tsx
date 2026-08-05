@@ -1,5 +1,5 @@
 import { providerTypeLabel } from "../domain/labels";
-import { providerReasoningFieldConfigs } from "../domain/provider-reasoning";
+import { providerReasoningFieldConfigs, providerSupportsAnthropicReasoning } from "../domain/provider-reasoning";
 import { tx } from "../i18n/runtime";
 import { providerTypeOptions } from "../shared/ui";
 import { ProviderInlineField } from "./provider-editor-fields";
@@ -39,6 +39,7 @@ export function ProviderAdvancedFields({
   onUpdate,
   accountIntegration,
 }: ProviderEditSectionProps & { accountIntegration: boolean }) {
+  const showReasoningCompatibility = providerSupportsAnthropicReasoning(values.type);
   return (
     <section className="provider-edit-section">
       <div className="provider-form-grid">
@@ -61,10 +62,10 @@ export function ProviderAdvancedFields({
           <input value={values.priority ?? "10"} type="number" onChange={(event) => onUpdate("priority", event.target.value)} />
         </label>
       </div>
-      <details className="provider-account-runtime">
+      {showReasoningCompatibility ? <details className="provider-account-runtime">
         <summary>
-          <strong>{tx("Claude Code 推理兼容")}</strong>
-          <span>{tx("配置推理强度值域、预算映射和 reasoning_content 多轮回传。")}</span>
+          <strong>{tx("Anthropic 推理参数兼容")}</strong>
+          <span>{tx("Provider 默认规则，适用于 Claude Code 等 Anthropic Messages 客户端。")}</span>
         </summary>
         <div className="provider-account-fields">
           {providerReasoningFieldConfigs().map((field) => (
@@ -77,7 +78,7 @@ export function ProviderAdvancedFields({
             />
           ))}
         </div>
-      </details>
+      </details> : null}
     </section>
   );
 }
