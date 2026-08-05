@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -103,6 +104,8 @@ type Config struct {
 	ImageQueueCapacity          int
 	ImageJobTimeoutSeconds      int
 	ImageCapabilityRetrySecs    int
+	MaxJSONRequestBytes         int64
+	MaxMultimodalRequestBytes   int64
 }
 
 func ConfigFromEnv() Config {
@@ -155,6 +158,8 @@ func ConfigFromEnv() Config {
 		ImageQueueCapacity:          getenvInt("TOKENHUB_IMAGE_QUEUE_CAPACITY", 64),
 		ImageJobTimeoutSeconds:      getenvInt("TOKENHUB_IMAGE_JOB_TIMEOUT_SECONDS", 300),
 		ImageCapabilityRetrySecs:    getenvInt("TOKENHUB_IMAGE_CAPABILITY_RETRY_SECONDS", 86400),
+		MaxJSONRequestBytes:         getenvBytes("TOKENHUB_MAX_JSON_REQUEST_BYTES", defaultMaxJSONRequestBytes),
+		MaxMultimodalRequestBytes:   getenvBytes("TOKENHUB_MAX_MULTIMODAL_REQUEST_BYTES", defaultMaxMultimodalRequestBytes),
 	}
 }
 
@@ -399,4 +404,60 @@ func getenvBool(key string, fallback bool) bool {
 	default:
 		return fallback
 	}
+}
+
+const maxConfigurableRequestBytes int64 = 512 << 20
+
+// Default request-body ceilings. The multimodal default is higher because Codex
+// and vision requests inline base64-encoded images (~33% overhead), which routinely
+// exceed a text-sized limit. Both are also used as the safety fallback when a
+// zero-value Config reaches the decode path (e.g. in tests).
+const (
+	defaultMaxJSONRequestBytes       int64 = 8 << 20
+	defaultMaxMultimodalRequestBytes int64 = 32 << 20
+)
+
+// getenvBytes reads a byte-size env var. It accepts a raw integer ("1048576")
+// or a binary size suffix ("16k", "32mb", "8MiB", "1g"). Empty, unparseable,
+// or non-positive values fall back. Values above maxConfigurableRequestBytes
+// are clamped to the ceiling to guard against typos that would risk OOM.
+func getenvBytes(key string, fallback int64) int64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	value, ok := parseByteSize(raw)
+	if !ok || value <= 0 {
+		return fallback
+	}
+	if value > maxConfigurableRequestBytes {
+		log.Printf("%s=%s exceeds the %d byte ceiling; clamping to ceiling", key, raw, maxConfigurableRequestBytes)
+		return maxConfigurableRequestBytes
+	}
+	return value
+}
+
+func parseByteSize(raw string) (int64, bool) {
+	lower := strings.ToLower(strings.TrimSpace(raw))
+	multiplier := int64(1)
+	switch {
+	case strings.HasSuffix(lower, "k"), strings.HasSuffix(lower, "kb"), strings.HasSuffix(lower, "kib"):
+		multiplier = 1 << 10
+	case strings.HasSuffix(lower, "m"), strings.HasSuffix(lower, "mb"), strings.HasSuffix(lower, "mib"):
+		multiplier = 1 << 20
+	case strings.HasSuffix(lower, "g"), strings.HasSuffix(lower, "gb"), strings.HasSuffix(lower, "gib"):
+		multiplier = 1 << 30
+	}
+	digits := strings.TrimRight(lower, "kmgib")
+	if digits == "" {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(digits, 10, 64)
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	if multiplier > 1 && n > (int64(1)<<62)/multiplier {
+		return 0, false // overflow
+	}
+	return n * multiplier, true
 }
