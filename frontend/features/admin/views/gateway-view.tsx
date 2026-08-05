@@ -342,7 +342,7 @@ export function gatewayDocBundle({
   const userCount = data.users.length || data.summary.user_count || 0;
   const providerCount = data.providers.length;
   const routeCount = data.routes.length;
-  const requestLogCount = data.logs.length;
+  const requestLogCount = data.summary.request_count || data.logs.length;
   const visibleModelCount = callableModels.length;
   const chatCurl = `curl -X POST "${baseURL}/chat/completions" \\
   -H "${authHeader}" \\
