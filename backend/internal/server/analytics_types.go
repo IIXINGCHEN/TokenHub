@@ -42,6 +42,7 @@ type TokenCostMetrics struct {
 }
 
 type TokenCostRow struct {
+	DedupeKey  string           `json:"dedupe_key"`
 	Bucket     string           `json:"bucket,omitempty"`
 	RequestID  string           `json:"request_id,omitempty"`
 	OccurredAt string           `json:"occurred_at,omitempty"`
@@ -56,13 +57,15 @@ type TokenCostRow struct {
 }
 
 type TokenCostQueryMetadata struct {
-	From        string            `json:"from"`
-	To          string            `json:"to"`
-	Granularity string            `json:"granularity"`
-	GroupBy     []string          `json:"group_by"`
-	Filters     map[string]string `json:"filters"`
-	Format      string            `json:"format"`
-	Limit       int               `json:"limit"`
+	From              string            `json:"from"`
+	To                string            `json:"to"`
+	Granularity       string            `json:"granularity"`
+	GroupBy           []string          `json:"group_by"`
+	Filters           map[string]string `json:"filters"`
+	Format            string            `json:"format"`
+	Limit             int               `json:"limit"`
+	DedupeBy          string            `json:"dedupe_by"`
+	IncrementalReplay bool              `json:"incremental_replay"`
 }
 
 type TokenCostResponse struct {
@@ -86,18 +89,19 @@ type TokenCostPage struct {
 }
 
 type TokenCostQuery struct {
-	From        time.Time
-	To          time.Time
-	ProjectID   string
-	UserID      string
-	APIKeyID    string
-	ProviderID  string
-	Model       string
-	Status      string
-	Granularity string
-	GroupBy     []string
-	Limit       int
-	AfterAt     time.Time
-	AfterID     string
-	Offset      int
+	From              time.Time
+	To                time.Time
+	ProjectID         string
+	UserID            string
+	APIKeyID          string
+	ProviderID        string
+	Model             string
+	Status            string
+	Granularity       string
+	GroupBy           []string
+	Limit             int
+	AfterAt           time.Time
+	AfterID           string
+	Offset            int
+	IncrementalReplay bool
 }

@@ -2,7 +2,10 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -181,7 +184,7 @@ func (s *GormStore) QueryTokenCosts(ctx context.Context, query TokenCostQuery) (
 	if err := db.Order("rl.created_at ASC, rl.request_id ASC").Limit(limit + 1).Find(&databaseRows).Error; err != nil {
 		return nil, false, err
 	}
-	return tokenCostRows(databaseRows, limit, false)
+	return tokenCostRows(databaseRows, limit, query)
 }
 
 func (s *GormStore) tokenCostRequestQuery(ctx context.Context, query TokenCostQuery) *gorm.DB {
@@ -274,7 +277,7 @@ func (s *GormStore) queryAggregatedTokenCosts(ctx context.Context, query TokenCo
 	if err := db.Offset(query.Offset).Limit(limit + 1).Find(&databaseRows).Error; err != nil {
 		return nil, false, err
 	}
-	return tokenCostRows(databaseRows, limit, true)
+	return tokenCostRows(databaseRows, limit, query)
 }
 
 func (s *GormStore) tokenCostBucketExpression(granularity string) string {
@@ -324,7 +327,8 @@ func normalizedTokenCostLimit(limit int) int {
 	return limit
 }
 
-func tokenCostRows(databaseRows []tokenCostDatabaseRow, limit int, aggregated bool) ([]TokenCostRow, bool, error) {
+func tokenCostRows(databaseRows []tokenCostDatabaseRow, limit int, query TokenCostQuery) ([]TokenCostRow, bool, error) {
+	aggregated := query.Granularity != "request"
 	hasMore := len(databaseRows) > limit
 	if hasMore {
 		databaseRows = databaseRows[:limit]
@@ -346,7 +350,7 @@ func tokenCostRows(databaseRows []tokenCostDatabaseRow, limit int, aggregated bo
 		if !row.OccurredAt.IsZero() {
 			occurredAt = row.OccurredAt.UTC().Format(time.RFC3339Nano)
 		}
-		rows = append(rows, TokenCostRow{
+		costRow := TokenCostRow{
 			Bucket: row.Bucket, RequestID: row.RequestID, OccurredAt: occurredAt,
 			ProjectID: row.ProjectID, UserID: row.UserID, APIKeyID: row.APIKeyID,
 			ProviderID: row.ProviderID, Model: row.Model, Status: status, StatusCode: row.StatusCode,
@@ -356,9 +360,36 @@ func tokenCostRows(databaseRows []tokenCostDatabaseRow, limit int, aggregated bo
 				OutputTokens: row.OutputTokens, ReasoningTokens: row.ReasoningTokens,
 				TotalTokens: row.TotalTokens, EstimatedCostUSD: row.EstimatedCostUSD,
 			},
-		})
+		}
+		costRow.DedupeKey = tokenCostDedupeKey(costRow, query)
+		rows = append(rows, costRow)
 	}
 	return rows, hasMore, nil
+}
+
+func tokenCostDedupeKey(row TokenCostRow, query TokenCostQuery) string {
+	if query.Granularity == "request" {
+		return row.RequestID
+	}
+	data, _ := json.Marshal(struct {
+		Granularity string
+		GroupBy     []string
+		Filters     []string
+		Row         []string
+	}{
+		Granularity: query.Granularity,
+		GroupBy:     query.GroupBy,
+		Filters: []string{
+			query.ProjectID, query.UserID, query.APIKeyID,
+			query.ProviderID, query.Model, query.Status,
+		},
+		Row: []string{
+			row.Bucket, row.ProjectID, row.UserID, row.APIKeyID,
+			row.ProviderID, row.Model, row.Status,
+		},
+	})
+	sum := sha256.Sum256(data)
+	return "aggregate_" + hex.EncodeToString(sum[:])
 }
 
 func (s *GormStore) TokenCostWatermark(ctx context.Context, query TokenCostQuery) (time.Time, string, error) {

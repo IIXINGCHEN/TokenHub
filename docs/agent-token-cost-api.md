@@ -92,7 +92,7 @@ Use `granularity=hour`, `day`, or `month` for time buckets. Use `granularity=non
 | `group_by` | Comma-separated or repeated `project`, `user`, `api_key`, `provider`, `model`, and `status` |
 | `limit` | 1–1000 rows; defaults to 100 |
 | `cursor` | Opaque `next_cursor` from the preceding page |
-| `after` | Opaque committed `watermark` for a new incremental pull; cannot be combined with `from` or `cursor` |
+| `after` | Opaque committed `watermark` for a replay-safe incremental pull; cannot be combined with `from` or `cursor` |
 | `format` | `json` (default) or `csv`; `Accept: text/csv` also selects CSV |
 
 Request-level time ranges are limited to 31 days. Aggregated ranges are limited to 366 days. Split a longer history into adjacent windows.
@@ -113,10 +113,13 @@ Every JSON response declares `schema_version: "1.0"` and has this shape:
     "group_by": ["project", "model"],
     "filters": {"project_id": "prj_payments"},
     "format": "json",
-    "limit": 100
+    "limit": 100,
+    "dedupe_by": "dedupe_key",
+    "incremental_replay": false
   },
   "data": [
     {
+      "dedupe_key": "aggregate_f6d6...",
       "bucket": "2026-08-01",
       "project_id": "prj_payments",
       "model": "gpt-4.1-mini",
@@ -144,7 +147,7 @@ Every JSON response declares `schema_version: "1.0"` and has this shape:
 
 When `has_more` is true, call the endpoint again with `cursor=next_cursor`. The cursor retains the original filters, `granularity`, `group_by`, and snapshot interval, so those parameters may be omitted. If they are supplied, they must match the cursor. The snapshot's upper bound remains fixed, so requests arriving during pagination do not shift later pages.
 
-The response `watermark` points to the newest matching request in that snapshot. Drain every page until `has_more` is false, process the rows successfully, and only then commit the watermark in the agent's durable state. Start the next run with `after=<committed watermark>`:
+The response `watermark` identifies the completed database snapshot. Drain every page until `has_more` is false, upsert the rows successfully by `dedupe_key`, and only then commit the watermark in the agent's durable state. Start the next run with `after=<committed watermark>`:
 
 ```bash
 curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
@@ -152,7 +155,9 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
   --data-urlencode "after=$TOKENHUB_COST_WATERMARK"
 ```
 
-The watermark also retains its original filters and aggregation shape. The `after` position is exclusive, and changing a query parameter while reusing a watermark is rejected. To start a differently shaped report, begin a new pull with `from` and `to`. When no new records exist, TokenHub returns an empty `data` array and echoes the committed watermark, so the agent does not lose its checkpoint.
+Database commit order is not the same as request `occurred_at` order. To avoid permanently skipping a request that commits late with an earlier timestamp, `after` replays a 24-hour overlap through the new `to`; `query.incremental_replay` is then `true`. Hour, day, and month aggregates align the overlap to the start of a bucket so replayed rows contain the complete bucket range. Unbucketed aggregates replay the original window because they represent a running total. Previously seen rows are expected. For request granularity, `dedupe_key` equals `request_id`; for aggregates, it identifies the query shape, bucket, and dimension combination, and the replayed row replaces the previously stored value.
+
+The watermark retains its original filters and aggregation shape, and changing either while reusing it is rejected. To start a differently shaped report, begin a new pull with `from` and `to`. A replay containing no newly committed requests may still contain only duplicate rows and echo the committed watermark; discard those duplicates by `dedupe_key`.
 
 ## CSV export
 
@@ -167,7 +172,7 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
   -o token-costs.csv
 ```
 
-CSV uses the same filters, limits, metrics, and pagination as JSON. Metadata is returned in `X-TokenHub-Schema-Version`, `X-TokenHub-Has-More`, `X-TokenHub-Next-Cursor`, and `X-TokenHub-Watermark` headers.
+CSV uses the same filters, limits, metrics, pagination, and `dedupe_key` as JSON. Metadata is returned in `X-TokenHub-Schema-Version`, `X-TokenHub-Has-More`, `X-TokenHub-Next-Cursor`, `X-TokenHub-Watermark`, `X-TokenHub-Dedupe-By`, and `X-TokenHub-Incremental-Replay` headers. Text cells that could be interpreted as spreadsheet formulas are prefixed with an apostrophe.
 
 ## CLI and MCP assessment
 

@@ -92,7 +92,7 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
 | `group_by` | カンマ区切りまたは繰り返し指定する `project`、`user`、`api_key`、`provider`、`model`、`status` |
 | `limit` | 1～1000 行。既定は 100 |
 | `cursor` | 直前ページの不透明な `next_cursor` |
-| `after` | 新しい差分取得に使う、コミット済みの不透明な `watermark`。`from`、`cursor` と併用不可 |
+| `after` | Replay-safe な差分取得に使う、コミット済みの不透明な `watermark`。`from`、`cursor` と併用不可 |
 | `format` | `json`（既定）または `csv`。`Accept: text/csv` でも CSV を選択 |
 
 リクエスト単位の期間上限は 31 日、集計クエリは 366 日です。それより長い履歴は連続する期間に分割してください。
@@ -113,10 +113,13 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
     "group_by": ["project", "model"],
     "filters": {"project_id": "prj_payments"},
     "format": "json",
-    "limit": 100
+    "limit": 100,
+    "dedupe_by": "dedupe_key",
+    "incremental_replay": false
   },
   "data": [
     {
+      "dedupe_key": "aggregate_f6d6...",
       "bucket": "2026-08-01",
       "project_id": "prj_payments",
       "model": "gpt-4.1-mini",
@@ -144,7 +147,7 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
 
 `has_more` が true の場合は `cursor=next_cursor` で再度呼び出します。Cursor は元のフィルター、`granularity`、`group_by`、スナップショット期間を保持するため、これらのパラメーターは省略できます。再指定する場合は Cursor と一致する必要があります。スナップショット上限は固定されるため、ページング中に到着したリクエストで後続ページがずれることはありません。
 
-レスポンスの `watermark` は、そのスナップショットで最後に一致したリクエストを指します。`has_more` が false になるまですべてのページを処理し、処理成功後にだけ watermark を Agent の永続状態へコミットしてください。次回は `after=<committed watermark>` を使います。
+レスポンスの `watermark` は完了した Database Snapshot を識別します。`has_more` が false になるまですべてのページを処理し、`dedupe_key` で Row を正常に Upsert した後にだけ watermark を Agent の永続状態へコミットしてください。次回は `after=<committed watermark>` を使います。
 
 ```bash
 curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
@@ -152,7 +155,9 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
   --data-urlencode "after=$TOKENHUB_COST_WATERMARK"
 ```
 
-Watermark も元のフィルターと集計形状を保持します。`after` の位置は含まず、watermark の再利用時にクエリパラメーターを変更すると拒否されます。異なる形状のレポートを開始する場合は、新しい `from` と `to` で取得を開始してください。新規レコードがない場合、TokenHub は空の `data` とコミット済み watermark をそのまま返すため、Agent はチェックポイントを失いません。
+Database の Commit 順序は Request の `occurred_at` 順序と同じではありません。早い Timestamp の Request が遅れて Commit されても永久に欠落しないよう、`after` は 24 時間の重複 Window から新しい `to` までを Replay し、`query.incremental_replay` は `true` になります。Hour、Day、Month 集計では重複 Window を Bucket の先頭に揃え、Replay Row が完全な Bucket 範囲を含むようにします。時間 Bucket なしの集計は Running Total を表すため、元の Window を Replay します。そのため処理済み Row の再出現は正常です。Request 粒度では `dedupe_key` は `request_id` と同じです。集計 Row では Query Shape、Bucket、Dimension の組み合わせを識別し、Replay された最新値で保存済みの値を置換します。
+
+Watermark は元の Filter と集計形状も保持し、再利用時にいずれかを変更すると拒否されます。異なる形状の Report は新しい `from` と `to` で開始してください。新しい Commit がない Replay でも重複 Row だけが返り、watermark がそのまま返ることがあります。`dedupe_key` で重複を破棄してください。
 
 ## CSV エクスポート
 
@@ -167,7 +172,7 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
   -o token-costs.csv
 ```
 
-CSV は JSON と同じフィルター、上限、メトリクス、ページング規則を使います。メタデータは `X-TokenHub-Schema-Version`、`X-TokenHub-Has-More`、`X-TokenHub-Next-Cursor`、`X-TokenHub-Watermark` ヘッダーで返します。
+CSV は JSON と同じ Filter、上限、Metric、Pagination、`dedupe_key` を使います。Metadata は `X-TokenHub-Schema-Version`、`X-TokenHub-Has-More`、`X-TokenHub-Next-Cursor`、`X-TokenHub-Watermark`、`X-TokenHub-Dedupe-By`、`X-TokenHub-Incremental-Replay` Header で返します。Spreadsheet Formula と解釈される可能性のある Text Cell には Apostrophe Prefix を付けます。
 
 ## CLI と MCP の評価
 

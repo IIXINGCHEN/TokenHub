@@ -253,6 +253,9 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 		if err := backfillTeamRelationships(db); err != nil {
 			return err
 		}
+		if err := backfillRequestLogAttribution(db); err != nil {
+			return err
+		}
 		return backfillRoutingPolicyBindingKeys(db)
 	}
 	if err := runSchemaMigrationLocked(sqlDB, driver, migrate); err != nil {
@@ -329,6 +332,47 @@ func openAnalyticsDatabase(driver string, dsn string, config Config) (*gorm.DB, 
 func sqliteSupportsWAL(dsn string) bool {
 	trimmed := strings.ToLower(strings.TrimSpace(dsn))
 	return trimmed != "" && trimmed != ":memory:" && !strings.Contains(trimmed, "mode=memory")
+}
+
+func backfillRequestLogAttribution(db *gorm.DB) error {
+	emptyAttribution := "COALESCE(attributed_user_id, '') = ''"
+	type attributionSource struct {
+		name   string
+		value  *gorm.DB
+		exists *gorm.DB
+	}
+	sources := []attributionSource{
+		{
+			name: "usage record",
+			value: db.Table("usage_records AS ur").Select("MAX(ur.attributed_user_id)").
+				Where("ur.request_id = request_logs.request_id").Where("ur.attributed_user_id <> ''"),
+			exists: db.Table("usage_records AS ur").Select("1").
+				Where("ur.request_id = request_logs.request_id").Where("ur.attributed_user_id <> ''"),
+		},
+		{
+			name: "API key owner",
+			value: db.Table("api_keys AS ak").Select("ak.owner_user_id").
+				Where("ak.id = request_logs.api_key_id").Where("ak.owner_user_id <> ''").Limit(1),
+			exists: db.Table("api_keys AS ak").Select("1").
+				Where("ak.id = request_logs.api_key_id").Where("ak.owner_user_id <> ''"),
+		},
+		{
+			name: "project owner",
+			value: db.Table("projects AS p").Select("p.owner_user_id").
+				Where("p.id = request_logs.project_id").Where("p.owner_user_id <> ''").Limit(1),
+			exists: db.Table("projects AS p").Select("1").
+				Where("p.id = request_logs.project_id").Where("p.owner_user_id <> ''"),
+		},
+	}
+	for _, source := range sources {
+		if err := db.Model(&RequestLog{}).
+			Where(emptyAttribution).
+			Where("EXISTS (?)", source.exists).
+			Update("attributed_user_id", source.value).Error; err != nil {
+			return fmt.Errorf("backfill request log attribution from %s: %w", source.name, err)
+		}
+	}
+	return nil
 }
 
 func backfillRoutingPolicyBindingKeys(db *gorm.DB) error {

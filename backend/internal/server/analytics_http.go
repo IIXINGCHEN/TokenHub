@@ -21,6 +21,7 @@ const (
 	maximumRawCostRange           = 31 * 24 * time.Hour
 	maximumGroupedCostRange       = 366 * 24 * time.Hour
 	maximumTokenCostQueryDuration = 10 * time.Second
+	tokenCostReplayOverlap        = 24 * time.Hour
 )
 
 type tokenCostCursor struct {
@@ -33,6 +34,7 @@ type tokenCostCursor struct {
 	Offset   int                  `json:"offset,omitempty"`
 	QueryKey string               `json:"query_key,omitempty"`
 	Query    tokenCostCursorQuery `json:"query"`
+	Replay   bool                 `json:"replay,omitempty"`
 }
 
 type tokenCostCursorQuery struct {
@@ -138,7 +140,7 @@ func (s *Server) handleTokenCostAnalytics(w http.ResponseWriter, r *http.Request
 		watermark = encodeTokenCostCursor(tokenCostCursor{
 			Version: 1, AfterAt: watermarkAt, AfterID: watermarkID,
 			From: query.From, Through: query.To, Kind: "watermark", QueryKey: queryKey,
-			Query: tokenCostCursorQueryFrom(query),
+			Query: tokenCostCursorQueryFrom(query), Replay: query.IncrementalReplay,
 		})
 	} else if after := strings.TrimSpace(r.URL.Query().Get("after")); after != "" {
 		watermark = after
@@ -149,13 +151,13 @@ func (s *Server) handleTokenCostAnalytics(w http.ResponseWriter, r *http.Request
 		nextCursor = encodeTokenCostCursor(tokenCostCursor{
 			Version: 1, AfterAt: lastTime, AfterID: last.RequestID,
 			From: query.From, Through: query.To, Kind: "request", QueryKey: queryKey,
-			Query: tokenCostCursorQueryFrom(query),
+			Query: tokenCostCursorQueryFrom(query), Replay: query.IncrementalReplay,
 		})
 	} else if hasMore {
 		nextCursor = encodeTokenCostCursor(tokenCostCursor{
 			Version: 1, From: query.From, Through: query.To,
 			Kind: "aggregate", Offset: query.Offset + len(rows), QueryKey: queryKey,
-			Query: tokenCostCursorQueryFrom(query),
+			Query: tokenCostCursorQueryFrom(query), Replay: query.IncrementalReplay,
 		})
 	}
 	payload := TokenCostResponse{
@@ -174,6 +176,8 @@ func (s *Server) handleTokenCostAnalytics(w http.ResponseWriter, r *http.Request
 	w.Header().Set("cache-control", "no-store")
 	w.Header().Set("x-tokenhub-schema-version", TokenCostSchemaVersion)
 	w.Header().Set("x-tokenhub-has-more", strconv.FormatBool(hasMore))
+	w.Header().Set("x-tokenhub-dedupe-by", "dedupe_key")
+	w.Header().Set("x-tokenhub-incremental-replay", strconv.FormatBool(metadata.IncrementalReplay))
 	if watermark != "" {
 		w.Header().Set("x-tokenhub-watermark", watermark)
 	}
@@ -228,7 +232,10 @@ func (s *Server) parseTokenCostQuery(r *http.Request, credential AnalyticsCreden
 		if strings.TrimSpace(values.Get("from")) != "" {
 			return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_cursor", "from cannot be combined with after")
 		}
-		fromFallback = afterCursor.AfterAt
+		// Database commit order can differ from occurred_at order. Replay a bounded
+		// overlap instead of treating event time as an exclusive checkpoint, and let
+		// callers upsert the repeated rows by dedupe_key.
+		fromFallback = tokenCostIncrementalReplayFrom(afterCursor)
 	}
 	if cursorValue != "" {
 		applyTokenCostCursorQuery(values, pageCursor.Query)
@@ -242,6 +249,9 @@ func (s *Server) parseTokenCostQuery(r *http.Request, credential AnalyticsCreden
 	to, err := parseTokenCostTime(values.Get("to"), toFallback, "to")
 	if err != nil {
 		return TokenCostQuery{}, TokenCostQueryMetadata{}, err
+	}
+	if afterValue != "" && to.Before(afterCursor.Through) {
+		return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_cursor", "to cannot be earlier than the watermark snapshot")
 	}
 	if !from.Before(to) {
 		return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_time_range", "from must be earlier than to")
@@ -310,6 +320,7 @@ func (s *Server) parseTokenCostQuery(r *http.Request, credential AnalyticsCreden
 		UserID: filters["user_id"], APIKeyID: filters["api_key_id"],
 		ProviderID: filters["provider_id"], Model: filters["model"], Status: status,
 		Granularity: granularity, GroupBy: groupBy, Limit: limit,
+		IncrementalReplay: afterValue != "" || pageCursor.Replay,
 	}
 	if cursorValue != "" {
 		if !from.Equal(pageCursor.From) || !to.Equal(pageCursor.Through) {
@@ -329,14 +340,35 @@ func (s *Server) parseTokenCostQuery(r *http.Request, credential AnalyticsCreden
 		if afterCursor.QueryKey == "" || afterCursor.QueryKey != tokenCostQueryKey(credential, query) {
 			return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_cursor", "after watermark does not match the query")
 		}
-		query.AfterAt = afterCursor.AfterAt
-		query.AfterID = afterCursor.AfterID
 	}
 	metadata := TokenCostQueryMetadata{
 		From: from.Format(time.RFC3339Nano), To: to.Format(time.RFC3339Nano),
 		Granularity: granularity, GroupBy: groupBy, Filters: filters, Format: format, Limit: limit,
+		DedupeBy: "dedupe_key", IncrementalReplay: query.IncrementalReplay,
 	}
 	return query, metadata, nil
+}
+
+func tokenCostIncrementalReplayFrom(cursor tokenCostCursor) time.Time {
+	// An unbucketed aggregate is a running total for its whole window, so it must
+	// be recomputed from the original lower bound to remain replaceable by one
+	// stable dedupe key.
+	if cursor.Query.Granularity == "none" {
+		return cursor.From
+	}
+	replayFrom := cursor.AfterAt.Add(-tokenCostReplayOverlap).UTC()
+	switch cursor.Query.Granularity {
+	case "hour":
+		replayFrom = replayFrom.Truncate(time.Hour)
+	case "day":
+		replayFrom = time.Date(replayFrom.Year(), replayFrom.Month(), replayFrom.Day(), 0, 0, 0, 0, time.UTC)
+	case "month":
+		replayFrom = time.Date(replayFrom.Year(), replayFrom.Month(), 1, 0, 0, 0, 0, time.UTC)
+	}
+	if replayFrom.Before(cursor.From) {
+		return cursor.From
+	}
+	return replayFrom
 }
 
 func applyTokenCostCursorQuery(values map[string][]string, query tokenCostCursorQuery) {
@@ -488,7 +520,7 @@ func writeTokenCostCSV(w http.ResponseWriter, rows []TokenCostRow) error {
 	var buffer bytes.Buffer
 	writer := csv.NewWriter(&buffer)
 	if err := writer.Write([]string{
-		"bucket", "request_id", "occurred_at", "project_id", "user_id", "api_key_id",
+		"dedupe_key", "bucket", "request_id", "occurred_at", "project_id", "user_id", "api_key_id",
 		"provider_id", "model", "status", "status_code", "request_count", "error_count",
 		"input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens",
 		"reasoning_output_tokens", "total_tokens", "estimated_cost_usd",
@@ -497,8 +529,11 @@ func writeTokenCostCSV(w http.ResponseWriter, rows []TokenCostRow) error {
 	}
 	for _, row := range rows {
 		if err := writer.Write([]string{
-			row.Bucket, row.RequestID, row.OccurredAt, row.ProjectID, row.UserID, row.APIKeyID,
-			row.ProviderID, row.Model, row.Status, strconv.Itoa(row.StatusCode),
+			safeReconciliationCSVCell(row.DedupeKey), safeReconciliationCSVCell(row.Bucket),
+			safeReconciliationCSVCell(row.RequestID), safeReconciliationCSVCell(row.OccurredAt),
+			safeReconciliationCSVCell(row.ProjectID), safeReconciliationCSVCell(row.UserID),
+			safeReconciliationCSVCell(row.APIKeyID), safeReconciliationCSVCell(row.ProviderID),
+			safeReconciliationCSVCell(row.Model), safeReconciliationCSVCell(row.Status), strconv.Itoa(row.StatusCode),
 			strconv.FormatInt(row.Metrics.RequestCount, 10), strconv.FormatInt(row.Metrics.ErrorCount, 10),
 			strconv.FormatInt(row.Metrics.InputTokens, 10), strconv.FormatInt(row.Metrics.CachedInputTokens, 10),
 			strconv.FormatInt(row.Metrics.CacheWriteTokens, 10), strconv.FormatInt(row.Metrics.OutputTokens, 10),

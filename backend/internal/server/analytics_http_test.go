@@ -281,7 +281,11 @@ func TestTokenCostCursorPaginatesSnapshotAndWatermarkSupportsIncrementalPull(t *
 	if err := json.Unmarshal([]byte(incrementalResponse.Body), &incremental); err != nil {
 		t.Fatal(err)
 	}
-	if len(incremental.Data) != 1 || incremental.Data[0].RequestID != "req_cursor_new" || incremental.Watermark == first.Watermark {
+	foundNew := false
+	for _, row := range incremental.Data {
+		foundNew = foundNew || row.RequestID == "req_cursor_new"
+	}
+	if !incremental.Query.IncrementalReplay || !foundNew || incremental.Watermark == first.Watermark {
 		t.Fatalf("incremental token cost pull = %#v", incremental)
 	}
 }
@@ -347,7 +351,9 @@ func TestTokenCostWatermarkPreservesOriginalFiltersAndAggregation(t *testing.T) 
 		pulled.Query.Filters["provider_id"] != "provider-watermark-a" {
 		t.Fatalf("incremental query lost original shape: %#v", pulled.Query)
 	}
-	if len(pulled.Data) != 1 || pulled.Data[0].ProviderID != "provider-watermark-a" || pulled.Data[0].Metrics.RequestCount != 1 {
+	if len(pulled.Data) != 1 || pulled.Data[0].ProviderID != "provider-watermark-a" ||
+		pulled.Data[0].Metrics.RequestCount != 2 || pulled.Data[0].DedupeKey != initial.Data[0].DedupeKey ||
+		!pulled.Query.IncrementalReplay {
 		t.Fatalf("incremental query mixed unrelated records: %#v", pulled.Data)
 	}
 }
@@ -388,7 +394,7 @@ func TestTokenCostAnalyticsExportsCSVWithStableSchemaHeaders(t *testing.T) {
 	if response.Header().Get("x-tokenhub-schema-version") != TokenCostSchemaVersion || response.Header().Get("x-tokenhub-watermark") == "" {
 		t.Fatalf("CSV schema headers = %#v", response.Header())
 	}
-	header := "bucket,request_id,occurred_at,project_id,user_id,api_key_id,provider_id,model,status,status_code,request_count,error_count,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,estimated_cost_usd"
+	header := "dedupe_key,bucket,request_id,occurred_at,project_id,user_id,api_key_id,provider_id,model,status,status_code,request_count,error_count,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,estimated_cost_usd"
 	if !strings.HasPrefix(response.Body.String(), header+"\n") || !strings.Contains(response.Body.String(), "req_csv") ||
 		!strings.Contains(response.Body.String(), "0.125") || strings.Contains(response.Body.String(), "provider_cost_usd") {
 		t.Fatalf("unexpected CSV token costs: %s", response.Body.String())

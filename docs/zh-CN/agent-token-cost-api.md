@@ -92,7 +92,7 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
 | `group_by` | 逗号分隔或重复传入 `project`、`user`、`api_key`、`provider`、`model`、`status` |
 | `limit` | 1–1000 行，默认 100 |
 | `cursor` | 上一页返回的不透明 `next_cursor` |
-| `after` | 新一轮增量拉取使用的已提交不透明 `watermark`；不能与 `from` 或 `cursor` 同时使用 |
+| `after` | 用于可安全重放增量拉取的已提交不透明 `watermark`；不能与 `from` 或 `cursor` 同时使用 |
 | `format` | `json`（默认）或 `csv`；`Accept: text/csv` 也会选择 CSV |
 
 请求级时间范围最多 31 天，聚合查询最多 366 天。更长历史应拆成首尾相接的区间。
@@ -113,10 +113,13 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
     "group_by": ["project", "model"],
     "filters": {"project_id": "prj_payments"},
     "format": "json",
-    "limit": 100
+    "limit": 100,
+    "dedupe_by": "dedupe_key",
+    "incremental_replay": false
   },
   "data": [
     {
+      "dedupe_key": "aggregate_f6d6...",
       "bucket": "2026-08-01",
       "project_id": "prj_payments",
       "model": "gpt-4.1-mini",
@@ -144,7 +147,7 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
 
 当 `has_more` 为 true 时，用 `cursor=next_cursor` 再次调用。Cursor 会保存原始过滤条件、`granularity`、`group_by` 和快照区间，因此这些参数都可以省略；如果再次传入，则必须与 Cursor 一致。快照上界保持固定，因此分页期间新到达的请求不会挤动后续页面。
 
-响应中的 `watermark` 指向当前快照内最新的匹配请求。Agent 必须先处理所有页面，直到 `has_more` 为 false；确认数据处理成功后，再把 watermark 持久化。下一轮使用 `after=<已提交 watermark>`：
+响应中的 `watermark` 标识已完成的数据库快照。Agent 必须先处理所有页面，按 `dedupe_key` 成功 upsert 数据后，再把 watermark 持久化。下一轮使用 `after=<已提交 watermark>`：
 
 ```bash
 curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
@@ -152,7 +155,9 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
   --data-urlencode "after=$TOKENHUB_COST_WATERMARK"
 ```
 
-Watermark 也会保存原始过滤条件和聚合形状。`after` 位置为不包含边界，复用 watermark 时修改查询参数会被拒绝。若要开始不同形状的报表，应使用新的 `from`、`to` 发起全新拉取。没有新记录时，TokenHub 返回空 `data` 并原样返回已提交 watermark，Agent 不会丢失检查点。
+数据库提交顺序与请求 `occurred_at` 顺序并不相同。为避免较早时间戳的请求延迟提交后被永久跳过，使用 `after` 时会重放 24 小时重叠窗口直到新的 `to`，此时 `query.incremental_replay` 为 `true`。小时、天、月聚合会把重叠窗口对齐到 Bucket 起点，确保重放行覆盖完整的 Bucket 范围；无时间桶聚合表示滚动总量，因此会重放原始窗口。响应中出现已处理行是正常现象。请求粒度的 `dedupe_key` 等于 `request_id`；聚合行的 `dedupe_key` 标识查询形状、Bucket 与维度组合，客户端应以最新重放值覆盖已存值。
+
+Watermark 也会保存原始过滤条件和聚合形状，复用时修改任一项都会被拒绝。若要开始不同形状的报表，应使用新的 `from`、`to` 发起全新拉取。没有新提交记录时，重放仍可能只返回重复行并原样返回已提交 watermark；客户端应按 `dedupe_key` 丢弃重复行。
 
 ## CSV 导出
 
@@ -167,7 +172,7 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
   -o token-costs.csv
 ```
 
-CSV 使用与 JSON 相同的过滤、限制、指标和分页规则。元数据通过 `X-TokenHub-Schema-Version`、`X-TokenHub-Has-More`、`X-TokenHub-Next-Cursor`、`X-TokenHub-Watermark` 响应头返回。
+CSV 使用与 JSON 相同的过滤、限制、指标、分页和 `dedupe_key`。元数据通过 `X-TokenHub-Schema-Version`、`X-TokenHub-Has-More`、`X-TokenHub-Next-Cursor`、`X-TokenHub-Watermark`、`X-TokenHub-Dedupe-By` 和 `X-TokenHub-Incremental-Replay` 响应头返回。可能被电子表格解释为公式的文本单元格会添加单引号前缀。
 
 ## CLI 与 MCP 评估
 
