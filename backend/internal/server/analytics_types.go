@@ -13,14 +13,17 @@ const (
 	TokenCostIncrementalSnapshot = "snapshot"
 	TokenCostIncrementalChanges  = "changes"
 	requestLogSequenceName       = "request_logs"
+	requestLogCheckpointLockName = "tokenhub:request-log-checkpoint"
 )
 
 // AnalyticsSequence is SQLite's transactionally updated request-log checkpoint.
-// PostgreSQL only uses it as a migration marker; frozen history is event-ordered,
-// while new rows use full transaction IDs and snapshot low-water marks.
+// PostgreSQL stores a portable transaction-ID offset and a one-time history
+// migration marker so pg_dump/pg_restore can preserve existing watermarks.
 type AnalyticsSequence struct {
-	Name      string `gorm:"primaryKey"`
-	LastValue int64  `gorm:"not null"`
+	Name            string `gorm:"primaryKey"`
+	LastValue       int64  `gorm:"not null"`
+	SequenceOffset  int64  `gorm:"not null;default:0"`
+	HistoryMigrated bool   `gorm:"not null;default:false"`
 }
 
 // AnalyticsCredential is a read-only credential for the versioned analytics

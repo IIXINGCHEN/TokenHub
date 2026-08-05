@@ -343,7 +343,21 @@ func ensureRequestLogCommitSequence(db *gorm.DB, driver string) error {
 	if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&sequence).Error; err != nil {
 		return fmt.Errorf("create request log sequence: %w", err)
 	}
-	if err := db.Exec("DROP INDEX IF EXISTS idx_request_logs_commit_sequence").Error; err != nil {
+	createIndex := "CREATE INDEX IF NOT EXISTS"
+	dropIndex := "DROP INDEX IF EXISTS"
+	if driver == "postgres" {
+		createIndex = "CREATE INDEX CONCURRENTLY IF NOT EXISTS"
+		dropIndex = "DROP INDEX CONCURRENTLY IF EXISTS"
+	}
+	if err := db.Exec(createIndex + ` idx_request_logs_commit_sequence_v2
+ON request_logs(commit_sequence)`).Error; err != nil {
+		return fmt.Errorf("index request log commit sequence: %w", err)
+	}
+	if err := db.Exec(createIndex + ` idx_request_logs_project_commit_sequence
+ON request_logs(project_id, commit_sequence)`).Error; err != nil {
+		return fmt.Errorf("index project request log commit sequence: %w", err)
+	}
+	if err := db.Exec(dropIndex + " idx_request_logs_commit_sequence").Error; err != nil {
 		return fmt.Errorf("replace request log commit sequence index: %w", err)
 	}
 	var triggerStatements []string
@@ -352,7 +366,11 @@ func ensureRequestLogCommitSequence(db *gorm.DB, driver string) error {
 CREATE OR REPLACE FUNCTION tokenhub_assign_request_log_commit_sequence()
 RETURNS trigger AS $function$
 BEGIN
-  NEW.commit_sequence = txid_current();
+  PERFORM pg_advisory_xact_lock_shared(hashtextextended('tokenhub:request-log-checkpoint', 0));
+  SELECT sequence_offset + txid_current()
+    INTO NEW.commit_sequence
+    FROM analytics_sequences
+   WHERE name = 'request_logs';
   RETURN NEW;
 END;
 $function$ LANGUAGE plpgsql;`, `
@@ -394,14 +412,6 @@ END;`}
 	if err := backfillRequestLogCommitSequence(db, driver); err != nil {
 		return err
 	}
-	if err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_request_logs_commit_sequence_v2
-ON request_logs(commit_sequence)`).Error; err != nil {
-		return fmt.Errorf("index request log commit sequence: %w", err)
-	}
-	if err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_request_logs_project_commit_sequence
-ON request_logs(project_id, commit_sequence)`).Error; err != nil {
-		return fmt.Errorf("index project request log commit sequence: %w", err)
-	}
 	return nil
 }
 
@@ -413,26 +423,10 @@ func backfillRequestLogCommitSequence(db *gorm.DB, driver string) error {
 				First(&sequence, "name = ?", requestLogSequenceName).Error; err != nil {
 				return err
 			}
-			// A non-negative value marks a database that has not yet converted its
-			// legacy sequences. The one-time table lock separates the frozen history
-			// from inserts that will use txid_current() after this transaction commits.
-			if sequence.LastValue >= 0 {
-				if err := tx.Exec("LOCK TABLE request_logs IN SHARE ROW EXCLUSIVE MODE").Error; err != nil {
-					return fmt.Errorf("lock legacy request logs: %w", err)
-				}
-				var count int64
-				if err := tx.Model(&RequestLog{}).Count(&count).Error; err != nil {
-					return err
-				}
-				var transactionID int64
-				if err := tx.Raw("SELECT txid_current()::bigint").Scan(&transactionID).Error; err != nil {
-					return err
-				}
-				if count >= transactionID {
-					return fmt.Errorf("convert legacy request log commit sequence: %d rows do not fit below transaction %d", count, transactionID)
-				}
-				if count > 0 {
-					if err := tx.Exec(`
+			// Frozen history only needs event-time ordering once. PostgreSQL's MVCC
+			// lets new request logs keep committing while this update scans old rows.
+			if !sequence.HistoryMigrated {
+				if err := tx.Exec(`
 WITH ranked AS (
   SELECT id, ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC) AS sequence
     FROM request_logs
@@ -441,14 +435,32 @@ UPDATE request_logs AS rl
    SET commit_sequence = ranked.sequence
   FROM ranked
  WHERE rl.id = ranked.id`).Error; err != nil {
-						return fmt.Errorf("convert legacy request log commit sequence: %w", err)
-					}
+					return fmt.Errorf("convert legacy request log commit sequence: %w", err)
 				}
-				if err := tx.Model(&AnalyticsSequence{}).
-					Where("name = ?", requestLogSequenceName).
-					Update("last_value", -1).Error; err != nil {
-					return err
-				}
+				sequence.HistoryMigrated = true
+			}
+			// Inserts share this advisory lock, so the indexed MAX and offset update
+			// form a short rebase barrier without serializing inserts with each other.
+			if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", requestLogCheckpointLockName).Error; err != nil {
+				return err
+			}
+			var maximum int64
+			if err := tx.Model(&RequestLog{}).Select("COALESCE(MAX(commit_sequence), 0)").Scan(&maximum).Error; err != nil {
+				return err
+			}
+			var transactionID int64
+			if err := tx.Raw("SELECT txid_current()::bigint").Scan(&transactionID).Error; err != nil {
+				return err
+			}
+			requiredOffset := maximum - transactionID + 1
+			offset := max(int64(0), sequence.SequenceOffset, requiredOffset)
+			if err := tx.Model(&AnalyticsSequence{}).
+				Where("name = ?", requestLogSequenceName).
+				Updates(map[string]any{
+					"sequence_offset":  offset,
+					"history_migrated": sequence.HistoryMigrated,
+				}).Error; err != nil {
+				return err
 			}
 			return nil
 		})

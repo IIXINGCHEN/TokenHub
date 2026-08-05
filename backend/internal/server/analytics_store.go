@@ -464,7 +464,12 @@ func (s *GormStore) tokenCostGlobalCheckpoint(ctx context.Context) (int64, error
 	if s.dbDriver == "postgres" {
 		var checkpoint int64
 		err := s.analyticsDB.WithContext(ctx).Raw(`
-SELECT GREATEST(txid_snapshot_xmin(txid_current_snapshot()) - 1, 0)::bigint`).Scan(&checkpoint).Error
+SELECT LEAST(
+  GREATEST(sequence_offset + txid_snapshot_xmin(txid_current_snapshot()) - 1, 0),
+  COALESCE((SELECT MAX(commit_sequence) FROM request_logs), 0)
+)::bigint
+  FROM analytics_sequences
+ WHERE name = ?`, requestLogSequenceName).Scan(&checkpoint).Error
 		return checkpoint, err
 	}
 	var sequence AnalyticsSequence

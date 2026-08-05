@@ -72,7 +72,9 @@ func testPostgresAnalyticsLegacySequenceMigration(t *testing.T, adminStore *Gorm
 		t.Fatal(err)
 	}
 	if err := legacyStore.db.Model(&AnalyticsSequence{}).
-		Where("name = ?", requestLogSequenceName).Update("last_value", 2).Error; err != nil {
+		Where("name = ?", requestLogSequenceName).Updates(map[string]any{
+		"last_value": 2, "sequence_offset": 0, "history_migrated": false,
+	}).Error; err != nil {
 		closeStore(legacyStore)
 		t.Fatal(err)
 	}
@@ -106,8 +108,8 @@ func testPostgresAnalyticsLegacySequenceMigration(t *testing.T, adminStore *Gorm
 	if err := upgradedStore.db.First(&marker, "name = ?", requestLogSequenceName).Error; err != nil {
 		t.Fatal(err)
 	}
-	if marker.LastValue != -1 {
-		t.Fatalf("legacy PostgreSQL migration marker = %d, want -1", marker.LastValue)
+	if !marker.HistoryMigrated || marker.SequenceOffset < 0 {
+		t.Fatalf("legacy PostgreSQL migration metadata = %#v", marker)
 	}
 	if err := backfillRequestLogCommitSequence(upgradedStore.db, "postgres"); err != nil {
 		t.Fatalf("repeat legacy PostgreSQL migration: %v", err)
@@ -120,5 +122,114 @@ func testPostgresAnalyticsLegacySequenceMigration(t *testing.T, adminStore *Gorm
 	if len(repeated) != 2 || repeated[0].CommitSequence != migrated[0].CommitSequence ||
 		repeated[1].CommitSequence != migrated[1].CommitSequence {
 		t.Fatalf("legacy PostgreSQL migration was not idempotent: first=%#v repeated=%#v", migrated, repeated)
+	}
+
+	// Hold one historical row so the migration's MVCC update remains in flight.
+	// A new gateway insert must still commit while that update is waiting.
+	if err := upgradedStore.db.Model(&AnalyticsSequence{}).
+		Where("name = ?", requestLogSequenceName).Update("history_migrated", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	blockedRow := upgradedStore.db.Begin()
+	if blockedRow.Error != nil {
+		t.Fatal(blockedRow.Error)
+	}
+	if err := blockedRow.Model(&RequestLog{}).Where("id = ?", logs[0].ID).
+		Update("model_name", "gpt-legacy-blocked").Error; err != nil {
+		_ = blockedRow.Rollback().Error
+		t.Fatal(err)
+	}
+	migrationDone := make(chan error, 1)
+	go func() {
+		migrationDone <- backfillRequestLogCommitSequence(upgradedStore.db, "postgres")
+	}()
+	locked := false
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
+		probe := upgradedStore.db.Begin()
+		if probe.Error != nil {
+			_ = blockedRow.Rollback().Error
+			t.Fatal(probe.Error)
+		}
+		err := probe.Exec(`SELECT 1 FROM analytics_sequences
+WHERE name = ? FOR UPDATE NOWAIT`, requestLogSequenceName).Error
+		_ = probe.Rollback().Error
+		if err != nil {
+			locked = true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !locked {
+		_ = blockedRow.Rollback().Error
+		t.Fatal("PostgreSQL history migration did not reach its row update")
+	}
+	concurrentLog := RequestLog{
+		ID: "log_during_legacy_migration", RequestID: "req_during_legacy_migration", ProjectID: projectID,
+		ModelName: "gpt-legacy", StatusCode: http.StatusOK, CreatedAt: now,
+	}
+	insertDone := make(chan error, 1)
+	go func() { insertDone <- upgradedStore.db.Create(&concurrentLog).Error }()
+	select {
+	case err := <-insertDone:
+		if err != nil {
+			_ = blockedRow.Rollback().Error
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		_ = blockedRow.Rollback().Error
+		t.Fatal("PostgreSQL history migration blocked a new request log insert")
+	}
+	if err := blockedRow.Rollback().Error; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-migrationDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("PostgreSQL history migration did not resume")
+	}
+
+	// Simulate pg_restore into a cluster whose transaction-ID space is behind
+	// the source watermark. Rebase must preserve that watermark and place new
+	// request logs above it without rewriting frozen history.
+	var currentTransactionID int64
+	if err := upgradedStore.db.Raw("SELECT txid_current()::bigint").Scan(&currentTransactionID).Error; err != nil {
+		t.Fatal(err)
+	}
+	savedWatermark := currentTransactionID + 10_000
+	if err := upgradedStore.db.Model(&RequestLog{}).Where("id = ?", logs[1].ID).
+		Update("commit_sequence", savedWatermark).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := upgradedStore.db.Model(&AnalyticsSequence{}).
+		Where("name = ?", requestLogSequenceName).Updates(map[string]any{
+		"sequence_offset": 0, "history_migrated": true,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := backfillRequestLogCommitSequence(upgradedStore.db, "postgres"); err != nil {
+		t.Fatalf("rebase restored PostgreSQL checkpoint: %v", err)
+	}
+	restoredLog := RequestLog{
+		ID: "log_after_pg_restore", RequestID: "req_after_pg_restore", ProjectID: projectID,
+		ModelName: "gpt-restored", StatusCode: http.StatusOK, CreatedAt: now.Add(2 * time.Hour),
+	}
+	if err := upgradedStore.db.Create(&restoredLog).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := upgradedStore.db.First(&restoredLog, "id = ?", restoredLog.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := upgradedStore.TokenCostCheckpoint(t.Context(), TokenCostQuery{
+		From: now.Add(-2 * time.Hour), To: now.Add(3 * time.Hour), ProjectID: projectID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restoredLog.CommitSequence <= savedWatermark || checkpoint <= savedWatermark {
+		t.Fatalf("restored PostgreSQL checkpoint did not rebase: saved=%d row=%d checkpoint=%d",
+			savedWatermark, restoredLog.CommitSequence, checkpoint)
 	}
 }
