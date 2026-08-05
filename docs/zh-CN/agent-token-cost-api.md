@@ -92,10 +92,10 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
 | `group_by` | 逗号分隔或重复传入 `project`、`user`、`api_key`、`provider`、`model`、`status` |
 | `limit` | 1–1000 行，默认 100 |
 | `cursor` | 上一页返回的不透明 `next_cursor` |
-| `after` | 用于可安全重放增量拉取的已提交不透明 `watermark`；不能与 `from` 或 `cursor` 同时使用 |
+| `after` | 用于按提交序号增量拉取的已提交不透明 `watermark`；不能与 `from` 或 `cursor` 同时使用 |
 | `format` | `json`（默认）或 `csv`；`Accept: text/csv` 也会选择 CSV |
 
-请求级时间范围最多 31 天，聚合查询最多 366 天。更长历史应拆成首尾相接的区间。
+初始请求级快照的时间范围最多 31 天，初始聚合快照最多 366 天。增量变更拉取由提交序号限定，因此可以保留原始 `from` 并持续推进 `to`，且不会重新扫描原始历史。
 
 ## JSON Schema
 
@@ -115,7 +115,8 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
     "format": "json",
     "limit": 100,
     "dedupe_by": "dedupe_key",
-    "incremental_replay": false
+    "checkpoint_by": "commit_sequence",
+    "incremental_mode": "snapshot"
   },
   "data": [
     {
@@ -147,7 +148,7 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
 
 当 `has_more` 为 true 时，用 `cursor=next_cursor` 再次调用。Cursor 会保存原始过滤条件、`granularity`、`group_by` 和快照区间，因此这些参数都可以省略；如果再次传入，则必须与 Cursor 一致。快照上界保持固定，因此分页期间新到达的请求不会挤动后续页面。
 
-响应中的 `watermark` 标识已完成的数据库快照。Agent 必须先处理所有页面，按 `dedupe_key` 成功 upsert 数据后，再把 watermark 持久化。下一轮使用 `after=<已提交 watermark>`：
+响应中的 `watermark` 使用事务内分配的请求日志提交序号标识已完成的数据库快照。TokenHub 分配序号时会持有一个数据库行锁直到插入事务提交，因此在 PostgreSQL 多实例间也保持单调。即使快照没有匹配行也会返回 watermark。Agent 必须先处理所有页面，成功后再把 watermark 持久化。下一轮使用 `after=<已提交 watermark>`：
 
 ```bash
 curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
@@ -155,9 +156,9 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
   --data-urlencode "after=$TOKENHUB_COST_WATERMARK"
 ```
 
-数据库提交顺序与请求 `occurred_at` 顺序并不相同。为避免较早时间戳的请求延迟提交后被永久跳过，使用 `after` 时会重放 24 小时重叠窗口直到新的 `to`，此时 `query.incremental_replay` 为 `true`。小时、天、月聚合会把重叠窗口对齐到 Bucket 起点，确保重放行覆盖完整的 Bucket 范围；无时间桶聚合表示滚动总量，因此会重放原始窗口。响应中出现已处理行是正常现象。请求粒度的 `dedupe_key` 等于 `request_id`；聚合行的 `dedupe_key` 标识查询形状、Bucket 与维度组合，客户端应以最新重放值覆盖已存值。
+使用 `after` 时，`query.incremental_mode` 为 `changes`，只返回提交序号大于已提交 watermark 且不超过新快照的请求日志。原始过滤条件和事件时间 `from` 会保留，`to` 可以持续推进。因此，即使延迟提交请求的 `occurred_at` 早于上一次快照中的最新事件，也不会被跳过。
 
-Watermark 也会保存原始过滤条件和聚合形状，复用时修改任一项都会被拒绝。若要开始不同形状的报表，应使用新的 `from`、`to` 发起全新拉取。没有新提交记录时，重放仍可能只返回重复行并原样返回已提交 watermark；客户端应按 `dedupe_key` 丢弃重复行。
+请求粒度变更的 `dedupe_key` 等于 `request_id`。聚合变更行是新增提交请求形成的 Delta，其 Key 标识已提交的起始检查点、查询形状、Bucket 和维度。Agent 应先按该 Key 暂存或 Upsert 所有页面，完整拉取后只应用一次 Delta，并原子推进 watermark。用同一已提交 watermark 重试时，即使新快照继续推进，Key 仍保持稳定并覆盖暂存值。复用 watermark 时修改过滤条件或聚合形状会被拒绝；不同形状的报表应从新的 `from`、`to` 快照开始。
 
 ## CSV 导出
 
@@ -172,7 +173,7 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
   -o token-costs.csv
 ```
 
-CSV 使用与 JSON 相同的过滤、限制、指标、分页和 `dedupe_key`。元数据通过 `X-TokenHub-Schema-Version`、`X-TokenHub-Has-More`、`X-TokenHub-Next-Cursor`、`X-TokenHub-Watermark`、`X-TokenHub-Dedupe-By` 和 `X-TokenHub-Incremental-Replay` 响应头返回。可能被电子表格解释为公式的文本单元格会添加单引号前缀。
+CSV 使用与 JSON 相同的过滤、限制、指标、分页和 `dedupe_key`。元数据通过 `X-TokenHub-Schema-Version`、`X-TokenHub-Has-More`、`X-TokenHub-Next-Cursor`、`X-TokenHub-Watermark`、`X-TokenHub-Dedupe-By`、`X-TokenHub-Checkpoint-By` 和 `X-TokenHub-Incremental-Mode` 响应头返回。可能被电子表格解释为公式的文本单元格会添加单引号前缀。
 
 ## CLI 与 MCP 评估
 

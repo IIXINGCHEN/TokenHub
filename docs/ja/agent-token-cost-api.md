@@ -92,10 +92,10 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
 | `group_by` | カンマ区切りまたは繰り返し指定する `project`、`user`、`api_key`、`provider`、`model`、`status` |
 | `limit` | 1～1000 行。既定は 100 |
 | `cursor` | 直前ページの不透明な `next_cursor` |
-| `after` | Replay-safe な差分取得に使う、コミット済みの不透明な `watermark`。`from`、`cursor` と併用不可 |
+| `after` | Commit Sequence 差分取得に使う、コミット済みの不透明な `watermark`。`from`、`cursor` と併用不可 |
 | `format` | `json`（既定）または `csv`。`Accept: text/csv` でも CSV を選択 |
 
-リクエスト単位の期間上限は 31 日、集計クエリは 366 日です。それより長い履歴は連続する期間に分割してください。
+初回の Request 単位 Snapshot は最大 31 日、初回の集計 Snapshot は最大 366 日です。差分 Change Pull は Commit Sequence で範囲を限定するため、元の `from` を保持したまま `to` を進めても、元の履歴を再走査しません。
 
 ## JSON Schema
 
@@ -115,7 +115,8 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
     "format": "json",
     "limit": 100,
     "dedupe_by": "dedupe_key",
-    "incremental_replay": false
+    "checkpoint_by": "commit_sequence",
+    "incremental_mode": "snapshot"
   },
   "data": [
     {
@@ -147,7 +148,7 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
 
 `has_more` が true の場合は `cursor=next_cursor` で再度呼び出します。Cursor は元のフィルター、`granularity`、`group_by`、スナップショット期間を保持するため、これらのパラメーターは省略できます。再指定する場合は Cursor と一致する必要があります。スナップショット上限は固定されるため、ページング中に到着したリクエストで後続ページがずれることはありません。
 
-レスポンスの `watermark` は完了した Database Snapshot を識別します。`has_more` が false になるまですべてのページを処理し、`dedupe_key` で Row を正常に Upsert した後にだけ watermark を Agent の永続状態へコミットしてください。次回は `after=<committed watermark>` を使います。
+レスポンスの `watermark` は、Transaction 内で割り当てた Request Log の Commit Sequence により完了済み Database Snapshot を識別します。TokenHub は Insert Transaction が Commit するまで 1 つの Database Row Lock を保持して Sequence を割り当てるため、PostgreSQL の複数 Replica 間でも単調性が保たれます。Snapshot に一致する Row がなくても watermark は返されます。`has_more` が false になるまですべてのページを処理し、成功後にだけ watermark を Agent の永続状態へコミットしてください。次回は `after=<committed watermark>` を使います。
 
 ```bash
 curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
@@ -155,9 +156,9 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
   --data-urlencode "after=$TOKENHUB_COST_WATERMARK"
 ```
 
-Database の Commit 順序は Request の `occurred_at` 順序と同じではありません。早い Timestamp の Request が遅れて Commit されても永久に欠落しないよう、`after` は 24 時間の重複 Window から新しい `to` までを Replay し、`query.incremental_replay` は `true` になります。Hour、Day、Month 集計では重複 Window を Bucket の先頭に揃え、Replay Row が完全な Bucket 範囲を含むようにします。時間 Bucket なしの集計は Running Total を表すため、元の Window を Replay します。そのため処理済み Row の再出現は正常です。Request 粒度では `dedupe_key` は `request_id` と同じです。集計 Row では Query Shape、Bucket、Dimension の組み合わせを識別し、Replay された最新値で保存済みの値を置換します。
+`after` を使う Pull では `query.incremental_mode` が `changes` となり、Commit 済み watermark より大きく、新しい Snapshot 以下の Commit Sequence を持つ Request Log だけを返します。元の Filter と Event-time `from` は保持され、`to` は継続的に進められます。したがって、遅れて Commit された Request の `occurred_at` が前回 Snapshot の最新 Event より早くても欠落しません。
 
-Watermark は元の Filter と集計形状も保持し、再利用時にいずれかを変更すると拒否されます。異なる形状の Report は新しい `from` と `to` で開始してください。新しい Commit がない Replay でも重複 Row だけが返り、watermark がそのまま返ることがあります。`dedupe_key` で重複を破棄してください。
+Request 単位 Change の `dedupe_key` は `request_id` と同じです。集計 Change Row は新しく Commit された Request の Delta であり、その Key は Commit 済み開始 Checkpoint、Query Shape、Bucket、Dimension を識別します。全 Page を Key で Stage または Upsert し、Pull 完了後に Delta を一度だけ適用して watermark を Atomically に進めてください。同じ Commit 済み watermark から再試行すると、新しい Snapshot が先へ進んでも Key は安定し、Stage 済みの値を置換できます。Watermark の再利用時に Filter または集計形状を変更すると拒否されるため、異なる形状の Report は新しい `from` と `to` で開始してください。
 
 ## CSV エクスポート
 
@@ -172,7 +173,7 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
   -o token-costs.csv
 ```
 
-CSV は JSON と同じ Filter、上限、Metric、Pagination、`dedupe_key` を使います。Metadata は `X-TokenHub-Schema-Version`、`X-TokenHub-Has-More`、`X-TokenHub-Next-Cursor`、`X-TokenHub-Watermark`、`X-TokenHub-Dedupe-By`、`X-TokenHub-Incremental-Replay` Header で返します。Spreadsheet Formula と解釈される可能性のある Text Cell には Apostrophe Prefix を付けます。
+CSV は JSON と同じ Filter、上限、Metric、Pagination、`dedupe_key` を使います。Metadata は `X-TokenHub-Schema-Version`、`X-TokenHub-Has-More`、`X-TokenHub-Next-Cursor`、`X-TokenHub-Watermark`、`X-TokenHub-Dedupe-By`、`X-TokenHub-Checkpoint-By`、`X-TokenHub-Incremental-Mode` Header で返します。Spreadsheet Formula と解釈される可能性のある Text Cell には Apostrophe Prefix を付けます。
 
 ## CLI と MCP の評価
 

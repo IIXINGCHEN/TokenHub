@@ -92,10 +92,10 @@ Use `granularity=hour`, `day`, or `month` for time buckets. Use `granularity=non
 | `group_by` | Comma-separated or repeated `project`, `user`, `api_key`, `provider`, `model`, and `status` |
 | `limit` | 1–1000 rows; defaults to 100 |
 | `cursor` | Opaque `next_cursor` from the preceding page |
-| `after` | Opaque committed `watermark` for a replay-safe incremental pull; cannot be combined with `from` or `cursor` |
+| `after` | Opaque committed `watermark` for a commit-sequence incremental pull; cannot be combined with `from` or `cursor` |
 | `format` | `json` (default) or `csv`; `Accept: text/csv` also selects CSV |
 
-Request-level time ranges are limited to 31 days. Aggregated ranges are limited to 366 days. Split a longer history into adjacent windows.
+Initial request-level snapshots are limited to 31 days and initial aggregated snapshots to 366 days. Incremental change pulls are bounded by commit sequence, so they may keep the original `from` while advancing `to` beyond those limits without rescanning the original history.
 
 ## JSON schema
 
@@ -115,7 +115,8 @@ Every JSON response declares `schema_version: "1.0"` and has this shape:
     "format": "json",
     "limit": 100,
     "dedupe_by": "dedupe_key",
-    "incremental_replay": false
+    "checkpoint_by": "commit_sequence",
+    "incremental_mode": "snapshot"
   },
   "data": [
     {
@@ -147,7 +148,7 @@ Every JSON response declares `schema_version: "1.0"` and has this shape:
 
 When `has_more` is true, call the endpoint again with `cursor=next_cursor`. The cursor retains the original filters, `granularity`, `group_by`, and snapshot interval, so those parameters may be omitted. If they are supplied, they must match the cursor. The snapshot's upper bound remains fixed, so requests arriving during pagination do not shift later pages.
 
-The response `watermark` identifies the completed database snapshot. Drain every page until `has_more` is false, upsert the rows successfully by `dedupe_key`, and only then commit the watermark in the agent's durable state. Start the next run with `after=<committed watermark>`:
+The response `watermark` identifies the completed database snapshot by a transactionally assigned request-log commit sequence. TokenHub allocates that sequence while holding one database row until the inserting transaction commits, so it remains monotonic across PostgreSQL replicas. A watermark is returned even when the snapshot has no matching rows. Drain every page until `has_more` is false, process the rows successfully, and only then commit the watermark in the agent's durable state. Start the next run with `after=<committed watermark>`:
 
 ```bash
 curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
@@ -155,9 +156,9 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
   --data-urlencode "after=$TOKENHUB_COST_WATERMARK"
 ```
 
-Database commit order is not the same as request `occurred_at` order. To avoid permanently skipping a request that commits late with an earlier timestamp, `after` replays a 24-hour overlap through the new `to`; `query.incremental_replay` is then `true`. Hour, day, and month aggregates align the overlap to the start of a bucket so replayed rows contain the complete bucket range. Unbucketed aggregates replay the original window because they represent a running total. Previously seen rows are expected. For request granularity, `dedupe_key` equals `request_id`; for aggregates, it identifies the query shape, bucket, and dimension combination, and the replayed row replaces the previously stored value.
+An `after` pull sets `query.incremental_mode` to `changes` and returns only request logs whose commit sequence is greater than the committed watermark and no greater than the new snapshot. Its original filters and event-time `from` are retained, while `to` may advance. A request that commits late is therefore returned regardless of whether its `occurred_at` is earlier than the previous watermark's newest event.
 
-The watermark retains its original filters and aggregation shape, and changing either while reusing it is rejected. To start a differently shaped report, begin a new pull with `from` and `to`. A replay containing no newly committed requests may still contain only duplicate rows and echo the committed watermark; discard those duplicates by `dedupe_key`.
+Request-granularity changes use `request_id` as `dedupe_key`. Aggregated change rows are deltas over newly committed requests; their key identifies the committed starting checkpoint, query shape, bucket, and dimensions. Stage or upsert every page by that key, apply the completed delta exactly once, and advance the watermark atomically. Retrying the same committed watermark keeps the same keys and replaces staged values, even if the newer snapshot has advanced. Changing filters or aggregation shape while reusing a watermark is rejected; start a differently shaped report with a new `from` and `to` snapshot.
 
 ## CSV export
 
@@ -172,7 +173,7 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
   -o token-costs.csv
 ```
 
-CSV uses the same filters, limits, metrics, pagination, and `dedupe_key` as JSON. Metadata is returned in `X-TokenHub-Schema-Version`, `X-TokenHub-Has-More`, `X-TokenHub-Next-Cursor`, `X-TokenHub-Watermark`, `X-TokenHub-Dedupe-By`, and `X-TokenHub-Incremental-Replay` headers. Text cells that could be interpreted as spreadsheet formulas are prefixed with an apostrophe.
+CSV uses the same filters, limits, metrics, pagination, and `dedupe_key` as JSON. Metadata is returned in `X-TokenHub-Schema-Version`, `X-TokenHub-Has-More`, `X-TokenHub-Next-Cursor`, `X-TokenHub-Watermark`, `X-TokenHub-Dedupe-By`, `X-TokenHub-Checkpoint-By`, and `X-TokenHub-Incremental-Mode` headers. Text cells that could be interpreted as spreadsheet formulas are prefixed with an apostrophe.
 
 ## CLI and MCP assessment
 

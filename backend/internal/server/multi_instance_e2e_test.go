@@ -55,6 +55,9 @@ func TestMultiInstancePostgresE2E(t *testing.T) {
 	t.Run("HTTP quotas and concurrency are cluster wide", func(t *testing.T) {
 		testClusterWideHTTPEnforcement(t, storeA, storeB, config)
 	})
+	t.Run("analytics checkpoints follow cross-replica commit order", func(t *testing.T) {
+		testAnalyticsCommitSequence(t, storeA, storeB)
+	})
 	t.Run("OAuth state and refresh coordination survive replica changes", func(t *testing.T) {
 		testSharedOAuthAndRefresh(t, storeA, storeB, config)
 	})
@@ -67,6 +70,62 @@ func TestMultiInstancePostgresE2E(t *testing.T) {
 	t.Run("lost cluster leases cancel guarded work", func(t *testing.T) {
 		testClusterLeaseLossCancelsWork(t, storeA, storeB)
 	})
+}
+
+func testAnalyticsCommitSequence(t *testing.T, storeA *GormStore, storeB *GormStore) {
+	t.Helper()
+	suffix := NewID("sequence")
+	firstID := "log_first_" + suffix
+	secondID := "log_second_" + suffix
+	t.Cleanup(func() {
+		_ = storeA.db.Delete(&RequestLog{}, "id IN ?", []string{firstID, secondID}).Error
+	})
+	firstTransaction := storeA.db.Begin()
+	if firstTransaction.Error != nil {
+		t.Fatal(firstTransaction.Error)
+	}
+	if err := firstTransaction.Create(&RequestLog{
+		ID: firstID, RequestID: "req_first_" + suffix, ProjectID: "project_sequence",
+		ModelName: "gpt-sequence", StatusCode: http.StatusOK, CreatedAt: time.Now().UTC(),
+	}).Error; err != nil {
+		_ = firstTransaction.Rollback().Error
+		t.Fatal(err)
+	}
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- storeB.db.Create(&RequestLog{
+			ID: secondID, RequestID: "req_second_" + suffix, ProjectID: "project_sequence",
+			ModelName: "gpt-sequence", StatusCode: http.StatusOK, CreatedAt: time.Now().UTC().Add(-48 * time.Hour),
+		}).Error
+	}()
+	select {
+	case err := <-secondDone:
+		_ = firstTransaction.Rollback().Error
+		t.Fatalf("second replica committed before the first transaction: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if err := firstTransaction.Commit().Error; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("second replica did not resume after the first commit")
+	}
+	var logs []RequestLog
+	if err := storeA.db.Where("id IN ?", []string{firstID, secondID}).Find(&logs).Error; err != nil {
+		t.Fatal(err)
+	}
+	sequences := map[string]int64{}
+	for _, requestLog := range logs {
+		sequences[requestLog.ID] = requestLog.CommitSequence
+	}
+	if sequences[firstID] <= 0 || sequences[secondID] <= sequences[firstID] {
+		t.Fatalf("commit sequences do not follow commit order: %#v", sequences)
+	}
 }
 
 func testConcurrentMigrations(t *testing.T, adminStore *GormStore, config Config) {

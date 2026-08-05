@@ -9,7 +9,19 @@ const (
 	TokenCostSchemaVersion = "1.0"
 	TokenCostStatusSuccess = "success"
 	TokenCostStatusError   = "error"
+
+	TokenCostIncrementalSnapshot = "snapshot"
+	TokenCostIncrementalChanges  = "changes"
+	requestLogSequenceName       = "request_logs"
 )
+
+// AnalyticsSequence is a transactionally updated database checkpoint. The
+// request_logs row is locked until the inserting transaction commits, making
+// allocated request-log sequence values follow commit order across replicas.
+type AnalyticsSequence struct {
+	Name      string `gorm:"primaryKey"`
+	LastValue int64  `gorm:"not null"`
+}
 
 // AnalyticsCredential is a read-only credential for the versioned analytics
 // API. It cannot authenticate to any model gateway endpoint.
@@ -57,15 +69,16 @@ type TokenCostRow struct {
 }
 
 type TokenCostQueryMetadata struct {
-	From              string            `json:"from"`
-	To                string            `json:"to"`
-	Granularity       string            `json:"granularity"`
-	GroupBy           []string          `json:"group_by"`
-	Filters           map[string]string `json:"filters"`
-	Format            string            `json:"format"`
-	Limit             int               `json:"limit"`
-	DedupeBy          string            `json:"dedupe_by"`
-	IncrementalReplay bool              `json:"incremental_replay"`
+	From            string            `json:"from"`
+	To              string            `json:"to"`
+	Granularity     string            `json:"granularity"`
+	GroupBy         []string          `json:"group_by"`
+	Filters         map[string]string `json:"filters"`
+	Format          string            `json:"format"`
+	Limit           int               `json:"limit"`
+	DedupeBy        string            `json:"dedupe_by"`
+	CheckpointBy    string            `json:"checkpoint_by"`
+	IncrementalMode string            `json:"incremental_mode"`
 }
 
 type TokenCostResponse struct {
@@ -82,26 +95,28 @@ type TokenCostResponse struct {
 // TokenCostPage keeps the exported rows and their checkpoint together so the
 // store can derive both from one consistent database snapshot.
 type TokenCostPage struct {
-	Rows        []TokenCostRow
-	HasMore     bool
-	WatermarkAt time.Time
-	WatermarkID string
+	Rows       []TokenCostRow
+	HasMore    bool
+	Checkpoint int64
 }
 
 type TokenCostQuery struct {
-	From              time.Time
-	To                time.Time
-	ProjectID         string
-	UserID            string
-	APIKeyID          string
-	ProviderID        string
-	Model             string
-	Status            string
-	Granularity       string
-	GroupBy           []string
-	Limit             int
-	AfterAt           time.Time
-	AfterID           string
-	Offset            int
-	IncrementalReplay bool
+	From               time.Time
+	To                 time.Time
+	ProjectID          string
+	UserID             string
+	APIKeyID           string
+	ProviderID         string
+	Model              string
+	Status             string
+	Granularity        string
+	GroupBy            []string
+	Limit              int
+	AfterAt            time.Time
+	AfterID            string
+	Offset             int
+	AfterSequence      int64
+	ThroughSequence    int64
+	ThroughSequenceSet bool
+	Incremental        bool
 }

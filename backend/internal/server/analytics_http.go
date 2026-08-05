@@ -21,20 +21,22 @@ const (
 	maximumRawCostRange           = 31 * 24 * time.Hour
 	maximumGroupedCostRange       = 366 * 24 * time.Hour
 	maximumTokenCostQueryDuration = 10 * time.Second
-	tokenCostReplayOverlap        = 24 * time.Hour
+	tokenCostCursorVersion        = 2
 )
 
 type tokenCostCursor struct {
-	Version  int                  `json:"v"`
-	AfterAt  time.Time            `json:"after_at"`
-	AfterID  string               `json:"after_id"`
-	From     time.Time            `json:"from"`
-	Through  time.Time            `json:"through"`
-	Kind     string               `json:"kind"`
-	Offset   int                  `json:"offset,omitempty"`
-	QueryKey string               `json:"query_key,omitempty"`
-	Query    tokenCostCursorQuery `json:"query"`
-	Replay   bool                 `json:"replay,omitempty"`
+	Version         int                  `json:"v"`
+	AfterAt         time.Time            `json:"after_at"`
+	AfterID         string               `json:"after_id"`
+	From            time.Time            `json:"from"`
+	Through         time.Time            `json:"through"`
+	Kind            string               `json:"kind"`
+	Offset          int                  `json:"offset,omitempty"`
+	QueryKey        string               `json:"query_key,omitempty"`
+	Query           tokenCostCursorQuery `json:"query"`
+	Checkpoint      int64                `json:"checkpoint"`
+	AfterCheckpoint int64                `json:"after_checkpoint,omitempty"`
+	Incremental     bool                 `json:"incremental,omitempty"`
 }
 
 type tokenCostCursorQuery struct {
@@ -132,32 +134,28 @@ func (s *Server) handleTokenCostAnalytics(w http.ResponseWriter, r *http.Request
 		return
 	}
 	rows, hasMore := page.Rows, page.HasMore
-	watermarkAt, watermarkID := page.WatermarkAt, page.WatermarkID
-	watermark := ""
-	nextCursor := ""
 	queryKey := tokenCostQueryKey(credential, query)
-	if !watermarkAt.IsZero() {
-		watermark = encodeTokenCostCursor(tokenCostCursor{
-			Version: 1, AfterAt: watermarkAt, AfterID: watermarkID,
-			From: query.From, Through: query.To, Kind: "watermark", QueryKey: queryKey,
-			Query: tokenCostCursorQueryFrom(query), Replay: query.IncrementalReplay,
-		})
-	} else if after := strings.TrimSpace(r.URL.Query().Get("after")); after != "" {
-		watermark = after
-	}
+	watermark := encodeTokenCostCursor(tokenCostCursor{
+		Version: tokenCostCursorVersion, Checkpoint: page.Checkpoint,
+		From: query.From, Through: query.To, Kind: "watermark", QueryKey: queryKey,
+		Query: tokenCostCursorQueryFrom(query), Incremental: query.Incremental,
+	})
+	nextCursor := ""
 	if hasMore && query.Granularity == "request" && len(rows) > 0 {
 		last := rows[len(rows)-1]
 		lastTime, _ := time.Parse(time.RFC3339Nano, last.OccurredAt)
 		nextCursor = encodeTokenCostCursor(tokenCostCursor{
-			Version: 1, AfterAt: lastTime, AfterID: last.RequestID,
+			Version: tokenCostCursorVersion, AfterAt: lastTime, AfterID: last.RequestID,
 			From: query.From, Through: query.To, Kind: "request", QueryKey: queryKey,
-			Query: tokenCostCursorQueryFrom(query), Replay: query.IncrementalReplay,
+			Query: tokenCostCursorQueryFrom(query), Checkpoint: page.Checkpoint,
+			AfterCheckpoint: query.AfterSequence, Incremental: query.Incremental,
 		})
 	} else if hasMore {
 		nextCursor = encodeTokenCostCursor(tokenCostCursor{
-			Version: 1, From: query.From, Through: query.To,
+			Version: tokenCostCursorVersion, From: query.From, Through: query.To,
 			Kind: "aggregate", Offset: query.Offset + len(rows), QueryKey: queryKey,
-			Query: tokenCostCursorQueryFrom(query), Replay: query.IncrementalReplay,
+			Query: tokenCostCursorQueryFrom(query), Checkpoint: page.Checkpoint,
+			AfterCheckpoint: query.AfterSequence, Incremental: query.Incremental,
 		})
 	}
 	payload := TokenCostResponse{
@@ -177,7 +175,8 @@ func (s *Server) handleTokenCostAnalytics(w http.ResponseWriter, r *http.Request
 	w.Header().Set("x-tokenhub-schema-version", TokenCostSchemaVersion)
 	w.Header().Set("x-tokenhub-has-more", strconv.FormatBool(hasMore))
 	w.Header().Set("x-tokenhub-dedupe-by", "dedupe_key")
-	w.Header().Set("x-tokenhub-incremental-replay", strconv.FormatBool(metadata.IncrementalReplay))
+	w.Header().Set("x-tokenhub-checkpoint-by", "commit_sequence")
+	w.Header().Set("x-tokenhub-incremental-mode", metadata.IncrementalMode)
 	if watermark != "" {
 		w.Header().Set("x-tokenhub-watermark", watermark)
 	}
@@ -226,16 +225,13 @@ func (s *Server) parseTokenCostQuery(r *http.Request, credential AnalyticsCreden
 		toFallback = pageCursor.Through
 	} else if afterValue != "" {
 		afterCursor, cursorErr = decodeTokenCostCursor(afterValue)
-		if cursorErr != nil || afterCursor.Kind != "watermark" || afterCursor.AfterAt.IsZero() || afterCursor.AfterID == "" {
+		if cursorErr != nil || afterCursor.Kind != "watermark" {
 			return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_cursor", "after watermark is invalid")
 		}
 		if strings.TrimSpace(values.Get("from")) != "" {
 			return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_cursor", "from cannot be combined with after")
 		}
-		// Database commit order can differ from occurred_at order. Replay a bounded
-		// overlap instead of treating event time as an exclusive checkpoint, and let
-		// callers upsert the repeated rows by dedupe_key.
-		fromFallback = tokenCostIncrementalReplayFrom(afterCursor)
+		fromFallback = afterCursor.From
 	}
 	if cursorValue != "" {
 		applyTokenCostCursorQuery(values, pageCursor.Query)
@@ -268,16 +264,17 @@ func (s *Server) parseTokenCostQuery(r *http.Request, credential AnalyticsCreden
 			granularity = "none"
 		}
 	}
+	incremental := afterValue != "" || pageCursor.Incremental
 	switch granularity {
 	case "request":
 		if len(groupBy) > 0 {
 			return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_grouping", "request granularity cannot be combined with group_by")
 		}
-		if to.Sub(from) > maximumRawCostRange {
+		if !incremental && to.Sub(from) > maximumRawCostRange {
 			return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusBadRequest, "analytics_time_range_too_large", "Request-level analytics queries are limited to 31 days")
 		}
 	case "none", "hour", "day", "month":
-		if to.Sub(from) > maximumGroupedCostRange {
+		if !incremental && to.Sub(from) > maximumGroupedCostRange {
 			return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusBadRequest, "analytics_time_range_too_large", "Aggregated analytics queries are limited to 366 days")
 		}
 	default:
@@ -319,8 +316,7 @@ func (s *Server) parseTokenCostQuery(r *http.Request, credential AnalyticsCreden
 		From: from, To: to, ProjectID: projectID,
 		UserID: filters["user_id"], APIKeyID: filters["api_key_id"],
 		ProviderID: filters["provider_id"], Model: filters["model"], Status: status,
-		Granularity: granularity, GroupBy: groupBy, Limit: limit,
-		IncrementalReplay: afterValue != "" || pageCursor.Replay,
+		Granularity: granularity, GroupBy: groupBy, Limit: limit, Incremental: incremental,
 	}
 	if cursorValue != "" {
 		if !from.Equal(pageCursor.From) || !to.Equal(pageCursor.Through) {
@@ -336,39 +332,25 @@ func (s *Server) parseTokenCostQuery(r *http.Request, credential AnalyticsCreden
 		query.AfterAt = pageCursor.AfterAt
 		query.AfterID = pageCursor.AfterID
 		query.Offset = pageCursor.Offset
+		query.AfterSequence = pageCursor.AfterCheckpoint
+		query.ThroughSequence = pageCursor.Checkpoint
+		query.ThroughSequenceSet = true
 	} else if afterValue != "" {
 		if afterCursor.QueryKey == "" || afterCursor.QueryKey != tokenCostQueryKey(credential, query) {
 			return TokenCostQuery{}, TokenCostQueryMetadata{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_cursor", "after watermark does not match the query")
 		}
+		query.AfterSequence = afterCursor.Checkpoint
+	}
+	incrementalMode := TokenCostIncrementalSnapshot
+	if query.Incremental {
+		incrementalMode = TokenCostIncrementalChanges
 	}
 	metadata := TokenCostQueryMetadata{
 		From: from.Format(time.RFC3339Nano), To: to.Format(time.RFC3339Nano),
 		Granularity: granularity, GroupBy: groupBy, Filters: filters, Format: format, Limit: limit,
-		DedupeBy: "dedupe_key", IncrementalReplay: query.IncrementalReplay,
+		DedupeBy: "dedupe_key", CheckpointBy: "commit_sequence", IncrementalMode: incrementalMode,
 	}
 	return query, metadata, nil
-}
-
-func tokenCostIncrementalReplayFrom(cursor tokenCostCursor) time.Time {
-	// An unbucketed aggregate is a running total for its whole window, so it must
-	// be recomputed from the original lower bound to remain replaceable by one
-	// stable dedupe key.
-	if cursor.Query.Granularity == "none" {
-		return cursor.From
-	}
-	replayFrom := cursor.AfterAt.Add(-tokenCostReplayOverlap).UTC()
-	switch cursor.Query.Granularity {
-	case "hour":
-		replayFrom = replayFrom.Truncate(time.Hour)
-	case "day":
-		replayFrom = time.Date(replayFrom.Year(), replayFrom.Month(), replayFrom.Day(), 0, 0, 0, 0, time.UTC)
-	case "month":
-		replayFrom = time.Date(replayFrom.Year(), replayFrom.Month(), 1, 0, 0, 0, 0, time.UTC)
-	}
-	if replayFrom.Before(cursor.From) {
-		return cursor.From
-	}
-	return replayFrom
 }
 
 func applyTokenCostCursorQuery(values map[string][]string, query tokenCostCursorQuery) {
@@ -459,11 +441,13 @@ func decodeTokenCostCursor(value string) (tokenCostCursor, error) {
 	if err := json.Unmarshal(data, &cursor); err != nil {
 		return tokenCostCursor{}, err
 	}
-	if cursor.Version != 1 || cursor.From.IsZero() || cursor.Through.IsZero() || !cursor.From.Before(cursor.Through) || cursor.Query.Granularity == "" {
+	if cursor.Version != tokenCostCursorVersion || cursor.From.IsZero() || cursor.Through.IsZero() ||
+		!cursor.From.Before(cursor.Through) || cursor.Query.Granularity == "" ||
+		cursor.Checkpoint < 0 || cursor.AfterCheckpoint < 0 || cursor.AfterCheckpoint > cursor.Checkpoint {
 		return tokenCostCursor{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_cursor", "cursor is invalid")
 	}
 	switch cursor.Kind {
-	case "request", "watermark":
+	case "request":
 		if cursor.AfterAt.IsZero() || cursor.AfterID == "" {
 			return tokenCostCursor{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_cursor", "cursor is invalid")
 		}
@@ -471,6 +455,7 @@ func decodeTokenCostCursor(value string) (tokenCostCursor, error) {
 		if cursor.Offset <= 0 {
 			return tokenCostCursor{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_cursor", "cursor is invalid")
 		}
+	case "watermark":
 	default:
 		return tokenCostCursor{}, NewHTTPError(http.StatusBadRequest, "invalid_analytics_cursor", "cursor is invalid")
 	}

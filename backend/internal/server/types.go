@@ -452,6 +452,7 @@ type UsageRecord struct {
 type RequestLog struct {
 	ID                       string    `json:"id" gorm:"primaryKey"`
 	RequestID                string    `json:"request_id" gorm:"index"`
+	CommitSequence           int64     `json:"-" gorm:"not null;default:0"`
 	ProjectID                string    `json:"project_id" gorm:"index;index:idx_request_logs_project_created,priority:1"`
 	APIKeyID                 string    `json:"api_key_id" gorm:"index"`
 	AttributedUserID         string    `json:"attributed_user_id,omitempty" gorm:"index"`

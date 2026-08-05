@@ -231,6 +231,7 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 			&ProviderCatalogSnapshot{},
 			&providerAccountOAuthSessionRecord{},
 			&UsageRecord{},
+			&AnalyticsSequence{},
 			&RequestLog{},
 			&AnalyticsCredential{},
 			&RequestPayloadLog{},
@@ -250,10 +251,13 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 		); err != nil {
 			return err
 		}
+		if err := ensureRequestLogCommitSequence(db, driver); err != nil {
+			return err
+		}
 		if err := backfillTeamRelationships(db); err != nil {
 			return err
 		}
-		if err := backfillRequestLogAttribution(db); err != nil {
+		if err := backfillRequestLogAttribution(db, driver); err != nil {
 			return err
 		}
 		return backfillRoutingPolicyBindingKeys(db)
@@ -334,7 +338,139 @@ func sqliteSupportsWAL(dsn string) bool {
 	return trimmed != "" && trimmed != ":memory:" && !strings.Contains(trimmed, "mode=memory")
 }
 
-func backfillRequestLogAttribution(db *gorm.DB) error {
+func ensureRequestLogCommitSequence(db *gorm.DB, driver string) error {
+	sequence := AnalyticsSequence{Name: requestLogSequenceName}
+	if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&sequence).Error; err != nil {
+		return fmt.Errorf("create request log sequence: %w", err)
+	}
+	var triggerStatements []string
+	if driver == "postgres" {
+		triggerStatements = []string{`
+CREATE OR REPLACE FUNCTION tokenhub_assign_request_log_commit_sequence()
+RETURNS trigger AS $function$
+BEGIN
+  UPDATE analytics_sequences
+     SET last_value = last_value + 1
+   WHERE name = 'request_logs'
+   RETURNING last_value INTO NEW.commit_sequence;
+  RETURN NEW;
+END;
+$function$ LANGUAGE plpgsql;`, `
+DO $block$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+      FROM pg_trigger
+     WHERE tgname = 'tokenhub_request_log_commit_sequence'
+       AND tgrelid = 'request_logs'::regclass
+  ) THEN
+    CREATE TRIGGER tokenhub_request_log_commit_sequence
+    BEFORE INSERT ON request_logs
+    FOR EACH ROW EXECUTE FUNCTION tokenhub_assign_request_log_commit_sequence();
+  END IF;
+END;
+$block$;`}
+	} else {
+		triggerStatements = []string{`
+CREATE TRIGGER IF NOT EXISTS tokenhub_request_log_commit_sequence
+AFTER INSERT ON request_logs
+FOR EACH ROW WHEN NEW.commit_sequence <= 0
+BEGIN
+  UPDATE analytics_sequences
+     SET last_value = last_value + 1
+   WHERE name = 'request_logs';
+  UPDATE request_logs
+     SET commit_sequence = (
+       SELECT last_value FROM analytics_sequences WHERE name = 'request_logs'
+     )
+   WHERE id = NEW.id;
+END;`}
+	}
+	for _, statement := range triggerStatements {
+		if err := db.Exec(statement).Error; err != nil {
+			return fmt.Errorf("create request log sequence trigger: %w", err)
+		}
+	}
+	if err := backfillRequestLogCommitSequence(db, driver); err != nil {
+		return err
+	}
+	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_request_logs_commit_sequence
+ON request_logs(commit_sequence)`).Error; err != nil {
+		return fmt.Errorf("index request log commit sequence: %w", err)
+	}
+	return nil
+}
+
+func backfillRequestLogCommitSequence(db *gorm.DB, driver string) error {
+	return db.Transaction(func(tx *gorm.DB) error {
+		var sequence AnalyticsSequence
+		if driver == "postgres" {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				First(&sequence, "name = ?", requestLogSequenceName).Error; err != nil {
+				return err
+			}
+		} else {
+			if err := tx.Model(&AnalyticsSequence{}).
+				Where("name = ?", requestLogSequenceName).
+				UpdateColumn("last_value", gorm.Expr("last_value")).Error; err != nil {
+				return err
+			}
+			if err := tx.First(&sequence, "name = ?", requestLogSequenceName).Error; err != nil {
+				return err
+			}
+		}
+		var maximum int64
+		if err := tx.Model(&RequestLog{}).Select("COALESCE(MAX(commit_sequence), 0)").Scan(&maximum).Error; err != nil {
+			return err
+		}
+		base := max(sequence.LastValue, maximum)
+		var count int64
+		if err := tx.Model(&RequestLog{}).Where("commit_sequence <= 0").Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			var statement string
+			if driver == "postgres" {
+				statement = `
+WITH ranked AS (
+  SELECT id, ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC) AS position
+    FROM request_logs
+   WHERE commit_sequence <= 0
+)
+UPDATE request_logs AS rl
+   SET commit_sequence = ? + ranked.position
+  FROM ranked
+ WHERE rl.id = ranked.id`
+			} else {
+				statement = `
+WITH ranked AS (
+  SELECT id, ? + ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC) AS sequence
+    FROM request_logs
+   WHERE commit_sequence <= 0
+)
+UPDATE request_logs
+   SET commit_sequence = (
+     SELECT sequence FROM ranked WHERE ranked.id = request_logs.id
+   )
+ WHERE commit_sequence <= 0`
+			}
+			if err := tx.Exec(statement, base).Error; err != nil {
+				return fmt.Errorf("backfill request log commit sequence: %w", err)
+			}
+			base += count
+		}
+		if sequence.LastValue != base {
+			if err := tx.Model(&AnalyticsSequence{}).
+				Where("name = ?", requestLogSequenceName).
+				Update("last_value", base).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func backfillRequestLogAttribution(db *gorm.DB, driver string) error {
 	emptyAttribution := "COALESCE(attributed_user_id, '') = ''"
 	type attributionSource struct {
 		name   string
@@ -357,6 +493,15 @@ func backfillRequestLogAttribution(db *gorm.DB) error {
 				Where("ak.id = request_logs.api_key_id").Where("ak.owner_user_id <> ''"),
 		},
 		{
+			name: "API key creator",
+			value: db.Table("api_keys AS ak").Select(apiKeyCreatorExpression(driver)).
+				Where("ak.id = request_logs.api_key_id").
+				Where(apiKeyCreatorExpression(driver) + " <> ''").Limit(1),
+			exists: db.Table("api_keys AS ak").Select("1").
+				Where("ak.id = request_logs.api_key_id").
+				Where(apiKeyCreatorExpression(driver) + " <> ''"),
+		},
+		{
 			name: "project owner",
 			value: db.Table("projects AS p").Select("p.owner_user_id").
 				Where("p.id = request_logs.project_id").Where("p.owner_user_id <> ''").Limit(1),
@@ -373,6 +518,13 @@ func backfillRequestLogAttribution(db *gorm.DB) error {
 		}
 	}
 	return nil
+}
+
+func apiKeyCreatorExpression(driver string) string {
+	if driver == "postgres" {
+		return "COALESCE(CAST(NULLIF(BTRIM(CAST(ak.metadata AS text)), '') AS jsonb) ->> 'created_by', '')"
+	}
+	return "CASE WHEN json_valid(ak.metadata) THEN COALESCE(json_extract(ak.metadata, '$.created_by'), '') ELSE '' END"
 }
 
 func backfillRoutingPolicyBindingKeys(db *gorm.DB) error {

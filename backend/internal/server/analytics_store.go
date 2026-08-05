@@ -101,7 +101,7 @@ func (s *GormStore) ValidateAnalyticsCredential(rawSecret string) (AnalyticsCred
 	return credential, nil
 }
 
-// QueryTokenCostPage reads rows and their watermark in one transaction. SQLite
+// QueryTokenCostPage reads rows and their commit checkpoint in one transaction. SQLite
 // pins both statements to one read transaction; PostgreSQL additionally uses
 // repeatable read because its default read-committed mode takes a new snapshot
 // for every statement.
@@ -110,17 +110,23 @@ func (s *GormStore) QueryTokenCostPage(ctx context.Context, query TokenCostQuery
 	readSnapshot := func(tx *gorm.DB) error {
 		snapshotStore := *s
 		snapshotStore.analyticsDB = tx
-		rows, hasMore, err := snapshotStore.QueryTokenCosts(ctx, query)
-		if err != nil {
-			return err
+		effectiveQuery := query
+		checkpoint := query.ThroughSequence
+		if !query.ThroughSequenceSet {
+			var err error
+			checkpoint, err = snapshotStore.TokenCostCheckpoint(ctx)
+			if err != nil {
+				return err
+			}
 		}
-		watermarkAt, watermarkID, err := snapshotStore.TokenCostWatermark(ctx, query)
+		effectiveQuery.ThroughSequence = checkpoint
+		effectiveQuery.ThroughSequenceSet = true
+		rows, hasMore, err := snapshotStore.QueryTokenCosts(ctx, effectiveQuery)
 		if err != nil {
 			return err
 		}
 		page = TokenCostPage{
-			Rows: rows, HasMore: hasMore,
-			WatermarkAt: watermarkAt, WatermarkID: watermarkID,
+			Rows: rows, HasMore: hasMore, Checkpoint: checkpoint,
 		}
 		return nil
 	}
@@ -160,6 +166,14 @@ type tokenCostDatabaseRow struct {
 }
 
 func (s *GormStore) QueryTokenCosts(ctx context.Context, query TokenCostQuery) ([]TokenCostRow, bool, error) {
+	if !query.ThroughSequenceSet {
+		checkpoint, err := s.TokenCostCheckpoint(ctx)
+		if err != nil {
+			return nil, false, err
+		}
+		query.ThroughSequence = checkpoint
+		query.ThroughSequenceSet = true
+	}
 	if query.Granularity != "request" {
 		return s.queryAggregatedTokenCosts(ctx, query)
 	}
@@ -188,6 +202,9 @@ func (s *GormStore) QueryTokenCosts(ctx context.Context, query TokenCostQuery) (
 }
 
 func (s *GormStore) tokenCostRequestQuery(ctx context.Context, query TokenCostQuery) *gorm.DB {
+	sequenceRequestIDs := s.analyticsDB.WithContext(ctx).Table("request_logs").
+		Select("request_id").
+		Where("commit_sequence > ? AND commit_sequence <= ?", query.AfterSequence, query.ThroughSequence)
 	usage := s.analyticsDB.WithContext(ctx).Table("usage_records").
 		Select(`request_id,
 			MAX(attributed_user_id) AS user_id,
@@ -199,6 +216,7 @@ func (s *GormStore) tokenCostRequestQuery(ctx context.Context, query TokenCostQu
 			SUM(total_tokens) AS total_tokens,
 			SUM(cost_usd) AS estimated_cost_usd`).
 		Where("created_at >= ? AND created_at < ?", query.From, query.To).
+		Where("request_id IN (?)", sequenceRequestIDs).
 		Group("request_id")
 	if query.ProjectID != "" {
 		usage = usage.Where("project_id = ?", query.ProjectID)
@@ -216,6 +234,7 @@ func (s *GormStore) tokenCostRequestQuery(ctx context.Context, query TokenCostQu
 	db := s.analyticsDB.WithContext(ctx).Table("request_logs AS rl").
 		Joins("LEFT JOIN (?) AS u ON u.request_id = rl.request_id", usage).
 		Where("rl.created_at >= ? AND rl.created_at < ?", query.From, query.To).
+		Where("rl.commit_sequence > ? AND rl.commit_sequence <= ?", query.AfterSequence, query.ThroughSequence).
 		Where("rl.project_id <> ?", "admin_playground")
 	if query.ProjectID != "" {
 		db = db.Where("rl.project_id = ?", query.ProjectID)
@@ -388,19 +407,18 @@ func tokenCostDedupeKey(row TokenCostRow, query TokenCostQuery) string {
 			row.ProviderID, row.Model, row.Status,
 		},
 	})
+	if query.Incremental {
+		data, _ = json.Marshal(struct {
+			Base  json.RawMessage
+			After int64
+		}{Base: data, After: query.AfterSequence})
+	}
 	sum := sha256.Sum256(data)
 	return "aggregate_" + hex.EncodeToString(sum[:])
 }
 
-func (s *GormStore) TokenCostWatermark(ctx context.Context, query TokenCostQuery) (time.Time, string, error) {
-	var row struct {
-		OccurredAt time.Time
-		RequestID  string
-	}
-	err := s.tokenCostRequestQuery(ctx, query).
-		Select("rl.created_at AS occurred_at, rl.request_id").
-		Order("rl.created_at DESC, rl.request_id DESC").
-		Limit(1).
-		Find(&row).Error
-	return row.OccurredAt, row.RequestID, err
+func (s *GormStore) TokenCostCheckpoint(ctx context.Context) (int64, error) {
+	var sequence AnalyticsSequence
+	err := s.analyticsDB.WithContext(ctx).First(&sequence, "name = ?", requestLogSequenceName).Error
+	return sequence.LastValue, err
 }

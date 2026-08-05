@@ -108,7 +108,7 @@ func TestTokenCostWatermarkSharesRowsDatabaseSnapshot(t *testing.T) {
 	})
 
 	initialQuery := url.Values{
-		"from": {base.Add(-time.Minute).Format(time.RFC3339Nano)},
+		"from": {base.Add(-30 * time.Hour).Format(time.RFC3339Nano)},
 		"to":   {through.Format(time.RFC3339Nano)},
 	}
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/analytics/token-costs?"+initialQuery.Encode(), nil)
@@ -128,7 +128,7 @@ func TestTokenCostWatermarkSharesRowsDatabaseSnapshot(t *testing.T) {
 	}
 	createErr := store.db.Create(&RequestLog{
 		ID: "log_snapshot_concurrent", RequestID: "req_snapshot_concurrent", ProjectID: "project_snapshot",
-		ModelName: "gpt-snapshot", StatusCode: http.StatusOK, CreatedAt: base.Add(-time.Second),
+		ModelName: "gpt-snapshot", StatusCode: http.StatusOK, CreatedAt: base.Add(-25 * time.Hour),
 	}).Error
 	close(continueSnapshot)
 	if createErr != nil {
@@ -153,8 +153,12 @@ func TestTokenCostWatermarkSharesRowsDatabaseSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode snapshot watermark: %v", err)
 	}
-	if watermark.AfterID != "req_snapshot_initial" {
-		t.Fatalf("watermark advanced past exported rows: %#v", watermark)
+	var concurrentLog RequestLog
+	if err := store.db.First(&concurrentLog, "request_id = ?", "req_snapshot_concurrent").Error; err != nil {
+		t.Fatal(err)
+	}
+	if watermark.Checkpoint <= 0 || concurrentLog.CommitSequence <= watermark.Checkpoint {
+		t.Fatalf("snapshot checkpoint = %d, concurrent sequence = %d", watermark.Checkpoint, concurrentLog.CommitSequence)
 	}
 
 	incrementalQuery := url.Values{
@@ -180,54 +184,131 @@ func TestTokenCostWatermarkSharesRowsDatabaseSnapshot(t *testing.T) {
 		}
 		seenDedupeKeys[row.DedupeKey] = true
 	}
-	if !incremental.Query.IncrementalReplay || !foundConcurrent {
-		t.Fatalf("incremental replay lost delayed commit: %#v", incremental)
+	if incremental.Query.IncrementalMode != TokenCostIncrementalChanges || !foundConcurrent || len(incremental.Data) != 1 {
+		t.Fatalf("incremental changes lost delayed commit: %#v", incremental)
 	}
 }
 
-func TestTokenCostIncrementalReplayUsesBoundedOverlap(t *testing.T) {
+func TestTokenCostEmptySnapshotEstablishesWatermark(t *testing.T) {
 	store := NewMemoryStore()
 	app := New(store).Handler()
 	token := createAnalyticsCredentialToken(t, app, map[string]any{
-		"name": "bounded-replay-agent", "scope_type": AnalyticsScopeOrganization,
+		"name": "empty-checkpoint-agent", "scope_type": AnalyticsScopeOrganization,
 	})
 	now := time.Now().UTC().Truncate(time.Second)
-	initialThrough := now.Add(-48 * time.Hour)
-	initialFrom := initialThrough.Add(-30 * 24 * time.Hour)
-	watermarkAt := initialThrough.Add(-time.Hour)
-	createAnalyticsRequest(t, store, RequestLog{
-		ID: "log_bounded_replay", RequestID: "req_bounded_replay", ProjectID: "project_bounded_replay",
-		ModelName: "gpt-bounded-replay", StatusCode: http.StatusOK, CreatedAt: watermarkAt,
-	}, nil)
-
 	initialQuery := url.Values{
-		"from": {initialFrom.Format(time.RFC3339Nano)},
-		"to":   {initialThrough.Format(time.RFC3339Nano)},
+		"from": {now.Add(-time.Hour).Format(time.RFC3339Nano)},
+		"to":   {now.Format(time.RFC3339Nano)},
 	}
 	initialResponse := doJSON(t, app, http.MethodGet, "/api/v1/analytics/token-costs?"+initialQuery.Encode(), nil, token)
 	if initialResponse.Code != http.StatusOK {
-		t.Fatalf("initial bounded replay query: %d %s", initialResponse.Code, initialResponse.Body)
+		t.Fatalf("initial empty checkpoint query: %d %s", initialResponse.Code, initialResponse.Body)
 	}
 	var initial TokenCostResponse
 	if err := json.Unmarshal([]byte(initialResponse.Body), &initial); err != nil {
 		t.Fatal(err)
 	}
+	checkpoint, err := decodeTokenCostCursor(initial.Watermark)
+	if err != nil || checkpoint.Checkpoint != 0 || len(initial.Data) != 0 {
+		t.Fatalf("empty checkpoint response = %#v, decoded = %#v, err = %v", initial, checkpoint, err)
+	}
+	createAnalyticsRequest(t, store, RequestLog{
+		ID: "log_after_empty", RequestID: "req_after_empty", ProjectID: "project_after_empty",
+		ModelName: "gpt-after-empty", StatusCode: http.StatusOK, CreatedAt: now.Add(time.Second),
+	}, nil)
 
+	incrementalQuery := url.Values{
+		"after": {initial.Watermark},
+		"to":    {now.Add(time.Minute).Format(time.RFC3339Nano)},
+	}
+	incrementalResponse := doJSON(t, app, http.MethodGet, "/api/v1/analytics/token-costs?"+incrementalQuery.Encode(), nil, token)
+	if incrementalResponse.Code != http.StatusOK {
+		t.Fatalf("incremental pull after empty snapshot: %d %s", incrementalResponse.Code, incrementalResponse.Body)
+	}
+	var incremental TokenCostResponse
+	if err := json.Unmarshal([]byte(incrementalResponse.Body), &incremental); err != nil {
+		t.Fatal(err)
+	}
+	if incremental.Query.IncrementalMode != TokenCostIncrementalChanges || len(incremental.Data) != 1 ||
+		incremental.Data[0].RequestID != "req_after_empty" {
+		t.Fatalf("incremental pull after empty snapshot = %#v", incremental)
+	}
+}
+
+func TestTokenCostNoneIncrementalUsesCommitSequenceBeyondRangeLimit(t *testing.T) {
+	store := NewMemoryStore()
+	app := New(store).Handler()
+	token := createAnalyticsCredentialToken(t, app, map[string]any{
+		"name": "long-running-none-agent", "scope_type": AnalyticsScopeOrganization,
+	})
+	now := time.Now().UTC().Truncate(time.Second)
+	initialFrom := now.Add(-400 * 24 * time.Hour)
+	initialThrough := initialFrom.Add(24 * time.Hour)
+	createAnalyticsRequest(t, store, RequestLog{
+		ID: "log_none_initial", RequestID: "req_none_initial", ProjectID: "project_none",
+		ProviderID: "provider-none", ModelName: "gpt-none", StatusCode: http.StatusOK,
+		CreatedAt: initialFrom.Add(time.Hour),
+	}, nil)
+	initialQuery := url.Values{
+		"from":        {initialFrom.Format(time.RFC3339Nano)},
+		"to":          {initialThrough.Format(time.RFC3339Nano)},
+		"granularity": {"none"},
+		"group_by":    {"provider"},
+	}
+	initialResponse := doJSON(t, app, http.MethodGet, "/api/v1/analytics/token-costs?"+initialQuery.Encode(), nil, token)
+	if initialResponse.Code != http.StatusOK {
+		t.Fatalf("initial none aggregation: %d %s", initialResponse.Code, initialResponse.Body)
+	}
+	var initial TokenCostResponse
+	if err := json.Unmarshal([]byte(initialResponse.Body), &initial); err != nil {
+		t.Fatal(err)
+	}
+	createAnalyticsRequest(t, store, RequestLog{
+		ID: "log_none_new", RequestID: "req_none_new", ProjectID: "project_none",
+		ProviderID: "provider-none", ModelName: "gpt-none", StatusCode: http.StatusOK,
+		CreatedAt: now.Add(-time.Minute),
+	}, nil)
 	incrementalQuery := url.Values{
 		"after": {initial.Watermark},
 		"to":    {now.Format(time.RFC3339Nano)},
 	}
 	incrementalResponse := doJSON(t, app, http.MethodGet, "/api/v1/analytics/token-costs?"+incrementalQuery.Encode(), nil, token)
 	if incrementalResponse.Code != http.StatusOK {
-		t.Fatalf("bounded incremental replay: %d %s", incrementalResponse.Code, incrementalResponse.Body)
+		t.Fatalf("long-running none aggregation: %d %s", incrementalResponse.Code, incrementalResponse.Body)
 	}
 	var incremental TokenCostResponse
 	if err := json.Unmarshal([]byte(incrementalResponse.Body), &incremental); err != nil {
 		t.Fatal(err)
 	}
-	wantFrom := watermarkAt.Add(-tokenCostReplayOverlap).Format(time.RFC3339Nano)
-	if incremental.Query.From != wantFrom || !incremental.Query.IncrementalReplay || len(incremental.Data) != 1 {
-		t.Fatalf("bounded incremental replay = %#v, want from %s", incremental, wantFrom)
+	if incremental.Query.IncrementalMode != TokenCostIncrementalChanges || len(incremental.Data) != 1 ||
+		incremental.Data[0].Metrics.RequestCount != 1 || incremental.Data[0].DedupeKey == initial.Data[0].DedupeKey {
+		t.Fatalf("long-running none aggregation changes = %#v", incremental)
+	}
+	createAnalyticsRequest(t, store, RequestLog{
+		ID: "log_none_later", RequestID: "req_none_later", ProjectID: "project_none",
+		ProviderID: "provider-none-later", ModelName: "gpt-none", StatusCode: http.StatusOK,
+		CreatedAt: now.Add(time.Second),
+	}, nil)
+	retryQuery := url.Values{
+		"after": {initial.Watermark},
+		"to":    {now.Add(time.Minute).Format(time.RFC3339Nano)},
+	}
+	retryResponse := doJSON(t, app, http.MethodGet, "/api/v1/analytics/token-costs?"+retryQuery.Encode(), nil, token)
+	if retryResponse.Code != http.StatusOK {
+		t.Fatalf("retry none aggregation: %d %s", retryResponse.Code, retryResponse.Body)
+	}
+	var retry TokenCostResponse
+	if err := json.Unmarshal([]byte(retryResponse.Body), &retry); err != nil {
+		t.Fatal(err)
+	}
+	stableKey := ""
+	for _, row := range retry.Data {
+		if row.ProviderID == "provider-none" {
+			stableKey = row.DedupeKey
+		}
+	}
+	if stableKey != incremental.Data[0].DedupeKey {
+		t.Fatalf("aggregate retry dedupe key = %q, want %q; rows=%#v", stableKey, incremental.Data[0].DedupeKey, retry.Data)
 	}
 }
 
@@ -308,9 +389,16 @@ func TestLegacyRequestLogAttributionMigration(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.Exec(
+		`INSERT INTO api_keys (id, project_id, owner_user_id, metadata, status, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		"key_legacy_creator", "project_legacy_attribution", "", `{"created_by":"user_key_creator"}`, StatusActive, now,
+	); err != nil {
+		t.Fatal(err)
+	}
 	for _, values := range [][]any{
 		{"log_legacy_usage", "req_legacy_usage", "key_legacy_attribution"},
 		{"log_legacy_key", "req_legacy_key", "key_legacy_attribution"},
+		{"log_legacy_creator", "req_legacy_creator", "key_legacy_creator"},
 		{"log_legacy_project", "req_legacy_project", "missing_key"},
 	} {
 		if _, err := db.Exec(
@@ -346,7 +434,15 @@ func TestLegacyRequestLogAttributionMigration(t *testing.T) {
 	want := map[string]string{
 		"req_legacy_usage":   "user_usage_owner",
 		"req_legacy_key":     "user_key_owner",
+		"req_legacy_creator": "user_key_creator",
 		"req_legacy_project": "user_project_owner",
+	}
+	seenSequences := map[int64]bool{}
+	for _, requestLog := range logs {
+		if requestLog.CommitSequence <= 0 || seenSequences[requestLog.CommitSequence] {
+			t.Fatalf("legacy request log sequence = %#v", logs)
+		}
+		seenSequences[requestLog.CommitSequence] = true
 	}
 	for requestID, userID := range want {
 		if got[requestID] != userID {

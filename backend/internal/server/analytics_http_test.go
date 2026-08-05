@@ -285,7 +285,7 @@ func TestTokenCostCursorPaginatesSnapshotAndWatermarkSupportsIncrementalPull(t *
 	for _, row := range incremental.Data {
 		foundNew = foundNew || row.RequestID == "req_cursor_new"
 	}
-	if !incremental.Query.IncrementalReplay || !foundNew || incremental.Watermark == first.Watermark {
+	if incremental.Query.IncrementalMode != TokenCostIncrementalChanges || !foundNew || incremental.Watermark == first.Watermark {
 		t.Fatalf("incremental token cost pull = %#v", incremental)
 	}
 }
@@ -352,8 +352,8 @@ func TestTokenCostWatermarkPreservesOriginalFiltersAndAggregation(t *testing.T) 
 		t.Fatalf("incremental query lost original shape: %#v", pulled.Query)
 	}
 	if len(pulled.Data) != 1 || pulled.Data[0].ProviderID != "provider-watermark-a" ||
-		pulled.Data[0].Metrics.RequestCount != 2 || pulled.Data[0].DedupeKey != initial.Data[0].DedupeKey ||
-		!pulled.Query.IncrementalReplay {
+		pulled.Data[0].Metrics.RequestCount != 1 || pulled.Data[0].DedupeKey == initial.Data[0].DedupeKey ||
+		pulled.Query.IncrementalMode != TokenCostIncrementalChanges {
 		t.Fatalf("incremental query mixed unrelated records: %#v", pulled.Data)
 	}
 }
@@ -391,7 +391,10 @@ func TestTokenCostAnalyticsExportsCSVWithStableSchemaHeaders(t *testing.T) {
 	if contentType := response.Header().Get("content-type"); !strings.HasPrefix(contentType, "text/csv") {
 		t.Fatalf("CSV content type = %q", contentType)
 	}
-	if response.Header().Get("x-tokenhub-schema-version") != TokenCostSchemaVersion || response.Header().Get("x-tokenhub-watermark") == "" {
+	if response.Header().Get("x-tokenhub-schema-version") != TokenCostSchemaVersion ||
+		response.Header().Get("x-tokenhub-watermark") == "" ||
+		response.Header().Get("x-tokenhub-checkpoint-by") != "commit_sequence" ||
+		response.Header().Get("x-tokenhub-incremental-mode") != TokenCostIncrementalSnapshot {
 		t.Fatalf("CSV schema headers = %#v", response.Header())
 	}
 	header := "dedupe_key,bucket,request_id,occurred_at,project_id,user_id,api_key_id,provider_id,model,status,status_code,request_count,error_count,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,estimated_cost_usd"
@@ -517,7 +520,7 @@ func TestTokenCostAnalyticsKeepsLargeQueriesIndexedAndPageBounded(t *testing.T) 
 	}
 
 	for table, expected := range map[string][]string{
-		"request_logs":  {"idx_request_logs_created_at", "idx_request_logs_project_created"},
+		"request_logs":  {"idx_request_logs_created_at", "idx_request_logs_project_created", "idx_request_logs_commit_sequence"},
 		"usage_records": {"idx_usage_records_created_at", "idx_usage_records_project_created"},
 	} {
 		var indexes []struct {
