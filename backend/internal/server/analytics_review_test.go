@@ -235,6 +235,63 @@ func TestTokenCostEmptySnapshotEstablishesWatermark(t *testing.T) {
 	}
 }
 
+func TestTokenCostCheckpointStopsBeforeCommittedFutureEvent(t *testing.T) {
+	store := NewMemoryStore()
+	app := New(store).Handler()
+	token := createAnalyticsCredentialToken(t, app, map[string]any{
+		"name": "future-event-agent", "scope_type": AnalyticsScopeOrganization,
+	})
+	now := time.Now().UTC().Truncate(time.Second)
+	createAnalyticsRequest(t, store, RequestLog{
+		ID: "log_before_to", RequestID: "req_before_to", ProjectID: "project_future_event",
+		ModelName: "gpt-future-event", StatusCode: http.StatusOK, CreatedAt: now.Add(-time.Hour),
+	}, nil)
+	createAnalyticsRequest(t, store, RequestLog{
+		ID: "log_after_to", RequestID: "req_after_to", ProjectID: "project_future_event",
+		ModelName: "gpt-future-event", StatusCode: http.StatusOK, CreatedAt: now.Add(time.Hour),
+	}, nil)
+	var futureLog RequestLog
+	if err := store.db.First(&futureLog, "id = ?", "log_after_to").Error; err != nil {
+		t.Fatal(err)
+	}
+	initialQuery := url.Values{
+		"from":       {now.Add(-2 * time.Hour).Format(time.RFC3339Nano)},
+		"to":         {now.Format(time.RFC3339Nano)},
+		"project_id": {"project_future_event"},
+	}
+	initialResponse := doJSON(t, app, http.MethodGet, "/api/v1/analytics/token-costs?"+initialQuery.Encode(), nil, token)
+	if initialResponse.Code != http.StatusOK {
+		t.Fatalf("initial future-event snapshot: %d %s", initialResponse.Code, initialResponse.Body)
+	}
+	var initial TokenCostResponse
+	if err := json.Unmarshal([]byte(initialResponse.Body), &initial); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := decodeTokenCostCursor(initial.Watermark)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(initial.Data) != 1 || initial.Data[0].RequestID != "req_before_to" || checkpoint.Checkpoint >= futureLog.CommitSequence {
+		t.Fatalf("future-event snapshot crossed its time boundary: response=%#v checkpoint=%#v future=%#v",
+			initial, checkpoint, futureLog)
+	}
+	incrementalQuery := url.Values{
+		"after": {initial.Watermark},
+		"to":    {now.Add(2 * time.Hour).Format(time.RFC3339Nano)},
+	}
+	incrementalResponse := doJSON(t, app, http.MethodGet, "/api/v1/analytics/token-costs?"+incrementalQuery.Encode(), nil, token)
+	if incrementalResponse.Code != http.StatusOK {
+		t.Fatalf("future-event incremental pull: %d %s", incrementalResponse.Code, incrementalResponse.Body)
+	}
+	var incremental TokenCostResponse
+	if err := json.Unmarshal([]byte(incrementalResponse.Body), &incremental); err != nil {
+		t.Fatal(err)
+	}
+	if len(incremental.Data) != 1 || incremental.Data[0].RequestID != "req_after_to" {
+		t.Fatalf("future event was not returned after to advanced: %#v", incremental)
+	}
+}
+
 func TestTokenCostNoneIncrementalUsesCommitSequenceBeyondRangeLimit(t *testing.T) {
 	store := NewMemoryStore()
 	app := New(store).Handler()

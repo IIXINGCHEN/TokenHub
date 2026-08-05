@@ -55,7 +55,7 @@ func TestMultiInstancePostgresE2E(t *testing.T) {
 	t.Run("HTTP quotas and concurrency are cluster wide", func(t *testing.T) {
 		testClusterWideHTTPEnforcement(t, storeA, storeB, config)
 	})
-	t.Run("analytics checkpoints follow cross-replica commit order", func(t *testing.T) {
+	t.Run("analytics checkpoints do not serialize replica writes", func(t *testing.T) {
 		testAnalyticsCommitSequence(t, storeA, storeB)
 	})
 	t.Run("OAuth state and refresh coordination survive replica changes", func(t *testing.T) {
@@ -91,6 +91,11 @@ func testAnalyticsCommitSequence(t *testing.T, storeA *GormStore, storeB *GormSt
 		_ = firstTransaction.Rollback().Error
 		t.Fatal(err)
 	}
+	var firstLog RequestLog
+	if err := firstTransaction.First(&firstLog, "id = ?", firstID).Error; err != nil {
+		_ = firstTransaction.Rollback().Error
+		t.Fatal(err)
+	}
 	secondDone := make(chan error, 1)
 	go func() {
 		secondDone <- storeB.db.Create(&RequestLog{
@@ -100,31 +105,44 @@ func testAnalyticsCommitSequence(t *testing.T, storeA *GormStore, storeB *GormSt
 	}()
 	select {
 	case err := <-secondDone:
+		if err != nil {
+			_ = firstTransaction.Rollback().Error
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
 		_ = firstTransaction.Rollback().Error
-		t.Fatalf("second replica committed before the first transaction: %v", err)
-	case <-time.After(200 * time.Millisecond):
+		t.Fatal("second replica was blocked by the first request-log transaction")
+	}
+	var secondLog RequestLog
+	if err := storeB.db.First(&secondLog, "id = ?", secondID).Error; err != nil {
+		_ = firstTransaction.Rollback().Error
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	checkpointBefore, err := storeB.TokenCostCheckpoint(t.Context(), TokenCostQuery{
+		From: now.Add(-72 * time.Hour), To: now.Add(time.Hour), ProjectID: "project_sequence",
+	})
+	if err != nil {
+		_ = firstTransaction.Rollback().Error
+		t.Fatal(err)
+	}
+	if firstLog.CommitSequence <= 0 || secondLog.CommitSequence <= firstLog.CommitSequence || checkpointBefore >= firstLog.CommitSequence {
+		_ = firstTransaction.Rollback().Error
+		t.Fatalf("unsafe active-transaction checkpoint: first=%d second=%d checkpoint=%d",
+			firstLog.CommitSequence, secondLog.CommitSequence, checkpointBefore)
 	}
 	if err := firstTransaction.Commit().Error; err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case err := <-secondDone:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("second replica did not resume after the first commit")
-	}
-	var logs []RequestLog
-	if err := storeA.db.Where("id IN ?", []string{firstID, secondID}).Find(&logs).Error; err != nil {
+	checkpointAfter, err := storeB.TokenCostCheckpoint(t.Context(), TokenCostQuery{
+		From: now.Add(-72 * time.Hour), To: now.Add(time.Hour), ProjectID: "project_sequence",
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	sequences := map[string]int64{}
-	for _, requestLog := range logs {
-		sequences[requestLog.ID] = requestLog.CommitSequence
-	}
-	if sequences[firstID] <= 0 || sequences[secondID] <= sequences[firstID] {
-		t.Fatalf("commit sequences do not follow commit order: %#v", sequences)
+	if checkpointAfter < secondLog.CommitSequence {
+		t.Fatalf("checkpoint did not advance after the older transaction committed: got %d, want >= %d",
+			checkpointAfter, secondLog.CommitSequence)
 	}
 }
 

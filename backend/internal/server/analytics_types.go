@@ -15,9 +15,8 @@ const (
 	requestLogSequenceName       = "request_logs"
 )
 
-// AnalyticsSequence is a transactionally updated database checkpoint. The
-// request_logs row is locked until the inserting transaction commits, making
-// allocated request-log sequence values follow commit order across replicas.
+// AnalyticsSequence is SQLite's transactionally updated request-log checkpoint.
+// PostgreSQL uses full transaction IDs and snapshot low-water marks instead.
 type AnalyticsSequence struct {
 	Name      string `gorm:"primaryKey"`
 	LastValue int64  `gorm:"not null"`

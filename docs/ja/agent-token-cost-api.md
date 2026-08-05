@@ -148,7 +148,7 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
 
 `has_more` が true の場合は `cursor=next_cursor` で再度呼び出します。Cursor は元のフィルター、`granularity`、`group_by`、スナップショット期間を保持するため、これらのパラメーターは省略できます。再指定する場合は Cursor と一致する必要があります。スナップショット上限は固定されるため、ページング中に到着したリクエストで後続ページがずれることはありません。
 
-レスポンスの `watermark` は、Transaction 内で割り当てた Request Log の Commit Sequence により完了済み Database Snapshot を識別します。TokenHub は Insert Transaction が Commit するまで 1 つの Database Row Lock を保持して Sequence を割り当てるため、PostgreSQL の複数 Replica 間でも単調性が保たれます。Snapshot に一致する Row がなくても watermark は返されます。`has_more` が false になるまですべてのページを処理し、成功後にだけ watermark を Agent の永続状態へコミットしてください。次回は `after=<committed watermark>` を使います。
+レスポンスの `watermark` は完了済み Database Snapshot を識別します。PostgreSQL では各 Request Log に Transaction ID を保存し、Checkpoint は Snapshot 内の最古の Active Transaction より前で停止します。後続 Transaction の Commit が共有 Analytics Row Lock を待つことはありません。SQLite では Database 既存の Single-writer Model 内で Transactional Sequence を使用します。Checkpoint は `occurred_at` が `to` 以上である最初の一致済み Commit Request より前でも停止するため、後から `to` を進めても、すでに Commit 済みの Future Event を欠落させません。Snapshot に一致する Row がなくても watermark は返されます。`has_more` が false になるまですべてのページを処理し、成功後にだけ watermark を Agent の永続状態へコミットしてください。次回は `after=<committed watermark>` を使います。
 
 ```bash
 curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \

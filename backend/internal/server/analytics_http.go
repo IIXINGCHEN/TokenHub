@@ -21,7 +21,7 @@ const (
 	maximumRawCostRange           = 31 * 24 * time.Hour
 	maximumGroupedCostRange       = 366 * 24 * time.Hour
 	maximumTokenCostQueryDuration = 10 * time.Second
-	tokenCostCursorVersion        = 2
+	tokenCostCursorVersion        = 3
 )
 
 type tokenCostCursor struct {

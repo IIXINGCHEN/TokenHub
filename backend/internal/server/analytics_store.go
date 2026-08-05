@@ -114,7 +114,7 @@ func (s *GormStore) QueryTokenCostPage(ctx context.Context, query TokenCostQuery
 		checkpoint := query.ThroughSequence
 		if !query.ThroughSequenceSet {
 			var err error
-			checkpoint, err = snapshotStore.TokenCostCheckpoint(ctx)
+			checkpoint, err = snapshotStore.TokenCostCheckpoint(ctx, effectiveQuery)
 			if err != nil {
 				return err
 			}
@@ -167,7 +167,7 @@ type tokenCostDatabaseRow struct {
 
 func (s *GormStore) QueryTokenCosts(ctx context.Context, query TokenCostQuery) ([]TokenCostRow, bool, error) {
 	if !query.ThroughSequenceSet {
-		checkpoint, err := s.TokenCostCheckpoint(ctx)
+		checkpoint, err := s.TokenCostCheckpoint(ctx, query)
 		if err != nil {
 			return nil, false, err
 		}
@@ -234,8 +234,12 @@ func (s *GormStore) tokenCostRequestQuery(ctx context.Context, query TokenCostQu
 	db := s.analyticsDB.WithContext(ctx).Table("request_logs AS rl").
 		Joins("LEFT JOIN (?) AS u ON u.request_id = rl.request_id", usage).
 		Where("rl.created_at >= ? AND rl.created_at < ?", query.From, query.To).
-		Where("rl.commit_sequence > ? AND rl.commit_sequence <= ?", query.AfterSequence, query.ThroughSequence).
-		Where("rl.project_id <> ?", "admin_playground")
+		Where("rl.commit_sequence > ? AND rl.commit_sequence <= ?", query.AfterSequence, query.ThroughSequence)
+	return applyTokenCostRequestFilters(db, query)
+}
+
+func applyTokenCostRequestFilters(db *gorm.DB, query TokenCostQuery) *gorm.DB {
+	db = db.Where("rl.project_id <> ?", "admin_playground")
 	if query.ProjectID != "" {
 		db = db.Where("rl.project_id = ?", query.ProjectID)
 	}
@@ -417,7 +421,48 @@ func tokenCostDedupeKey(row TokenCostRow, query TokenCostQuery) string {
 	return "aggregate_" + hex.EncodeToString(sum[:])
 }
 
-func (s *GormStore) TokenCostCheckpoint(ctx context.Context) (int64, error) {
+func (s *GormStore) TokenCostCheckpoint(ctx context.Context, query TokenCostQuery) (int64, error) {
+	checkpoint, err := s.tokenCostGlobalCheckpoint(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if checkpoint <= query.AfterSequence {
+		return query.AfterSequence, nil
+	}
+	blockerQuery := TokenCostQuery{
+		To: query.To, ProjectID: query.ProjectID, UserID: query.UserID,
+		APIKeyID: query.APIKeyID, ProviderID: query.ProviderID, Model: query.Model,
+		Status: query.Status, AfterSequence: query.AfterSequence, ThroughSequence: checkpoint,
+	}
+	sequenceRequestIDs := s.analyticsDB.WithContext(ctx).Table("request_logs").
+		Select("request_id").
+		Where("commit_sequence > ? AND commit_sequence <= ?", blockerQuery.AfterSequence, blockerQuery.ThroughSequence)
+	usageUsers := s.analyticsDB.WithContext(ctx).Table("usage_records").
+		Select("request_id, MAX(attributed_user_id) AS user_id").
+		Where("request_id IN (?)", sequenceRequestIDs).
+		Group("request_id")
+	blockers := s.analyticsDB.WithContext(ctx).Table("request_logs AS rl").
+		Joins("LEFT JOIN (?) AS u ON u.request_id = rl.request_id", usageUsers).
+		Where("rl.commit_sequence > ? AND rl.commit_sequence <= ?", blockerQuery.AfterSequence, blockerQuery.ThroughSequence).
+		Where("rl.created_at >= ?", blockerQuery.To)
+	blockers = applyTokenCostRequestFilters(blockers, blockerQuery)
+	var blocker sql.NullInt64
+	if err := blockers.Select("MIN(rl.commit_sequence)").Scan(&blocker).Error; err != nil {
+		return 0, err
+	}
+	if blocker.Valid && blocker.Int64 <= checkpoint {
+		checkpoint = max(query.AfterSequence, blocker.Int64-1)
+	}
+	return checkpoint, nil
+}
+
+func (s *GormStore) tokenCostGlobalCheckpoint(ctx context.Context) (int64, error) {
+	if s.dbDriver == "postgres" {
+		var checkpoint int64
+		err := s.analyticsDB.WithContext(ctx).Raw(`
+SELECT GREATEST(txid_snapshot_xmin(txid_current_snapshot()) - 1, 0)::bigint`).Scan(&checkpoint).Error
+		return checkpoint, err
+	}
 	var sequence AnalyticsSequence
 	err := s.analyticsDB.WithContext(ctx).First(&sequence, "name = ?", requestLogSequenceName).Error
 	return sequence.LastValue, err

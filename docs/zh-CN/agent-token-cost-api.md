@@ -148,7 +148,7 @@ curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \
 
 当 `has_more` 为 true 时，用 `cursor=next_cursor` 再次调用。Cursor 会保存原始过滤条件、`granularity`、`group_by` 和快照区间，因此这些参数都可以省略；如果再次传入，则必须与 Cursor 一致。快照上界保持固定，因此分页期间新到达的请求不会挤动后续页面。
 
-响应中的 `watermark` 使用事务内分配的请求日志提交序号标识已完成的数据库快照。TokenHub 分配序号时会持有一个数据库行锁直到插入事务提交，因此在 PostgreSQL 多实例间也保持单调。即使快照没有匹配行也会返回 watermark。Agent 必须先处理所有页面，成功后再把 watermark 持久化。下一轮使用 `after=<已提交 watermark>`：
+响应中的 `watermark` 标识已完成的数据库快照。在 PostgreSQL 上，每条请求日志保存其事务 ID，检查点停在快照中最早的活跃事务之前；后续事务提交不需要等待共享的分析行锁。SQLite 则在数据库原有的单写者模型内使用事务序号。检查点还会停在第一条 `occurred_at` 大于等于 `to` 的已提交匹配请求之前，因此后续推进 `to` 时不会跳过已经提交的未来事件。即使快照没有匹配行也会返回 watermark。Agent 必须先处理所有页面，成功后再把 watermark 持久化。下一轮使用 `after=<已提交 watermark>`：
 
 ```bash
 curl -sS -G https://tokenhub.example.com/api/v1/analytics/token-costs \

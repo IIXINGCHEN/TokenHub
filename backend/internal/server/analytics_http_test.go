@@ -520,7 +520,8 @@ func TestTokenCostAnalyticsKeepsLargeQueriesIndexedAndPageBounded(t *testing.T) 
 	}
 
 	for table, expected := range map[string][]string{
-		"request_logs":  {"idx_request_logs_created_at", "idx_request_logs_project_created", "idx_request_logs_commit_sequence"},
+		"request_logs": {"idx_request_logs_created_at", "idx_request_logs_project_created",
+			"idx_request_logs_commit_sequence_v2", "idx_request_logs_project_commit_sequence"},
 		"usage_records": {"idx_usage_records_created_at", "idx_usage_records_project_created"},
 	} {
 		var indexes []struct {
@@ -538,6 +539,27 @@ func TestTokenCostAnalyticsKeepsLargeQueriesIndexedAndPageBounded(t *testing.T) 
 				t.Fatalf("%s is missing analytics index %s; indexes=%v", table, name, found)
 			}
 		}
+	}
+	checkpoint, err := store.tokenCostGlobalCheckpoint(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan []struct {
+		Detail string `gorm:"column:detail"`
+	}
+	if err := store.db.Raw(`EXPLAIN QUERY PLAN
+SELECT rl.request_id FROM request_logs AS rl
+WHERE rl.project_id = ? AND rl.commit_sequence > ? AND rl.commit_sequence <= ?
+  AND rl.created_at >= ? AND rl.created_at < ?`,
+		project.ID, checkpoint, checkpoint, now.Add(-365*24*time.Hour), now.Add(time.Hour)).Scan(&plan).Error; err != nil {
+		t.Fatal(err)
+	}
+	usesProjectSequence := false
+	for _, step := range plan {
+		usesProjectSequence = usesProjectSequence || strings.Contains(step.Detail, "idx_request_logs_project_commit_sequence")
+	}
+	if !usesProjectSequence {
+		t.Fatalf("empty project delta did not use project/sequence index: %#v", plan)
 	}
 }
 

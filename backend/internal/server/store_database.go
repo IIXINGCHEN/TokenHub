@@ -343,16 +343,16 @@ func ensureRequestLogCommitSequence(db *gorm.DB, driver string) error {
 	if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&sequence).Error; err != nil {
 		return fmt.Errorf("create request log sequence: %w", err)
 	}
+	if err := db.Exec("DROP INDEX IF EXISTS idx_request_logs_commit_sequence").Error; err != nil {
+		return fmt.Errorf("replace request log commit sequence index: %w", err)
+	}
 	var triggerStatements []string
 	if driver == "postgres" {
 		triggerStatements = []string{`
 CREATE OR REPLACE FUNCTION tokenhub_assign_request_log_commit_sequence()
 RETURNS trigger AS $function$
 BEGIN
-  UPDATE analytics_sequences
-     SET last_value = last_value + 1
-   WHERE name = 'request_logs'
-   RETURNING last_value INTO NEW.commit_sequence;
+  NEW.commit_sequence = txid_current();
   RETURN NEW;
 END;
 $function$ LANGUAGE plpgsql;`, `
@@ -394,30 +394,50 @@ END;`}
 	if err := backfillRequestLogCommitSequence(db, driver); err != nil {
 		return err
 	}
-	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_request_logs_commit_sequence
+	if err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_request_logs_commit_sequence_v2
 ON request_logs(commit_sequence)`).Error; err != nil {
 		return fmt.Errorf("index request log commit sequence: %w", err)
+	}
+	if err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_request_logs_project_commit_sequence
+ON request_logs(project_id, commit_sequence)`).Error; err != nil {
+		return fmt.Errorf("index project request log commit sequence: %w", err)
 	}
 	return nil
 }
 
 func backfillRequestLogCommitSequence(db *gorm.DB, driver string) error {
-	return db.Transaction(func(tx *gorm.DB) error {
-		var sequence AnalyticsSequence
-		if driver == "postgres" {
+	if driver == "postgres" {
+		return db.Transaction(func(tx *gorm.DB) error {
+			var sequence AnalyticsSequence
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 				First(&sequence, "name = ?", requestLogSequenceName).Error; err != nil {
 				return err
 			}
-		} else {
-			if err := tx.Model(&AnalyticsSequence{}).
-				Where("name = ?", requestLogSequenceName).
-				UpdateColumn("last_value", gorm.Expr("last_value")).Error; err != nil {
-				return err
+			// A non-negative value marks a database that has not yet converted its
+			// legacy/event-order sequences. Existing rows form the initial snapshot
+			// and can share one synthetic transaction ID; new inserts use txid_current().
+			if sequence.LastValue >= 0 {
+				if err := tx.Model(&RequestLog{}).Where("1 = 1").Update("commit_sequence", 1).Error; err != nil {
+					return fmt.Errorf("convert legacy request log commit sequence: %w", err)
+				}
+				if err := tx.Model(&AnalyticsSequence{}).
+					Where("name = ?", requestLogSequenceName).
+					Update("last_value", -1).Error; err != nil {
+					return err
+				}
 			}
-			if err := tx.First(&sequence, "name = ?", requestLogSequenceName).Error; err != nil {
-				return err
-			}
+			return nil
+		})
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		var sequence AnalyticsSequence
+		if err := tx.Model(&AnalyticsSequence{}).
+			Where("name = ?", requestLogSequenceName).
+			UpdateColumn("last_value", gorm.Expr("last_value")).Error; err != nil {
+			return err
+		}
+		if err := tx.First(&sequence, "name = ?", requestLogSequenceName).Error; err != nil {
+			return err
 		}
 		var maximum int64
 		if err := tx.Model(&RequestLog{}).Select("COALESCE(MAX(commit_sequence), 0)").Scan(&maximum).Error; err != nil {
@@ -443,7 +463,7 @@ UPDATE request_logs AS rl
  WHERE rl.id = ranked.id`
 			} else {
 				statement = `
-WITH ranked AS (
+WITH ranked AS MATERIALIZED (
   SELECT id, ? + ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC) AS sequence
     FROM request_logs
    WHERE commit_sequence <= 0
