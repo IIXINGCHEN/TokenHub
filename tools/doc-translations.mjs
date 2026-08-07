@@ -21,7 +21,7 @@ export const LOCALES = ["zh-CN", "ja"];
 
 // Documents that are deliberately English-only. These are inside the tracked universe
 // and are skipped on purpose, which is different from a path simply not being tracked.
-const ENGLISH_ONLY = ["docs/development/", "docs/postgresql-setup.md", "docs/superpowers/"];
+const ENGLISH_ONLY = ["docs/development/", "docs/postgresql-setup.md"];
 
 // Root documents that translate to a sibling with a locale suffix rather than into a
 // locale directory.
