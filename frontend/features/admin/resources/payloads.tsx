@@ -6,7 +6,7 @@ import { firstActiveModel, firstActiveProject, firstActiveProvider, firstActiveT
 import { compactNumber } from "../domain/formatting";
 import { enumValueLabel, numberFromUnknown, numberOr, parseLooseValue, splitList } from "../domain/labels";
 import { initialModelRoutes } from "../domain/provider-model-selection";
-import { providerReasoningFormValues, providerReasoningOptions } from "../domain/provider-reasoning";
+import { providerReasoningFormValues, providerReasoningOptions, providerReasoningOverrideFormValues } from "../domain/provider-reasoning";
 import { activeLanguage, tx } from "../i18n/runtime";
 import { handleApprovalOrJSON } from "./governance-config";
 import { projectQuotaFields, type ProjectQuotaValues } from "../views/crud-projects";
@@ -110,7 +110,7 @@ export function providerResourceOptions(values: Record<string, string>) {
   return providerReasoningOptions(values, accountOptions);
 }
 
-export function providerResourceToForm(item: ProviderResource) {
+export function providerResourceToForm(item: ProviderResource, providerOptions?: Record<string, string>) {
   const summary = item.credential_summary ?? {};
   return {
     provider_id: item.provider_id,
@@ -139,7 +139,7 @@ export function providerResourceToForm(item: ProviderResource) {
     environment: item.environment ?? "",
     status: item.status,
     healthy: String(item.healthy),
-    ...providerReasoningFormValues(item.options),
+    ...providerReasoningOverrideFormValues(item.options, providerOptions),
   };
 }
 

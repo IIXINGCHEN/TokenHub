@@ -49,7 +49,7 @@ export function ProviderResourceReasoningSettings({
     setSavedID("");
     setErrors((current) => ({ ...current, [resource.id]: "" }));
     try {
-      const payload = providerResourceUpdatePayload({ ...providerResourceToForm(resource), ...draft });
+      const payload = providerResourceUpdatePayload({ ...providerResourceToForm(resource, provider.options), ...draft });
       const response = await adminFetch(api, `/api/admin/provider-resources/${encodeURIComponent(resource.id)}`, {
         method: "PATCH",
         body: JSON.stringify(payload),

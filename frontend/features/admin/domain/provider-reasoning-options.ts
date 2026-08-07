@@ -27,7 +27,9 @@ export function providerReasoningOverrideFormValues(
   providerOptions?: Record<string, string>,
 ) {
   const overridden = providerHasReasoningOverrides(resourceOptions);
-  const displayed = overridden ? resourceOptions : providerOptions;
+  const displayed = overridden
+    ? { ...(providerOptions ?? {}), ...(resourceOptions ?? {}) }
+    : providerOptions;
   return {
     ...providerReasoningFormValues(displayed),
     _existing_options: JSON.stringify(resourceOptions ?? {}),

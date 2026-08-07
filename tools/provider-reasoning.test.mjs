@@ -75,4 +75,49 @@ describe("Provider Resource reasoning overrides", () => {
 
     assert.deepEqual(options, { environment_hint: "gpu-a" });
   });
+
+  it("preserves explicit resource tombstones through the normal edit round trip", () => {
+    const resourceOptions = {
+      environment_hint: "gpu-a",
+      reasoning_effort_values: "",
+      reasoning_effort_map: "",
+      reasoning_effort_unsupported: "omit",
+      reasoning_budget_map: "",
+      preserve_reasoning_content: "false",
+    };
+    const values = providerReasoningOverrideFormValues(resourceOptions);
+
+    assert.equal(values._reasoning_override, "true");
+    assert.deepEqual(serializeProviderReasoningOptions(values), resourceOptions);
+  });
+
+  it("displays effective values for a partial resource override without merging existing options", () => {
+    const resourceOptions = {
+      environment_hint: "gpu-a",
+      reasoning_effort_values: "low,high",
+    };
+    const values = providerReasoningOverrideFormValues(resourceOptions, {
+      reasoning_effort_values: "none,low,medium,high,max",
+      reasoning_effort_map: '{"xhigh":"max"}',
+      reasoning_effort_unsupported: "reject",
+      reasoning_budget_map: '{"*":"high"}',
+      preserve_reasoning_content: "true",
+    });
+
+    assert.equal(values._reasoning_override, "true");
+    assert.equal(values.reasoning_effort_values, "low,high");
+    assert.equal(values.reasoning_effort_map, '{"xhigh":"max"}');
+    assert.equal(values.reasoning_effort_unsupported, "reject");
+    assert.equal(values.reasoning_budget_map, '{"*":"high"}');
+    assert.equal(values.preserve_reasoning_content, "true");
+    assert.deepEqual(JSON.parse(values._existing_options), resourceOptions);
+    assert.deepEqual(serializeProviderReasoningOptions(values), {
+      environment_hint: "gpu-a",
+      reasoning_effort_values: "low,high",
+      reasoning_effort_map: '{"xhigh":"max"}',
+      reasoning_effort_unsupported: "reject",
+      reasoning_budget_map: '{"*":"high"}',
+      preserve_reasoning_content: "true",
+    });
+  });
 });

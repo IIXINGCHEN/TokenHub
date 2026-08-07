@@ -125,7 +125,7 @@ export function providerResourceConfig(provider?: Provider): ResourceConfig<Prov
         doneMessage: (item) => `${item.name} ${tx("Token 已刷新")}`,
       },
     ],
-    toForm: providerResourceToForm,
+    toForm: (item) => providerResourceToForm(item, provider?.options),
   };
 }
 

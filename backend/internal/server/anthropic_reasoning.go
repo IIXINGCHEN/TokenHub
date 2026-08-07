@@ -155,8 +155,12 @@ func reasoningEffortValues(raw string) map[string]struct{} {
 }
 
 func providerPreservesReasoningContent(provider Provider) bool {
-	value := strings.ToLower(strings.TrimSpace(provider.Options[reasoningContentOption]))
-	return provider.Type == "deepseek" || value == "true" || value == "1" || value == "yes"
+	raw, configured := provider.Options[reasoningContentOption]
+	if !configured {
+		return provider.Type == "deepseek"
+	}
+	value := strings.ToLower(strings.TrimSpace(raw))
+	return value == "true" || value == "1" || value == "yes"
 }
 
 func gatewayReasoningSignature(provider Provider, reasoning string) string {
