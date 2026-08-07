@@ -235,6 +235,12 @@ func TestParseByteSize(t *testing.T) {
 		{"", 0, false},
 		{"abc", 0, false},
 		{"99999999999g", 0, false}, // overflow guard
+		{"8kk", 0, false},          // malformed suffix
+		{"8ib", 0, false},          // malformed suffix
+		{"8big", 0, false},         // malformed suffix
+		{"8mbb", 0, false},         // malformed suffix
+		{"k", 0, false},            // suffix without digits
+		{"-5", 0, false},           // negative
 	}
 	for _, tc := range cases {
 		got, ok := parseByteSize(tc.in)

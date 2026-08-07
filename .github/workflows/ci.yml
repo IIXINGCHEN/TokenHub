@@ -197,6 +197,10 @@ jobs:
 
           remote_rendered="$(docker compose --env-file deploy/.env.example -f deploy/docker-compose.remote-postgres.yml config)"
           grep -Fq 'target: /etc/nginx/templates/default.conf.template' <<<"$remote_rendered"
+          # The load balancer's client_max_body_size uses an nginx-format variable
+          # (default 32m), kept separate from the backend's byte-format limits so a
+          # value like 32mb never renders as invalid nginx syntax.
+          grep -Fq 'TOKENHUB_NGINX_CLIENT_MAX_BODY_SIZE: 32m' <<<"$remote_rendered"
 
           docker compose --env-file deploy/.env.example \
             -f deploy/docker-compose.yml \

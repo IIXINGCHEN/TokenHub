@@ -91,7 +91,7 @@ services:
     image: nginx:1.27-alpine
     restart: unless-stopped
     environment:
-      TOKENHUB_MAX_MULTIMODAL_REQUEST_BYTES: ${TOKENHUB_MAX_MULTIMODAL_REQUEST_BYTES:-33554432}
+      TOKENHUB_NGINX_CLIENT_MAX_BODY_SIZE: ${TOKENHUB_NGINX_CLIENT_MAX_BODY_SIZE:-32m}
     ports:
       - "${TOKENHUB_GATEWAY_PORT:-8080}:8080"
     volumes:

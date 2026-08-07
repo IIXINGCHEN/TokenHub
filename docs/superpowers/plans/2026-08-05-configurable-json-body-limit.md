@@ -4,13 +4,15 @@
 
 **Goal:** Replace the hard-coded 4 MiB `decodeJSON` limit with admin-configurable per-tier limits and a clear `413 Payload Too Large` response, unblocking large multimodal (Codex) requests.
 
+> **Note (paths reconciled to the actual implementation):** this plan was drafted before the `internal/server` refactor split the monolithic `http_transport.go`. The `decodeJSON` decode logic and its migration landed in `backend/internal/server/http_transport.go` (not `http_transport.go`), and the decode tests were added as `backend/internal/server/decode_json_test.go` (not `decode_json_test.go`). The line numbers below (e.g. `~6201`) are historical and no longer apply. The steps otherwise describe the change as implemented.
+
 **Architecture:** Add two `int64` config fields read from env (`getenvBytes` with size-suffix + hard ceiling). Convert `decodeJSON` to a `*Server` method using `http.MaxBytesReader` (streaming, typed 413). Migrate all ~37 uniform call sites; give multimodal chat endpoints the higher limit. Sync docs/env.
 
 **Tech Stack:** Go 1.26, `net/http`, standard library only. Package `backend/internal/server`.
 
 ## Global Constraints
 
-- Package under change: `backend/internal/server` (`config.go`, `http.go`).
+- Package under change: `backend/internal/server` (`config.go`, `http_transport.go`).
 - Env prefix `TOKENHUB_`; helpers live in `config.go` (`getenv`, `getenvInt`, `getenvBool`, `getenvList`).
 - Defaults (verbatim): global `8 << 20` (8 MiB); multimodal `32 << 20` (32 MiB); hard ceiling `512 << 20` (512 MiB).
 - Suffix parsing is binary (1k = 1024), case-insensitive: `b`, `k`/`kb`/`kib`, `m`/`mb`/`mib`, `g`/`gb`/`gib`.
@@ -23,8 +25,8 @@
 
 - `backend/internal/server/config.go` — add `MaxJSONRequestBytes`, `MaxMultimodalRequestBytes` fields, wire in `ConfigFromEnv`, add `getenvBytes` + `parseByteSize` + `maxConfigurableRequestBytes`.
 - `backend/internal/server/config_test.go` — table tests for `getenvBytes`/`parseByteSize`.
-- `backend/internal/server/http.go` — add `errors` import; add `(*Server).decodeJSON` + `(*Server).decodeJSONLimit`; migrate ~37 call sites; remove old free `decodeJSON`.
-- `backend/internal/server/decode_test.go` — tests for the decode methods.
+- `backend/internal/server/http_transport.go` — add `errors` import; add `(*Server).decodeJSON` + `(*Server).decodeJSONLimit`; migrate ~37 call sites; remove old free `decodeJSON`.
+- `backend/internal/server/decode_json_test.go` — tests for the decode methods.
 - `deploy/.env.example`, `start.sh`, `docs/deployment.md`, `docs/zh-CN/deployment.md`, `docs/ja/deployment.md` — env + docs sync.
 
 ---
@@ -173,8 +175,8 @@ git commit -m "feat(config): add configurable JSON request body byte limits"
 ### Task 2: `decodeJSON`/`decodeJSONLimit` methods with 413
 
 **Files:**
-- Modify: `backend/internal/server/http.go` (add `errors` import; add methods near the existing free `decodeJSON` at ~line 6201 — do NOT remove the free function yet)
-- Test: `backend/internal/server/decode_test.go` (create)
+- Modify: `backend/internal/server/http_transport.go` (add `errors` import; add methods near the existing free `decodeJSON` at ~line 6201 — do NOT remove the free function yet)
+- Test: `backend/internal/server/decode_json_test.go` (create)
 
 **Interfaces:**
 - Consumes: `Config.MaxJSONRequestBytes` (Task 1); `NewHTTPError`, `AsHTTPError`.
@@ -182,7 +184,7 @@ git commit -m "feat(config): add configurable JSON request body byte limits"
 
 - [ ] **Step 1: Write the failing test**
 
-Create `backend/internal/server/decode_test.go`:
+Create `backend/internal/server/decode_json_test.go`:
 
 ```go
 package server
@@ -261,7 +263,7 @@ Expected: FAIL — `s.decodeJSONLimit undefined` (method not yet defined).
 
 - [ ] **Step 3: Add `errors` import and the methods**
 
-In `http.go`, add `"errors"` to the import block (alphabetically, before `"fmt"`).
+In `http_transport.go`, add `"errors"` to the import block (alphabetically, before `"fmt"`).
 
 Add these two methods immediately above the existing `func decodeJSON(r *http.Request, target any) error` (~line 6201). Leave the old free function in place for now so the package still builds:
 
@@ -290,13 +292,13 @@ Note: a method `(*Server).decodeJSON` and the free function `decodeJSON` legally
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd backend && gofmt -w internal/server/http.go internal/server/decode_test.go && go test ./internal/server/ -run TestDecodeJSON -v`
+Run: `cd backend && gofmt -w internal/server/http_transport.go internal/server/decode_json_test.go && go test ./internal/server/ -run TestDecodeJSON -v`
 Expected: PASS (4 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add backend/internal/server/http.go backend/internal/server/decode_test.go
+git add backend/internal/server/http_transport.go backend/internal/server/decode_json_test.go
 git commit -m "feat(server): add MaxBytesReader decode methods returning 413"
 ```
 
@@ -305,7 +307,7 @@ git commit -m "feat(server): add MaxBytesReader decode methods returning 413"
 ### Task 3: Migrate call sites + remove old `decodeJSON`
 
 **Files:**
-- Modify: `backend/internal/server/http.go`, `backend/internal/server/provider_account_oauth.go` (all `decodeJSON(r, …)` call sites)
+- Modify: `backend/internal/server/http_transport.go`, `backend/internal/server/provider_account_oauth.go` (all `decodeJSON(r, …)` call sites)
 
 **Interfaces:**
 - Consumes: `(*Server).decodeJSON`, `(*Server).decodeJSONLimit` (Task 2); `Config.MaxMultimodalRequestBytes` (Task 1).
@@ -317,7 +319,7 @@ Every call site is `decodeJSON(r, &X)`. Rewrite to `s.decodeJSON(w, r, &X)`. The
 
 ```bash
 cd backend/internal/server
-perl -0pi -e 's/(?<![\w.])decodeJSON\(r, /s.decodeJSON(w, r, /g' http.go provider_account_oauth.go
+perl -0pi -e 's/(?<![\w.])decodeJSON\(r, /s.decodeJSON(w, r, /g' http_transport.go provider_account_oauth.go
 ```
 
 - [ ] **Step 2: Collapse the now-redundant 400 wrap to pass the typed error through**
@@ -326,12 +328,12 @@ Only the wrap line immediately following one of our decode calls must change (so
 
 ```bash
 cd backend/internal/server
-perl -0pi -e 's/(s\.decodeJSON(?:Limit)?\([^\n]*\); err != nil \{\s*\n\s*)writeError\(w, r, NewHTTPError\(400, "invalid_request", err\.Error\(\)\)\)/${1}writeError(w, r, err)/g' http.go provider_account_oauth.go
+perl -0pi -e 's/(s\.decodeJSON(?:Limit)?\([^\n]*\); err != nil \{\s*\n\s*)writeError\(w, r, NewHTTPError\(400, "invalid_request", err\.Error\(\)\)\)/${1}writeError(w, r, err)/g' http_transport.go provider_account_oauth.go
 ```
 
 - [ ] **Step 3: Give multimodal endpoints the higher limit**
 
-In `http.go`, in `handleChatCompletions`, `handleResponses`, and `handleAdminPlaygroundChat`, change their `s.decodeJSON(w, r, &req)` line to:
+In `http_transport.go`, in `handleChatCompletions`, `handleResponses`, and `handleAdminPlaygroundChat`, change their `s.decodeJSON(w, r, &req)` line to:
 
 ```go
 	if err := s.decodeJSONLimit(w, r, &req, s.config.MaxMultimodalRequestBytes); err != nil {
@@ -341,14 +343,14 @@ Locate them precisely:
 
 ```bash
 cd backend/internal/server
-grep -n "func (s \*Server) handleChatCompletions\|func (s \*Server) handleResponses\|func (s \*Server) handleAdminPlaygroundChat" http.go
+grep -n "func (s \*Server) handleChatCompletions\|func (s \*Server) handleResponses\|func (s \*Server) handleAdminPlaygroundChat" http_transport.go
 ```
 
 Edit the `s.decodeJSON(w, r, &req)` on the first such line inside each of those three functions. (`/v1/embeddings` stays on the default — do not change `handleEmbeddings`.)
 
 - [ ] **Step 4: Remove the old free `decodeJSON`**
 
-Delete the now-unused free function in `http.go`:
+Delete the now-unused free function in `http_transport.go`:
 
 ```go
 func decodeJSON(r *http.Request, target any) error {
@@ -367,8 +369,8 @@ cd backend
 ! grep -rn "[^.]decodeJSON(r," internal/server/ && echo "no bare calls OK"
 ! grep -rn "io.LimitReader(r.Body, 4<<20)" internal/server/ && echo "old limiter gone OK"
 # Multimodal endpoints wired (expect 3 matches):
-grep -c "decodeJSONLimit(w, r, &req, s.config.MaxMultimodalRequestBytes)" internal/server/http.go
-gofmt -w internal/server/http.go internal/server/provider_account_oauth.go
+grep -c "decodeJSONLimit(w, r, &req, s.config.MaxMultimodalRequestBytes)" internal/server/http_transport.go
+gofmt -w internal/server/http_transport.go internal/server/provider_account_oauth.go
 go build ./... && go vet ./... && go test ./...
 ```
 
@@ -377,7 +379,7 @@ Expected: both `grep` guards print their OK line; multimodal count is `3`; build
 - [ ] **Step 6: Commit**
 
 ```bash
-git add backend/internal/server/http.go backend/internal/server/provider_account_oauth.go
+git add backend/internal/server/http_transport.go backend/internal/server/provider_account_oauth.go
 git commit -m "feat(server): route all JSON decoding through configurable limits, 413 on overflow"
 ```
 

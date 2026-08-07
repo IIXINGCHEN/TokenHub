@@ -5,10 +5,12 @@
 
 ## Problem
 
-`decodeJSON` in `backend/internal/server/http.go` caps every JSON request body at a
-hard-coded 4 MiB via `io.LimitReader(r.Body, 4<<20)`. It is used by ~37 handlers,
-including the OpenAI-compatible endpoints `/v1/chat/completions`, `/v1/responses`,
-and `/v1/embeddings`.
+`decodeJSON` in `backend/internal/server/http_transport.go` caps every JSON request
+body at a hard-coded 4 MiB. It reads the body with `io.ReadAll(io.LimitReader(r.Body,
+4<<20+1))`, checks the resulting length, and on excess returns
+`request body exceeds 4194304 bytes`. It is used by ~37 handlers, including the
+OpenAI-compatible endpoints `/v1/chat/completions`, `/v1/responses`, and
+`/v1/embeddings`.
 
 Multimodal requests (Codex, vision) inline base64-encoded images or large structured
 context. Base64 adds ~33% overhead, so common image inputs exceed 4 MiB and fail.
@@ -16,23 +18,21 @@ context. Base64 adds ~33% overhead, so common image inputs exceed 4 MiB and fail
 Two defects in the current behavior:
 
 1. **No configuration.** The 4 MiB ceiling cannot be changed without a code patch.
-2. **Wrong failure mode.** `io.LimitReader` does not error on excess — it *silently
-   truncates* at 4 MiB. The JSON decoder then hits EOF mid-stream and returns a
-   generic parse error, which handlers wrap as `400 invalid_request` with a
-   confusing message (e.g. `unexpected EOF`). There is no `413`.
+2. **Wrong failure mode.** Over-limit is detected correctly, but every caller wraps
+   the returned error as `400 invalid_request`. A client that sent too large a body
+   gets a generic client-error with no way to distinguish it from malformed JSON;
+   there is no `413 Payload Too Large`.
 
-Note: the issue text also claims the code uses `io.ReadAll` and returns a
-`request body exceeds 4194304 bytes` error. Neither is accurate for the current
-request path — decoding is already streaming via `json.NewDecoder`, and no
-`MaxBytesReader` (the source of that message) is used. The core limitation is real;
-these specific details are not.
+The whole-body `io.ReadAll` also buffers the entire request in memory before
+decoding, so a higher limit would raise worst-case memory per in-flight request more
+than a streaming decode would.
 
 ## Goals
 
 - Admin-configurable JSON body limit, with a separate higher limit for multimodal
   chat endpoints.
-- Clear `413 Payload Too Large` on over-limit instead of a silent-truncation `400`.
-- Preserve streaming decode (no whole-body `io.ReadAll`) to bound memory under load.
+- Clear `413 Payload Too Large` on over-limit instead of a generic `400`.
+- Switch to a streaming decode (no whole-body `io.ReadAll`) to bound memory under load.
 - Keep OpenAI `/v1` contract unchanged for well-formed under-limit requests.
 
 ## Non-goals
@@ -69,7 +69,7 @@ New helper `getenvBytes(key string, fallback int64) int64`:
   (512 MiB). Any configured value above the ceiling is clamped to the ceiling and a
   warning is logged, guarding against typos (e.g. `32g`) that would risk OOM.
 
-### 2. Decode logic (`backend/internal/server/http.go`)
+### 2. Decode logic (`backend/internal/server/http_transport.go`)
 
 `decodeJSON` becomes a method on `*Server` (so it can reach `s.config`) and takes the
 `http.ResponseWriter` (required by `http.MaxBytesReader`):

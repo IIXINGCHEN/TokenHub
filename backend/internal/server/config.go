@@ -437,19 +437,41 @@ func getenvBytes(key string, fallback int64) int64 {
 	return value
 }
 
+// parseByteSize parses a byte-size string into a count of bytes. It accepts a
+// bare integer ("1048576") or an integer followed by exactly one of the
+// documented, case-insensitive binary suffixes: k/kb/kib, m/mb/mib, g/gb/gib
+// (and a plain "b" for bytes). All multipliers are binary (1k = 1024). Any
+// other trailing text — including doubled or mixed suffixes like "8kk" or
+// "8big" — is rejected.
 func parseByteSize(raw string) (int64, bool) {
 	lower := strings.ToLower(strings.TrimSpace(raw))
-	multiplier := int64(1)
-	switch {
-	case strings.HasSuffix(lower, "k"), strings.HasSuffix(lower, "kb"), strings.HasSuffix(lower, "kib"):
-		multiplier = 1 << 10
-	case strings.HasSuffix(lower, "m"), strings.HasSuffix(lower, "mb"), strings.HasSuffix(lower, "mib"):
-		multiplier = 1 << 20
-	case strings.HasSuffix(lower, "g"), strings.HasSuffix(lower, "gb"), strings.HasSuffix(lower, "gib"):
-		multiplier = 1 << 30
+	if lower == "" {
+		return 0, false
 	}
-	digits := strings.TrimRight(lower, "kmgib")
+	// Split leading decimal digits from the trailing unit suffix.
+	split := len(lower)
+	for i, ch := range lower {
+		if ch < '0' || ch > '9' {
+			split = i
+			break
+		}
+	}
+	digits := lower[:split]
+	suffix := lower[split:]
 	if digits == "" {
+		return 0, false
+	}
+	var multiplier int64
+	switch suffix {
+	case "", "b":
+		multiplier = 1
+	case "k", "kb", "kib":
+		multiplier = 1 << 10
+	case "m", "mb", "mib":
+		multiplier = 1 << 20
+	case "g", "gb", "gib":
+		multiplier = 1 << 30
+	default:
 		return 0, false
 	}
 	n, err := strconv.ParseInt(digits, 10, 64)
