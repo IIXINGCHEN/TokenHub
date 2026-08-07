@@ -358,7 +358,7 @@ func TestAnthropicMessagesPreservesNativeProtocolAndHeaders(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	handler, _, secret := newAnthropicGateway(t, upstream.URL, ProviderAnthropic)
+	handler, _, secret := newAnthropicGateway(t, upstream.URL+"/v1", ProviderAnthropic)
 	resp := doAnthropicRequest(t, handler, "/v1/messages", map[string]any{
 		"model":      "claude-tokenhub-test",
 		"max_tokens": 1024,
