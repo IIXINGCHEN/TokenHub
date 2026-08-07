@@ -3,6 +3,7 @@ import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { clearPendingProviderAccountOAuthSession, consumePendingProviderAccountOAuthResult, hasPendingProviderAccountOAuthResult, parseProviderAccountOAuthResult, providerAccountOAuthCallbackURL, type ProviderAccountOAuthGenerateResponse, type ProviderAccountOAuthResult, readPendingProviderAccountOAuthSession, savePendingProviderAccountOAuthSession } from "../core/session";
 import { type ApiContext, type Model, type ModelRoute, type Provider, type ProviderCatalogEntry, type ProviderCredentialMode, type ProviderModel, type ProviderResource } from "../core/types";
 import { buildCustomProviderCatalogEntry, canonicalModelNameForUI, catalogModelCategoryOptions, modelCategory, modelCategoryForCatalog, modelCategoryLabel, providerEntryCategoryCount, providerEntrySupportsCategory } from "../domain/catalog";
+import { copyText } from "../domain/clipboard";
 import { compactNumber, formatModelPrice, modelCapabilities } from "../domain/formatting";
 import { providerTypeLabel } from "../domain/labels";
 import { clearCustomValidity, countWithUnit, handleRequiredFieldInvalid, providerSaveMessage, tx } from "../i18n/runtime";
@@ -762,10 +763,9 @@ export function ProviderUpsertModal({
   }
 
   async function copyProviderAccountCallbackURL() {
-    try {
-      await navigator.clipboard.writeText(openAIAccountOAuthRedirectURI);
+    if (await copyText(openAIAccountOAuthRedirectURI)) {
       setAccountOAuthStatus(tx("已复制 OpenAI 固定回调地址。"));
-    } catch {
+    } else {
       setAccountOAuthCallback(openAIAccountOAuthRedirectURI);
       setAccountOAuthStatus(openAIAccountOAuthRedirectURI);
     }
