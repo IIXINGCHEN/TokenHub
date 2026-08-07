@@ -20,6 +20,7 @@ import {
   type PlaygroundStreamEvent,
 } from "../core/types";
 import { modelCategory, modelCategoryLabel } from "../domain/catalog";
+import { copyText } from "../domain/clipboard";
 import {
   activeRouteCount,
   apiExampleLanguages,
@@ -542,7 +543,7 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
       <section className="playground-main" aria-label={tx("模型演练对话")}>
         <div className="playground-model-bar">
           <div className="playground-model-title">
-            <button type="button" className="playground-copy-model" title={tx("复制模型名")} onClick={() => navigator.clipboard?.writeText(modelName).catch(() => undefined)}>
+            <button type="button" className="playground-copy-model" title={tx("复制模型名")} onClick={() => void copyText(modelName)}>
               <strong>{modelName || tx("选择模型")}</strong>
               <Copy size={13} />
             </button>
@@ -785,13 +786,9 @@ export function PlaygroundAPIExamples({ baseURL, modelName }: { baseURL: string;
   const examples = useMemo(() => apiExampleScripts(baseURL, modelName), [baseURL, modelName]);
   const current = examples[language];
   async function copyCurrent() {
-    try {
-      await navigator.clipboard?.writeText(current);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1400);
-    } catch {
-      setCopied(false);
-    }
+    const success = await copyText(current);
+    setCopied(success);
+    if (success) window.setTimeout(() => setCopied(false), 1400);
   }
   return (
     <section className="api-example-panel">

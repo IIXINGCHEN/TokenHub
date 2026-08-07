@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { canViewAdminAudit } from "../core/navigation";
 import { type AdminUser, type ApiContext, type AppData, type RequestDetail, type RequestLogPage, type RequestLogPagination, type RequestLogSummary, type RequestPayloadLog } from "../core/types";
 import { auditRequestPagePath, type AuditRequestStatus } from "../domain/audit-request-page";
+import { copyText } from "../domain/clipboard";
 import { apiKeyAuditLabel, projectName, providerAttemptLabel, providerAuditLabel, providerResourceAuditLabel } from "../domain/entities";
 import { compactNumber, formatMoney, formatNumber, formatTime } from "../domain/formatting";
 import { actionLabel, enumValueLabel, resourceTypeLabel } from "../domain/labels";
@@ -410,9 +411,9 @@ export function RequestDetailPanel({
   const isError = log.status_code >= 400;
 
   async function copyRequestID() {
-    await navigator.clipboard?.writeText(log.request_id).catch(() => undefined);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1200);
+    const success = await copyText(log.request_id);
+    setCopied(success);
+    if (success) window.setTimeout(() => setCopied(false), 1200);
   }
 
   return (
