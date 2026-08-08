@@ -18,7 +18,9 @@ func validateBaseURL(t *testing.T, raw string) error {
 	if err != nil {
 		t.Fatalf("failed to parse test URL %q: %v", raw, err)
 	}
-	return validateProviderUpstreamBaseURL(endpoint)
+	// Tests exercise the strict form by default (redirect re-validation and
+	// hostname resolution never get the private-range allowlist).
+	return validateProviderUpstreamBaseURL(endpoint, nil)
 }
 
 func TestValidateProviderUpstreamBaseURLAllowsPublicHTTPS(t *testing.T) {
@@ -230,7 +232,7 @@ func TestCustomProviderCatalogFromUpstreamDropsCallerCheckRedirect(t *testing.T)
 // guard directly: dialing a disallowed literal IP must fail, while the
 // loopback exception and a hostname that resolves to loopback must succeed.
 func TestSSRFGuardedDialContextRejectsPrivateLiteral(t *testing.T) {
-	transport := ssrfGuardedProviderTransport()
+	transport := ssrfGuardedProviderTransport(nil)
 	if transport.DialContext == nil {
 		t.Fatal("expected guarded transport to install a DialContext")
 	}
@@ -276,7 +278,7 @@ func TestSSRFGuardedDialContextRejectsPrivateLiteral(t *testing.T) {
 // directly rather than re-resolving, by pointing the request at the loopback
 // listener via the "localhost" hostname.
 func TestSSRFGuardedDialContextDialsValidatedAddress(t *testing.T) {
-	transport := ssrfGuardedProviderTransport()
+	transport := ssrfGuardedProviderTransport(nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -298,4 +300,101 @@ func TestSSRFGuardedDialContextDialsValidatedAddress(t *testing.T) {
 		t.Fatalf("expected connection to a loopback address, got %s", conn.RemoteAddr())
 	}
 	conn.Close()
+}
+
+func mustParseCIDRs(t *testing.T, cidrs ...string) []*net.IPNet {
+	t.Helper()
+	blocks := make([]*net.IPNet, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		_, block, err := net.ParseCIDR(cidr)
+		if err != nil {
+			t.Fatalf("failed to parse test CIDR %q: %v", cidr, err)
+		}
+		blocks = append(blocks, block)
+	}
+	return blocks
+}
+
+func TestAllowedProviderUpstreamCIDRsParsesEnv(t *testing.T) {
+	t.Setenv("TOKENHUB_PROVIDER_UPSTREAM_ALLOWED_CIDRS", "10.0.0.0/8, 192.168.0.0/16;not-a-cidr")
+	blocks := allowedProviderUpstreamCIDRs()
+	if len(blocks) != 2 {
+		t.Fatalf("expected 2 valid CIDR blocks (invalid entry skipped), got %d", len(blocks))
+	}
+	if !blocks[0].Contains(net.ParseIP("10.1.2.3")) || !blocks[1].Contains(net.ParseIP("192.168.1.10")) {
+		t.Fatalf("parsed blocks do not cover the configured ranges: %v", blocks)
+	}
+}
+
+// TestValidateProviderUpstreamBaseURLAllowlistedPrivateLiteral verifies the
+// operator allowlist: literal private IPs inside the configured ranges pass,
+// while private IPs outside the ranges and link-local/metadata addresses stay
+// rejected (the allowlist can never widen to non-private special-use ranges).
+func TestValidateProviderUpstreamBaseURLAllowlistedPrivateLiteral(t *testing.T) {
+	allowed := mustParseCIDRs(t, "192.168.0.0/16", "10.0.0.0/8")
+	for _, raw := range []string{
+		"http://192.168.1.10:8000/v1",
+		"http://10.0.0.5/v1",
+	} {
+		endpoint, err := url.Parse(raw)
+		if err != nil {
+			t.Fatalf("failed to parse test URL %q: %v", raw, err)
+		}
+		if err := validateProviderUpstreamBaseURL(endpoint, allowed); err != nil {
+			t.Fatalf("expected allowlisted literal %q to pass, got %v", raw, err)
+		}
+	}
+	for _, raw := range []string{
+		// Private but outside the configured ranges.
+		"http://172.16.0.9/v1",
+		"http://[fd00::1]/v1",
+		// Link-local metadata can never be allowlisted (not RFC1918/ULA).
+		"http://169.254.169.254/latest/meta-data",
+		// CGNAT metadata range is likewise not RFC1918/ULA private.
+		"http://100.100.100.200/latest/meta-data",
+	} {
+		endpoint, err := url.Parse(raw)
+		if err != nil {
+			t.Fatalf("failed to parse test URL %q: %v", raw, err)
+		}
+		if err := validateProviderUpstreamBaseURL(endpoint, allowed); err == nil {
+			t.Fatalf("expected %q to stay rejected despite the allowlist", raw)
+		}
+	}
+	// Even an operator attempting to allowlist link-local must fail: the range
+	// is not private, so isAllowlistedPrivateProviderUpstreamIP ignores it.
+	linkLocal := mustParseCIDRs(t, "169.254.0.0/16")
+	endpoint, err := url.Parse("http://169.254.169.254/latest/meta-data")
+	if err != nil {
+		t.Fatalf("failed to parse metadata URL: %v", err)
+	}
+	if err := validateProviderUpstreamBaseURL(endpoint, linkLocal); err == nil {
+		t.Fatal("expected metadata address to stay rejected even when its range is configured")
+	}
+}
+
+// TestSSRFGuardedDialContextAllowlistedPrivateLiteral verifies the dial-time
+// guard applies the allowlist only to literal IPs: an allowlisted literal
+// private address reaches the dialer (failing only because nothing listens),
+// while the same address without the allowlist is refused up front.
+func TestSSRFGuardedDialContextAllowlistedPrivateLiteral(t *testing.T) {
+	// 192.168.222.222 on an unusual port: nothing should be listening there in
+	// test environments, and the sandbox has no route, so a passing check
+	// surfaces as a connection error rather than the guard's rejection.
+	guarded := ssrfGuardedProviderTransport(mustParseCIDRs(t, "192.168.0.0/16"))
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	conn, err := guarded.DialContext(ctx, "tcp", "192.168.222.222:19999")
+	if err == nil {
+		conn.Close()
+		return // unexpectedly reachable: the allowlist clearly let the dial through
+	}
+	if strings.Contains(err.Error(), "disallowed") {
+		t.Fatalf("expected allowlisted literal to reach the dialer, got guard rejection: %v", err)
+	}
+
+	strict := ssrfGuardedProviderTransport(nil)
+	if _, err := strict.DialContext(ctx, "tcp", "192.168.222.222:19999"); err == nil || !strings.Contains(err.Error(), "disallowed") {
+		t.Fatalf("expected non-allowlisted literal to be rejected by the guard, got %v", err)
+	}
 }
