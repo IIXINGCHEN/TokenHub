@@ -478,7 +478,7 @@ func parseByteSize(raw string) (int64, bool) {
 	if err != nil || n < 0 {
 		return 0, false
 	}
-	if multiplier > 1 && n > (int64(1)<<62)/multiplier {
+	if multiplier > 1 && n > math.MaxInt64/multiplier {
 		return 0, false // overflow
 	}
 	return n * multiplier, true

@@ -205,6 +205,10 @@ func TestGetenvBytes(t *testing.T) {
 		{"zero", true, "0", fallback},
 		{"negative", true, "-5", fallback},
 		{"above_ceiling", true, "9999g", maxConfigurableRequestBytes},
+		// Representable in int64 (~5.4e18 < math.MaxInt64) but above the ceiling:
+		// must clamp to the ceiling, not fall back. Regression for the old
+		// (1<<62)/multiplier overflow guard that wrongly rejected it.
+		{"representable_above_ceiling", true, "5000000000g", maxConfigurableRequestBytes},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -234,13 +238,14 @@ func TestParseByteSize(t *testing.T) {
 		{"8MiB", 8 << 20, true},
 		{"", 0, false},
 		{"abc", 0, false},
-		{"99999999999g", 0, false}, // overflow guard
-		{"8kk", 0, false},          // malformed suffix
-		{"8ib", 0, false},          // malformed suffix
-		{"8big", 0, false},         // malformed suffix
-		{"8mbb", 0, false},         // malformed suffix
-		{"k", 0, false},            // suffix without digits
-		{"-5", 0, false},           // negative
+		{"99999999999g", 0, false},              // overflow beyond int64
+		{"5000000000g", 5000000000 << 30, true}, // representable above ceiling; clamp happens in getenvBytes
+		{"8kk", 0, false},                       // malformed suffix
+		{"8ib", 0, false},                       // malformed suffix
+		{"8big", 0, false},                      // malformed suffix
+		{"8mbb", 0, false},                      // malformed suffix
+		{"k", 0, false},                         // suffix without digits
+		{"-5", 0, false},                        // negative
 	}
 	for _, tc := range cases {
 		got, ok := parseByteSize(tc.in)

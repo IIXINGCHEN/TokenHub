@@ -91,10 +91,14 @@ func (s *Server) decodeJSONOptional(w http.ResponseWriter, r *http.Request, targ
 }
 
 // decodeJSONLimit decodes the request body into target, rejecting bodies larger
-// than limit with a 413 instead of silently truncating. http.MaxBytesReader streams,
-// so peak memory is bounded by the decoded structure rather than the whole body, and
-// total bytes read are capped at limit. A non-positive limit falls back to the
-// default so a zero-value Config (e.g. in tests) still enforces a sane ceiling.
+// than limit with a 413 instead of silently truncating. http.MaxBytesReader caps the
+// total bytes read at limit and aborts the read early once it is exceeded, so an
+// over-limit request is rejected without reading the rest of the body. Note that
+// encoding/json buffers the full top-level value before unmarshalling, so worst-case
+// memory per in-flight request is still on the order of limit; the ceiling
+// (maxConfigurableRequestBytes) and conservative defaults bound that. A non-positive
+// limit falls back to the default so a zero-value Config (e.g. in tests) still
+// enforces a sane ceiling.
 func (s *Server) decodeJSONLimit(w http.ResponseWriter, r *http.Request, target any, limit int64) error {
 	defer r.Body.Close()
 	if limit <= 0 {
@@ -125,6 +129,17 @@ func decodeJSONError(err error, limit int64) error {
 		return errEmptyRequestBody
 	}
 	return NewHTTPError(http.StatusBadRequest, "invalid_request", err.Error())
+}
+
+// isPayloadTooLarge reports whether a decode error is the typed 413 returned when a
+// request body exceeds its configured limit. Handlers that otherwise replace decode
+// failures with a bespoke 400 use this to let the 413 payload-too-large contract
+// through unchanged, keeping the 400 only for malformed or invalid payloads.
+func isPayloadTooLarge(err error) bool {
+	if err == nil {
+		return false
+	}
+	return AsHTTPError(err).Status == http.StatusRequestEntityTooLarge
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

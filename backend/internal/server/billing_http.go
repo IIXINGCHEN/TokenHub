@@ -32,6 +32,10 @@ func (s *Server) handleAdminBillingConnectors(w http.ResponseWriter, r *http.Req
 	case http.MethodPost:
 		var request BillingConnectorRequest
 		if err := s.decodeJSON(w, r, &request); err != nil {
+			if isPayloadTooLarge(err) {
+				writeError(w, r, err)
+				return
+			}
 			writeError(w, r, NewHTTPError(http.StatusBadRequest, "invalid_billing_connector", "Invalid billing connector payload"))
 			return
 		}
@@ -83,6 +87,10 @@ func (s *Server) handleAdminBillingConnectorItem(w http.ResponseWriter, r *http.
 		}
 		var request BillingConnectorPatchRequest
 		if err := s.decodeJSON(w, r, &request); err != nil {
+			if isPayloadTooLarge(err) {
+				writeError(w, r, err)
+				return
+			}
 			writeError(w, r, NewHTTPError(http.StatusBadRequest, "invalid_billing_connector", "Invalid billing connector payload"))
 			return
 		}
@@ -134,6 +142,10 @@ func (s *Server) handleAdminBillingConnectorAction(w http.ResponseWriter, r *htt
 	case "sync":
 		var request BillingSyncRequest
 		if err := s.decodeJSONOptional(w, r, &request); err != nil {
+			if isPayloadTooLarge(err) {
+				writeError(w, r, err)
+				return
+			}
 			writeError(w, r, NewHTTPError(http.StatusBadRequest, "invalid_billing_sync", "Invalid billing sync payload"))
 			return
 		}

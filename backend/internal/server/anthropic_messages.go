@@ -990,6 +990,8 @@ func anthropicErrorType(status int) string {
 		return "authentication_error"
 	case http.StatusForbidden:
 		return "permission_error"
+	case http.StatusRequestEntityTooLarge:
+		return "request_too_large"
 	case http.StatusTooManyRequests:
 		return "rate_limit_error"
 	case http.StatusServiceUnavailable:

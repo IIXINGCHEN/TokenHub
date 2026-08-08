@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -123,5 +125,55 @@ func TestDecodeJSONMultimodalLimit(t *testing.T) {
 	var accepted map[string]any
 	if err := s.decodeJSONLimit(w, r, &accepted, s.config.MaxMultimodalRequestBytes); err != nil {
 		t.Fatalf("expected success under the multimodal limit, got %v", err)
+	}
+}
+
+// TestIsPayloadTooLarge locks the predicate that handlers use to let the typed 413
+// pass through instead of collapsing it into a bespoke 400.
+func TestIsPayloadTooLarge(t *testing.T) {
+	if !isPayloadTooLarge(NewHTTPError(http.StatusRequestEntityTooLarge, "payload_too_large", "too big")) {
+		t.Fatal("expected a 413 error to be recognized")
+	}
+	if isPayloadTooLarge(NewHTTPError(http.StatusBadRequest, "invalid_request", "bad")) {
+		t.Fatal("did not expect a 400 error to be recognized as payload-too-large")
+	}
+	if isPayloadTooLarge(nil) {
+		t.Fatal("did not expect nil to be recognized as payload-too-large")
+	}
+}
+
+// TestAnthropicErrorTypeForPayloadTooLarge verifies a 413 maps to the Anthropic
+// request_too_large type rather than the generic api_error.
+func TestAnthropicErrorTypeForPayloadTooLarge(t *testing.T) {
+	if got := anthropicErrorType(http.StatusRequestEntityTooLarge); got != "request_too_large" {
+		t.Fatalf("anthropicErrorType(413) = %q, want request_too_large", got)
+	}
+}
+
+// TestBillingConnectorOverLimitReturns413 is an end-to-end regression: the billing
+// connector handler must surface payload_too_large from an over-limit body instead
+// of replacing it with its bespoke invalid_billing_connector 400.
+func TestBillingConnectorOverLimitReturns413(t *testing.T) {
+	handler := NewWithConfig(NewMemoryStore(), Config{
+		AdminToken:                "dev_admin_token",
+		MaxJSONRequestBytes:       1 << 10,
+		MaxMultimodalRequestBytes: 4 << 10,
+	}).Handler()
+
+	big, err := json.Marshal(map[string]any{"name": strings.Repeat("a", 4096)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/billing/connectors", bytes.NewReader(big))
+	req.Header.Set("content-type", "application/json")
+	req.Header.Set("authorization", "Bearer dev_admin_token")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413; body = %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "payload_too_large") {
+		t.Fatalf("expected payload_too_large in body, got %s", rr.Body.String())
 	}
 }

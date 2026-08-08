@@ -26,6 +26,10 @@ func (s *Server) handleAdminReconciliationRules(w http.ResponseWriter, r *http.R
 	case http.MethodPost:
 		var request ReconciliationRuleRequest
 		if err := s.decodeJSON(w, r, &request); err != nil {
+			if isPayloadTooLarge(err) {
+				writeError(w, r, err)
+				return
+			}
 			writeError(w, r, NewHTTPError(http.StatusBadRequest, "invalid_reconciliation_rule", "Invalid reconciliation rule payload"))
 			return
 		}
@@ -59,6 +63,9 @@ func (s *Server) handleAdminReconciliationRuleItem(w http.ResponseWriter, r *htt
 		var request ReconciliationRunRequest
 		if err := s.decodeJSON(w, r, &request); err != nil {
 			httpErr := NewHTTPError(http.StatusBadRequest, "invalid_reconciliation_run", "Invalid reconciliation run payload")
+			if isPayloadTooLarge(err) {
+				httpErr = AsHTTPError(err)
+			}
 			s.recordAdminAuditWithStatus(r, user, "reconcile", "billing_reconciliation", parts[0], "failed", httpErr.Code, nil, map[string]any{"rule_id": parts[0], "error_code": httpErr.Code})
 			writeError(w, r, httpErr)
 			return
@@ -91,6 +98,10 @@ func (s *Server) handleAdminReconciliationRuleItem(w http.ResponseWriter, r *htt
 	case http.MethodPatch:
 		var request ReconciliationRulePatchRequest
 		if err := s.decodeJSON(w, r, &request); err != nil {
+			if isPayloadTooLarge(err) {
+				writeError(w, r, err)
+				return
+			}
 			writeError(w, r, NewHTTPError(http.StatusBadRequest, "invalid_reconciliation_rule", "Invalid reconciliation rule payload"))
 			return
 		}
