@@ -154,11 +154,94 @@ cp deploy/.env.example deploy/.env
 
 TokenHub 的演进离不开真实企业场景里的使用反馈、网关集成、文档完善、测试补充和持续维护。感谢每一位让项目变得更可靠的人。
 
-<p align="center">
-  <a href="https://github.com/astaxie/TokenHub/graphs/contributors">
-    <img src="https://contrib.rocks/image?repo=astaxie/TokenHub" alt="TokenHub contributors" />
-  </a>
-</p>
+<!-- readme: contributors -start -->
+
+<table>
+  <tr>
+    <td align="center" valign="top" width="12.5%">
+      <a href="https://github.com/astaxie">
+        <img src="https://avatars.githubusercontent.com/u/233907?v=4" width="80px" alt="astaxie" />
+        <br /><sub><b>astaxie</b></sub>
+      </a>
+    </td>
+    <td align="center" valign="top" width="12.5%">
+      <a href="https://github.com/legendtkl">
+        <img src="https://avatars.githubusercontent.com/u/2370761?v=4" width="80px" alt="legendtkl" />
+        <br /><sub><b>legendtkl</b></sub>
+      </a>
+    </td>
+    <td align="center" valign="top" width="12.5%">
+      <a href="https://github.com/cngump">
+        <img src="https://avatars.githubusercontent.com/u/108251?v=4" width="80px" alt="cngump" />
+        <br /><sub><b>cngump</b></sub>
+      </a>
+    </td>
+    <td align="center" valign="top" width="12.5%">
+      <a href="https://github.com/Mr0bean">
+        <img src="https://avatars.githubusercontent.com/u/19573968?v=4" width="80px" alt="Mr0bean" />
+        <br /><sub><b>Mr0bean</b></sub>
+      </a>
+    </td>
+    <td align="center" valign="top" width="12.5%">
+      <a href="https://github.com/deepjerry-ai">
+        <img src="https://avatars.githubusercontent.com/u/262369278?v=4" width="80px" alt="deepjerry-ai" />
+        <br /><sub><b>deepjerry-ai</b></sub>
+      </a>
+    </td>
+    <td align="center" valign="top" width="12.5%">
+      <a href="https://github.com/coldbrewtea">
+        <img src="https://avatars.githubusercontent.com/u/6879314?v=4" width="80px" alt="coldbrewtea" />
+        <br /><sub><b>coldbrewtea</b></sub>
+      </a>
+    </td>
+    <td align="center" valign="top" width="12.5%">
+      <a href="https://github.com/wangle201210">
+        <img src="https://avatars.githubusercontent.com/u/19949348?v=4" width="80px" alt="wangle201210" />
+        <br /><sub><b>wangle201210</b></sub>
+      </a>
+    </td>
+    <td align="center" valign="top" width="12.5%">
+      <a href="https://github.com/samz406">
+        <img src="https://avatars.githubusercontent.com/u/3055810?v=4" width="80px" alt="samz406" />
+        <br /><sub><b>samz406</b></sub>
+      </a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="top" width="12.5%">
+      <a href="https://github.com/CLukeLi">
+        <img src="https://avatars.githubusercontent.com/u/252523101?v=4" width="80px" alt="CLukeLi" />
+        <br /><sub><b>CLukeLi</b></sub>
+      </a>
+    </td>
+    <td align="center" valign="top" width="12.5%">
+      <a href="https://github.com/ocass-chen">
+        <img src="https://avatars.githubusercontent.com/u/172055494?v=4" width="80px" alt="ocass-chen" />
+        <br /><sub><b>ocass-chen</b></sub>
+      </a>
+    </td>
+    <td align="center" valign="top" width="12.5%">
+      <a href="https://github.com/AnxForever">
+        <img src="https://avatars.githubusercontent.com/u/130662349?v=4" width="80px" alt="AnxForever" />
+        <br /><sub><b>AnxForever</b></sub>
+      </a>
+    </td>
+    <td align="center" valign="top" width="12.5%">
+      <a href="https://github.com/yujiewanwan">
+        <img src="https://avatars.githubusercontent.com/u/268286250?v=4" width="80px" alt="yujiewanwan" />
+        <br /><sub><b>yujiewanwan</b></sub>
+      </a>
+    </td>
+    <td align="center" valign="top" width="12.5%">
+      <a href="https://github.com/lxm">
+        <img src="https://avatars.githubusercontent.com/u/1918195?v=4" width="80px" alt="lxm" />
+        <br /><sub><b>lxm</b></sub>
+      </a>
+    </td>
+  </tr>
+</table>
+
+<!-- readme: contributors -end -->
 
 <p align="center">
   <a href="https://github.com/astaxie/TokenHub/graphs/contributors">查看全部贡献者</a>
