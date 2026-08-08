@@ -507,7 +507,7 @@ func (a AnthropicAdapter) doRaw(ctx context.Context, provider Provider, endpoint
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(provider.BaseURL, "/")+endpoint, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, anthropicEndpointURL(provider.BaseURL, endpoint), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}

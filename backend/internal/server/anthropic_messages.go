@@ -800,7 +800,7 @@ func (s *Server) doNativeAnthropicRequest(
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+endpoint, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, anthropicEndpointURL(baseURL, endpoint), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
