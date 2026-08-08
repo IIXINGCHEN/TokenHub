@@ -633,6 +633,7 @@ models:
 
 	store := NewMemoryStore()
 	store.AddModel(Model{Name: "factory-chat", Family: "customized", Modality: "chat", ContextWindow: 1000, Status: StatusDisabled})
+	store.AddModel(Model{Name: "factory-embedding", Family: "customized", Modality: "embedding", EmbeddingPriceUSDPer1M: 9, Status: StatusDisabled})
 	store.AddModel(Model{Name: "custom-only", Family: "custom", Modality: "chat", Status: StatusActive})
 	app := NewWithConfig(store, Config{AdminToken: "dev_admin_token", ModelCatalogFile: catalogPath}).Handler()
 
