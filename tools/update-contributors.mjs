@@ -21,7 +21,8 @@ export function renderContributors(contributors) {
   for (const contributor of contributors) {
     if (
       typeof contributor.login !== "string" ||
-      contributor.login.endsWith("[bot]") ||
+      contributor.login.toLowerCase().endsWith("[bot]") ||
+      contributor.type === "Bot" ||
       typeof contributor.avatar_url !== "string" ||
       typeof contributor.html_url !== "string"
     ) {
@@ -118,20 +119,54 @@ export async function fetchContributors(repository, token, fetchImpl = fetch) {
   }
 }
 
-async function updateReadmes(contributors) {
+export async function updateReadmes(
+  contributors,
+  {
+    paths = README_PATHS,
+    readFileImpl = readFile,
+    writeFileImpl = writeFile,
+    log = console.log,
+  } = {},
+) {
   const rendered = renderContributors(contributors);
-  let changed = 0;
-  for (const path of README_PATHS) {
-    const current = await readFile(path, "utf8");
-    const next = replaceContributorSection(current, rendered);
-    if (next !== current) {
-      await writeFile(path, next);
-      changed += 1;
-    }
-  }
-  console.log(
-    `Updated ${changed} of ${README_PATHS.length} contributor sections.`,
+  const prepared = await Promise.all(
+    paths.map(async (path) => {
+      const current = await readFileImpl(path, "utf8");
+      return {
+        path,
+        current,
+        next: replaceContributorSection(current, rendered),
+      };
+    }),
   );
+  const changed = prepared.filter(({ current, next }) => next !== current);
+  const touched = [];
+
+  try {
+    for (const entry of changed) {
+      touched.push(entry);
+      await writeFileImpl(entry.path, entry.next);
+    }
+  } catch (writeError) {
+    const rollbackErrors = [];
+    for (const entry of touched.reverse()) {
+      try {
+        await writeFileImpl(entry.path, entry.current);
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError);
+      }
+    }
+    if (rollbackErrors.length > 0) {
+      throw new AggregateError(
+        [writeError, ...rollbackErrors],
+        "README update failed and could not be fully rolled back",
+      );
+    }
+    throw writeError;
+  }
+
+  log(`Updated ${changed.length} of ${paths.length} contributor sections.`);
+  return changed.length;
 }
 
 async function main() {

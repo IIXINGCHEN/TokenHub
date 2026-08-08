@@ -5,6 +5,7 @@ import {
   fetchContributors,
   renderContributors,
   replaceContributorSection,
+  updateReadmes,
 } from "./update-contributors.mjs";
 
 const contributors = [
@@ -18,6 +19,17 @@ const contributors = [
     avatar_url: "https://avatars.example/bot",
     html_url: "https://github.com/apps/release",
   },
+  {
+    login: "LOUD[BOT]",
+    avatar_url: "https://avatars.example/loud-bot",
+    html_url: "https://github.com/apps/loud",
+  },
+  {
+    login: "automation",
+    avatar_url: "https://avatars.example/automation",
+    html_url: "https://github.com/automation",
+    type: "Bot",
+  },
 ];
 
 describe("contributor rendering", () => {
@@ -27,6 +39,8 @@ describe("contributor rendering", () => {
     assert.match(rendered, /href="https:\/\/github\.com\/alice"/);
     assert.match(rendered, /<b>alice<\/b>/);
     assert.doesNotMatch(rendered, /release\[bot\]/);
+    assert.doesNotMatch(rendered, /LOUD\[BOT\]/);
+    assert.doesNotMatch(rendered, /automation/);
   });
 
   it("escapes contributor-controlled values", () => {
@@ -40,6 +54,71 @@ describe("contributor rendering", () => {
 
     assert.match(rendered, /a&lt;&amp;&quot;/);
     assert.match(rendered, /x=1&amp;y=&quot;2&quot;/);
+  });
+});
+
+describe("README transaction", () => {
+  const markerDocument = (content) =>
+    [
+      "before",
+      "<!-- readme: contributors -start -->",
+      content,
+      "<!-- readme: contributors -end -->",
+      "after",
+    ].join("\n");
+
+  it("validates every README before writing any of them", async () => {
+    const files = new Map([
+      ["README.md", markerDocument("old")],
+      ["README.zh-CN.md", "missing markers"],
+      ["README.ja.md", markerDocument("old")],
+    ]);
+    let writes = 0;
+
+    await assert.rejects(
+      () =>
+        updateReadmes(contributors, {
+          paths: [...files.keys()],
+          readFileImpl: async (path) => files.get(path),
+          writeFileImpl: async () => {
+            writes += 1;
+          },
+          log() {},
+        }),
+      /must contain/,
+    );
+
+    assert.equal(writes, 0);
+    assert.equal(files.get("README.md"), markerDocument("old"));
+  });
+
+  it("rolls back every touched README when a write fails", async () => {
+    const original = new Map([
+      ["README.md", markerDocument("english")],
+      ["README.zh-CN.md", markerDocument("chinese")],
+      ["README.ja.md", markerDocument("japanese")],
+    ]);
+    const files = new Map(original);
+    let failedOnce = false;
+
+    await assert.rejects(
+      () =>
+        updateReadmes(contributors, {
+          paths: [...files.keys()],
+          readFileImpl: async (path) => files.get(path),
+          writeFileImpl: async (path, content) => {
+            if (path === "README.zh-CN.md" && !failedOnce) {
+              failedOnce = true;
+              throw new Error("simulated write failure");
+            }
+            files.set(path, content);
+          },
+          log() {},
+        }),
+      /simulated write failure/,
+    );
+
+    assert.deepEqual(files, original);
   });
 });
 
