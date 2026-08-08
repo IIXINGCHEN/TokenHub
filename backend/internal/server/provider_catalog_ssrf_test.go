@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -18,9 +19,10 @@ func validateBaseURL(t *testing.T, raw string) error {
 	if err != nil {
 		t.Fatalf("failed to parse test URL %q: %v", raw, err)
 	}
-	// Tests exercise the strict form by default (redirect re-validation and
-	// hostname resolution never get the private-range allowlist).
-	return validateProviderUpstreamBaseURL(endpoint, nil)
+	// Tests exercise the save-time form by default: operator allowlist empty,
+	// localhost exception enabled. Redirect re-validation passes (nil, false)
+	// and is covered by dedicated cases below.
+	return validateProviderUpstreamBaseURL(endpoint, nil, true)
 }
 
 func TestValidateProviderUpstreamBaseURLAllowsPublicHTTPS(t *testing.T) {
@@ -28,7 +30,9 @@ func TestValidateProviderUpstreamBaseURLAllowsPublicHTTPS(t *testing.T) {
 		"https://api.example.com/v1",
 		"https://api.openai.com/v1",
 		"http://api.example.com:8080/v1",
-		"https://203.0.113.10/v1",
+		// A globally routable literal (Google Public DNS): special-purpose
+		// literals such as 203.0.113.x are rejected instead, see below.
+		"https://8.8.8.8/v1",
 	} {
 		if err := validateBaseURL(t, raw); err != nil {
 			t.Fatalf("expected %q to be allowed, got %v", raw, err)
@@ -53,6 +57,26 @@ func TestValidateProviderUpstreamBaseURLRejectsMetadataAndPrivate(t *testing.T) 
 		// This-host and reserved ranges are never valid upstreams.
 		"http://0.0.0.8/v1":   "provider_base_url_not_allowed",
 		"http://240.0.0.1/v1": "provider_base_url_not_allowed",
+		// Documentation and benchmarking special-purpose ranges are not
+		// routable upstreams either.
+		"http://192.0.2.10/v1":    "provider_base_url_not_allowed",
+		"http://198.51.100.20/v1": "provider_base_url_not_allowed",
+		"http://203.0.113.10/v1":  "provider_base_url_not_allowed",
+		"http://198.18.0.1/v1":    "provider_base_url_not_allowed",
+		"http://[2001:db8::1]/v1": "provider_base_url_not_allowed",
+		// Multicast destinations can never serve a unicast upstream API.
+		"http://224.0.0.1/v1":     "provider_base_url_not_allowed",
+		"http://[ff02::1]/v1":     "provider_base_url_not_allowed",
+		"http://255.255.255.255/": "provider_base_url_not_allowed",
+		// Deprecated IPv6 site-local space is still routable inside sites, and
+		// NAT64 translation prefixes can encode RFC1918 targets.
+		"http://[fec0::1]/v1":          "provider_base_url_not_allowed",
+		"http://[64:ff9b::a00:1]/v1":   "provider_base_url_not_allowed",
+		"http://[64:ff9b:1::a00:1]/v1": "provider_base_url_not_allowed",
+		// IPv4-mapped IPv6 spellings of private addresses are classified as
+		// private through To4, no special range needed.
+		"http://[::ffff:10.0.0.5]/v1":      "provider_base_url_not_allowed",
+		"http://[::ffff:169.254.169.254]/": "provider_base_url_not_allowed",
 	}
 	for raw, wantCode := range cases {
 		err := validateBaseURL(t, raw)
@@ -115,17 +139,14 @@ func writeModelsPayload(t *testing.T, w http.ResponseWriter) {
 	}
 }
 
-// TestCustomProviderCatalogFromUpstreamAllowsRedirectToPublic verifies that a
-// redirect to another allowed (loopback, in this in-process test) URL is
-// followed and the models payload is loaded. The redirect target is a second
-// httptest server on 127.0.0.1, which the localhost exception permits.
-func TestCustomProviderCatalogFromUpstreamAllowsRedirectToPublic(t *testing.T) {
+// TestCustomProviderCatalogFromUpstreamRejectsRedirectToLoopback verifies the
+// redirect guard runs in strict mode: even though the initial base URL and the
+// redirect target both sit on loopback (legitimate when typed directly), a
+// redirect hop must never lead onto a loopback service, because a public URL
+// could use the same bounce to reach services bound to the host.
+func TestCustomProviderCatalogFromUpstreamRejectsRedirectToLoopback(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v1/models" {
-			writeModelsPayload(t, w)
-			return
-		}
-		http.NotFound(w, r)
+		writeModelsPayload(t, w)
 	}))
 	defer upstream.Close()
 
@@ -134,15 +155,15 @@ func TestCustomProviderCatalogFromUpstreamAllowsRedirectToPublic(t *testing.T) {
 	}))
 	defer redirector.Close()
 
-	entry, err := CustomProviderCatalogFromUpstream(context.Background(), nil, ProviderCreateRequest{
+	_, err := CustomProviderCatalogFromUpstream(context.Background(), nil, ProviderCreateRequest{
 		BaseURL: redirector.URL + "/v1",
 		Type:    ProviderOpenAICompatible,
 	})
-	if err != nil {
-		t.Fatalf("expected redirect to allowed target to succeed, got %v", err)
+	if err == nil {
+		t.Fatal("expected redirect onto a loopback target to be rejected")
 	}
-	if entry.ModelsCount != 1 {
-		t.Fatalf("expected 1 model after redirect, got %d", entry.ModelsCount)
+	if code := AsHTTPError(err).Code; code != "provider_models_request_failed" {
+		t.Fatalf("expected provider_models_request_failed, got %q (%v)", code, err)
 	}
 }
 
@@ -340,7 +361,7 @@ func TestValidateProviderUpstreamBaseURLAllowlistedPrivateLiteral(t *testing.T) 
 		if err != nil {
 			t.Fatalf("failed to parse test URL %q: %v", raw, err)
 		}
-		if err := validateProviderUpstreamBaseURL(endpoint, allowed); err != nil {
+		if err := validateProviderUpstreamBaseURL(endpoint, allowed, true); err != nil {
 			t.Fatalf("expected allowlisted literal %q to pass, got %v", raw, err)
 		}
 	}
@@ -357,7 +378,7 @@ func TestValidateProviderUpstreamBaseURLAllowlistedPrivateLiteral(t *testing.T) 
 		if err != nil {
 			t.Fatalf("failed to parse test URL %q: %v", raw, err)
 		}
-		if err := validateProviderUpstreamBaseURL(endpoint, allowed); err == nil {
+		if err := validateProviderUpstreamBaseURL(endpoint, allowed, true); err == nil {
 			t.Fatalf("expected %q to stay rejected despite the allowlist", raw)
 		}
 	}
@@ -368,33 +389,276 @@ func TestValidateProviderUpstreamBaseURLAllowlistedPrivateLiteral(t *testing.T) 
 	if err != nil {
 		t.Fatalf("failed to parse metadata URL: %v", err)
 	}
-	if err := validateProviderUpstreamBaseURL(endpoint, linkLocal); err == nil {
+	if err := validateProviderUpstreamBaseURL(endpoint, linkLocal, true); err == nil {
 		t.Fatal("expected metadata address to stay rejected even when its range is configured")
 	}
 }
 
-// TestSSRFGuardedDialContextAllowlistedPrivateLiteral verifies the dial-time
-// guard applies the allowlist only to literal IPs: an allowlisted literal
-// private address reaches the dialer (failing only because nothing listens),
-// while the same address without the allowlist is refused up front.
-func TestSSRFGuardedDialContextAllowlistedPrivateLiteral(t *testing.T) {
-	// 192.168.222.222 on an unusual port: nothing should be listening there in
-	// test environments, and the sandbox has no route, so a passing check
-	// surfaces as a connection error rather than the guard's rejection.
-	guarded := ssrfGuardedProviderTransport(mustParseCIDRs(t, "192.168.0.0/16"))
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	conn, err := guarded.DialContext(ctx, "tcp", "192.168.222.222:19999")
-	if err == nil {
-		conn.Close()
-		return // unexpectedly reachable: the allowlist clearly let the dial through
+// TestCheckProviderUpstreamLiteralDialAllowlist verifies the dial-time guard's
+// literal-IP decision without any network access: allowlisted private literals
+// pass, literals outside the allowlist and special-use addresses fail, and
+// public literals always pass.
+func TestCheckProviderUpstreamLiteralDialAllowlist(t *testing.T) {
+	allowed := mustParseCIDRs(t, "192.168.0.0/16")
+	if err := checkProviderUpstreamLiteralDial(net.ParseIP("192.168.1.10"), allowed); err != nil {
+		t.Fatalf("expected allowlisted literal to pass, got %v", err)
 	}
-	if strings.Contains(err.Error(), "disallowed") {
-		t.Fatalf("expected allowlisted literal to reach the dialer, got guard rejection: %v", err)
+	// The same address without the allowlist is refused.
+	if err := checkProviderUpstreamLiteralDial(net.ParseIP("192.168.1.10"), nil); !errors.Is(err, errProviderUpstreamDialDisallowed) {
+		t.Fatalf("expected non-allowlisted literal to be rejected, got %v", err)
+	}
+	for _, ip := range []string{
+		"10.0.0.5", // private but outside the configured ranges
+		"169.254.169.254",
+		"203.0.113.10",
+		"224.0.0.1",
+		"fec0::1",        // deprecated site-local, still routable on-site
+		"64:ff9b::a00:1", // NAT64 well-known prefix encoding 10.0.0.1
+	} {
+		if err := checkProviderUpstreamLiteralDial(net.ParseIP(ip), allowed); !errors.Is(err, errProviderUpstreamDialDisallowed) {
+			t.Fatalf("expected %s to be rejected as disallowed, got %v", ip, err)
+		}
+	}
+	// Public unicast literals pass regardless of the allowlist.
+	for _, ip := range []string{"8.8.8.8", "1.1.1.1"} {
+		if err := checkProviderUpstreamLiteralDial(net.ParseIP(ip), nil); err != nil {
+			t.Fatalf("expected public literal %s to pass, got %v", ip, err)
+		}
+	}
+	// Configuring a link-local range must not allowlist the metadata address:
+	// it is not RFC1918/ULA private, so the allowlist ignores it.
+	if err := checkProviderUpstreamLiteralDial(net.ParseIP("169.254.169.254"), mustParseCIDRs(t, "169.254.0.0/16")); !errors.Is(err, errProviderUpstreamDialDisallowed) {
+		t.Fatalf("expected metadata address to stay rejected even when configured, got %v", err)
+	}
+}
+
+// TestValidateProviderUpstreamBaseURLStrictModeRejectsLoopback pins the
+// redirect re-validation form: with the localhost exception disabled, every
+// loopback spelling must be rejected, so a validated public URL can never
+// redirect onto a service bound to the gateway host.
+func TestValidateProviderUpstreamBaseURLStrictModeRejectsLoopback(t *testing.T) {
+	for _, raw := range []string{
+		"http://localhost:11434/v1",
+		"http://127.0.0.1:11434/v1",
+		"http://[::1]:1234/v1",
+		// Allowlisted private literals are also refused in strict mode.
+		"http://192.168.1.10/v1",
+	} {
+		endpoint, err := url.Parse(raw)
+		if err != nil {
+			t.Fatalf("failed to parse test URL %q: %v", raw, err)
+		}
+		if err := validateProviderUpstreamBaseURL(endpoint, nil, false); err == nil {
+			t.Fatalf("expected %q to be rejected in strict (redirect) mode", raw)
+		}
+	}
+}
+
+// TestAdminCreateProviderRejectsSSRFBaseURL covers the persistence guard the
+// review called out: saving a provider whose base URL points at link-local
+// metadata or private space must fail at create time, not only when the
+// models endpoint is probed.
+func TestAdminCreateProviderRejectsSSRFBaseURL(t *testing.T) {
+	for _, baseURL := range []string{
+		"http://169.254.169.254/latest/meta-data",
+		"http://100.100.100.200/latest/meta-data",
+		"http://10.0.0.5/v1",
+		"http://192.168.1.10/v1",
+		"http://203.0.113.10/v1",
+	} {
+		store := NewMemoryStore()
+		if err := SeedDemoData(store); err != nil {
+			t.Fatal(err)
+		}
+		app := New(store).Handler()
+		resp := doJSON(t, app, http.MethodPost, "/api/admin/providers", map[string]any{
+			"name":     "SSRF attempt",
+			"type":     "local",
+			"base_url": baseURL,
+		}, "")
+		if resp.Code != http.StatusBadRequest {
+			t.Fatalf("expected base URL %q to be rejected with 400, got %d: %s", baseURL, resp.Code, resp.Body)
+		}
+		if !strings.Contains(resp.Body, "provider_base_url_not_allowed") {
+			t.Fatalf("expected provider_base_url_not_allowed for %q, got %s", baseURL, resp.Body)
+		}
+	}
+}
+
+// TestAdminPatchProviderRejectsSSRFBaseURL verifies the same guard on update:
+// an existing healthy provider must not be repointed at a metadata endpoint.
+func TestAdminPatchProviderRejectsSSRFBaseURL(t *testing.T) {
+	store := NewMemoryStore()
+	if err := SeedDemoData(store); err != nil {
+		t.Fatal(err)
+	}
+	app := New(store).Handler()
+
+	created := doJSON(t, app, http.MethodPost, "/api/admin/providers", map[string]any{
+		"name":     "Local vLLM",
+		"type":     "local",
+		"base_url": "http://localhost:8000/v1",
+	}, "")
+	if created.Code != http.StatusCreated {
+		t.Fatalf("expected provider created, got %d: %s", created.Code, created.Body)
+	}
+	var payload struct {
+		Provider Provider `json:"provider"`
+	}
+	if err := json.Unmarshal([]byte(created.Body), &payload); err != nil {
+		t.Fatal(err)
 	}
 
-	strict := ssrfGuardedProviderTransport(nil)
-	if _, err := strict.DialContext(ctx, "tcp", "192.168.222.222:19999"); err == nil || !strings.Contains(err.Error(), "disallowed") {
-		t.Fatalf("expected non-allowlisted literal to be rejected by the guard, got %v", err)
+	patched := doJSON(t, app, http.MethodPatch, "/api/admin/providers/"+payload.Provider.ID, map[string]any{
+		"base_url": "http://169.254.169.254/latest/meta-data",
+	}, "")
+	if patched.Code != http.StatusBadRequest {
+		t.Fatalf("expected SSRF patch to be rejected with 400, got %d: %s", patched.Code, patched.Body)
 	}
+	if !strings.Contains(patched.Body, "provider_base_url_not_allowed") {
+		t.Fatalf("expected provider_base_url_not_allowed, got %s", patched.Body)
+	}
+}
+
+// TestAdminCreateProviderAllowsAllowlistedPrivateLiteral covers the operator
+// workflow for in-house model servers: with the range configured, a literal
+// private IP saves successfully.
+func TestAdminCreateProviderAllowsAllowlistedPrivateLiteral(t *testing.T) {
+	t.Setenv("TOKENHUB_PROVIDER_UPSTREAM_ALLOWED_CIDRS", "192.168.0.0/16")
+	store := NewMemoryStore()
+	if err := SeedDemoData(store); err != nil {
+		t.Fatal(err)
+	}
+	app := New(store).Handler()
+	resp := doJSON(t, app, http.MethodPost, "/api/admin/providers", map[string]any{
+		"name":     "In-house vLLM",
+		"type":     "local",
+		"base_url": "http://192.168.1.10:8000/v1",
+	}, "")
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("expected allowlisted private literal to be created, got %d: %s", resp.Code, resp.Body)
+	}
+}
+
+// TestUpstreamClientsGuardInferenceDial verifies the streaming and
+// non-streaming inference clients dial through the SSRF guard: disallowed
+// literals fail before connecting, while the loopback exception still permits
+// local providers.
+func TestUpstreamClientsGuardInferenceDial(t *testing.T) {
+	client, streamClient, _ := newUpstreamClients(Config{})
+	for name, candidate := range map[string]*http.Client{"non-streaming": client, "streaming": streamClient} {
+		transport, ok := candidate.Transport.(*http.Transport)
+		if !ok || transport.DialContext == nil {
+			t.Fatalf("expected %s client to install a guarded DialContext", name)
+		}
+		if candidate.CheckRedirect == nil {
+			t.Fatalf("expected %s client to enforce the strict redirect policy", name)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		for _, addr := range []string{"169.254.169.254:80", "10.0.0.5:80", "203.0.113.10:443"} {
+			if _, err := transport.DialContext(ctx, "tcp", addr); err == nil || !strings.Contains(err.Error(), "disallowed") {
+				t.Fatalf("expected %s client dial to %s to be rejected by the guard, got %v", name, addr, err)
+			}
+		}
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("failed to start loopback listener: %v", err)
+		}
+		conn, err := transport.DialContext(ctx, "tcp", listener.Addr().String())
+		if err != nil {
+			_ = listener.Close()
+			t.Fatalf("expected %s client loopback dial to succeed, got %v", name, err)
+		}
+		conn.Close()
+		_ = listener.Close()
+	}
+}
+
+// TestProviderResourceBaseURLSSRFGuard covers the resource-level persistence
+// paths: routeSelection lets a resource BaseURL override the provider's
+// validated one, so create, update and import must all reject disallowed
+// URLs, while clearing the override (empty value) and allowlisted literals
+// keep working.
+func TestProviderResourceBaseURLSSRFGuard(t *testing.T) {
+	newStore := func(t *testing.T) (*GormStore, Provider) {
+		t.Helper()
+		store := NewMemoryStore()
+		provider := store.AddProvider(Provider{
+			ID:      "prv_ssrf_test",
+			Name:    "SSRF test provider",
+			Type:    ProviderOpenAICompatible,
+			BaseURL: "https://api.example.com/v1",
+			Status:  StatusActive,
+		})
+		return store, provider
+	}
+
+	t.Run("create rejects metadata and private URLs", func(t *testing.T) {
+		store, provider := newStore(t)
+		for _, baseURL := range []string{
+			"http://169.254.169.254/latest/meta-data",
+			"http://192.168.1.10/v1",
+			"http://203.0.113.10/v1",
+		} {
+			_, err := store.AddProviderResource(ProviderResource{
+				ProviderID: provider.ID,
+				Name:       "bad-" + baseURL,
+				BaseURL:    baseURL,
+			})
+			if err == nil {
+				t.Fatalf("expected resource with base URL %q to be rejected", baseURL)
+			}
+		}
+	})
+
+	t.Run("update rejects private URL and allows clearing", func(t *testing.T) {
+		store, provider := newStore(t)
+		resource, err := store.AddProviderResource(ProviderResource{
+			ProviderID: provider.ID,
+			Name:       "updatable",
+			BaseURL:    "http://localhost:9000/v1",
+		})
+		if err != nil {
+			t.Fatalf("expected localhost resource to be created, got %v", err)
+		}
+		if _, err := store.UpdateProviderResource(resource.ID, ProviderResource{BaseURL: "http://10.0.0.5/v1"}); err == nil {
+			t.Fatal("expected private base URL update to be rejected")
+		}
+		// Clearing the override (empty value) restores the provider URL and
+		// must stay allowed.
+		updated, err := store.UpdateProviderResource(resource.ID, ProviderResource{BaseURL: ""})
+		if err != nil {
+			t.Fatalf("expected clearing the base URL override to succeed, got %v", err)
+		}
+		if updated.BaseURL != "" {
+			t.Fatalf("expected override cleared, got %q", updated.BaseURL)
+		}
+	})
+
+	t.Run("import fails only the offending row", func(t *testing.T) {
+		store, provider := newStore(t)
+		result, err := store.ImportProviderResources([]ProviderResource{
+			{ProviderID: provider.ID, Name: "good", BaseURL: "http://localhost:9001/v1"},
+			{ProviderID: provider.ID, Name: "bad", BaseURL: "http://169.254.169.254/latest/meta-data"},
+		})
+		if err != nil {
+			t.Fatalf("expected import to complete with per-row results, got %v", err)
+		}
+		if result.Success != 1 || result.Failed != 1 {
+			t.Fatalf("expected 1 success and 1 row failure, got %d/%d", result.Success, result.Failed)
+		}
+	})
+
+	t.Run("allowlisted private literal is accepted", func(t *testing.T) {
+		t.Setenv("TOKENHUB_PROVIDER_UPSTREAM_ALLOWED_CIDRS", "192.168.0.0/16")
+		store, provider := newStore(t)
+		if _, err := store.AddProviderResource(ProviderResource{
+			ProviderID: provider.ID,
+			Name:       "in-house",
+			BaseURL:    "http://192.168.1.10:8000/v1",
+		}); err != nil {
+			t.Fatalf("expected allowlisted private literal to be accepted, got %v", err)
+		}
+	})
 }

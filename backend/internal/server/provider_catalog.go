@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -524,7 +525,7 @@ func CustomProviderCatalogFromUpstream(ctx context.Context, client *http.Client,
 	if err != nil || endpoint.Scheme == "" || endpoint.Host == "" {
 		return ProviderCatalogEntry{}, NewHTTPError(http.StatusBadRequest, "provider_base_url_invalid", "Base URL is invalid")
 	}
-	if err := validateProviderUpstreamBaseURL(endpoint, allowedProviderUpstreamCIDRs()); err != nil {
+	if err := validateProviderUpstreamBaseURL(endpoint, allowedProviderUpstreamCIDRs(), true); err != nil {
 		return ProviderCatalogEntry{}, err
 	}
 	client = ssrfGuardedProviderClient(client)
@@ -580,21 +581,24 @@ func CustomProviderCatalogFromUpstream(ctx context.Context, client *http.Client,
 // validateProviderUpstreamBaseURL guards against server-side request forgery
 // (SSRF) when the gateway calls an administrator-supplied custom provider base
 // URL. It requires an http(s) scheme, forbids credentials embedded in the URL,
-// and rejects hosts that resolve to loopback, private, or link-local addresses
-// (which include the cloud metadata endpoint 169.254.169.254).
+// and rejects hosts that resolve to loopback, private, link-local or other
+// special-use addresses (which include the cloud metadata endpoint
+// 169.254.169.254).
 //
-// Trade-off: loopback/localhost is explicitly allowed because the project
-// supports self-hosted local providers out of the box (see
-// normalizeProviderBaseURL, which defaults ollama/lmstudio to
-// http://127.0.0.1:...). Blocking loopback would break that documented
+// Trade-off: loopback/localhost is explicitly allowed when allowLocalhost is
+// set, because the project supports self-hosted local providers out of the box
+// (see normalizeProviderBaseURL, which defaults ollama/lmstudio to
+// http://127.0.0.1:...). Blocking loopback there would break that documented
 // development/self-host workflow. Operators that need to reach providers on a
 // private network list the trusted ranges in
 // TOKENHUB_PROVIDER_UPSTREAM_ALLOWED_CIDRS and use literal IPs from those
 // ranges; the allowlist only ever applies to literal IPs an administrator
 // typed, never to resolved hostnames (DNS rebinding) or redirect targets.
-// allowedPrivate is nil for redirect re-validation, so a public URL can never
-// redirect into a private target even inside an allowlisted range.
-func validateProviderUpstreamBaseURL(endpoint *url.URL, allowedPrivate []*net.IPNet) error {
+// Redirect re-validation passes nil for allowedPrivate and false for
+// allowLocalhost: a public URL must not be able to bounce requests into the
+// internal network or onto a loopback service, even when the operator
+// allowlists private ranges or runs a local provider.
+func validateProviderUpstreamBaseURL(endpoint *url.URL, allowedPrivate []*net.IPNet, allowLocalhost bool) error {
 	if endpoint == nil {
 		return NewHTTPError(http.StatusBadRequest, "provider_base_url_invalid", "Base URL is invalid")
 	}
@@ -610,7 +614,10 @@ func validateProviderUpstreamBaseURL(endpoint *url.URL, allowedPrivate []*net.IP
 		return NewHTTPError(http.StatusBadRequest, "provider_base_url_invalid", "Base URL is invalid")
 	}
 	if isLocalProviderHostname(host) {
-		return nil
+		if allowLocalhost {
+			return nil
+		}
+		return NewHTTPError(http.StatusBadRequest, "provider_base_url_not_allowed", "Base URL host must not be a loopback address")
 	}
 	if ip := net.ParseIP(host); ip != nil {
 		if isAllowlistedPrivateProviderUpstreamIP(ip, allowedPrivate) {
@@ -621,6 +628,33 @@ func validateProviderUpstreamBaseURL(endpoint *url.URL, allowedPrivate []*net.IP
 		}
 	}
 	return nil
+}
+
+// validateProviderUpstreamBaseURLString parses raw and applies
+// validateProviderUpstreamBaseURL. An empty URL passes: adapters fall back to
+// their built-in default endpoint when none is configured, and that default is
+// validated wherever it is actually used.
+func validateProviderUpstreamBaseURLString(raw string, allowedPrivate []*net.IPNet, allowLocalhost bool) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	endpoint, err := url.Parse(raw)
+	if err != nil || endpoint.Scheme == "" || endpoint.Host == "" {
+		return NewHTTPError(http.StatusBadRequest, "provider_base_url_invalid", "Base URL is invalid")
+	}
+	return validateProviderUpstreamBaseURL(endpoint, allowedPrivate, allowLocalhost)
+}
+
+// strictProviderUpstreamRedirect is the CheckRedirect policy shared by every
+// SSRF-guarded client: re-validate each hop with no private-range allowlist
+// and no localhost exception, so a validated URL can never redirect into the
+// internal network or onto a loopback service.
+func strictProviderUpstreamRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return fmt.Errorf("stopped after 10 redirects")
+	}
+	return validateProviderUpstreamBaseURL(req.URL, nil, false)
 }
 
 // allowedProviderUpstreamCIDRs parses TOKENHUB_PROVIDER_UPSTREAM_ALLOWED_CIDRS
@@ -673,9 +707,29 @@ func isLocalProviderHostname(host string) bool {
 // private/loopback/link-local predicates do not cover but that must never be
 // reached from a provider base URL: this-host (0.0.0.0/8), the shared/CGNAT
 // range (100.64.0.0/10, which hosts Alibaba Cloud's metadata endpoint
-// 100.100.100.200), and the reserved range (240.0.0.0/4).
+// 100.100.100.200), the IPv4/IPv6 documentation ranges (192.0.2.0/24,
+// 198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32), the benchmarking range
+// (198.18.0.0/15), the reserved range (240.0.0.0/4, which includes the
+// limited-broadcast address), the deprecated IPv6 site-local range
+// (fec0::/10, still routable inside sites that kept it), and the NAT64
+// translation prefixes (64:ff9b::/96 and the local-use 64:ff9b:1::/48),
+// which can encode RFC1918 targets that the IPv4 checks would otherwise
+// catch. IPv4-mapped IPv6 spellings need no entry: To4-based predicates
+// already classify ::ffff:10.x as private.
 var disallowedProviderUpstreamCIDRs = func() []*net.IPNet {
-	cidrs := []string{"0.0.0.0/8", "100.64.0.0/10", "240.0.0.0/4"}
+	cidrs := []string{
+		"0.0.0.0/8",
+		"100.64.0.0/10",
+		"192.0.2.0/24",
+		"198.18.0.0/15",
+		"198.51.100.0/24",
+		"203.0.113.0/24",
+		"240.0.0.0/4",
+		"2001:db8::/32",
+		"fec0::/10",
+		"64:ff9b::/96",
+		"64:ff9b:1::/48",
+	}
 	blocks := make([]*net.IPNet, 0, len(cidrs))
 	for _, cidr := range cidrs {
 		if _, block, err := net.ParseCIDR(cidr); err == nil {
@@ -688,11 +742,11 @@ var disallowedProviderUpstreamCIDRs = func() []*net.IPNet {
 // isDisallowedProviderUpstreamIP reports whether the literal IP targets an
 // address that must not be reached from a provider base URL: loopback,
 // RFC1918/ULA private ranges, link-local (including the cloud metadata address
-// 169.254.169.254), the unspecified address (0.0.0.0 / ::, which routes to the
-// local host), or a special-use range in disallowedProviderUpstreamCIDRs.
-// Loopback literals are normally filtered earlier by isLocalProviderHostname,
-// so the loopback check here only catches the forms that helper does not
-// special-case.
+// 169.254.169.254), multicast, the unspecified address (0.0.0.0 / ::, which
+// routes to the local host), or a special-use range in
+// disallowedProviderUpstreamCIDRs. Loopback literals are normally filtered
+// earlier by isLocalProviderHostname, so the loopback check here only catches
+// the forms that helper does not special-case.
 //
 // Note: this only inspects the literal host. Hostnames that merely resolve to a
 // disallowed address (DNS rebinding) and non-standard numeric forms that
@@ -700,7 +754,7 @@ var disallowedProviderUpstreamCIDRs = func() []*net.IPNet {
 // literal check; the dial-time guard in ssrfGuardedProviderTransport closes the
 // resolution gap.
 func isDisallowedProviderUpstreamIP(ip net.IP) bool {
-	if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+	if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
 		return true
 	}
 	for _, block := range disallowedProviderUpstreamCIDRs {
@@ -709,6 +763,25 @@ func isDisallowedProviderUpstreamIP(ip net.IP) bool {
 		}
 	}
 	return false
+}
+
+// errProviderUpstreamDialDisallowed is returned by the dial guard when a
+// literal or resolved address must not be connected to.
+var errProviderUpstreamDialDisallowed = errors.New("provider base URL resolved to a disallowed address")
+
+// checkProviderUpstreamLiteralDial decides whether a literal-IP host may be
+// dialed: operator-allowlisted private ranges pass, disallowed special-use
+// addresses fail, and anything else (public unicast) passes. Loopback
+// identifiers are handled by isLocalProviderHostname before this runs, and
+// hostname resolution results are filtered separately after LookupIPAddr.
+func checkProviderUpstreamLiteralDial(ip net.IP, allowedPrivate []*net.IPNet) error {
+	if isAllowlistedPrivateProviderUpstreamIP(ip, allowedPrivate) {
+		return nil
+	}
+	if isDisallowedProviderUpstreamIP(ip) {
+		return errProviderUpstreamDialDisallowed
+	}
+	return nil
 }
 
 // ssrfGuardedProviderClient returns an http.Client whose requests are guarded
@@ -736,15 +809,9 @@ func isDisallowedProviderUpstreamIP(ip net.IP) bool {
 // on every redirect target so a hop to a private or non-http(s) URL is refused.
 func ssrfGuardedProviderClient(client *http.Client) *http.Client {
 	guard := &http.Client{
-		// Re-validate every redirect target before following it.
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return fmt.Errorf("stopped after 10 redirects")
-			}
-			// Redirect targets never get the private-range allowlist: a public
-			// URL must not be able to bounce requests into the internal network.
-			return validateProviderUpstreamBaseURL(req.URL, nil)
-		},
+		// Re-validate every redirect target before following it, with no
+		// allowlist and no localhost exception.
+		CheckRedirect: strictProviderUpstreamRedirect,
 	}
 	if client == nil || client == http.DefaultClient {
 		guard.Transport = ssrfGuardedProviderTransport(allowedProviderUpstreamCIDRs())
@@ -798,15 +865,18 @@ func ssrfGuardedProviderTransport(allowedPrivate []*net.IPNet) *http.Transport {
 			return dialer.DialContext(ctx, network, addr)
 		}
 		if ip := net.ParseIP(host); ip != nil {
-			if isAllowlistedPrivateProviderUpstreamIP(ip, allowedPrivate) {
-				return dialer.DialContext(ctx, network, addr)
-			}
-			if isDisallowedProviderUpstreamIP(ip) {
-				return nil, fmt.Errorf("provider base URL resolved to a disallowed address")
+			if err := checkProviderUpstreamLiteralDial(ip, allowedPrivate); err != nil {
+				return nil, err
 			}
 			return dialer.DialContext(ctx, network, addr)
 		}
-		ips, err := resolver.LookupIPAddr(ctx, host)
+		// Resolution and the whole fallback sequence share one budget, created
+		// before the lookup: a stalled resolver must not hold a streaming
+		// request (which carries no total deadline, and ResponseHeaderTimeout
+		// starts only after dialing) hostage.
+		dialCtx, cancel := context.WithTimeout(ctx, dialer.Timeout)
+		defer cancel()
+		ips, err := resolver.LookupIPAddr(dialCtx, host)
 		if err != nil {
 			return nil, err
 		}
@@ -820,10 +890,19 @@ func ssrfGuardedProviderTransport(allowedPrivate []*net.IPNet) *http.Transport {
 			return nil, fmt.Errorf("provider base URL host %q resolves only to disallowed addresses", host)
 		}
 		// Dial each validated address directly, falling back to the next one, so
-		// the connected address is always one that passed the check.
+		// the connected address is always one that passed the check. Every
+		// candidate gets an even slice of the remaining budget: one silently
+		// black-holing address must not starve the healthy candidates behind
+		// it (the default transport's Happy Eyeballs behavior this replaces).
+		budget := dialer.Timeout / time.Duration(len(allowed))
+		if budget < time.Second {
+			budget = time.Second
+		}
 		var lastErr error
 		for _, candidate := range allowed {
-			conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(candidate.IP.String(), port))
+			candidateCtx, candidateCancel := context.WithTimeout(dialCtx, budget)
+			conn, dialErr := dialer.DialContext(candidateCtx, network, net.JoinHostPort(candidate.IP.String(), port))
+			candidateCancel()
 			if dialErr == nil {
 				return conn, nil
 			}
