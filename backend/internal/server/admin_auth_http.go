@@ -17,10 +17,6 @@ import (
 )
 
 func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	var req struct {
 		Identity string `json:"identity"`
 		Password string `json:"password"`
@@ -46,10 +42,6 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAdminResetPassword(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	var req struct {
 		Token    string `json:"token"`
 		Password string `json:"password"`
@@ -75,10 +67,6 @@ func (s *Server) handleAdminResetPassword(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	token := bearerToken(r)
 	if token != "" && token != strings.TrimSpace(s.config.AdminToken) {
 		s.store.RevokeAdminSession(token)
@@ -125,10 +113,6 @@ type oauthTokenResponse struct {
 }
 
 func (s *Server) handleAdminAuthIdentityProviders(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	providers := []adminAuthIdentityProvider{}
 	for _, item := range s.activeOAuthIdentityProviders() {
 		providers = append(providers, adminAuthIdentityProvider{
@@ -144,10 +128,6 @@ func (s *Server) handleAdminAuthIdentityProviders(w http.ResponseWriter, r *http
 }
 
 func (s *Server) handleAdminOAuthStart(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	provider, ok := s.findActiveOAuthIdentityProvider(r.URL.Query().Get("id"))
 	if !ok {
 		writeError(w, r, NewHTTPError(404, "identity_provider_not_found", "Identity provider not found"))
@@ -185,10 +165,6 @@ func (s *Server) handleAdminOAuthStart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAdminOAuthCallback(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	state, err := s.verifyOAuthState(r.URL.Query().Get("state"))
 	if err != nil {
 		writeError(w, r, NewHTTPError(400, "invalid_oauth_state", "OAuth state is invalid or expired"))
