@@ -417,7 +417,7 @@ function newPolicyDraft(): GuardrailPolicyDraft {
 function newDetectionItem(type: GuardrailDetectorType): GuardrailDetectionItem {
   if (type === "pattern") return { name: tx("自定义文本规则"), detector_type: type, action: "block", config: { keywords: [], regex: [], case_sensitive: false } };
   if (type === "model") return { name: tx("模型内容分类"), detector_type: type, action: "audit", config: { block_on: "unsafe", on_unavailable: "allow_and_audit" } };
-  return { name: tx("敏感数据"), detector_type: type, action: "block", config: { data_types: ["credential"] } };
+  return { name: tx("敏感信息识别"), detector_type: type, action: "block", config: { data_types: ["credential"] } };
 }
 
 function editPolicyDraft(policy: GuardrailPolicy): GuardrailPolicyDraft {
