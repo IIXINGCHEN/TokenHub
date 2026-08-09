@@ -42,9 +42,8 @@ test("switching an earlier candidate removes descendants", () => {
 
 test("playground image support honors explicit model metadata", () => {
   assert.equal(modelSupportsPlaygroundImages({ input_modalities: ["text", "image"] }), true);
-  assert.equal(modelSupportsPlaygroundImages({ capabilities: ["chat", "vision"] }), true);
-  assert.equal(modelSupportsPlaygroundImages({ supported_parameters: ["image_input"] }), true);
-  assert.equal(modelSupportsPlaygroundImages({ input_modalities: ["text"], capabilities: ["chat"] }), false);
+  assert.equal(modelSupportsPlaygroundImages({ input_modalities: ["text"] }), false);
+  assert.equal(modelSupportsPlaygroundImages({}), false);
 });
 
 test("playground messages preserve the text-only wire shape", () => {

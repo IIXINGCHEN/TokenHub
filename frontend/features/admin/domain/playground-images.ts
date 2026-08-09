@@ -18,11 +18,8 @@ export type PlaygroundRequestContent = string | Array<
   | { type: "image_url"; image_url: { url: string } }
 >;
 
-export function modelSupportsPlaygroundImages(model?: Pick<Model, "input_modalities" | "capabilities" | "supported_parameters">) {
-  if (!model) return false;
-  return model.input_modalities?.includes("image") === true
-    || model.capabilities?.includes("vision") === true
-    || model.supported_parameters?.includes("image_input") === true;
+export function modelSupportsPlaygroundImages(model?: Pick<Model, "input_modalities">) {
+  return model?.input_modalities?.includes("image") === true;
 }
 
 export function playgroundMessageContent(text: string, images: PlaygroundImageAttachment[]): PlaygroundRequestContent {

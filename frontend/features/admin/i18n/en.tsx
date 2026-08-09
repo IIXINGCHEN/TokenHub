@@ -1127,6 +1127,8 @@ export const enTranslations: Record<string, string> = {
     "系统提示词": "System Prompt",
     "支持参数": "Supported Parameters",
     "输入模态": "Input Modalities",
+    "文本": "Text",
+    "选择模型实际支持的输入类型。": "Select the input types the model actually supports.",
     "输出模态": "Output Modalities",
     "计费输入": "Input Price",
     "计费输出": "Output Price",
