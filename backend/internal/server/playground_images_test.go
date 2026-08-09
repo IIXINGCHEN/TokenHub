@@ -49,9 +49,13 @@ func TestValidatePlaygroundImagesEnforcesTypeCountAndEncoding(t *testing.T) {
 }
 
 func TestPlaygroundAuditRequestRedactsImageData(t *testing.T) {
+	dataURI := " \tdata:image/png;base64,YWJj\n"
 	req := ChatCompletionRequest{Model: "qwen3-vl", Messages: []ChatMessage{{
-		Role: "user", Content: []any{playgroundImagePart("data:image/png;base64,YWJj")},
+		Role: "user", Content: []any{playgroundImagePart(dataURI)},
 	}}}
+	if err := validatePlaygroundImages(req.Messages); err != nil {
+		t.Fatalf("expected normalized data URI to pass validation, got %v", err)
+	}
 	raw, err := json.Marshal(playgroundAuditRequest(req))
 	if err != nil {
 		t.Fatal(err)

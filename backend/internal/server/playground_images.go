@@ -37,11 +37,11 @@ func validatePlaygroundImages(messages []ChatMessage) error {
 			if imageCount > maxPlaygroundImagesPerMessage {
 				return NewHTTPError(http.StatusBadRequest, "too_many_images", "each playground message supports at most 4 images")
 			}
-			imageURL := playgroundImageURL(part["image_url"])
+			imageURL, isDataURI := normalizePlaygroundImageURL(part["image_url"])
 			if imageURL == "" {
 				return NewHTTPError(http.StatusBadRequest, "invalid_image", "image_url content requires a URL")
 			}
-			if !strings.HasPrefix(imageURL, "data:") {
+			if !isDataURI {
 				continue
 			}
 			mediaType, encoded, err := parseDataURI(imageURL)
@@ -67,15 +67,16 @@ func validatePlaygroundImages(messages []ChatMessage) error {
 	return nil
 }
 
-func playgroundImageURL(value any) string {
+func normalizePlaygroundImageURL(value any) (string, bool) {
+	var imageURL string
 	switch typed := value.(type) {
 	case string:
-		return strings.TrimSpace(typed)
+		imageURL = typed
 	case map[string]any:
-		return strings.TrimSpace(stringFromPayload(typed, "url"))
-	default:
-		return ""
+		imageURL = stringFromPayload(typed, "url")
 	}
+	imageURL = strings.TrimSpace(imageURL)
+	return imageURL, strings.HasPrefix(imageURL, "data:")
 }
 
 func playgroundAuditRequest(req ChatCompletionRequest) any {
@@ -94,14 +95,15 @@ func redactPlaygroundImages(value any) any {
 	switch typed := value.(type) {
 	case map[string]any:
 		if stringFromPayload(typed, "type") == "image_url" {
+			normalizedURL, isDataURI := normalizePlaygroundImageURL(typed["image_url"])
 			switch imageURL := typed["image_url"].(type) {
 			case map[string]any:
-				if rawURL := stringFromPayload(imageURL, "url"); strings.HasPrefix(rawURL, "data:") {
-					imageURL["url"] = playgroundImageAuditMarker(rawURL)
+				if isDataURI {
+					imageURL["url"] = playgroundImageAuditMarker(normalizedURL)
 				}
 			case string:
-				if strings.HasPrefix(imageURL, "data:") {
-					typed["image_url"] = playgroundImageAuditMarker(imageURL)
+				if isDataURI {
+					typed["image_url"] = playgroundImageAuditMarker(normalizedURL)
 				}
 			}
 		}

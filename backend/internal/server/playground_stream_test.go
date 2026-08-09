@@ -269,7 +269,7 @@ func TestAdminPlaygroundStreamForwardsMultimodalContent(t *testing.T) {
 		t.Fatalf("multimodal content was not forwarded: %#v", adapter.request.Messages[0].Content)
 	}
 	image, _ := parts[1].(map[string]any)
-	if got := playgroundImageURL(image["image_url"]); got != dataURI {
+	if got, _ := normalizePlaygroundImageURL(image["image_url"]); got != dataURI {
 		t.Fatalf("image URL = %q, want %q", got, dataURI)
 	}
 }
