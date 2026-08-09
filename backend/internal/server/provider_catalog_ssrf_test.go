@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -33,6 +34,9 @@ func TestValidateProviderUpstreamBaseURLAllowsPublicHTTPS(t *testing.T) {
 		// A globally routable literal (Google Public DNS): special-purpose
 		// literals such as 203.0.113.x are rejected instead, see below.
 		"https://8.8.8.8/v1",
+		// DNS64-synthesized form of the same public address (RFC 6052
+		// well-known prefix): reachable on IPv6-only networks.
+		"https://[64:ff9b::808:808]/v1",
 	} {
 		if err := validateBaseURL(t, raw); err != nil {
 			t.Fatalf("expected %q to be allowed, got %v", raw, err)
@@ -69,10 +73,12 @@ func TestValidateProviderUpstreamBaseURLRejectsMetadataAndPrivate(t *testing.T) 
 		"http://[ff02::1]/v1":     "provider_base_url_not_allowed",
 		"http://255.255.255.255/": "provider_base_url_not_allowed",
 		// Deprecated IPv6 site-local space is still routable inside sites, and
-		// NAT64 translation prefixes can encode RFC1918 targets.
-		"http://[fec0::1]/v1":          "provider_base_url_not_allowed",
-		"http://[64:ff9b::a00:1]/v1":   "provider_base_url_not_allowed",
-		"http://[64:ff9b:1::a00:1]/v1": "provider_base_url_not_allowed",
+		// NAT64 prefixes synthesizing private/metadata IPv4 targets stay
+		// rejected (the embedded address drives the classification).
+		"http://[fec0::1]/v1":            "provider_base_url_not_allowed",
+		"http://[64:ff9b::a00:1]/v1":     "provider_base_url_not_allowed",
+		"http://[64:ff9b::a9fe:a9fe]/v1": "provider_base_url_not_allowed",
+		"http://[64:ff9b:1::a00:1]/v1":   "provider_base_url_not_allowed",
 		// IPv4-mapped IPv6 spellings of private addresses are classified as
 		// private through To4, no special range needed.
 		"http://[::ffff:10.0.0.5]/v1":      "provider_base_url_not_allowed",
@@ -419,8 +425,9 @@ func TestCheckProviderUpstreamLiteralDialAllowlist(t *testing.T) {
 			t.Fatalf("expected %s to be rejected as disallowed, got %v", ip, err)
 		}
 	}
-	// Public unicast literals pass regardless of the allowlist.
-	for _, ip := range []string{"8.8.8.8", "1.1.1.1"} {
+	// Public unicast literals pass regardless of the allowlist, including the
+	// DNS64-synthesized form of a public address.
+	for _, ip := range []string{"8.8.8.8", "1.1.1.1", "64:ff9b::808:808"} {
 		if err := checkProviderUpstreamLiteralDial(net.ParseIP(ip), nil); err != nil {
 			t.Fatalf("expected public literal %s to pass, got %v", ip, err)
 		}
@@ -661,4 +668,168 @@ func TestProviderResourceBaseURLSSRFGuard(t *testing.T) {
 			t.Fatalf("expected allowlisted private literal to be accepted, got %v", err)
 		}
 	})
+}
+
+// TestDialGuardedUpstreamFallbackAfterSlowLookup is the regression test for
+// the staggered Happy Eyeballs race: a slow lookup runs first and the first
+// resolved address black-holes, yet the healthy second candidate must win in
+// about one fallback delay — not after a sequential share of the budget
+// (which would burn several seconds, breaking the 15s test-connection
+// context), and not after the whole deadline (a fixed up-front slice).
+func TestDialGuardedUpstreamFallbackAfterSlowLookup(t *testing.T) {
+	budget := 10 * time.Second
+	lookup := func(ctx context.Context, host string) ([]net.IPAddr, error) {
+		select {
+		case <-time.After(500 * time.Millisecond): // slow resolver
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return []net.IPAddr{{IP: net.ParseIP("1.1.1.1")}, {IP: net.ParseIP("8.8.8.8")}}, nil
+	}
+	var mu sync.Mutex
+	var dialed []string
+	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		mu.Lock()
+		dialed = append(dialed, addr)
+		mu.Unlock()
+		if strings.HasPrefix(addr, "1.1.1.1:") {
+			<-ctx.Done() // black hole: only the race winner cancels it
+			return nil, ctx.Err()
+		}
+		server, client := net.Pipe()
+		go func() {
+			defer server.Close()
+			_, _ = server.Write([]byte{})
+		}()
+		return client, nil
+	}
+
+	started := time.Now()
+	conn, err := dialGuardedUpstream(context.Background(), "tcp", "provider.example:443", nil, budget, lookup, dial)
+	if err != nil {
+		t.Fatalf("expected fallback to reach the healthy candidate, got %v (dialed: %v)", err, dialed)
+	}
+	conn.Close()
+	if elapsed := time.Since(started); elapsed > 4*time.Second {
+		t.Fatalf("expected staggered fallback in about one fallback delay, took %v", elapsed)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(dialed) != 2 {
+		t.Fatalf("expected both validated candidates to be dialed, got %v", dialed)
+	}
+	seen := map[string]bool{dialed[0]: true, dialed[1]: true}
+	if !seen["1.1.1.1:443"] || !seen["8.8.8.8:443"] {
+		t.Fatalf("expected the two validated addresses to be dialed, got %v", dialed)
+	}
+}
+
+// TestRaceValidatedUpstreamCandidatesClosesLosingConnections verifies the
+// leak guard: when a slower candidate also connects after the race was
+// decided, its connection is closed by the losing goroutine instead of
+// being stranded in the results channel.
+func TestRaceValidatedUpstreamCandidatesClosesLosingConnections(t *testing.T) {
+	var mu sync.Mutex
+	var loser net.Conn
+	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		server, client := net.Pipe()
+		go func() {
+			defer server.Close()
+			buf := make([]byte, 1)
+			_, _ = server.Read(buf) // keep the pipe until the peer closes
+		}()
+		if strings.HasPrefix(addr, "1.1.1.1:") {
+			// Connect just after the fallback delay, so the second candidate
+			// has already started and wins the race first. The wait ignores
+			// ctx on purpose: it simulates a dial that reports success even
+			// though the race was already decided and raceCtx cancelled,
+			// which is exactly the case the leak guard exists for.
+			time.Sleep(upstreamDialFallbackDelay + 150*time.Millisecond)
+			mu.Lock()
+			loser = client
+			mu.Unlock()
+		}
+		return client, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := raceValidatedUpstreamCandidates(ctx, "tcp", "443", []net.IPAddr{{IP: net.ParseIP("1.1.1.1")}, {IP: net.ParseIP("8.8.8.8")}}, dial)
+	if err != nil {
+		t.Fatalf("expected the race to produce a winner, got %v", err)
+	}
+	conn.Close()
+
+	// Wait for the slower attempt to finish connecting, then check its fate.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		mu.Lock()
+		late := loser
+		mu.Unlock()
+		if late != nil {
+			if _, writeErr := late.Write([]byte{0}); writeErr == nil {
+				t.Fatal("expected the losing connection to be closed, but it still accepts writes")
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the slower candidate never completed")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestRaceValidatedUpstreamCandidatesDrainsAfterCancellation covers the
+// cancellation boundary: the caller gives up while a dial is still in
+// flight, and the dialer then reports success anyway. The drainer must
+// collect that late outcome and close the connection instead of stranding
+// it in the buffered results channel.
+func TestRaceValidatedUpstreamCandidatesDrainsAfterCancellation(t *testing.T) {
+	var mu sync.Mutex
+	var late net.Conn
+	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		server, client := net.Pipe()
+		go func() {
+			defer server.Close()
+			buf := make([]byte, 1)
+			_, _ = server.Read(buf) // keep the pipe until the peer closes
+		}()
+		// Ignore ctx on purpose: this simulates a dialer that connects just
+		// after the race was abandoned, the exact leak window.
+		time.Sleep(200 * time.Millisecond)
+		mu.Lock()
+		late = client
+		mu.Unlock()
+		return client, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	if _, err := raceValidatedUpstreamCandidates(ctx, "tcp", "443", []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}, dial); err == nil {
+		t.Fatal("expected the cancelled race to fail")
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		mu.Lock()
+		conn := late
+		mu.Unlock()
+		if conn != nil {
+			// Give the drainer a moment to collect the late outcome, then
+			// probe exactly once: net.Pipe is synchronous, so a successful
+			// write proves the connection is still open.
+			time.Sleep(300 * time.Millisecond)
+			if _, writeErr := conn.Write([]byte{0}); writeErr == nil {
+				t.Fatal("expected the late connection to be closed by the drainer, but it still accepts writes")
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the in-flight dial never completed")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
