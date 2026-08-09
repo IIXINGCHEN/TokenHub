@@ -14,6 +14,7 @@ const {
   playgroundAttachmentBytes,
   playgroundImagesForExport,
   playgroundMessageContent,
+  validatePlaygroundImageSelection,
 } = await importTypeScript(new URL("./playground-images.ts", import.meta.url));
 
 test("playground max tokens honor model limits", () => {
@@ -64,4 +65,13 @@ test("playground exports omit image payloads", () => {
   assert.deepEqual(playgroundImagesForExport(images), [{
     id: "image-1", name: "campus.png", media_type: "image/png", size_bytes: 3, content: "[image data omitted]",
   }]);
+});
+
+test("playground image limits are revalidated against current attachments", () => {
+  const image = (id, sizeBytes = 1, mediaType = "image/png") => ({ id, name: `${id}.png`, mediaType, sizeBytes, dataURL: "data:" });
+  assert.equal(validatePlaygroundImageSelection([], 0, [image("one")]), undefined);
+  assert.equal(validatePlaygroundImageSelection([image("one"), image("two"), image("three"), image("four")], 0, [image("five")]), "too_many_images");
+  assert.equal(validatePlaygroundImageSelection([], 0, [image("gif", 1, "image/gif")]), "unsupported_type");
+  assert.equal(validatePlaygroundImageSelection([], 0, [image("large", 5 * 1024 * 1024 + 1)]), "image_too_large");
+  assert.equal(validatePlaygroundImageSelection([], 12 * 1024 * 1024, [image("overflow")]), "conversation_too_large");
 });

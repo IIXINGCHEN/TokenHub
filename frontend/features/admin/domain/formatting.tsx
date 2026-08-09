@@ -401,16 +401,18 @@ export function modelToForm(item: Model) {
   };
 }
 
-export function formatBytes(value: number) {
-  if (!value) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  let size = value;
+const byteUnits = ["B", "KB", "MB", "GB"] as const;
+
+export function formatBytes(value: number, locale = languageLocale()) {
+  let size = Number.isFinite(value) && value > 0 ? value : 0;
   let index = 0;
-  while (size >= 1024 && index < units.length - 1) {
+  while (size >= 1024 && index < byteUnits.length - 1) {
     size /= 1024;
     index += 1;
   }
-  return `${size.toFixed(index === 0 ? 0 : 2)} ${units[index]}`;
+  const fractionDigits = index === 0 ? 0 : 2;
+  const formatter = new Intl.NumberFormat(locale, { minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits });
+  return `${formatter.format(size)} ${byteUnits[index]}`;
 }
 
 export function routeStrategyLabel(value?: string) {
