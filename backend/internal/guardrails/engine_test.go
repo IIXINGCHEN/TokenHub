@@ -214,6 +214,32 @@ func TestEngineDoesNotLimitInputWithoutApplicablePolicies(t *testing.T) {
 	}
 }
 
+func TestMaskedFragmentsMergesOverlappingFindings(t *testing.T) {
+	fragments := []Fragment{{ID: "input", Text: "0123456789", Mutable: true}}
+	findings := []Finding{
+		{Action: ActionMask, FragmentID: "input", Start: 0, End: 5},
+		{Action: ActionMask, FragmentID: "input", Start: 3, End: 10},
+	}
+
+	masked := maskedFragments(fragments, findings)
+	if got := masked["input"]; got != "[REDACTED]" {
+		t.Fatalf("expected overlapping findings to be fully masked, got %q", got)
+	}
+}
+
+func TestMaskedFragmentsPrefersLongestFindingAtSameStart(t *testing.T) {
+	fragments := []Fragment{{ID: "input", Text: "0123456789", Mutable: true}}
+	findings := []Finding{
+		{Action: ActionMask, FragmentID: "input", Start: 0, End: 5},
+		{Action: ActionMask, FragmentID: "input", Start: 0, End: 10},
+	}
+
+	masked := maskedFragments(fragments, findings)
+	if got := masked["input"]; got != "[REDACTED]" {
+		t.Fatalf("expected the longest same-start finding to be fully masked, got %q", got)
+	}
+}
+
 func mustNormalizePolicy(t *testing.T, policy Policy) Policy {
 	t.Helper()
 	normalized, err := NormalizePolicy(policy)

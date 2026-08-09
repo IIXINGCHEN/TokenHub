@@ -455,13 +455,28 @@ func maskedFragments(fragments []Fragment, findings []Finding) map[string]string
 			continue
 		}
 		spans := byFragment[fragment.ID]
-		sort.Slice(spans, func(i int, j int) bool { return spans[i].Start < spans[j].Start })
-		var builder strings.Builder
-		cursor := 0
+		sort.Slice(spans, func(i int, j int) bool {
+			if spans[i].Start != spans[j].Start {
+				return spans[i].Start < spans[j].Start
+			}
+			return spans[i].End > spans[j].End
+		})
+		merged := make([]Finding, 0, len(spans))
 		for _, span := range spans {
-			if span.Start < cursor || span.Start < 0 || span.End > len(fragment.Text) {
+			if span.Start < 0 || span.End > len(fragment.Text) || span.End <= span.Start {
 				continue
 			}
+			if len(merged) == 0 || span.Start > merged[len(merged)-1].End {
+				merged = append(merged, span)
+				continue
+			}
+			if span.End > merged[len(merged)-1].End {
+				merged[len(merged)-1].End = span.End
+			}
+		}
+		var builder strings.Builder
+		cursor := 0
+		for _, span := range merged {
 			builder.WriteString(fragment.Text[cursor:span.Start])
 			builder.WriteString("[REDACTED]")
 			cursor = span.End
