@@ -12,11 +12,8 @@ import (
 
 const (
 	ActionAllow = "allow"
-
-	maxEvaluationBytes = 64 * 1024
 )
 
-var ErrInputTooLarge = errors.New("guardrail input exceeds the evaluation limit")
 var ErrModelUnavailable = errors.New("guardrail model detector is unavailable")
 
 type Fragment struct {
@@ -84,9 +81,6 @@ func (e *Engine) Evaluate(ctx context.Context, request EvaluationRequest) (decis
 	}
 	if request.Protocol == "" {
 		request.Protocol = ProtocolAll
-	}
-	if evaluationSize(request.Fragments) > maxEvaluationBytes {
-		return decision, ErrInputTooLarge
 	}
 	policies := applicablePolicies(request)
 	if len(policies) == 0 {
@@ -485,14 +479,6 @@ func maskedFragments(fragments []Fragment, findings []Finding) map[string]string
 		result[fragment.ID] = builder.String()
 	}
 	return result
-}
-
-func evaluationSize(fragments []Fragment) int {
-	total := 0
-	for _, fragment := range fragments {
-		total += len(fragment.Text)
-	}
-	return total
 }
 
 func stringSliceConfig(config map[string]any, key string) []string {

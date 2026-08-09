@@ -42,7 +42,7 @@ Playground の利用を許可されたすべてのユーザーは、性能、利
 
 機密データ検出は、ラベル付きまたは構造検証済みの中国身分証番号、中国本土の携帯電話番号、メールアドレス、銀行カード番号、Credential と秘密鍵、氏名、住所、生年月日などを対象とします。日付の妥当性、身分証のチェックサム、Luhn 検証などにより、一般的な数値の誤検知を抑えます。広く有効化する前に、**ポリシーをテスト**で代表的な陽性例と陰性例を確認してください。
 
-現在のリクエスト側検査は `/v1/chat/completions`、`/v1/responses`、`/v1/messages` を対象とし、Model Playground からのリクエストも含みます。TokenHub は Provider へルーティングする前に、通常のユーザー表示テキストを検査します。このバージョンでは、構造化された tool 引数、JSON payload 内の値、コード固有の解析、Provider レスポンスは検査しません。検査対象テキストが 64 KiB を超える場合、HTTP 413 と `guardrail_input_too_large` を返します。
+現在のリクエスト側検査は `/v1/chat/completions`、`/v1/responses`、`/v1/messages` を対象とし、Model Playground からのリクエストも含みます。TokenHub は Provider へルーティングする前に、通常のユーザー表示テキストを検査します。このバージョンでは、構造化された tool 引数、JSON payload 内の値、コード固有の解析、Provider レスポンスは検査しません。セキュリティ検査自体には独立したテキストサイズ上限を設けず、設定済みのリクエスト本文サイズ上限は引き続き適用されます。
 
 ポリシーがリクエストをブロックすると、互換 API は HTTP 403 と `guardrail_blocked` を返します。エラー詳細には `categories`、`reason_codes`、`policy_matches` が含まれ、各ポリシー一致からポリシー、検出項目、検出器タイプ、カテゴリ、理由コードを確認できます。監査記録との対応付けにはレスポンスの `request_id` を使用します。一致した原文はエラー詳細に含まれません。Model Playground にも同じポリシーと理由が表示されるため、「Request blocked by a content security policy」だけでなく、再現可能な情報を管理者へ報告できます。
 

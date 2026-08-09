@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -55,9 +54,6 @@ func (s *Server) evaluateOutboundGuardrails(ctx context.Context, projectID strin
 		Policies:   policies,
 	})
 	if err != nil {
-		if errors.Is(err, guardrails.ErrInputTooLarge) {
-			return decision, NewHTTPError(http.StatusRequestEntityTooLarge, "guardrail_input_too_large", "Content security input exceeds the 64 KiB inspection limit")
-		}
 		return decision, NewHTTPError(http.StatusInternalServerError, "guardrail_evaluation_failed", "Content security evaluation failed")
 	}
 	for _, target := range targets {

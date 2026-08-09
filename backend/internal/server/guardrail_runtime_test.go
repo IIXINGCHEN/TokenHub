@@ -263,51 +263,6 @@ func TestAdminPlaygroundRequiresGuardrailProjectContext(t *testing.T) {
 	}
 }
 
-func TestGuardrailsRejectOversizedInputWithoutPolicies(t *testing.T) {
-	store := NewMemoryStore()
-	if err := SeedDemoData(store); err != nil {
-		t.Fatal(err)
-	}
-	app := New(store).Handler()
-	oversized := strings.Repeat("x", 64*1024+1)
-	tests := []struct {
-		name    string
-		request func() *httptest.ResponseRecorder
-	}{
-		{name: "chat completions", request: func() *httptest.ResponseRecorder {
-			return doGuardrailProtocolRequest(t, app, "/v1/chat/completions", map[string]any{
-				"model": "gpt-4.1-mini", "messages": []any{map[string]any{"role": "user", "content": oversized}},
-			}, "thk_demo_local")
-		}},
-		{name: "responses", request: func() *httptest.ResponseRecorder {
-			return doGuardrailProtocolRequest(t, app, "/v1/responses", map[string]any{"model": "gpt-4.1-mini", "input": oversized}, "thk_demo_local")
-		}},
-		{name: "anthropic messages", request: func() *httptest.ResponseRecorder {
-			return doAnthropicRequest(t, app, "/v1/messages", map[string]any{
-				"model": "gpt-4.1-mini", "max_tokens": 8, "messages": []any{map[string]any{"role": "user", "content": oversized}},
-			}, "", "thk_demo_local")
-		}},
-		{name: "playground", request: func() *httptest.ResponseRecorder {
-			return doGuardrailProtocolRequest(t, app, "/api/admin/playground/chat", map[string]any{
-				"project_id": "prj_demo", "model": "gpt-4.1-mini", "messages": []any{map[string]any{"role": "user", "content": oversized}},
-			}, "dev_admin_token")
-		}},
-		{name: "playground stream", request: func() *httptest.ResponseRecorder {
-			return doGuardrailProtocolRequest(t, app, "/api/admin/playground/chat/stream", map[string]any{
-				"project_id": "prj_demo", "model": "gpt-4.1-mini", "messages": []any{map[string]any{"role": "user", "content": oversized}},
-			}, "dev_admin_token")
-		}},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			response := test.request()
-			if response.Code != http.StatusRequestEntityTooLarge || !strings.Contains(response.Body.String(), `"code":"guardrail_input_too_large"`) {
-				t.Fatalf("expected guardrail size failure, got %d: %s", response.Code, response.Body.String())
-			}
-		})
-	}
-}
-
 func TestGuardrailModelDetectorRunsOnlyAfterAPIKeyAdmission(t *testing.T) {
 	var detectorCalls atomic.Int64
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

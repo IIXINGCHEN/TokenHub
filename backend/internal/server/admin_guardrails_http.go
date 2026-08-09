@@ -62,10 +62,6 @@ func (s *Server) handleAdminGuardrailPolicyTest(w http.ResponseWriter, r *http.R
 		IgnoreBindings: true,
 	})
 	if err != nil {
-		if errors.Is(err, guardrails.ErrInputTooLarge) {
-			writeError(w, r, NewHTTPError(http.StatusRequestEntityTooLarge, "guardrail_input_too_large", "Content security input exceeds the 64 KiB inspection limit"))
-			return
-		}
 		writeError(w, r, NewHTTPError(http.StatusInternalServerError, "guardrail_evaluation_failed", "Content security evaluation failed"))
 		return
 	}
