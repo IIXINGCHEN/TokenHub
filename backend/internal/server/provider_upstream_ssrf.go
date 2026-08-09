@@ -81,17 +81,6 @@ func validateProviderUpstreamBaseURLString(raw string, allowedPrivate []*net.IPN
 	return validateProviderUpstreamBaseURL(endpoint, allowedPrivate, allowLocalhost)
 }
 
-// strictProviderUpstreamRedirect is the CheckRedirect policy shared by every
-// SSRF-guarded client: re-validate each hop with no private-range allowlist
-// and no localhost exception, so a validated URL can never redirect into the
-// internal network or onto a loopback service.
-func strictProviderUpstreamRedirect(req *http.Request, via []*http.Request) error {
-	if len(via) >= 10 {
-		return fmt.Errorf("stopped after 10 redirects")
-	}
-	return validateProviderUpstreamBaseURL(req.URL, nil, false)
-}
-
 // allowedProviderUpstreamCIDRs parses TOKENHUB_PROVIDER_UPSTREAM_ALLOWED_CIDRS
 // (comma/semicolon/whitespace-separated CIDRs). The allowlist only relaxes the
 // RFC1918/ULA private-range check for literal IPs; loopback, link-local
@@ -124,6 +113,15 @@ func allowedProviderUpstreamCIDRs() []*net.IPNet {
 // addresses qualify: loopback, link-local (metadata), unspecified and
 // special-use ranges can never be allowlisted.
 func isAllowlistedPrivateProviderUpstreamIP(ip net.IP, allowedPrivate []*net.IPNet) bool {
+	if isAlwaysDeniedProviderUpstreamIP(ip) {
+		return false
+	}
+	if _, translated := providerUpstreamEmbeddedNAT64IPv4(ip); translated {
+		return false
+	}
+	if nat64LocalUsePrefix.Contains(ip) {
+		return false
+	}
 	if !ip.IsPrivate() {
 		return false
 	}
@@ -154,12 +152,11 @@ func isLocalProviderHostname(host string) bool {
 // 198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32), the benchmarking range
 // (198.18.0.0/15), the reserved range (240.0.0.0/4, which includes the
 // limited-broadcast address), the deprecated IPv6 site-local range
-// (fec0::/10, still routable inside sites that kept it), and the local-use
-// NAT64 prefix (64:ff9b:1::/48). The well-known NAT64 prefix 64:ff9b::/96 is
-// deliberately absent: isDisallowedProviderUpstreamIP classifies the IPv4
-// address embedded in it instead, so DNS64-synthesized public upstreams stay
-// reachable on IPv6-only networks. IPv4-mapped IPv6 spellings need no entry:
-// To4-based predicates already classify ::ffff:10.x as private.
+// (fec0::/10, still routable inside sites that kept it), and AWS's IPv6
+// instance-metadata endpoint. NAT64 ranges are handled separately so a
+// configured RFC 6052 prefix can distinguish public from private embedded
+// IPv4 targets. IPv4-mapped IPv6 spellings need no entry: To4-based
+// predicates already classify ::ffff:10.x as private.
 var disallowedProviderUpstreamCIDRs = func() []*net.IPNet {
 	cidrs := []string{
 		"0.0.0.0/8",
@@ -171,7 +168,7 @@ var disallowedProviderUpstreamCIDRs = func() []*net.IPNet {
 		"240.0.0.0/4",
 		"2001:db8::/32",
 		"fec0::/10",
-		"64:ff9b:1::/48",
+		"fd00:ec2::254/128",
 	}
 	blocks := make([]*net.IPNet, 0, len(cidrs))
 	for _, cidr := range cidrs {
@@ -182,41 +179,8 @@ var disallowedProviderUpstreamCIDRs = func() []*net.IPNet {
 	return blocks
 }()
 
-// nat64WellKnownPrefix is the RFC 6052 well-known prefix. DNS64 resolvers
-// synthesize AAAA records under it for IPv4-only hosts, so the embedded
-// address — not the prefix — must drive the classification.
-var nat64WellKnownPrefix = func() *net.IPNet {
-	_, block, _ := net.ParseCIDR("64:ff9b::/96")
-	return block
-}()
-
-// isDisallowedProviderUpstreamIP reports whether the literal IP targets an
-// address that must not be reached from a provider base URL: loopback,
-// RFC1918/ULA private ranges, link-local (including the cloud metadata address
-// 169.254.169.254), multicast, the unspecified address (0.0.0.0 / ::, which
-// routes to the local host), or a special-use range in
-// disallowedProviderUpstreamCIDRs. Addresses under the well-known NAT64
-// prefix are classified by the IPv4 address they embed. Loopback literals are
-// normally filtered earlier by isLocalProviderHostname, so the loopback check
-// here only catches the forms that helper does not special-case.
-//
-// Note: this only inspects the literal host. Hostnames that merely resolve to a
-// disallowed address (DNS rebinding) and non-standard numeric forms that
-// net.ParseIP cannot decode (for example "127.1") are out of scope for this
-// literal check; the dial-time guard in ssrfGuardedProviderTransport closes the
-// resolution gap.
-func isDisallowedProviderUpstreamIP(ip net.IP) bool {
-	// DNS64-synthesized address: 64:ff9b::/96 embeds the IPv4 target in the
-	// last 32 bits. Classify the embedded address so a synthesized public
-	// upstream (64:ff9b::808:808 = 8.8.8.8) stays reachable while synthesized
-	// private or metadata targets stay rejected. net.IPv4 returns the
-	// 4-in-6 mapped form, whose To4 is non-nil, so the recursion cannot
-	// re-enter this branch.
-	if ip.To4() == nil && nat64WellKnownPrefix.Contains(ip) {
-		b := ip.To16()
-		return isDisallowedProviderUpstreamIP(net.IPv4(b[12], b[13], b[14], b[15]))
-	}
-	if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
+func isAlwaysDeniedProviderUpstreamIP(ip net.IP) bool {
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
 		return true
 	}
 	for _, block := range disallowedProviderUpstreamCIDRs {
@@ -225,6 +189,23 @@ func isDisallowedProviderUpstreamIP(ip net.IP) bool {
 		}
 	}
 	return false
+}
+
+// isDisallowedProviderUpstreamIP applies the non-bypassable special-use
+// checks first, then classifies an RFC 6052 NAT64 address by its embedded IPv4
+// target. Addresses in the RFC 8215 local-use allocation remain denied unless
+// an operator configures the actual translation prefix.
+func isDisallowedProviderUpstreamIP(ip net.IP) bool {
+	if isAlwaysDeniedProviderUpstreamIP(ip) {
+		return true
+	}
+	if embedded, translated := providerUpstreamEmbeddedNAT64IPv4(ip); translated {
+		return embedded == nil || isDisallowedProviderUpstreamIP(embedded)
+	}
+	if nat64LocalUsePrefix.Contains(ip) {
+		return true
+	}
+	return ip.IsPrivate()
 }
 
 // errProviderUpstreamDialDisallowed is returned by the dial guard when a
