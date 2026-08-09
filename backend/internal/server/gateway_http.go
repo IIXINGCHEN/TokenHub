@@ -542,11 +542,12 @@ func (s *Server) handleAdminPlaygroundChat(w http.ResponseWriter, r *http.Reques
 		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
 		return
 	}
-	var req ChatCompletionRequest
-	if err := s.decodeJSONLimit(w, r, &req, s.config.MaxMultimodalRequestBytes); err != nil {
+	var playgroundReq playgroundChatRequest
+	if err := s.decodeJSONLimit(w, r, &playgroundReq, s.config.MaxMultimodalRequestBytes); err != nil {
 		writeError(w, r, err)
 		return
 	}
+	req := playgroundReq.ChatCompletionRequest
 	req.Model = strings.TrimSpace(req.Model)
 	req.Stream = false
 	if req.Model == "" {
@@ -563,12 +564,17 @@ func (s *Server) handleAdminPlaygroundChat(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
+	guardrailProjectID, err := s.resolvePlaygroundGuardrailProjectID(user, playgroundReq.ProjectID)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
 
 	startedAt := time.Now()
 	call := s.newPlaygroundCallContext(user, req.Model, startedAt)
 	requestID := call.RequestID
 	w.Header().Set("x-request-id", requestID)
-	decision, guardrailErr := s.evaluateOutboundGuardrails(r.Context(), call.Project.ID, chatGuardrailTargets(&req))
+	decision, guardrailErr := s.evaluateOutboundGuardrails(r.Context(), guardrailProjectID, chatGuardrailTargets(&req))
 	requestAuditPayload := guardrailRequestAuditPayload(req.Model, decision, req)
 	if guardrailErr != nil {
 		httpErr := AsHTTPError(guardrailErr)

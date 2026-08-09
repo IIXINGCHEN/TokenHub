@@ -12,6 +12,28 @@ import (
 
 const playgroundClientClosedStatus = 499
 
+type playgroundChatRequest struct {
+	ChatCompletionRequest
+	ProjectID string
+}
+
+func (r *playgroundChatRequest) UnmarshalJSON(data []byte) error {
+	var request ChatCompletionRequest
+	if err := json.Unmarshal(data, &request); err != nil {
+		return err
+	}
+	var context struct {
+		ProjectID string `json:"project_id"`
+	}
+	if err := json.Unmarshal(data, &context); err != nil {
+		return err
+	}
+	delete(request.raw, "project_id")
+	r.ChatCompletionRequest = request
+	r.ProjectID = strings.TrimSpace(context.ProjectID)
+	return nil
+}
+
 type playgroundTiming struct {
 	Mode                    string     `json:"mode"`
 	StartedAt               time.Time  `json:"started_at"`
@@ -224,18 +246,24 @@ func (s *Server) handleAdminPlaygroundChatStream(w http.ResponseWriter, r *http.
 		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
 		return
 	}
-	var req ChatCompletionRequest
-	if err := s.decodeJSONLimit(w, r, &req, s.config.MaxMultimodalRequestBytes); err != nil {
+	var playgroundReq playgroundChatRequest
+	if err := s.decodeJSONLimit(w, r, &playgroundReq, s.config.MaxMultimodalRequestBytes); err != nil {
 		writeError(w, r, err)
 		return
 	}
+	req := playgroundReq.ChatCompletionRequest
 	if err := validatePlaygroundRequest(&req); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	guardrailProjectID, err := s.resolvePlaygroundGuardrailProjectID(user, playgroundReq.ProjectID)
+	if err != nil {
 		writeError(w, r, err)
 		return
 	}
 	call := s.newPlaygroundCallContext(user, req.Model, admittedAt)
 	w.Header().Set("x-request-id", call.RequestID)
-	decision, guardrailErr := s.evaluateOutboundGuardrails(r.Context(), call.Project.ID, chatGuardrailTargets(&req))
+	decision, guardrailErr := s.evaluateOutboundGuardrails(r.Context(), guardrailProjectID, chatGuardrailTargets(&req))
 	requestAuditPayload := guardrailRequestAuditPayload(req.Model, decision, req)
 	if guardrailErr != nil {
 		httpErr := AsHTTPError(guardrailErr)
@@ -334,6 +362,24 @@ func validatePlaygroundRequest(req *ChatCompletionRequest) error {
 		}
 	}
 	return nil
+}
+
+func (s *Server) resolvePlaygroundGuardrailProjectID(user AdminUser, requestedID string) (string, error) {
+	projectID := strings.TrimSpace(requestedID)
+	if projectID == "" {
+		return "", NewHTTPError(http.StatusBadRequest, "missing_project", "project_id is required")
+	}
+	project, ok := s.store.GetProject(projectID)
+	if !ok {
+		return "", NewHTTPError(http.StatusNotFound, "project_not_found", "Project not found")
+	}
+	if project.Status != "" && project.Status != StatusActive {
+		return "", NewHTTPError(http.StatusConflict, "project_inactive", "Project is not active")
+	}
+	if !s.canAccessProject(user, project) {
+		return "", NewHTTPError(http.StatusForbidden, "project_forbidden", "Project is not available for this user")
+	}
+	return project.ID, nil
 }
 
 func (s *Server) newPlaygroundCallContext(user AdminUser, model string, startedAt time.Time) CallContext {

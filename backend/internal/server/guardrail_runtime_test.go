@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"tokenhub/backend/internal/guardrails"
 )
@@ -167,7 +168,7 @@ func TestGuardrailsBlockAdminPlaygroundBeforeRouting(t *testing.T) {
 			Name: "Phone", DetectorType: guardrails.DetectorSensitiveData, Action: guardrails.ActionBlock,
 			Config: map[string]any{"data_types": []string{"phone"}},
 		}},
-		Bindings: []guardrails.Binding{{ScopeType: guardrails.ScopeAllProjects}},
+		Bindings: []guardrails.Binding{{ScopeType: guardrails.ScopeProject, ScopeID: "prj_demo"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -176,8 +177,9 @@ func TestGuardrailsBlockAdminPlaygroundBeforeRouting(t *testing.T) {
 	for _, path := range []string{"/api/admin/playground/chat", "/api/admin/playground/chat/stream"} {
 		t.Run(path, func(t *testing.T) {
 			response := doGuardrailProtocolRequest(t, app, path, map[string]any{
-				"model":    "gpt-4.1-mini",
-				"messages": []any{map[string]any{"role": "user", "content": "call 13312341234"}},
+				"project_id": "prj_demo",
+				"model":      "gpt-4.1-mini",
+				"messages":   []any{map[string]any{"role": "user", "content": "call 13312341234"}},
 			}, "dev_admin_token")
 			if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), `"code":"guardrail_blocked"`) || !strings.Contains(response.Body.String(), `"categories":["phone"]`) || !strings.Contains(response.Body.String(), `"policy_name":"Block phone numbers"`) || !strings.Contains(response.Body.String(), `"detection_item_name":"Phone"`) {
 				t.Fatalf("expected playground request to be blocked, got %d: %s", response.Code, response.Body)
@@ -209,6 +211,100 @@ func TestGuardrailsBlockAdminPlaygroundBeforeRouting(t *testing.T) {
 		if !expectedRequestIDs[payload.RequestID] {
 			t.Fatalf("audit request_id=%q does not match a blocked response: %#v", payload.RequestID, expectedRequestIDs)
 		}
+	}
+}
+
+func TestAdminPlaygroundRejectsUnauthorizedGuardrailProjectContext(t *testing.T) {
+	store := NewMemoryStore()
+	if err := SeedDemoData(store); err != nil {
+		t.Fatal(err)
+	}
+	user, err := store.CreateAdminUser(AdminUser{
+		Username: "guardrail-playground-user", Name: "Guardrail Playground User", Email: "guardrail-playground-user@tokenhub.local",
+		Role: "user", Status: StatusActive,
+	}, "user123456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, session, err := store.AuthenticateAdminUser(user.Username, "user123456", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := New(store).Handler()
+	for _, path := range []string{"/api/admin/playground/chat", "/api/admin/playground/chat/stream"} {
+		t.Run(path, func(t *testing.T) {
+			response := doGuardrailProtocolRequest(t, app, path, map[string]any{
+				"project_id": "prj_demo",
+				"model":      "gpt-4.1-mini",
+				"messages":   []any{map[string]any{"role": "user", "content": "inspect me"}},
+			}, session.Token)
+			if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), `"code":"project_forbidden"`) {
+				t.Fatalf("expected project access failure, got %d: %s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestAdminPlaygroundRequiresGuardrailProjectContext(t *testing.T) {
+	store := NewMemoryStore()
+	if err := SeedDemoData(store); err != nil {
+		t.Fatal(err)
+	}
+	app := New(store).Handler()
+	for _, path := range []string{"/api/admin/playground/chat", "/api/admin/playground/chat/stream"} {
+		t.Run(path, func(t *testing.T) {
+			response := doGuardrailProtocolRequest(t, app, path, map[string]any{
+				"model": "gpt-4.1-mini", "messages": []any{map[string]any{"role": "user", "content": "inspect me"}},
+			}, "dev_admin_token")
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"missing_project"`) {
+				t.Fatalf("expected missing project failure, got %d: %s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestGuardrailsRejectOversizedInputWithoutPolicies(t *testing.T) {
+	store := NewMemoryStore()
+	if err := SeedDemoData(store); err != nil {
+		t.Fatal(err)
+	}
+	app := New(store).Handler()
+	oversized := strings.Repeat("x", 64*1024+1)
+	tests := []struct {
+		name    string
+		request func() *httptest.ResponseRecorder
+	}{
+		{name: "chat completions", request: func() *httptest.ResponseRecorder {
+			return doGuardrailProtocolRequest(t, app, "/v1/chat/completions", map[string]any{
+				"model": "gpt-4.1-mini", "messages": []any{map[string]any{"role": "user", "content": oversized}},
+			}, "thk_demo_local")
+		}},
+		{name: "responses", request: func() *httptest.ResponseRecorder {
+			return doGuardrailProtocolRequest(t, app, "/v1/responses", map[string]any{"model": "gpt-4.1-mini", "input": oversized}, "thk_demo_local")
+		}},
+		{name: "anthropic messages", request: func() *httptest.ResponseRecorder {
+			return doAnthropicRequest(t, app, "/v1/messages", map[string]any{
+				"model": "gpt-4.1-mini", "max_tokens": 8, "messages": []any{map[string]any{"role": "user", "content": oversized}},
+			}, "", "thk_demo_local")
+		}},
+		{name: "playground", request: func() *httptest.ResponseRecorder {
+			return doGuardrailProtocolRequest(t, app, "/api/admin/playground/chat", map[string]any{
+				"project_id": "prj_demo", "model": "gpt-4.1-mini", "messages": []any{map[string]any{"role": "user", "content": oversized}},
+			}, "dev_admin_token")
+		}},
+		{name: "playground stream", request: func() *httptest.ResponseRecorder {
+			return doGuardrailProtocolRequest(t, app, "/api/admin/playground/chat/stream", map[string]any{
+				"project_id": "prj_demo", "model": "gpt-4.1-mini", "messages": []any{map[string]any{"role": "user", "content": oversized}},
+			}, "dev_admin_token")
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := test.request()
+			if response.Code != http.StatusRequestEntityTooLarge || !strings.Contains(response.Body.String(), `"code":"guardrail_input_too_large"`) {
+				t.Fatalf("expected guardrail size failure, got %d: %s", response.Code, response.Body.String())
+			}
+		})
 	}
 }
 
@@ -312,8 +408,9 @@ func TestGuardrailsMaskAdminPlaygroundBeforeRouting(t *testing.T) {
 	for _, path := range []string{"/api/admin/playground/chat", "/api/admin/playground/chat/stream"} {
 		t.Run(path, func(t *testing.T) {
 			response := doJSON(t, app, http.MethodPost, path, map[string]any{
-				"model":    "gpt-4.1-mini",
-				"messages": []any{map[string]any{"role": "user", "content": "contact demo@example.com"}},
+				"project_id": "prj_demo",
+				"model":      "gpt-4.1-mini",
+				"messages":   []any{map[string]any{"role": "user", "content": "contact demo@example.com"}},
 			}, "")
 			if response.Code != http.StatusOK || !strings.Contains(response.Body, "contact [REDACTED]") || strings.Contains(response.Body, "demo@example.com") {
 				t.Fatalf("expected masked playground request, got %d: %s", response.Code, response.Body)

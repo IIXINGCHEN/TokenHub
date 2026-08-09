@@ -85,12 +85,12 @@ func (e *Engine) Evaluate(ctx context.Context, request EvaluationRequest) (decis
 	if request.Protocol == "" {
 		request.Protocol = ProtocolAll
 	}
+	if evaluationSize(request.Fragments) > maxEvaluationBytes {
+		return decision, ErrInputTooLarge
+	}
 	policies := applicablePolicies(request)
 	if len(policies) == 0 {
 		return decision, nil
-	}
-	if evaluationSize(request.Fragments) > maxEvaluationBytes {
-		return decision, ErrInputTooLarge
 	}
 
 	modelItems := make([]policyItem, 0)

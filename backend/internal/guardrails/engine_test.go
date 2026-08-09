@@ -232,10 +232,26 @@ func TestEngineRejectsOversizedInput(t *testing.T) {
 	}
 }
 
-func TestEngineDoesNotLimitInputWithoutApplicablePolicies(t *testing.T) {
-	decision, err := NewEngine(nil).Evaluate(context.Background(), EvaluationRequest{Fragments: []Fragment{{ID: "input", Text: strings.Repeat("x", maxEvaluationBytes+1)}}})
-	if err != nil || decision.Action != ActionAllow {
-		t.Fatalf("decision=%#v err=%v", decision, err)
+func TestEngineRejectsOversizedInputWithoutApplicablePolicies(t *testing.T) {
+	otherProjectPolicy := mustNormalizePolicy(t, Policy{
+		Name: "Other project", DetectionItems: []DetectionItem{{Name: "Keyword", DetectorType: DetectorPattern, Action: ActionAudit, Config: map[string]any{"keywords": []string{"x"}}}},
+		Bindings: []Binding{{ScopeType: ScopeProject, ScopeID: "prj_other"}},
+	})
+	for _, test := range []struct {
+		name     string
+		policies []Policy
+	}{
+		{name: "no policies"},
+		{name: "policy bound to another project", policies: []Policy{otherProjectPolicy}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := NewEngine(nil).Evaluate(context.Background(), EvaluationRequest{
+				ProjectID: "prj_one", Fragments: []Fragment{{ID: "input", Text: strings.Repeat("x", maxEvaluationBytes+1)}}, Policies: test.policies,
+			})
+			if !errors.Is(err, ErrInputTooLarge) {
+				t.Fatalf("expected input limit error, got %v", err)
+			}
+		})
 	}
 }
 

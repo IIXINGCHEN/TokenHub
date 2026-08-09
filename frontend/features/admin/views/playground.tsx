@@ -210,7 +210,9 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
     const candidates = playgroundModels(data, canViewRoutes);
     return canViewRoutes ? candidates.filter((model) => activeRouteCount(model.name, data) > 0) : candidates;
   }, [data, canViewRoutes]);
+  const projects = useMemo(() => data.projects.filter((project) => !project.status || project.status === "active"), [data.projects]);
   const [modelName, setModelName] = useState(models[0]?.name ?? "");
+  const [projectID, setProjectID] = useState(projects[0]?.id ?? "");
   const [pendingModelName, setPendingModelName] = useState("");
   const [turns, setTurns] = useState<PlaygroundTurn[]>([]);
   const [draft, setDraft] = useState("");
@@ -252,6 +254,11 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
     if (modelName && !models.some((model) => model.name === modelName)) setModelName(models[0]?.name ?? "");
   }, [modelName, models]);
 
+  useEffect(() => {
+    if (!projectID && projects[0]?.id) setProjectID(projects[0].id);
+    if (projectID && !projects.some((project) => project.id === projectID)) setProjectID(projects[0]?.id ?? "");
+  }, [projectID, projects]);
+
   const languageVersion = activeLanguage;
   useEffect(() => {
     setSystemPrompt((current) => isDefaultPlaygroundSystemPrompt(current) ? defaultPlaygroundSystemPrompt() : current);
@@ -292,6 +299,7 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
 
   function buildPayload(messages: PlaygroundRequestMessage[], requestModel: string) {
     const payload: Record<string, unknown> = {
+      project_id: projectID,
       model: requestModel,
       messages,
       max_tokens: clampPlaygroundMaxTokens(numericParameter(maxTokens), maxTokenLimit),
@@ -383,7 +391,7 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
   function sendMessage(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
     const content = draft.trim();
-    if (!content || !modelName || loading) return;
+    if (!content || !modelName || !projectID || loading) return;
     const candidate = createCandidate(modelName);
     const turn: PlaygroundTurn = {
       id: uniqueUIID("turn"),
@@ -400,7 +408,7 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
   }
 
   function rerunTurn(turnID: string) {
-    if (loading) return;
+    if (loading || !projectID) return;
     const turnIndex = turns.findIndex((turn) => turn.id === turnID);
     if (turnIndex < 0) return;
     const candidate = createCandidate(modelName);
@@ -494,6 +502,13 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
 
         <div className="playground-config-body">
           <h2>{tx("模型配置")}</h2>
+          <label className="playground-field">
+            <span>{tx("选择项目")}</span>
+            <select value={projectID} onChange={(event) => setProjectID(event.target.value)} disabled={projects.length === 0 || loading}>
+              {projects.length === 0 ? <option value="">{tx("暂无可选项目")}</option> : null}
+              {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+            </select>
+          </label>
           <label className="playground-field">
             <span>{tx("系统提示")}</span>
             <textarea value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} disabled={loading} />
@@ -609,7 +624,7 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
                         {formatPlaygroundInteger(index + 1)}
                       </button>
                     )) : null}
-                    <button type="button" onClick={() => rerunTurn(turn.id)} disabled={loading} title={tx("从这一轮重新生成，并移除后续分支")}>
+                    <button type="button" onClick={() => rerunTurn(turn.id)} disabled={loading || !projectID} title={tx("从这一轮重新生成，并移除后续分支")}>
                       <RotateCcw size={13} />{tx("重跑")}
                     </button>
                   </div>
@@ -627,7 +642,7 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
         ) : null}
 
         <form className="playground-composer" onSubmit={sendMessage}>
-          <textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={tx("输入用于诊断模型的消息...")} disabled={loading || models.length === 0} />
+          <textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={tx("输入用于诊断模型的消息...")} disabled={loading || models.length === 0 || projects.length === 0} />
           <div className="playground-composer-actions">
             <span className="playground-ephemeral">{tx("会话仅保存在当前页面，按需导出")}</span>
             <div className="playground-foot">
@@ -637,7 +652,7 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
             {loading ? (
               <button className="playground-stop-button" type="button" onClick={() => activeRequestRef.current?.abort()} title={tx("停止生成")}><Square size={16} /></button>
             ) : (
-              <button className="playground-send-button" disabled={!draft.trim() || models.length === 0} type="submit" title={tx("发送")}><Send size={18} /></button>
+              <button className="playground-send-button" disabled={!draft.trim() || models.length === 0 || projects.length === 0} type="submit" title={tx("发送")}><Send size={18} /></button>
             )}
           </div>
         </form>

@@ -301,7 +301,8 @@ func TestAdminPlaygroundChatUsesRoutesWithoutProjectBilling(t *testing.T) {
 	}
 
 	resp := doJSON(t, app, http.MethodPost, "/api/admin/playground/chat", map[string]any{
-		"model": "gpt-4.1-mini",
+		"project_id": "prj_demo",
+		"model":      "gpt-4.1-mini",
 		"messages": []map[string]any{
 			{"role": "user", "content": "playground smoke"},
 		},
@@ -360,6 +361,7 @@ func TestAdminPlaygroundChatUsesRoutesWithoutProjectBilling(t *testing.T) {
 
 func TestAdminPlaygroundChatUsesResponsesForCodexSubscription(t *testing.T) {
 	store := NewMemoryStore()
+	project := store.CreateProject(Project{Name: "Playground Codex Project"})
 	provider := store.AddProvider(Provider{
 		ID:      "prv_playground_codex",
 		Name:    "Playground Codex",
@@ -452,7 +454,8 @@ func TestAdminPlaygroundChatUsesResponsesForCodexSubscription(t *testing.T) {
 	})}
 
 	resp := doJSON(t, server.Handler(), http.MethodPost, "/api/admin/playground/chat", map[string]any{
-		"model": "gpt-playground-codex",
+		"project_id": project.ID,
+		"model":      "gpt-playground-codex",
 		"messages": []map[string]any{
 			{"role": "system", "content": "Be concise."},
 			{"role": "user", "content": "First question"},
