@@ -2,10 +2,12 @@ package server
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMethodRoutingContracts(t *testing.T) {
@@ -23,8 +25,6 @@ func TestMethodRoutingContracts(t *testing.T) {
 		wantCode  string
 		wantAllow string
 	}{
-		{name: "health wrong method", method: http.MethodPost, path: "/livez", wantCode: "method_not_allowed", wantAllow: ""},
-		{name: "admin login wrong method", method: http.MethodGet, path: "/api/admin/auth/login", wantCode: "method_not_allowed", wantAllow: ""},
 		{name: "gateway wrong method", method: http.MethodGet, path: "/v1/chat/completions", wantCode: "method_not_allowed", wantAllow: ""},
 		{name: "models rejects head", method: http.MethodHead, path: "/v1/models", wantCode: "method_not_allowed", wantAllow: ""},
 	}
@@ -35,6 +35,161 @@ func TestMethodRoutingContracts(t *testing.T) {
 			assertAllowHeader(t, response, test.wantAllow)
 		})
 	}
+}
+
+func TestSimpleMethodRoutesReachHandlers(t *testing.T) {
+	app := newTestServer()
+	tests := []struct {
+		method     string
+		path       string
+		wantStatus int
+	}{
+		{method: http.MethodGet, path: "/livez", wantStatus: http.StatusOK},
+		{method: http.MethodGet, path: "/readyz", wantStatus: http.StatusOK},
+		{method: http.MethodGet, path: "/healthz", wantStatus: http.StatusOK},
+		{method: http.MethodGet, path: "/api/admin/auth/identity-providers", wantStatus: http.StatusOK},
+		{method: http.MethodGet, path: "/api/admin/auth/oauth/start", wantStatus: http.StatusNotFound},
+		{method: http.MethodGet, path: "/api/admin/auth/oauth/callback", wantStatus: http.StatusBadRequest},
+		{method: http.MethodPost, path: "/api/admin/auth/login", wantStatus: http.StatusBadRequest},
+		{method: http.MethodPost, path: "/api/admin/auth/logout", wantStatus: http.StatusNoContent},
+		{method: http.MethodPost, path: "/api/admin/auth/reset-password", wantStatus: http.StatusBadRequest},
+	}
+	for _, test := range tests {
+		t.Run(test.method+" "+test.path, func(t *testing.T) {
+			response := methodRoutingRequest(app, test.method, test.path, "")
+			if response.Code != test.wantStatus {
+				t.Fatalf("expected %d, got %d: %s", test.wantStatus, response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestSimpleMethodRoutesRejectWrongMethodsAsJSON(t *testing.T) {
+	app := newTestServer()
+	tests := []struct {
+		allowed string
+		method  string
+		path    string
+	}{
+		{allowed: http.MethodGet, method: http.MethodPost, path: "/livez"},
+		{allowed: http.MethodGet, method: http.MethodPost, path: "/readyz"},
+		{allowed: http.MethodGet, method: http.MethodPost, path: "/healthz"},
+		{allowed: http.MethodGet, method: http.MethodPost, path: "/api/admin/auth/identity-providers"},
+		{allowed: http.MethodGet, method: http.MethodPost, path: "/api/admin/auth/oauth/start"},
+		{allowed: http.MethodGet, method: http.MethodPost, path: "/api/admin/auth/oauth/callback"},
+		{allowed: http.MethodPost, method: http.MethodGet, path: "/api/admin/auth/login"},
+		{allowed: http.MethodPost, method: http.MethodGet, path: "/api/admin/auth/logout"},
+		{allowed: http.MethodPost, method: http.MethodGet, path: "/api/admin/auth/reset-password"},
+	}
+	for _, test := range tests {
+		t.Run(test.method+" "+test.path, func(t *testing.T) {
+			response := methodRoutingRequest(app, test.method, test.path, "")
+			assertJSONError(t, response, http.StatusMethodNotAllowed, "method_not_allowed")
+			assertAllowHeader(t, response, test.allowed)
+		})
+	}
+}
+
+func TestSimpleGETMethodRoutesRejectHEAD(t *testing.T) {
+	server := httptest.NewServer(newTestServer())
+	defer server.Close()
+
+	paths := []string{
+		"/livez",
+		"/readyz",
+		"/healthz",
+		"/api/admin/auth/identity-providers",
+		"/api/admin/auth/oauth/start",
+		"/api/admin/auth/oauth/callback",
+	}
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			request, err := http.NewRequest(http.MethodHead, server.URL+path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := server.Client().Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+
+			if response.StatusCode != http.StatusMethodNotAllowed {
+				t.Fatalf("expected 405, got %d", response.StatusCode)
+			}
+			if got := response.Header.Get("Allow"); got != http.MethodGet {
+				t.Fatalf("Allow = %q, want %q", got, http.MethodGet)
+			}
+			if requestID := response.Header.Get("x-request-id"); requestID == "" {
+				t.Fatal("x-request-id is empty")
+			}
+			body, err := io.ReadAll(response.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(body) != 0 {
+				t.Fatalf("HEAD response body = %q, want empty", body)
+			}
+		})
+	}
+}
+
+func TestSingleMethodRouteLeavesFallbackHeadersToFallback(t *testing.T) {
+	server := &Server{mux: http.NewServeMux()}
+	server.registerSingleMethodRoute(http.MethodGet, "/protected", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}, func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, r, NewHTTPError(http.StatusUnauthorized, "invalid_admin_token", "Invalid admin token"))
+	})
+
+	response := methodRoutingRequest(server.mux, http.MethodPost, "/protected", "")
+	assertJSONError(t, response, http.StatusUnauthorized, "invalid_admin_token")
+	assertAllowHeader(t, response, "")
+}
+
+func TestSimpleMethodRouteLogoutRevokesSession(t *testing.T) {
+	_, app := newMethodRoutingAdminServer(t, "method-routing-old-password")
+	token, _ := loginMethodRoutingAdmin(t, app, "method-routing-old-password")
+
+	response := methodRoutingRequest(app, http.MethodPost, "/api/admin/auth/logout", token)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("logout: expected 204, got %d: %s", response.Code, response.Body.String())
+	}
+
+	response = methodRoutingRequest(app, http.MethodGet, "/api/admin/auth/me", token)
+	assertJSONError(t, response, http.StatusUnauthorized, "invalid_admin_token")
+}
+
+func TestSimpleMethodRouteResetPasswordInvalidatesOldCredentials(t *testing.T) {
+	const (
+		oldPassword = "method-routing-old-password"
+		newPassword = "method-routing-new-password"
+	)
+	store, app := newMethodRoutingAdminServer(t, oldPassword)
+	oldSession, user := loginMethodRoutingAdmin(t, app, oldPassword)
+	resetToken, _, err := store.CreateAdminPasswordResetToken(user.ID, user.ID, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := methodRoutingJSONRequest(t, app, http.MethodPost, "/api/admin/auth/reset-password", map[string]any{
+		"token":    resetToken,
+		"password": newPassword,
+	}, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("reset password: expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+
+	response = methodRoutingRequest(app, http.MethodGet, "/api/admin/auth/me", oldSession)
+	assertJSONError(t, response, http.StatusUnauthorized, "invalid_admin_token")
+
+	response = methodRoutingJSONRequest(t, app, http.MethodPost, "/api/admin/auth/login", map[string]any{
+		"identity": user.Email,
+		"password": oldPassword,
+	}, "")
+	assertJSONError(t, response, http.StatusUnauthorized, "invalid_credentials")
+
+	loginMethodRoutingAdmin(t, app, newPassword)
 }
 
 func TestMethodRoutingPreservesAdminAuthenticationOrder(t *testing.T) {
@@ -98,6 +253,56 @@ func methodRoutingRequest(handler http.Handler, method string, path string, toke
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	return response
+}
+
+func methodRoutingJSONRequest(t *testing.T, handler http.Handler, method string, path string, payload any, token string) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(method, path, strings.NewReader(string(body)))
+	request.Header.Set("content-type", "application/json")
+	if token != "" {
+		request.Header.Set("authorization", "Bearer "+token)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response
+}
+
+func newMethodRoutingAdminServer(t *testing.T, password string) (*GormStore, http.Handler) {
+	t.Helper()
+	config := ConfigFromEnv()
+	config.AdminToken = "dev_admin_token"
+	config.BootstrapAdminPassword = password
+	store := NewMemoryStoreWithConfig(config)
+	if err := BootstrapBaseDataWithConfig(store, config); err != nil {
+		t.Fatal(err)
+	}
+	return store, NewWithConfig(store, config).Handler()
+}
+
+func loginMethodRoutingAdmin(t *testing.T, handler http.Handler, password string) (string, AdminUser) {
+	t.Helper()
+	response := methodRoutingJSONRequest(t, handler, http.MethodPost, "/api/admin/auth/login", map[string]any{
+		"identity": "admin@tokenhub.local",
+		"password": password,
+	}, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("login: expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Token string    `json:"token"`
+		User  AdminUser `json:"user"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Token == "" || payload.User.ID == "" {
+		t.Fatalf("incomplete login response: %#v", payload)
+	}
+	return payload.Token, payload.User
 }
 
 func assertJSONError(t *testing.T, response *httptest.ResponseRecorder, wantStatus int, wantCode string) {

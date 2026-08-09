@@ -1,12 +1,14 @@
 package server
 
+import "net/http"
+
 // The gateway's URL surface, kept apart from server construction so adding an
 // endpoint and changing how the server is built stay separate edits.
 
 func (s *Server) routes() {
-	s.mux.HandleFunc("/livez", s.handleLive)
-	s.mux.HandleFunc("/readyz", s.handleHealth)
-	s.mux.HandleFunc("/healthz", s.handleHealth)
+	s.registerSingleMethodRoute(http.MethodGet, "/livez", s.handleLive, jsonMethodNotAllowed(http.MethodGet))
+	s.registerSingleMethodRoute(http.MethodGet, "/readyz", s.handleHealth, jsonMethodNotAllowed(http.MethodGet))
+	s.registerSingleMethodRoute(http.MethodGet, "/healthz", s.handleHealth, jsonMethodNotAllowed(http.MethodGet))
 	s.mux.HandleFunc("/metrics", s.handleMetrics)
 	s.registerModelRoutes()
 	// The in-flight gauge covers exactly the endpoints that route to an upstream, so
@@ -25,13 +27,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/v1/image-assets/", s.handleImageAsset)
 	s.mux.HandleFunc("/api/v1/analytics/token-costs", s.handleTokenCostAnalytics)
 
-	s.mux.HandleFunc("/api/admin/auth/login", s.handleAdminLogin)
-	s.mux.HandleFunc("/api/admin/auth/logout", s.handleAdminLogout)
+	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/auth/login", s.handleAdminLogin, jsonMethodNotAllowed(http.MethodPost))
+	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/auth/logout", s.handleAdminLogout, jsonMethodNotAllowed(http.MethodPost))
 	s.mux.HandleFunc("/api/admin/auth/me", s.handleAdminMe)
-	s.mux.HandleFunc("/api/admin/auth/reset-password", s.handleAdminResetPassword)
-	s.mux.HandleFunc("/api/admin/auth/identity-providers", s.handleAdminAuthIdentityProviders)
-	s.mux.HandleFunc("/api/admin/auth/oauth/start", s.handleAdminOAuthStart)
-	s.mux.HandleFunc("/api/admin/auth/oauth/callback", s.handleAdminOAuthCallback)
+	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/auth/reset-password", s.handleAdminResetPassword, jsonMethodNotAllowed(http.MethodPost))
+	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/auth/identity-providers", s.handleAdminAuthIdentityProviders, jsonMethodNotAllowed(http.MethodGet))
+	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/auth/oauth/start", s.handleAdminOAuthStart, jsonMethodNotAllowed(http.MethodGet))
+	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/auth/oauth/callback", s.handleAdminOAuthCallback, jsonMethodNotAllowed(http.MethodGet))
 	s.mux.HandleFunc("/api/admin/overview", s.handleAdminOverview)
 	s.mux.HandleFunc("/api/admin/playground/chat", s.handleAdminPlaygroundChat)
 	s.mux.HandleFunc("/api/admin/playground/chat/stream", s.handleAdminPlaygroundChatStream)
