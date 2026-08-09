@@ -55,6 +55,7 @@ type PlaygroundCandidate = {
   liveTTFTMS?: number;
   result?: PlaygroundChatPayload;
   error?: string;
+  blocked?: boolean;
 };
 
 type PlaygroundTurn = {
@@ -226,7 +227,6 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
   const [showCode, setShowCode] = useState(false);
   const [showModelDetails, setShowModelDetails] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
   const [nowMS, setNowMS] = useState(Date.now());
   const [showNewContent, setShowNewContent] = useState(false);
   const activeRequestRef = useRef<AbortController | null>(null);
@@ -311,7 +311,6 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
     const controller = new AbortController();
     activeRequestRef.current = controller;
     setLoading(true);
-    setError("");
     let terminalEventSeen = false;
     try {
       await streamPlaygroundChat(api, buildPayload(messages, requestModel), controller.signal, (_name, event: PlaygroundStreamEvent) => {
@@ -362,8 +361,8 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
         ...candidate,
         status: cancelled ? "cancelled" : "failed",
         error: message,
+        blocked: !cancelled && message.startsWith(tx("请求已被内容安全策略阻断。")),
       }));
-      if (!cancelled) setError(message);
     } finally {
       if (activeRequestRef.current === controller) activeRequestRef.current = null;
       setLoading(false);
@@ -437,13 +436,11 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
     setModelName(pendingModelName);
     setPendingModelName("");
     if (!keepContext) setTurns([]);
-    setError("");
   }
 
   function clearHistory() {
     activeRequestRef.current?.abort();
     setTurns([]);
-    setError("");
   }
 
   function exportSession() {
@@ -588,8 +585,6 @@ export function PlaygroundPanel({ api, data, canViewRoutes }: { api: ApiContext;
         ) : null}
 
         {showCode ? <div className="playground-code-drawer"><PlaygroundAPIExamples baseURL={api.baseURL} modelName={modelName || "gpt-4.1-mini"} /></div> : null}
-        {error ? <div className="status-line error playground-error">{error}</div> : null}
-
         <div className="playground-chat" ref={chatRef} onScroll={handleChatScroll}>
           {turns.length === 0 ? (
             <div className="playground-empty">
@@ -660,10 +655,10 @@ function PlaygroundCandidateCard({ candidate, nowMS, canViewRoutes, turnIndex }:
   const rate = timing?.output_tokens_per_second ?? timing?.end_to_end_tokens_per_second;
   const usageKnown = hasPlaygroundUsage(usage);
   const modeLabel = (timing?.mode ?? candidate.mode) === "buffered" ? tx("非流式 · 缓冲返回") : tx("流式");
-  const statusLabel = candidate.status === "cancelled" ? tx("已取消") : candidate.status === "failed" ? tx("失败") : tx("已完成");
+  const statusLabel = candidate.blocked ? tx("已阻断") : candidate.status === "cancelled" ? tx("已取消") : candidate.status === "failed" ? tx("失败") : tx("已完成");
   return (
     <div className={`playground-message assistant ${candidate.status}`}>
-      <p>{candidate.content || (isStreaming ? tx("等待模型返回...") : tx("没有可展示内容"))}</p>
+      <p>{candidate.content || candidate.error || (isStreaming ? tx("等待模型返回...") : tx("没有可展示内容"))}</p>
       {isStreaming ? (
         <div className="playground-live-metrics">
           <span className="playground-live-dot" />
@@ -691,7 +686,6 @@ function PlaygroundCandidateCard({ candidate, nowMS, canViewRoutes, turnIndex }:
               {timing?.completed_at ? <span>{formatClock(timing.completed_at)}</span> : null}
             </div>
           ) : null}
-          {candidate.error ? <div className="playground-candidate-error">{candidate.error}</div> : null}
           {payload ? <PlaygroundDiagnostics payload={payload} canViewRoutes={canViewRoutes} turnIndex={turnIndex} /> : null}
         </>
       )}
