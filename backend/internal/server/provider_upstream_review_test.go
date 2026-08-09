@@ -155,23 +155,40 @@ func TestProviderUpstreamLoopbackExplicitOptIn(t *testing.T) {
 	}
 }
 
-func TestProviderUpstreamClassifiesIPv4ProtocolAssignments(t *testing.T) {
-	for _, raw := range []string{"192.0.0.1", "192.0.0.6", "192.0.0.170", "192.0.0.171"} {
-		ip := net.ParseIP(raw)
-		if err := checkProviderUpstreamLiteralDial(ip, nil); !errors.Is(err, errProviderUpstreamDialDisallowed) {
-			t.Fatalf("expected dial target %s to be rejected, got %v", raw, err)
-		}
-		if err := ValidateProviderUpstreamBaseURL("http://" + raw + "/v1"); err == nil {
-			t.Fatalf("expected save-time target %s to be rejected", raw)
-		}
+func TestProviderUpstreamClassifiesSpecialPurposeAssignments(t *testing.T) {
+	for _, raw := range []string{
+		"192.0.0.1", "192.0.0.6", "192.0.0.8", "192.0.0.170", "192.0.0.171",
+		"192.88.99.2",
+		"100::1", "100:0:0:1::1", "2001:2::1", "3fff::1", "5f00::1",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			ip := net.ParseIP(raw)
+			if err := checkProviderUpstreamLiteralDial(ip, nil); !errors.Is(err, errProviderUpstreamDialDisallowed) {
+				t.Fatalf("expected dial target %s to be rejected, got %v", raw, err)
+			}
+			host := raw
+			if ip.To4() == nil {
+				host = "[" + raw + "]"
+			}
+			if err := ValidateProviderUpstreamBaseURL("http://" + host + "/v1"); err == nil {
+				t.Fatalf("expected save-time target %s to be rejected", raw)
+			}
+		})
 	}
 
-	for _, raw := range []string{"192.0.0.9", "192.0.0.10"} {
+	for _, raw := range []string{
+		"192.0.0.9", "192.0.0.10",
+		"2001:1::1", "2001:1::2", "2001:1::3",
+	} {
 		ip := net.ParseIP(raw)
 		if err := checkProviderUpstreamLiteralDial(ip, nil); err != nil {
 			t.Fatalf("expected globally reachable target %s to pass dial classification, got %v", raw, err)
 		}
-		if err := ValidateProviderUpstreamBaseURL("http://" + raw + "/v1"); err != nil {
+		host := raw
+		if ip.To4() == nil {
+			host = "[" + raw + "]"
+		}
+		if err := ValidateProviderUpstreamBaseURL("http://" + host + "/v1"); err != nil {
 			t.Fatalf("expected globally reachable target %s to pass save-time validation, got %v", raw, err)
 		}
 	}
