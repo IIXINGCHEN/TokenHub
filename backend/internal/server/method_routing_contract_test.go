@@ -40,6 +40,7 @@ func TestMethodRoutingContracts(t *testing.T) {
 func TestMethodRoutingPreservesAdminAuthenticationOrder(t *testing.T) {
 	response := methodRoutingRequest(New(NewMemoryStore()).Handler(), http.MethodPost, "/api/admin/auth/me", "")
 	assertJSONError(t, response, http.StatusUnauthorized, "invalid_admin_token")
+	assertAllowHeader(t, response, "")
 }
 
 func TestMethodRoutingPreservesAnthropicErrorShape(t *testing.T) {
@@ -53,15 +54,16 @@ func TestMethodRoutingPreservesAnthropicErrorShape(t *testing.T) {
 	var payload struct {
 		Type  string `json:"type"`
 		Error struct {
-			Type string `json:"type"`
-			Code string `json:"code"`
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
 		} `json:"error"`
 		RequestID string `json:"request_id"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode Anthropic method error: %v", err)
 	}
-	if payload.Type != "error" || payload.Error.Type != "invalid_request_error" || payload.Error.Code != "method_not_allowed" {
+	if payload.Type != "error" || payload.Error.Type != "invalid_request_error" || payload.Error.Code != "method_not_allowed" || payload.Error.Message == "" {
 		t.Fatalf("unexpected Anthropic method error: %#v", payload)
 	}
 	assertRequestID(t, response, payload.RequestID)
@@ -108,7 +110,9 @@ func assertJSONError(t *testing.T, response *httptest.ResponseRecorder, wantStat
 	}
 	var payload struct {
 		Error struct {
-			Code string `json:"code"`
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Code    string `json:"code"`
 		} `json:"error"`
 		RequestID string `json:"request_id"`
 	}
@@ -117,6 +121,12 @@ func assertJSONError(t *testing.T, response *httptest.ResponseRecorder, wantStat
 	}
 	if payload.Error.Code != wantCode {
 		t.Fatalf("error code = %q, want %q", payload.Error.Code, wantCode)
+	}
+	if payload.Error.Type != wantCode {
+		t.Fatalf("error type = %q, want %q", payload.Error.Type, wantCode)
+	}
+	if payload.Error.Message == "" {
+		t.Fatal("error message is empty")
 	}
 	assertRequestID(t, response, payload.RequestID)
 }
@@ -133,6 +143,16 @@ func assertRequestID(t *testing.T, response *httptest.ResponseRecorder, bodyRequ
 
 func assertAllowHeader(t *testing.T, response *httptest.ResponseRecorder, want string) {
 	t.Helper()
+	_, present := response.Header()[http.CanonicalHeaderKey("Allow")]
+	if want == "" {
+		if present {
+			t.Fatalf("Allow header is present with value %q, want it absent", response.Header().Get("Allow"))
+		}
+		return
+	}
+	if !present {
+		t.Fatalf("Allow header is absent, want %q", want)
+	}
 	if got := response.Header().Get("Allow"); got != want {
 		t.Fatalf("Allow = %q, want %q", got, want)
 	}
