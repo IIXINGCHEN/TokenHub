@@ -422,11 +422,14 @@ func (s *Server) executeRoutedPlaygroundStream(
 	events *playgroundEventStream,
 ) (playgroundStreamResult, RouteSelection, Usage, []RouteAttempt, error) {
 	allowEffortFallback := normalizedReasoningEffort(req.ReasoningEffort) != nil
-	responsesReq := playgroundChatResponsesRequest(req)
 	var lastResult playgroundStreamResult
 	result, route, usage, attempts, err := executeRoutedWithStore(
 		r.Context(), s.store, routed, allowEffortFallback,
 		func(ctx context.Context, candidate RouteSelection, omitReasoningEffort bool, _ int) (playgroundStreamResult, Usage, error) {
+			responsesReq, useResponses, conversionErr := playgroundResponsesRequestForRoute(candidate, req)
+			if conversionErr != nil {
+				return playgroundStreamResult{}, Usage{}, conversionErr
+			}
 			prepared, prepareErr := s.prepareRouteForUpstream(ctx, candidate)
 			if prepareErr != nil {
 				return playgroundStreamResult{}, Usage{}, prepareErr
@@ -434,7 +437,7 @@ func (s *Server) executeRoutedPlaygroundStream(
 			var attemptResult playgroundStreamResult
 			var attemptUsage Usage
 			var attemptErr error
-			if prepared.Provider.Type == ProviderOpenAICodex {
+			if useResponses {
 				upstreamReq := responsesReq
 				if omitReasoningEffort {
 					upstreamReq = withoutResponsesReasoningEffort(upstreamReq)
