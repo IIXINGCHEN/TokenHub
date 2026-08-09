@@ -17,20 +17,22 @@ func TestMethodRoutingContracts(t *testing.T) {
 	}
 
 	tests := []struct {
-		name   string
-		method string
-		path   string
-		want   string
+		name      string
+		method    string
+		path      string
+		wantCode  string
+		wantAllow string
 	}{
-		{name: "health wrong method", method: http.MethodPost, path: "/livez", want: "method_not_allowed"},
-		{name: "admin login wrong method", method: http.MethodGet, path: "/api/admin/auth/login", want: "method_not_allowed"},
-		{name: "gateway wrong method", method: http.MethodGet, path: "/v1/chat/completions", want: "method_not_allowed"},
-		{name: "models rejects head", method: http.MethodHead, path: "/v1/models", want: "method_not_allowed"},
+		{name: "health wrong method", method: http.MethodPost, path: "/livez", wantCode: "method_not_allowed", wantAllow: ""},
+		{name: "admin login wrong method", method: http.MethodGet, path: "/api/admin/auth/login", wantCode: "method_not_allowed", wantAllow: ""},
+		{name: "gateway wrong method", method: http.MethodGet, path: "/v1/chat/completions", wantCode: "method_not_allowed", wantAllow: ""},
+		{name: "models rejects head", method: http.MethodHead, path: "/v1/models", wantCode: "method_not_allowed", wantAllow: ""},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			response := methodRoutingRequest(app, test.method, test.path, "")
-			assertJSONError(t, response, http.StatusMethodNotAllowed, test.want)
+			assertJSONError(t, response, http.StatusMethodNotAllowed, test.wantCode)
+			assertAllowHeader(t, response, test.wantAllow)
 		})
 	}
 }
@@ -63,6 +65,7 @@ func TestMethodRoutingPreservesAnthropicErrorShape(t *testing.T) {
 		t.Fatalf("unexpected Anthropic method error: %#v", payload)
 	}
 	assertRequestID(t, response, payload.RequestID)
+	assertAllowHeader(t, response, "")
 }
 
 func TestMethodRoutingPreservesCORSPreflight(t *testing.T) {
@@ -125,5 +128,12 @@ func assertRequestID(t *testing.T, response *httptest.ResponseRecorder, bodyRequ
 	}
 	if headerRequestID := response.Header().Get("x-request-id"); headerRequestID != bodyRequestID {
 		t.Fatalf("body request_id = %q, header x-request-id = %q", bodyRequestID, headerRequestID)
+	}
+}
+
+func assertAllowHeader(t *testing.T, response *httptest.ResponseRecorder, want string) {
+	t.Helper()
+	if got := response.Header().Get("Allow"); got != want {
+		t.Fatalf("Allow = %q, want %q", got, want)
 	}
 }
