@@ -156,18 +156,10 @@ func (s *Server) handleAdminProviderAdapters(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) handleLive(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "service": "tokenhub-backend"})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 	if err := s.store.Ping(ctx); err != nil {
