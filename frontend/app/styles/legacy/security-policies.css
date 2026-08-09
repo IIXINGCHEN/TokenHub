@@ -253,6 +253,24 @@
   line-height: 1.45;
 }
 
+.guardrail-pattern-note {
+  min-height: 34px;
+  border-left: 2px solid var(--accent);
+  padding: 7px 9px;
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.guardrail-pattern-note svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
 .guardrail-model-note svg {
   flex: 0 0 auto;
   margin-top: 1px;

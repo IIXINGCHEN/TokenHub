@@ -386,7 +386,7 @@ function DetectionItemEditor({ item, itemNumber, onChange, onRemove }: { item: G
       {open ? (
         <div className="guardrail-detector-body">
           <label className="field"><span>{tx("名称")}</span><input onChange={(event) => onChange({ ...item, name: event.target.value })} placeholder={tx("检测项名称")} value={item.name} /></label>
-          <label className="field"><span>{tx("检测类型")}</span><select onChange={(event) => onChange(newDetectionItem(event.target.value as GuardrailDetectorType))} value={item.detector_type}>{detectorTypes.map((type) => <option key={type} value={type}>{tx(detectorTypeLabel(type))}</option>)}</select></label>
+          <label className="field"><span>{tx("检测类型")}</span><select onChange={(event) => onChange(newDetectionItem(event.target.value as GuardrailDetectorType))} value={item.detector_type}>{detectorTypes.map((type) => <option key={type} value={type}>{tx(detectorTypeLabel(type))}</option>)}</select><small>{tx(detectorTypeDescription(item.detector_type))}</small></label>
           <label className="field"><span>{tx("命中动作")}</span><select onChange={(event) => onChange({ ...item, action: event.target.value as GuardrailAction })} value={item.action}>{supportedActions.map((action) => <option key={action} value={action}>{tx(actionLabel(action))}</option>)}</select></label>
           {item.detector_type === "pattern" ? <PatternConfig item={item} onChange={onChange} /> : null}
           {item.detector_type === "sensitive_data" ? <SensitiveDataConfig item={item} onChange={onChange} /> : null}
@@ -398,7 +398,7 @@ function DetectionItemEditor({ item, itemNumber, onChange, onRemove }: { item: G
 }
 
 function PatternConfig({ item, onChange }: { item: GuardrailDetectionItem; onChange: (item: GuardrailDetectionItem) => void }) {
-  return <><label className="field guardrail-wide-field"><span>{tx("关键词")}</span><textarea onChange={(event) => onChange({ ...item, config: { ...item.config, keywords: lines(event.target.value) } })} placeholder={tx("每行一个关键词")} value={stringList(item.config.keywords).join("\n")} /></label><label className="field guardrail-wide-field"><span>{tx("安全正则")}</span><textarea onChange={(event) => onChange({ ...item, config: { ...item.config, regex: lines(event.target.value) } })} placeholder={tx("每行一个正则表达式")} value={stringList(item.config.regex).join("\n")} /></label></>;
+  return <><div className="guardrail-pattern-note guardrail-wide-field"><Info size={14} /><span>{tx("任意一个关键词或正则表达式匹配时，即视为命中。")}</span></div><label className="field guardrail-wide-field"><span>{tx("关键词（直接匹配）")}</span><textarea onChange={(event) => onChange({ ...item, config: { ...item.config, keywords: lines(event.target.value) } })} placeholder={tx("每行一项，例如：内部机密")} value={stringList(item.config.keywords).join("\n")} /><small>{tx("适合禁止词、内部代号和固定短语。")}</small></label><label className="field guardrail-wide-field"><span>{tx("正则表达式（高级）")}</span><textarea onChange={(event) => onChange({ ...item, config: { ...item.config, regex: lines(event.target.value) } })} placeholder={tx("每行一个表达式，例如：TH-[0-9]{6}")} value={stringList(item.config.regex).join("\n")} /><small>{tx("适合编号、格式规则或需要灵活匹配的内容。")}</small></label></>;
 }
 
 function SensitiveDataConfig({ item, onChange }: { item: GuardrailDetectionItem; onChange: (item: GuardrailDetectionItem) => void }) {
@@ -415,7 +415,7 @@ function newPolicyDraft(): GuardrailPolicyDraft {
 }
 
 function newDetectionItem(type: GuardrailDetectorType): GuardrailDetectionItem {
-  if (type === "pattern") return { name: tx("词表与模式"), detector_type: type, action: "block", config: { keywords: [], regex: [], case_sensitive: false } };
+  if (type === "pattern") return { name: tx("自定义文本规则"), detector_type: type, action: "block", config: { keywords: [], regex: [], case_sensitive: false } };
   if (type === "model") return { name: tx("模型内容分类"), detector_type: type, action: "audit", config: { block_on: "unsafe", on_unavailable: "allow_and_audit" } };
   return { name: tx("敏感数据"), detector_type: type, action: "block", config: { data_types: ["credential"] } };
 }
@@ -434,7 +434,7 @@ function validateDraft(draft: GuardrailPolicyDraft) {
   if (draft.detection_items.some((item) => !item.name.trim())) return tx("请输入检测项名称");
   if (draft.bindings.length === 0) return tx("请选择至少一个项目");
   for (const item of draft.detection_items) {
-    if (item.detector_type === "pattern" && stringList(item.config.keywords).length === 0 && stringList(item.config.regex).length === 0) return tx("词表与模式至少需要一个关键词或正则表达式");
+    if (item.detector_type === "pattern" && stringList(item.config.keywords).length === 0 && stringList(item.config.regex).length === 0) return tx("自定义文本规则至少需要一个关键词或正则表达式");
     if (item.detector_type === "sensitive_data" && stringList(item.config.data_types).length === 0) return tx("请至少选择一种敏感数据类型");
   }
   return "";
@@ -481,7 +481,8 @@ function utf8ByteOffsetToStringIndex(text: string, byteOffset: number) {
   }
   return index;
 }
-function detectorTypeLabel(type: GuardrailDetectorType) { return type === "pattern" ? "词表与模式" : type === "sensitive_data" ? "敏感数据" : "模型检测"; }
+function detectorTypeLabel(type: GuardrailDetectorType) { return type === "pattern" ? "自定义文本规则" : type === "sensitive_data" ? "敏感信息识别" : "AI 内容审核"; }
+function detectorTypeDescription(type: GuardrailDetectorType) { return type === "pattern" ? "按关键词或正则表达式匹配请求文本。" : type === "sensitive_data" ? "识别身份证号、手机号、凭证等敏感信息。" : "使用独立审核模型判断不安全或争议内容。"; }
 function actionLabel(action: GuardrailAction) { return action === "audit" ? "审计" : action === "mask" ? "脱敏" : "阻断"; }
 function testActionLabel(action: GuardrailTestResult["action"]) { return action === "allow" ? "放行" : actionLabel(action); }
 function dataTypeLabel(type: string) {
@@ -489,7 +490,7 @@ function dataTypeLabel(type: string) {
   return labels[type] ?? type;
 }
 function findingCategoryLabel(category: string) {
-  if (category === "pattern") return "自定义词表或正则";
+  if (category === "pattern") return "关键词或正则匹配";
   if (category === "unsafe") return "模型判定为不安全";
   if (category === "controversial") return "模型判定为争议内容";
   return dataTypeLabel(category);

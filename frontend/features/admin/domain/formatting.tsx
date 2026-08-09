@@ -311,7 +311,7 @@ function guardrailCategoryLabel(category: string) {
   const labels: Record<string, string> = {
     credential: "云凭据与访问密钥", email: "邮箱地址", phone: "手机号码", cn_id_card: "中国身份证号",
     bank_card: "银行卡号", person_name: "姓名", address: "地址", birth_date: "出生日期",
-    pattern: "自定义词表或正则", unsafe: "模型判定为不安全", controversial: "模型判定为争议内容",
+    pattern: "关键词或正则匹配", unsafe: "模型判定为不安全", controversial: "模型判定为争议内容",
   };
   return labels[category] ?? category;
 }
