@@ -1,7 +1,7 @@
 import { type ApiExampleLanguage, type AppData, type Model, type ModelRoute, type PlaygroundChatPayload, type ProviderCatalogModel, routeViews, type ViewKey } from "../core/types";
 import { modelCategory } from "./catalog";
 import { codexImageCapableResources, findProvider, findProviderResource, isCodexSubscriptionImageModel, modelRoutesFor, stringifyForm, stringifyValue } from "./entities";
-import { tx } from "../i18n/runtime";
+import { guardrailBlockedDiagnostic, languageLocale, tx } from "../i18n/runtime";
 import { preferredModelCategories } from "../shared/ui";
 
 export function initialView(): ViewKey {
@@ -289,12 +289,7 @@ export async function readAPIError(resp: Response) {
     const rawMatches: unknown[] = Array.isArray(payload?.error?.details?.policy_matches) ? payload.error.details.policy_matches : [];
     const policyLabels = Array.from(new Set(rawMatches.map(guardrailPolicyMatchLabel).filter((label): label is string => Boolean(label)))).slice(0, 3);
     const requestID = typeof payload?.request_id === "string" ? payload.request_id.trim() : "";
-    const details = [
-      labels.length > 0 ? `${tx("原因")}：${labels.map((label) => tx(label)).join("、")}` : "",
-      policyLabels.length > 0 ? `${tx("命中策略")}：${policyLabels.join("、")}` : "",
-      requestID ? `${tx("请求 ID")}：${requestID}` : "",
-    ].filter(Boolean);
-    return [tx("请求已被内容安全策略阻断。"), details.join("；")].filter(Boolean).join(" ");
+    return guardrailBlockedDiagnostic(labels.map((label) => tx(label)), policyLabels, requestID);
   }
   return `${message} (${code})`;
 }
@@ -419,5 +414,7 @@ export function routeStrategyLabel(value?: string) {
 
 export function formatTime(value: string) {
   if (!value) return "-";
-  return new Date(value).toLocaleString();
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return new Intl.DateTimeFormat(languageLocale(), { dateStyle: "medium", timeStyle: "medium" }).format(date);
 }

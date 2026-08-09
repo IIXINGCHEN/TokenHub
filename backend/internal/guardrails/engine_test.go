@@ -72,6 +72,31 @@ func TestEngineMasksEverySensitiveDataMatch(t *testing.T) {
 	}
 }
 
+func TestEngineMasksCompletePEMPrivateKey(t *testing.T) {
+	policy := mustNormalizePolicy(t, Policy{
+		Name: "Mask private keys",
+		DetectionItems: []DetectionItem{{
+			Name: "Credentials", DetectorType: DetectorSensitiveData, Action: ActionMask,
+			Config: map[string]any{"data_types": []string{"credential"}},
+		}},
+		Bindings: []Binding{{ScopeType: ScopeAllProjects}},
+	})
+	privateKey := "-----BEGIN PRIVATE KEY-----\nQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=\n-----END PRIVATE KEY-----"
+	decision, err := NewEngine(nil).Evaluate(context.Background(), EvaluationRequest{
+		Fragments: []Fragment{{ID: "input", Text: "before\n" + privateKey + "\nafter", Mutable: true}}, Policies: []Policy{policy},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	masked := decision.Replacements["input"]
+	if masked != "before\n[REDACTED]\nafter" {
+		t.Fatalf("expected the complete PEM block to be masked, got %q", masked)
+	}
+	if strings.Contains(masked, "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo") || strings.Contains(masked, "END PRIVATE KEY") {
+		t.Fatalf("masked output retained private-key material: %q", masked)
+	}
+}
+
 func TestEngineDetectsSensitiveDataExamples(t *testing.T) {
 	tests := []struct {
 		name     string

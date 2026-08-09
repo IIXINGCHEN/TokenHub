@@ -36,16 +36,22 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		writeAnthropicError(w, r, err)
 		return
 	}
-	guardrailStarted := time.Now().UTC()
-	decision, err := s.evaluateOutboundGuardrails(r.Context(), project.ID, anthropicGuardrailTargets(&req))
-	auditPayload := guardrailRequestAuditPayload(req.Model, decision, req.Raw)
+	admittedAt := time.Now().UTC()
+	call, err := s.admitRoutedCall(w, r, project, key, req.Model, req.Stream, anthropicTokenReservation(req))
 	if err != nil {
-		requestID := s.finishRejectedCall(r, guardrailStarted, project, key, req.Model, req.Stream, err, guardrailAuditSummary{Model: req.Model, Guardrail: decision})
+		requestID := s.finishRejectedCall(r, admittedAt, project, key, req.Model, req.Stream, err, guardrailAuditSummary{Model: req.Model})
 		w.Header().Set("x-request-id", requestID)
 		writeAnthropicError(w, r, err)
 		return
 	}
-	routed, ok := s.startAnthropicRoutedCall(w, r, project, key, req, auditPayload)
+	decision, err := s.evaluateOutboundGuardrails(r.Context(), call.Project.ID, anthropicGuardrailTargets(&req))
+	auditPayload := guardrailRequestAuditPayload(req.Model, decision, req.Raw)
+	if err != nil {
+		s.finishFailedRoutedCall(r, RoutedCall{Call: call}, nil, Usage{}, err, auditPayload)
+		writeAnthropicError(w, r, err)
+		return
+	}
+	routed, ok := s.prepareAnthropicRoutedCall(w, r, call, key, req, auditPayload)
 	if !ok {
 		return
 	}
@@ -151,21 +157,7 @@ func keyCanAccessModel(store Store, key APIKey, model string) bool {
 	return false
 }
 
-func (s *Server) startAnthropicRoutedCall(w http.ResponseWriter, r *http.Request, project Project, key APIKey, req anthropicMessagesRequest, auditPayload any) (RoutedCall, bool) {
-	admittedAt := time.Now().UTC()
-	call, err := s.store.StartCall(r.Context(), project, key, req.Model, anthropicTokenReservation(req))
-	call.Stream = req.Stream
-	if err != nil {
-		requestID := s.finishRejectedCall(r, admittedAt, project, key, req.Model, req.Stream, err, auditPayload)
-		w.Header().Set("x-request-id", requestID)
-		writeAnthropicError(w, r, err)
-		return RoutedCall{}, false
-	}
-	w.Header().Set("x-request-id", call.RequestID)
-	writeRateLimitHeaders(w.Header(), call.RateLimitHeaders)
-	if call.requestContext != nil {
-		*r = *r.WithContext(call.requestContext)
-	}
+func (s *Server) prepareAnthropicRoutedCall(w http.ResponseWriter, r *http.Request, call CallContext, key APIKey, req anthropicMessagesRequest, auditPayload any) (RoutedCall, bool) {
 	routes, err := s.store.SelectRouteCandidates(req.Model)
 	if err != nil {
 		err = s.annotateRoutingPolicyForCandidateError(&call, err)

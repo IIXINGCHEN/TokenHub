@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"tokenhub/backend/internal/guardrails"
@@ -171,15 +172,27 @@ func TestGuardrailsBlockAdminPlaygroundBeforeRouting(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := New(store).Handler()
+	expectedRequestIDs := map[string]bool{}
 	for _, path := range []string{"/api/admin/playground/chat", "/api/admin/playground/chat/stream"} {
 		t.Run(path, func(t *testing.T) {
-			response := doJSON(t, app, http.MethodPost, path, map[string]any{
+			response := doGuardrailProtocolRequest(t, app, path, map[string]any{
 				"model":    "gpt-4.1-mini",
 				"messages": []any{map[string]any{"role": "user", "content": "call 13312341234"}},
-			}, "")
-			if response.Code != http.StatusForbidden || !strings.Contains(response.Body, `"code":"guardrail_blocked"`) || !strings.Contains(response.Body, `"categories":["phone"]`) || !strings.Contains(response.Body, `"policy_name":"Block phone numbers"`) || !strings.Contains(response.Body, `"detection_item_name":"Phone"`) {
+			}, "dev_admin_token")
+			if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), `"code":"guardrail_blocked"`) || !strings.Contains(response.Body.String(), `"categories":["phone"]`) || !strings.Contains(response.Body.String(), `"policy_name":"Block phone numbers"`) || !strings.Contains(response.Body.String(), `"detection_item_name":"Phone"`) {
 				t.Fatalf("expected playground request to be blocked, got %d: %s", response.Code, response.Body)
 			}
+			requestID := response.Header().Get("x-request-id")
+			var payload struct {
+				RequestID string `json:"request_id"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("decode blocked response: %v", err)
+			}
+			if requestID == "" || payload.RequestID != requestID {
+				t.Fatalf("response request_id=%q header=%q", payload.RequestID, requestID)
+			}
+			expectedRequestIDs[requestID] = true
 		})
 	}
 	var payloads []RequestPayloadLog
@@ -192,6 +205,90 @@ func TestGuardrailsBlockAdminPlaygroundBeforeRouting(t *testing.T) {
 	for _, payload := range payloads {
 		if strings.Contains(payload.RequestBody, "13312341234") || !strings.Contains(payload.RequestBody, "guardrail") {
 			t.Fatalf("blocked playground audit leaked matched input: %#v", payload)
+		}
+		if !expectedRequestIDs[payload.RequestID] {
+			t.Fatalf("audit request_id=%q does not match a blocked response: %#v", payload.RequestID, expectedRequestIDs)
+		}
+	}
+}
+
+func TestGuardrailModelDetectorRunsOnlyAfterAPIKeyAdmission(t *testing.T) {
+	var detectorCalls atomic.Int64
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		detectorCalls.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{"content": "Safety: Unsafe"}}},
+		})
+	}))
+	defer model.Close()
+
+	store := NewMemoryStore()
+	if err := SeedDemoData(store); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateGuardrailPolicy(guardrails.Policy{
+		Name:   "Model detector",
+		Status: guardrails.StatusActive,
+		DetectionItems: []guardrails.DetectionItem{{
+			Name: "Qwen3Guard", DetectorType: guardrails.DetectorModel, Action: guardrails.ActionBlock,
+			Config: map[string]any{"block_on": "unsafe", "on_unavailable": "block"},
+		}},
+		Bindings: []guardrails.Binding{{ScopeType: guardrails.ScopeAllProjects}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	app := NewWithConfig(store, Config{AdminToken: "dev_admin_token", GuardrailModelURL: model.URL}).Handler()
+	tests := []struct {
+		name    string
+		request func() *httptest.ResponseRecorder
+	}{
+		{
+			name: "chat completions",
+			request: func() *httptest.ResponseRecorder {
+				return doGuardrailProtocolRequest(t, app, "/v1/chat/completions", map[string]any{
+					"model": "model-not-allowed", "messages": []any{map[string]any{"role": "user", "content": "inspect me"}},
+				}, "thk_demo_local")
+			},
+		},
+		{
+			name: "responses",
+			request: func() *httptest.ResponseRecorder {
+				return doGuardrailProtocolRequest(t, app, "/v1/responses", map[string]any{
+					"model": "model-not-allowed", "input": "inspect me",
+				}, "thk_demo_local")
+			},
+		},
+		{
+			name: "anthropic messages",
+			request: func() *httptest.ResponseRecorder {
+				return doAnthropicRequest(t, app, "/v1/messages", map[string]any{
+					"model": "model-not-allowed", "max_tokens": 8,
+					"messages": []any{map[string]any{"role": "user", "content": "inspect me"}},
+				}, "", "thk_demo_local")
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := test.request()
+			if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), `"code":"model_not_allowed"`) {
+				t.Fatalf("expected model admission failure, got %d: %s", response.Code, response.Body.String())
+			}
+		})
+	}
+	if calls := detectorCalls.Load(); calls != 0 {
+		t.Fatalf("guard model was invoked %d times before API-key admission", calls)
+	}
+	var payloads []RequestPayloadLog
+	if err := store.db.Find(&payloads).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(payloads) != len(tests) {
+		t.Fatalf("expected one admission audit per request, got %#v", payloads)
+	}
+	for _, payload := range payloads {
+		if strings.Contains(payload.RequestBody, "inspect me") {
+			t.Fatalf("admission failure persisted uninspected request content: %#v", payload)
 		}
 	}
 }

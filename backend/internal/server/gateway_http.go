@@ -35,17 +35,23 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, NewHTTPError(400, "missing_model", "model is required"))
 		return
 	}
-	guardrailStarted := time.Now().UTC()
-	decision, err := s.evaluateOutboundGuardrails(r.Context(), project.ID, chatGuardrailTargets(&req))
-	auditPayload := guardrailRequestAuditPayload(req.Model, decision, req)
+	admittedAt := time.Now().UTC()
+	call, err := s.admitRoutedCall(w, r, project, key, req.Model, req.Stream, requestTokenReservation(req))
 	if err != nil {
-		requestID := s.finishRejectedCall(r, guardrailStarted, project, key, req.Model, req.Stream, err, guardrailAuditSummary{Model: req.Model, Guardrail: decision})
+		requestID := s.finishRejectedCall(r, admittedAt, project, key, req.Model, req.Stream, err, guardrailAuditSummary{Model: req.Model})
 		w.Header().Set("x-request-id", requestID)
 		writeError(w, r, err)
 		return
 	}
+	decision, err := s.evaluateOutboundGuardrails(r.Context(), call.Project.ID, chatGuardrailTargets(&req))
+	auditPayload := guardrailRequestAuditPayload(req.Model, decision, req)
+	if err != nil {
+		s.finishFailedRoutedCall(r, RoutedCall{Call: call}, nil, Usage{}, err, auditPayload)
+		writeError(w, r, err)
+		return
+	}
 
-	routed, ok := s.startRoutedCallWithAudit(w, r, project, key, req.Model, req.Stream, req, auditPayload)
+	routed, ok := s.prepareAdmittedRoutedCallWithAudit(w, r, call, req.Model, auditPayload)
 	if !ok {
 		return
 	}
@@ -158,16 +164,22 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, NewHTTPError(400, "missing_model", "model is required"))
 		return
 	}
-	guardrailStarted := time.Now().UTC()
-	decision, err := s.evaluateOutboundGuardrails(r.Context(), project.ID, responsesGuardrailTargets(&req))
-	auditPayload := guardrailRequestAuditPayload(req.Model, decision, req)
+	admittedAt := time.Now().UTC()
+	call, err := s.admitRoutedCall(w, r, project, key, req.Model, req.Stream, requestTokenReservation(req))
 	if err != nil {
-		requestID := s.finishRejectedCall(r, guardrailStarted, project, key, req.Model, req.Stream, err, guardrailAuditSummary{Model: req.Model, Guardrail: decision})
+		requestID := s.finishRejectedCall(r, admittedAt, project, key, req.Model, req.Stream, err, guardrailAuditSummary{Model: req.Model})
 		w.Header().Set("x-request-id", requestID)
 		writeError(w, r, err)
 		return
 	}
-	routed, ok := s.startRoutedCallWithAudit(w, r, project, key, req.Model, req.Stream, req, auditPayload)
+	decision, err := s.evaluateOutboundGuardrails(r.Context(), call.Project.ID, responsesGuardrailTargets(&req))
+	auditPayload := guardrailRequestAuditPayload(req.Model, decision, req)
+	if err != nil {
+		s.finishFailedRoutedCall(r, RoutedCall{Call: call}, nil, Usage{}, err, auditPayload)
+		writeError(w, r, err)
+		return
+	}
+	routed, ok := s.prepareAdmittedRoutedCallWithAudit(w, r, call, req.Model, auditPayload)
 	if !ok {
 		return
 	}
@@ -337,19 +349,31 @@ func (s *Server) startRoutedCall(w http.ResponseWriter, r *http.Request, project
 
 func (s *Server) startRoutedCallWithAudit(w http.ResponseWriter, r *http.Request, project Project, key APIKey, model string, stream bool, requestPayload any, auditPayload any) (RoutedCall, bool) {
 	admittedAt := time.Now().UTC()
-	call, err := s.store.StartCall(r.Context(), project, key, model, requestTokenReservation(requestPayload))
-	call.Stream = stream
+	call, err := s.admitRoutedCall(w, r, project, key, model, stream, requestTokenReservation(requestPayload))
 	if err != nil {
 		requestID := s.finishRejectedCall(r, admittedAt, project, key, model, stream, err, auditPayload)
 		w.Header().Set("x-request-id", requestID)
 		writeError(w, r, err)
 		return RoutedCall{}, false
 	}
+	return s.prepareAdmittedRoutedCallWithAudit(w, r, call, model, auditPayload)
+}
+
+func (s *Server) admitRoutedCall(w http.ResponseWriter, r *http.Request, project Project, key APIKey, model string, stream bool, tokenReservation int64) (CallContext, error) {
+	call, err := s.store.StartCall(r.Context(), project, key, model, tokenReservation)
+	call.Stream = stream
+	if err != nil {
+		return CallContext{}, err
+	}
 	w.Header().Set("x-request-id", call.RequestID)
 	writeRateLimitHeaders(w.Header(), call.RateLimitHeaders)
 	if call.requestContext != nil {
 		*r = *r.WithContext(call.requestContext)
 	}
+	return call, nil
+}
+
+func (s *Server) prepareAdmittedRoutedCallWithAudit(w http.ResponseWriter, r *http.Request, call CallContext, model string, auditPayload any) (RoutedCall, bool) {
 	routes, err := s.store.SelectRouteCandidates(model)
 	if err != nil {
 		err = s.annotateRoutingPolicyForCandidateError(&call, err)
@@ -543,6 +567,7 @@ func (s *Server) handleAdminPlaygroundChat(w http.ResponseWriter, r *http.Reques
 	startedAt := time.Now()
 	call := s.newPlaygroundCallContext(user, req.Model, startedAt)
 	requestID := call.RequestID
+	w.Header().Set("x-request-id", requestID)
 	decision, guardrailErr := s.evaluateOutboundGuardrails(r.Context(), call.Project.ID, chatGuardrailTargets(&req))
 	requestAuditPayload := guardrailRequestAuditPayload(req.Model, decision, req)
 	if guardrailErr != nil {

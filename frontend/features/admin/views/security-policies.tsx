@@ -4,7 +4,7 @@ import { AlertCircle, ChevronDown, ChevronRight, FlaskConical, Info, Pencil, Plu
 import { useEffect, useMemo, useRef, useState } from "react";
 import { type ApiContext, type AppData } from "../core/types";
 import { formatTime } from "../domain/formatting";
-import { tx } from "../i18n/runtime";
+import { countWithUnit, guardrailDetectionItemName, millisecondsText, tx } from "../i18n/runtime";
 import { adminFetch, isAuthExpiredError, readAdminError } from "../resources/payloads";
 import { ConfirmDialog, StatusPill } from "../shared/ui";
 
@@ -196,7 +196,7 @@ export function ContentSecurityPolicies({ api, data }: { api: ApiContext; data: 
             <input onChange={(event) => setQuery(event.target.value)} placeholder={tx("搜索策略名称或说明")} type="search" value={query} />
           </div>
           <div className="table-toolbar-actions">
-            <span className="table-result-count">{filteredPolicies.length} {tx("条策略")}</span>
+            <span className="table-result-count">{countWithUnit(filteredPolicies.length, "条策略", "policy", "件のポリシー")}</span>
             <button className="button" onClick={() => setDraft(newPolicyDraft())} type="button"><Plus size={17} />{tx("新增策略")}</button>
           </div>
         </div>
@@ -221,7 +221,7 @@ export function ContentSecurityPolicies({ api, data }: { api: ApiContext; data: 
                   <span><strong>{policy.name}</strong><small>{policy.description || tx("暂无说明")}</small></span>
                   <StatusPill status={policy.status} />
                 </button>
-                <span>{policy.detection_items.length} {tx("项")}</span>
+                <span>{countWithUnit(policy.detection_items.length, "项", "item", "件")}</span>
                 <span>{scopeSummary(policy, data)}</span>
                 <span>{tx("请求发送前")}</span>
                 <span>{formatTime(policy.updated_at ?? "")}</span>
@@ -236,7 +236,7 @@ export function ContentSecurityPolicies({ api, data }: { api: ApiContext; data: 
       </div>
 
       {draft ? <GuardrailPolicyEditor api={api} data={data} draft={draft} saving={saving} onChange={setDraft} onClose={() => !saving && setDraft(null)} onSave={() => void savePolicy()} /> : null}
-      {deletePolicy ? <ConfirmDialog title="删除内容安全策略" message={tx("删除后，这条策略将立即停止生效。此操作无法撤销。")} confirmLabel="删除" loading={saving} onCancel={() => setDeletePolicy(null)} onConfirm={() => void removePolicy()} /> : null}
+      {deletePolicy ? <ConfirmDialog title={tx("删除内容安全策略")} message={tx("删除后，这条策略将立即停止生效。此操作无法撤销。")} confirmLabel={tx("删除")} loading={saving} onCancel={() => setDeletePolicy(null)} onConfirm={() => void removePolicy()} /> : null}
     </section>
   );
 }
@@ -360,7 +360,7 @@ function GuardrailPolicyTestPanel({ error, result, text, testing, onClose, onLoa
         {error ? <div className="guardrail-test-error"><AlertCircle size={15} /><span>{error}</span></div> : null}
         {result ? (
           <div className="guardrail-test-result">
-            <div className={`guardrail-test-decision ${result.action}`}><span>{tx("最终动作")}</span><strong>{tx(testActionLabel(result.action))}</strong><small>{result.duration_ms} ms{result.short_circuited ? ` · ${tx("已短路")}` : ""}{result.detection_degraded ? ` · ${tx("检测降级")}` : ""}</small></div>
+            <div className={`guardrail-test-decision ${result.action}`}><span>{tx("最终动作")}</span><strong>{tx(testActionLabel(result.action))}</strong><small>{millisecondsText(result.duration_ms)}{result.short_circuited ? ` · ${tx("已短路")}` : ""}{result.detection_degraded ? ` · ${tx("检测降级")}` : ""}</small></div>
             {highlightedSegments.some((segment) => segment.matched) ? <div className="guardrail-test-highlight"><span>{tx("命中位置")}</span><pre>{highlightedSegments.map((segment, index) => segment.matched ? <mark key={index}>{segment.text}</mark> : segment.text)}</pre></div> : null}
             {result.masked_text ? <div className="guardrail-test-masked"><span>{tx("脱敏结果")}</span><pre>{result.masked_text}</pre></div> : null}
             <div className="guardrail-test-findings">
@@ -380,7 +380,7 @@ function DetectionItemEditor({ item, itemNumber, onChange, onRemove }: { item: G
   return (
     <article className={open ? "guardrail-detector open" : "guardrail-detector"}>
       <header>
-        <button aria-expanded={open} className="guardrail-detector-toggle" onClick={() => setOpen((value) => !value)} type="button">{open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}<span><strong>{item.name || `${tx("检测项")} ${itemNumber}`}</strong><small>{tx(detectorTypeLabel(item.detector_type))} · {tx(actionLabel(item.action))}</small></span></button>
+        <button aria-expanded={open} className="guardrail-detector-toggle" onClick={() => setOpen((value) => !value)} type="button">{open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}<span><strong>{item.name || guardrailDetectionItemName(itemNumber)}</strong><small>{tx(detectorTypeLabel(item.detector_type))} · {tx(actionLabel(item.action))}</small></span></button>
         <button aria-label={tx("移除检测项")} className="icon-button subtle danger" onClick={onRemove} title={tx("移除检测项")} type="button"><Trash2 size={15} /></button>
       </header>
       {open ? (
@@ -443,8 +443,8 @@ function validateDraft(draft: GuardrailPolicyDraft) {
 function scopeSummary(policy: GuardrailPolicy, data: AppData) {
   if (policy.bindings.some((binding) => binding.scope_type === "all_projects")) return tx("全部项目");
   const count = policy.bindings.filter((binding) => binding.scope_type === "project").length;
-  if (count === 1) return data.projects.find((project) => project.id === policy.bindings[0]?.scope_id)?.name ?? tx("1 个项目");
-  return `${count} ${tx("个项目")}`;
+  if (count === 1) return data.projects.find((project) => project.id === policy.bindings[0]?.scope_id)?.name ?? countWithUnit(1, "个项目", "project", "プロジェクト");
+  return countWithUnit(count, "个项目", "project", "プロジェクト");
 }
 
 function stringList(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []; }

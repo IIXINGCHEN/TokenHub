@@ -234,6 +234,7 @@ func (s *Server) handleAdminPlaygroundChatStream(w http.ResponseWriter, r *http.
 		return
 	}
 	call := s.newPlaygroundCallContext(user, req.Model, admittedAt)
+	w.Header().Set("x-request-id", call.RequestID)
 	decision, guardrailErr := s.evaluateOutboundGuardrails(r.Context(), call.Project.ID, chatGuardrailTargets(&req))
 	requestAuditPayload := guardrailRequestAuditPayload(req.Model, decision, req)
 	if guardrailErr != nil {
