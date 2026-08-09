@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"tokenhub/backend/internal/guardrails"
+
 	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -215,6 +217,9 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 			&ReconciliationRule{}, &ReconciliationRun{}, &ReconciliationItem{},
 			&Project{},
 			&ProjectTeam{},
+			&guardrails.Policy{},
+			&guardrails.DetectionItem{},
+			&guardrails.Binding{},
 			&APIKey{},
 			&Provider{},
 			&ProviderResource{},

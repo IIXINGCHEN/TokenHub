@@ -1,0 +1,505 @@
+package guardrails
+
+import (
+	"context"
+	"errors"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const (
+	ActionAllow = "allow"
+
+	maxEvaluationBytes = 64 * 1024
+)
+
+var ErrInputTooLarge = errors.New("guardrail input exceeds the evaluation limit")
+var ErrModelUnavailable = errors.New("guardrail model detector is unavailable")
+
+type Fragment struct {
+	ID      string
+	Text    string
+	Mutable bool
+}
+
+type EvaluationRequest struct {
+	ProjectID      string
+	Checkpoint     string
+	Protocol       string
+	Fragments      []Fragment
+	Policies       []Policy
+	IgnoreBindings bool
+}
+
+type Finding struct {
+	PolicyID     string `json:"policy_id"`
+	PolicyName   string `json:"policy_name"`
+	ItemID       string `json:"detection_item_id"`
+	ItemName     string `json:"detection_item_name"`
+	DetectorType string `json:"detector_type"`
+	Action       string `json:"action"`
+	Category     string `json:"category"`
+	ReasonCode   string `json:"reason_code"`
+	FragmentID   string `json:"-"`
+	Start        int    `json:"-"`
+	End          int    `json:"-"`
+}
+
+type Decision struct {
+	Action            string            `json:"action"`
+	Findings          []Finding         `json:"findings"`
+	Replacements      map[string]string `json:"-"`
+	ShortCircuited    bool              `json:"short_circuited"`
+	DetectionDegraded bool              `json:"detection_degraded"`
+	DurationMS        int64             `json:"duration_ms"`
+}
+
+type ModelResult struct {
+	Safety     string
+	Categories []string
+}
+
+type ModelDetector interface {
+	Detect(context.Context, string) (ModelResult, error)
+}
+
+type Engine struct {
+	modelDetector ModelDetector
+}
+
+func NewEngine(modelDetector ModelDetector) *Engine {
+	return &Engine{modelDetector: modelDetector}
+}
+
+func (e *Engine) Evaluate(ctx context.Context, request EvaluationRequest) (decision Decision, err error) {
+	started := time.Now()
+	decision = Decision{Action: ActionAllow, Replacements: map[string]string{}}
+	defer func() { decision.DurationMS = time.Since(started).Milliseconds() }()
+
+	if request.Checkpoint == "" {
+		request.Checkpoint = CheckpointBeforeProvider
+	}
+	if request.Protocol == "" {
+		request.Protocol = ProtocolAll
+	}
+	policies := applicablePolicies(request)
+	if len(policies) == 0 {
+		return decision, nil
+	}
+	if evaluationSize(request.Fragments) > maxEvaluationBytes {
+		return decision, ErrInputTooLarge
+	}
+
+	modelItems := make([]policyItem, 0)
+	for _, policy := range policies {
+		for _, item := range policy.DetectionItems {
+			if item.DetectorType == DetectorModel {
+				modelItems = append(modelItems, policyItem{policy: policy, item: item})
+				continue
+			}
+			decision.Findings = append(decision.Findings, deterministicFindings(policy, item, request.Fragments)...)
+		}
+	}
+
+	decision.Action = strictestAction(decision.Findings)
+	if decision.Action == ActionBlock {
+		decision.ShortCircuited = true
+		decision.DurationMS = time.Since(started).Milliseconds()
+		return decision, nil
+	}
+
+	if len(modelItems) > 0 {
+		result, err := e.detectModel(ctx, request.Fragments)
+		if err != nil {
+			decision.DetectionDegraded = true
+			for _, candidate := range modelItems {
+				action := ActionAudit
+				if stringConfig(candidate.item.Config, "on_unavailable") == ActionBlock {
+					action = ActionBlock
+				}
+				decision.Findings = append(decision.Findings, modelFinding(candidate, action, "model_unavailable", "guardrail_model_unavailable"))
+			}
+		} else {
+			for _, candidate := range modelItems {
+				if modelResultMatches(result.Safety, stringConfig(candidate.item.Config, "block_on")) {
+					// Model-generated category text is untrusted and may echo prompt
+					// content. Persist only the closed safety label in findings.
+					category := strings.ToLower(strings.TrimSpace(result.Safety))
+					decision.Findings = append(decision.Findings, modelFinding(candidate, candidate.item.Action, category, "guardrail_model_match"))
+				}
+			}
+		}
+	}
+
+	decision.Action = strictestAction(decision.Findings)
+	if decision.Action == ActionMask {
+		decision.Replacements = maskedFragments(request.Fragments, decision.Findings)
+	}
+	decision.DurationMS = time.Since(started).Milliseconds()
+	return decision, nil
+}
+
+type policyItem struct {
+	policy Policy
+	item   DetectionItem
+}
+
+func (e *Engine) detectModel(ctx context.Context, fragments []Fragment) (ModelResult, error) {
+	if e == nil || e.modelDetector == nil {
+		return ModelResult{}, ErrModelUnavailable
+	}
+	parts := make([]string, 0, len(fragments))
+	for _, fragment := range fragments {
+		if strings.TrimSpace(fragment.Text) != "" {
+			parts = append(parts, fragment.Text)
+		}
+	}
+	return e.modelDetector.Detect(ctx, strings.Join(parts, "\n"))
+}
+
+func applicablePolicies(request EvaluationRequest) []Policy {
+	result := make([]Policy, 0, len(request.Policies))
+	for _, policy := range request.Policies {
+		if policy.Status != StatusActive {
+			continue
+		}
+		if request.IgnoreBindings || policyApplies(policy, request.ProjectID, request.Checkpoint, request.Protocol) {
+			result = append(result, policy)
+		}
+	}
+	return result
+}
+
+func policyApplies(policy Policy, projectID string, checkpoint string, protocol string) bool {
+	for _, binding := range policy.Bindings {
+		if binding.Checkpoint != checkpoint || binding.Protocol != protocol {
+			continue
+		}
+		if binding.ScopeType == ScopeAllProjects || (binding.ScopeType == ScopeProject && binding.ScopeID == projectID) {
+			return true
+		}
+	}
+	return false
+}
+
+type deterministicMatcher struct {
+	expression   *regexp.Regexp
+	captureGroup int
+	category     string
+	reasonCode   string
+	validator    func(string) bool
+}
+
+func deterministicFindings(policy Policy, item DetectionItem, fragments []Fragment) []Finding {
+	matchers := deterministicMatchers(item)
+	if item.Action != ActionMask {
+		for _, fragment := range fragments {
+			for _, matcher := range matchers {
+				if indexes := matcher.firstValidMatch(fragment.Text); indexes != nil {
+					return []Finding{newDeterministicFinding(policy, item, fragment.ID, matcher, indexes)}
+				}
+			}
+		}
+		return nil
+	}
+
+	findings := make([]Finding, 0)
+	for _, fragment := range fragments {
+		for _, matcher := range matchers {
+			for _, indexes := range matcher.allValidMatches(fragment.Text) {
+				findings = append(findings, newDeterministicFinding(policy, item, fragment.ID, matcher, indexes))
+			}
+		}
+	}
+	return findings
+}
+
+func deterministicMatchers(item DetectionItem) []deterministicMatcher {
+	switch item.DetectorType {
+	case DetectorPattern:
+		return patternMatchers(item)
+	case DetectorSensitiveData:
+		return sensitiveDataMatchers(item)
+	default:
+		return nil
+	}
+}
+
+func patternMatchers(item DetectionItem) []deterministicMatcher {
+	matchers := make([]deterministicMatcher, 0)
+	caseSensitive := boolConfig(item.Config, "case_sensitive")
+	for _, keyword := range stringSliceConfig(item.Config, "keywords") {
+		expression := regexp.QuoteMeta(keyword)
+		if !caseSensitive {
+			expression = "(?i)" + expression
+		}
+		matchers = appendMatcher(matchers, expression, "pattern", "guardrail_pattern_match")
+	}
+	for _, expression := range stringSliceConfig(item.Config, "regex") {
+		matchers = appendMatcher(matchers, expression, "pattern", "guardrail_pattern_match")
+	}
+	return matchers
+}
+
+func sensitiveDataMatchers(item DetectionItem) []deterministicMatcher {
+	matchers := make([]deterministicMatcher, 0)
+	for _, dataType := range stringSliceConfig(item.Config, "data_types") {
+		for _, definition := range sensitiveDataDefinitions(dataType) {
+			matchers = appendConfiguredMatcher(matchers, definition.expression, definition.captureGroup, dataType, "guardrail_sensitive_data_match", definition.validator)
+		}
+	}
+	return matchers
+}
+
+type sensitiveDataDefinition struct {
+	expression   string
+	captureGroup int
+	validator    func(string) bool
+}
+
+func sensitiveDataDefinitions(dataType string) []sensitiveDataDefinition {
+	switch dataType {
+	case "credential":
+		return sensitiveDefinitions(
+			`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`,
+			`(?i)\b(?:sk-[a-z0-9_-]{16,}|gh[pousr]_[a-z0-9]{20,}|glpat-[a-z0-9_-]{20,}|xox[baprs]-[a-z0-9-]{20,})\b`,
+			`\bAIza[0-9A-Za-z_-]{35}\b`,
+			`\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b`,
+			`-----BEGIN [A-Z ]*PRIVATE KEY-----`,
+		)
+	case "email":
+		return sensitiveDefinitions(`(?i)\b[a-z0-9.!#$%&'*+/=?^_` + "`" + `{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+\b`)
+	case "phone":
+		return []sensitiveDataDefinition{
+			{expression: `\b1[3-9][0-9]{9}\b`},
+			{expression: `(?:^|[^0-9])((?:\+86|86)[- ]?1[3-9][0-9]{9})(?:$|[^0-9])`, captureGroup: 1},
+		}
+	case "cn_id_card":
+		return []sensitiveDataDefinition{{expression: `\b[1-9][0-9]{5}(?:18|19|20)[0-9]{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12][0-9]|3[01])[0-9]{3}[0-9Xx]\b`, validator: validCNIDCard}}
+	case "bank_card":
+		return []sensitiveDataDefinition{
+			{expression: `(?:银行卡号|银行卡|卡号|bank[ _-]*card)\s*[:：]?\s*([0-9](?:[ -]?[0-9]){12,18})`, captureGroup: 1, validator: validCardLength},
+			{expression: `\b[0-9](?:[ -]?[0-9]){12,18}\b`, validator: validLuhnCard},
+		}
+	case "person_name":
+		return []sensitiveDataDefinition{{expression: `(?:姓名|联系人|收件人|紧急联系人)\s*[:：]\s*([\p{Han}][\p{Han}·]{1,19})`, captureGroup: 1}}
+	case "address":
+		return []sensitiveDataDefinition{{expression: `(?:联系地址|家庭住址|户籍地址|收件地址|通讯地址|地址)\s*[:：]\s*([^\r\n]{6,120})`, captureGroup: 1}}
+	case "birth_date":
+		return []sensitiveDataDefinition{{expression: `(?:出生日期|出生年月|生日)\s*[:：]\s*((?:18|19|20)[0-9]{2}\s*(?:年|[-/.])\s*(?:1[0-2]|0?[1-9])\s*(?:月|[-/.])\s*(?:3[01]|[12][0-9]|0?[1-9])\s*日?)`, captureGroup: 1}}
+	default:
+		return nil
+	}
+}
+
+func sensitiveDefinitions(expressions ...string) []sensitiveDataDefinition {
+	definitions := make([]sensitiveDataDefinition, 0, len(expressions))
+	for _, expression := range expressions {
+		definitions = append(definitions, sensitiveDataDefinition{expression: expression})
+	}
+	return definitions
+}
+
+func appendMatcher(matchers []deterministicMatcher, expression string, category string, reasonCode string) []deterministicMatcher {
+	return appendConfiguredMatcher(matchers, expression, 0, category, reasonCode, nil)
+}
+
+func appendConfiguredMatcher(matchers []deterministicMatcher, expression string, captureGroup int, category string, reasonCode string, validator func(string) bool) []deterministicMatcher {
+	compiled, err := regexp.Compile(expression)
+	if err != nil {
+		return matchers
+	}
+	return append(matchers, deterministicMatcher{expression: compiled, captureGroup: captureGroup, category: category, reasonCode: reasonCode, validator: validator})
+}
+
+func (matcher deterministicMatcher) firstValidMatch(text string) []int {
+	matches := matcher.allValidMatches(text)
+	if len(matches) == 0 {
+		return nil
+	}
+	return matches[0]
+}
+
+func (matcher deterministicMatcher) allValidMatches(text string) [][]int {
+	result := make([][]int, 0)
+	for _, indexes := range matcher.expression.FindAllStringSubmatchIndex(text, -1) {
+		position := matcher.captureGroup * 2
+		if position+1 >= len(indexes) || indexes[position] < 0 || indexes[position+1] <= indexes[position] {
+			continue
+		}
+		start, end := indexes[position], indexes[position+1]
+		if matcher.validator != nil && !matcher.validator(text[start:end]) {
+			continue
+		}
+		result = append(result, []int{start, end})
+	}
+	return result
+}
+
+func digitsOnly(value string) string {
+	var builder strings.Builder
+	for _, character := range value {
+		if character >= '0' && character <= '9' {
+			builder.WriteRune(character)
+		}
+	}
+	return builder.String()
+}
+
+func validCardLength(value string) bool {
+	length := len(digitsOnly(value))
+	return length >= 13 && length <= 19
+}
+
+func validLuhnCard(value string) bool {
+	digits := digitsOnly(value)
+	if len(digits) < 13 || len(digits) > 19 {
+		return false
+	}
+	sum := 0
+	parity := len(digits) % 2
+	for index, character := range digits {
+		digit := int(character - '0')
+		if index%2 == parity {
+			digit *= 2
+			if digit > 9 {
+				digit -= 9
+			}
+		}
+		sum += digit
+	}
+	return sum%10 == 0
+}
+
+func validCNIDCard(value string) bool {
+	value = strings.ToUpper(strings.TrimSpace(value))
+	if len(value) != 18 {
+		return false
+	}
+	if _, err := time.Parse("20060102", value[6:14]); err != nil {
+		return false
+	}
+	weights := [...]int{7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2}
+	checks := "10X98765432"
+	sum := 0
+	for index := 0; index < 17; index++ {
+		digit, err := strconv.Atoi(value[index : index+1])
+		if err != nil {
+			return false
+		}
+		sum += digit * weights[index]
+	}
+	return value[17] == checks[sum%11]
+}
+
+func newDeterministicFinding(policy Policy, item DetectionItem, fragmentID string, matcher deterministicMatcher, indexes []int) Finding {
+	return Finding{
+		PolicyID: policy.ID, PolicyName: policy.Name, ItemID: item.ID, ItemName: item.Name,
+		DetectorType: item.DetectorType, Action: item.Action, Category: matcher.category, ReasonCode: matcher.reasonCode,
+		FragmentID: fragmentID, Start: indexes[0], End: indexes[1],
+	}
+}
+
+func modelFinding(candidate policyItem, action string, category string, reasonCode string) Finding {
+	return Finding{
+		PolicyID: candidate.policy.ID, PolicyName: candidate.policy.Name,
+		ItemID: candidate.item.ID, ItemName: candidate.item.Name,
+		DetectorType: DetectorModel, Action: action, Category: category, ReasonCode: reasonCode,
+	}
+}
+
+func modelResultMatches(safety string, blockOn string) bool {
+	safety = strings.ToLower(strings.TrimSpace(safety))
+	if safety == "unsafe" {
+		return true
+	}
+	return safety == "controversial" && blockOn == "controversial_or_unsafe"
+}
+
+func strictestAction(findings []Finding) string {
+	result := ActionAllow
+	for _, finding := range findings {
+		if actionRank(finding.Action) > actionRank(result) {
+			result = finding.Action
+		}
+	}
+	return result
+}
+
+func actionRank(action string) int {
+	switch action {
+	case ActionBlock:
+		return 3
+	case ActionMask:
+		return 2
+	case ActionAudit:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func maskedFragments(fragments []Fragment, findings []Finding) map[string]string {
+	byFragment := map[string][]Finding{}
+	for _, finding := range findings {
+		if finding.Action == ActionMask && finding.End > finding.Start {
+			byFragment[finding.FragmentID] = append(byFragment[finding.FragmentID], finding)
+		}
+	}
+	result := map[string]string{}
+	for _, fragment := range fragments {
+		if !fragment.Mutable || len(byFragment[fragment.ID]) == 0 {
+			continue
+		}
+		spans := byFragment[fragment.ID]
+		sort.Slice(spans, func(i int, j int) bool { return spans[i].Start < spans[j].Start })
+		var builder strings.Builder
+		cursor := 0
+		for _, span := range spans {
+			if span.Start < cursor || span.Start < 0 || span.End > len(fragment.Text) {
+				continue
+			}
+			builder.WriteString(fragment.Text[cursor:span.Start])
+			builder.WriteString("[REDACTED]")
+			cursor = span.End
+		}
+		builder.WriteString(fragment.Text[cursor:])
+		result[fragment.ID] = builder.String()
+	}
+	return result
+}
+
+func evaluationSize(fragments []Fragment) int {
+	total := 0
+	for _, fragment := range fragments {
+		total += len(fragment.Text)
+	}
+	return total
+}
+
+func stringSliceConfig(config map[string]any, key string) []string {
+	values, _ := config[key].([]any)
+	if typed, ok := config[key].([]string); ok {
+		return typed
+	}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if text, ok := value.(string); ok {
+			result = append(result, text)
+		}
+	}
+	return result
+}
+
+func stringConfig(config map[string]any, key string) string {
+	value, _ := config[key].(string)
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func boolConfig(config map[string]any, key string) bool {
+	value, _ := config[key].(bool)
+	return value
+}

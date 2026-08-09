@@ -1,0 +1,224 @@
+package guardrails
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+)
+
+type testModelDetector struct {
+	result ModelResult
+	err    error
+	calls  int
+}
+
+func (d *testModelDetector) Detect(context.Context, string) (ModelResult, error) {
+	d.calls++
+	return d.result, d.err
+}
+
+func TestEngineMergesActionsAndMasksMutableText(t *testing.T) {
+	policy := mustNormalizePolicy(t, Policy{
+		Name: "Enterprise protection",
+		DetectionItems: []DetectionItem{
+			{Name: "Internal term", DetectorType: DetectorPattern, Action: ActionAudit, Config: map[string]any{"keywords": []string{"Aurora"}}},
+			{Name: "Customer email", DetectorType: DetectorSensitiveData, Action: ActionMask, Config: map[string]any{"data_types": []string{"email"}}},
+		},
+		Bindings: []Binding{{ScopeType: ScopeProject, ScopeID: "prj_one"}},
+	})
+	decision, err := NewEngine(nil).Evaluate(context.Background(), EvaluationRequest{
+		ProjectID: "prj_one", Fragments: []Fragment{{ID: "message.0", Text: "Aurora contact demo@example.com", Mutable: true}}, Policies: []Policy{policy},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Action != ActionMask || decision.Replacements["message.0"] != "Aurora contact [REDACTED]" || len(decision.Findings) != 2 {
+		t.Fatalf("unexpected decision: %#v", decision)
+	}
+}
+
+func TestEngineKeepsOneFindingPerNonMaskDetectionItem(t *testing.T) {
+	policy := mustNormalizePolicy(t, Policy{
+		Name: "Repeated audit",
+		DetectionItems: []DetectionItem{{
+			Name: "Common term", DetectorType: DetectorPattern, Action: ActionAudit,
+			Config: map[string]any{"keywords": []string{"x"}},
+		}},
+		Bindings: []Binding{{ScopeType: ScopeAllProjects}},
+	})
+	decision, err := NewEngine(nil).Evaluate(context.Background(), EvaluationRequest{
+		Fragments: []Fragment{{ID: "input", Text: strings.Repeat("x", maxEvaluationBytes)}}, Policies: []Policy{policy},
+	})
+	if err != nil || decision.Action != ActionAudit || len(decision.Findings) != 1 {
+		t.Fatalf("unexpected decision: %#v err=%v", decision, err)
+	}
+}
+
+func TestEngineMasksEverySensitiveDataMatch(t *testing.T) {
+	policy := mustNormalizePolicy(t, Policy{
+		Name: "Mask all emails",
+		DetectionItems: []DetectionItem{{
+			Name: "Email", DetectorType: DetectorSensitiveData, Action: ActionMask,
+			Config: map[string]any{"data_types": []string{"email"}},
+		}},
+		Bindings: []Binding{{ScopeType: ScopeAllProjects}},
+	})
+	decision, err := NewEngine(nil).Evaluate(context.Background(), EvaluationRequest{
+		Fragments: []Fragment{{ID: "input", Text: "a@example.com and b@example.com", Mutable: true}}, Policies: []Policy{policy},
+	})
+	if err != nil || decision.Replacements["input"] != "[REDACTED] and [REDACTED]" || len(decision.Findings) != 2 {
+		t.Fatalf("unexpected decision: %#v err=%v", decision, err)
+	}
+}
+
+func TestEngineDetectsSensitiveDataExamples(t *testing.T) {
+	tests := []struct {
+		name     string
+		dataType string
+		text     string
+		category string
+	}{
+		{name: "cloud credential", dataType: "credential", text: "token sk-example_12345678901234567890", category: "credential"},
+		{name: "email", dataType: "email", text: "电子邮箱：demo@example.com", category: "email"},
+		{name: "phone", dataType: "phone", text: "联系电话：13812345678", category: "phone"},
+		{name: "validated identity card", dataType: "cn_id_card", text: "身份证号码：11010519491231002X", category: "cn_id_card"},
+		{name: "labelled bank card", dataType: "bank_card", text: "银行卡号：6222020200123456789", category: "bank_card"},
+		{name: "luhn bank card", dataType: "bank_card", text: "payment 4111 1111 1111 1111", category: "bank_card"},
+		{name: "labelled person name", dataType: "person_name", text: "紧急联系人：李雯 联系电话：13987654321", category: "person_name"},
+		{name: "labelled address", dataType: "address", text: "联系地址：上海市黄浦区南京东路 123 弄 4 号 602 室", category: "address"},
+		{name: "labelled birth date", dataType: "birth_date", text: "出生日期：1992 年 05 月 16 日", category: "birth_date"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			policy := mustNormalizePolicy(t, Policy{
+				Name: "Sensitive data examples",
+				DetectionItems: []DetectionItem{{
+					Name: "Sensitive data", DetectorType: DetectorSensitiveData, Action: ActionMask,
+					Config: map[string]any{"data_types": []string{test.dataType}},
+				}},
+				Bindings: []Binding{{ScopeType: ScopeAllProjects}},
+			})
+			decision, err := NewEngine(nil).Evaluate(context.Background(), EvaluationRequest{
+				Fragments: []Fragment{{ID: "input", Text: test.text, Mutable: true}}, Policies: []Policy{policy},
+			})
+			if err != nil || len(decision.Findings) != 1 || decision.Findings[0].Category != test.category {
+				t.Fatalf("unexpected decision=%#v err=%v", decision, err)
+			}
+			if !strings.Contains(decision.Replacements["input"], "[REDACTED]") {
+				t.Fatalf("expected masked replacement, got %q", decision.Replacements["input"])
+			}
+			if test.dataType == "birth_date" && decision.Replacements["input"] != "出生日期：[REDACTED]" {
+				t.Fatalf("expected complete date masking, got %q", decision.Replacements["input"])
+			}
+		})
+	}
+}
+
+func TestSensitiveDataValidationAvoidsCommonNumericFalsePositives(t *testing.T) {
+	tests := []struct {
+		name     string
+		dataType string
+		text     string
+	}{
+		{name: "invalid identity checksum", dataType: "cn_id_card", text: "身份证号码：110105194912310021"},
+		{name: "invalid calendar date", dataType: "cn_id_card", text: "身份证号码：11010519990230002X"},
+		{name: "unlabelled non-luhn account", dataType: "bank_card", text: "订单号 6222020200123456789"},
+		{name: "phone embedded in longer number", dataType: "phone", text: "流水号 9138123456787"},
+		{name: "unlabelled chinese name", dataType: "person_name", text: "王浩宇参加了会议"},
+		{name: "unlabelled location", dataType: "address", text: "我们在上海市黄浦区见面"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			policy := mustNormalizePolicy(t, Policy{
+				Name: "False positive protection",
+				DetectionItems: []DetectionItem{{
+					Name: "Sensitive data", DetectorType: DetectorSensitiveData, Action: ActionBlock,
+					Config: map[string]any{"data_types": []string{test.dataType}},
+				}},
+				Bindings: []Binding{{ScopeType: ScopeAllProjects}},
+			})
+			decision, err := NewEngine(nil).Evaluate(context.Background(), EvaluationRequest{
+				Fragments: []Fragment{{ID: "input", Text: test.text, Mutable: true}}, Policies: []Policy{policy},
+			})
+			if err != nil || len(decision.Findings) != 0 || decision.Action != ActionAllow {
+				t.Fatalf("unexpected decision=%#v err=%v", decision, err)
+			}
+		})
+	}
+}
+
+func TestEngineShortCircuitsBeforeModel(t *testing.T) {
+	detector := &testModelDetector{result: ModelResult{Safety: "unsafe"}}
+	policy := mustNormalizePolicy(t, Policy{
+		Name: "Block first",
+		DetectionItems: []DetectionItem{
+			{Name: "Credential", DetectorType: DetectorSensitiveData, Action: ActionBlock, Config: map[string]any{"data_types": []string{"credential"}}},
+			{Name: "Model", DetectorType: DetectorModel, Action: ActionBlock, Config: map[string]any{}},
+		},
+		Bindings: []Binding{{ScopeType: ScopeAllProjects}},
+	})
+	decision, err := NewEngine(detector).Evaluate(context.Background(), EvaluationRequest{
+		ProjectID: "prj_one", Fragments: []Fragment{{ID: "message.0", Text: "AKIA0000000000000000", Mutable: true}}, Policies: []Policy{policy},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Action != ActionBlock || !decision.ShortCircuited || detector.calls != 0 {
+		t.Fatalf("unexpected decision=%#v model calls=%d", decision, detector.calls)
+	}
+}
+
+func TestEngineHonorsModelResultAndUnavailablePolicy(t *testing.T) {
+	policy := mustNormalizePolicy(t, Policy{
+		Name: "Model policy",
+		DetectionItems: []DetectionItem{{
+			Name: "Model", DetectorType: DetectorModel, Action: ActionBlock,
+			Config: map[string]any{"block_on": "controversial_or_unsafe", "on_unavailable": "block"},
+		}},
+		Bindings: []Binding{{ScopeType: ScopeAllProjects}},
+	})
+
+	t.Run("classification", func(t *testing.T) {
+		detector := &testModelDetector{result: ModelResult{Safety: "controversial", Categories: []string{"policy"}}}
+		decision, err := NewEngine(detector).Evaluate(context.Background(), EvaluationRequest{Fragments: []Fragment{{ID: "input", Text: "review me"}}, Policies: []Policy{policy}})
+		if err != nil || decision.Action != ActionBlock || detector.calls != 1 {
+			t.Fatalf("decision=%#v calls=%d err=%v", decision, detector.calls, err)
+		}
+	})
+
+	t.Run("unavailable", func(t *testing.T) {
+		detector := &testModelDetector{err: errors.New("offline")}
+		decision, err := NewEngine(detector).Evaluate(context.Background(), EvaluationRequest{Fragments: []Fragment{{ID: "input", Text: "review me"}}, Policies: []Policy{policy}})
+		if err != nil || decision.Action != ActionBlock || !decision.DetectionDegraded || decision.Findings[0].ReasonCode != "guardrail_model_unavailable" {
+			t.Fatalf("unexpected decision=%#v err=%v", decision, err)
+		}
+	})
+}
+
+func TestEngineRejectsOversizedInput(t *testing.T) {
+	policy := mustNormalizePolicy(t, Policy{
+		Name: "Size limit", DetectionItems: []DetectionItem{{Name: "Keyword", DetectorType: DetectorPattern, Action: ActionAudit, Config: map[string]any{"keywords": []string{"x"}}}},
+		Bindings: []Binding{{ScopeType: ScopeAllProjects}},
+	})
+	_, err := NewEngine(nil).Evaluate(context.Background(), EvaluationRequest{Fragments: []Fragment{{ID: "input", Text: strings.Repeat("x", maxEvaluationBytes+1)}}, Policies: []Policy{policy}})
+	if !errors.Is(err, ErrInputTooLarge) {
+		t.Fatalf("expected input limit error, got %v", err)
+	}
+}
+
+func TestEngineDoesNotLimitInputWithoutApplicablePolicies(t *testing.T) {
+	decision, err := NewEngine(nil).Evaluate(context.Background(), EvaluationRequest{Fragments: []Fragment{{ID: "input", Text: strings.Repeat("x", maxEvaluationBytes+1)}}})
+	if err != nil || decision.Action != ActionAllow {
+		t.Fatalf("decision=%#v err=%v", decision, err)
+	}
+}
+
+func mustNormalizePolicy(t *testing.T, policy Policy) Policy {
+	t.Helper()
+	normalized, err := NormalizePolicy(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return normalized
+}

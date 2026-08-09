@@ -381,6 +381,10 @@ Options: `--rebuild`, `--reset` to drop the local database, `--backend-port N`, 
 | `TOKENHUB_CACHE_AFFINITY_ENABLED` | `false` | For Chat Completions, Anthropic Messages, and Responses, pin a session to one upstream account so the provider's prompt cache keeps hitting. Off by default because it changes routing behaviour |
 | `TOKENHUB_CACHE_AFFINITY_MODELS` | empty | Comma-separated model allowlist for staged rollout; empty means every model |
 | `TOKENHUB_CACHE_AFFINITY_ALLOW_USER_SCOPE` | `false` | Also accept Chat/Responses `user` and Anthropic `metadata.user_id` as affinity keys; off by default because one user's concurrent sessions would share a single account |
+| `TOKENHUB_GUARDRAIL_MODEL_URL` | empty | Complete OpenAI-compatible chat-completions URL for a dedicated Qwen3Guard service. Empty disables model calls; each policy applies its configured unavailable behavior |
+| `TOKENHUB_GUARDRAIL_MODEL_API_KEY` | empty | Optional bearer credential for the dedicated guardrail model service |
+| `TOKENHUB_GUARDRAIL_MODEL_NAME` | `Qwen/Qwen3Guard-Gen-0.6B` | Model identifier sent to the guardrail service |
+| `TOKENHUB_GUARDRAIL_MODEL_TIMEOUT_SECONDS` | `10` | Time limit for one guardrail model classification |
 | `TOKENHUB_IMAGE_STORAGE_DIR` | `data/images` | Directory holding generated image assets |
 | `TOKENHUB_IMAGE_WORKER_CONCURRENCY` | `2` | Number of workers draining the image generation queue |
 | `TOKENHUB_IMAGE_QUEUE_CAPACITY` | `64` | Maximum image jobs that may wait in the queue |

@@ -82,7 +82,7 @@ func TestMethodRoutingPreservesCORSPreflight(t *testing.T) {
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("OPTIONS /api/admin/auth/login: expected 204, got %d: %s", response.Code, response.Body.String())
 	}
-	if got := response.Header().Get("access-control-allow-methods"); got != "GET,POST,PATCH,DELETE,OPTIONS" {
+	if got := response.Header().Get("access-control-allow-methods"); got != "GET,POST,PUT,PATCH,DELETE,OPTIONS" {
 		t.Fatalf("access-control-allow-methods = %q", got)
 	}
 	if got := response.Header().Get("access-control-allow-headers"); got != "authorization,content-type" {

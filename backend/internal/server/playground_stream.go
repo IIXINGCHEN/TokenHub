@@ -233,8 +233,24 @@ func (s *Server) handleAdminPlaygroundChatStream(w http.ResponseWriter, r *http.
 		writeError(w, r, err)
 		return
 	}
+	call := s.newPlaygroundCallContext(user, req.Model, admittedAt)
+	decision, guardrailErr := s.evaluateOutboundGuardrails(r.Context(), call.Project.ID, chatGuardrailTargets(&req))
+	requestAuditPayload := guardrailRequestAuditPayload(req.Model, decision, req)
+	if guardrailErr != nil {
+		httpErr := AsHTTPError(guardrailErr)
+		s.finishRoutedCall(r, GatewayCallCompletion{
+			Kind: CompletionKindPlayground, Call: call, StatusCode: httpErr.Status,
+			ErrorCode: httpErr.Code, ErrorMessage: httpErr.Message, RequestPayload: requestAuditPayload,
+			ResponsePayload: auditErrorPayload(guardrailErr, call.RequestID),
+		})
+		s.recordAdminAudit(r, user, "chat_failed", "playground", req.Model, "", map[string]any{
+			"model": req.Model, "attempts": []PlaygroundRouteAttempt{}, "error": httpErr.Code,
+		})
+		writeError(w, r, guardrailErr)
+		return
+	}
 
-	routed, err := s.preparePlaygroundRoutedCall(r.Context(), user, req, admittedAt)
+	routed, err := s.preparePlaygroundRoutedCall(r.Context(), req, call)
 	if err != nil {
 		httpErr := AsHTTPError(err)
 		s.finishRoutedCall(r, GatewayCallCompletion{
@@ -243,7 +259,7 @@ func (s *Server) handleAdminPlaygroundChatStream(w http.ResponseWriter, r *http.
 			StatusCode:      httpErr.Status,
 			ErrorCode:       httpErr.Code,
 			ErrorMessage:    httpErr.Message,
-			RequestPayload:  req,
+			RequestPayload:  requestAuditPayload,
 			ResponsePayload: auditErrorPayload(err, routed.Call.RequestID),
 		})
 		s.recordAdminAudit(r, user, "chat_failed", "playground", req.Model, "", map[string]any{
@@ -259,7 +275,7 @@ func (s *Server) handleAdminPlaygroundChatStream(w http.ResponseWriter, r *http.
 		"model":      req.Model,
 		"started_at": routed.Call.StartedAt,
 	}); err != nil {
-		s.finishPlaygroundClientCancellation(r, routed, req, nil)
+		s.finishPlaygroundClientCancellation(r, routed, requestAuditPayload, nil)
 		return
 	}
 
@@ -267,7 +283,7 @@ func (s *Server) handleAdminPlaygroundChatStream(w http.ResponseWriter, r *http.
 	completedAt := time.Now().UTC()
 	usage = priceUsage(routed.Call.Model, usage)
 	if streamErr != nil {
-		s.finishFailedPlaygroundStream(r, user, routed, req, result, route, usage, attempts, completedAt, events, streamErr)
+		s.finishFailedPlaygroundStream(r, user, routed, req, requestAuditPayload, result, route, usage, attempts, completedAt, events, streamErr)
 		return
 	}
 	if result.Response == nil {
@@ -282,7 +298,7 @@ func (s *Server) handleAdminPlaygroundChatStream(w http.ResponseWriter, r *http.
 		Usage:           usage,
 		Attempts:        attempts,
 		StatusCode:      http.StatusOK,
-		RequestPayload:  req,
+		RequestPayload:  requestAuditPayload,
 		ResponsePayload: result.Response,
 	})
 	s.recordAdminAudit(r, user, "chat", "playground", req.Model, "", map[string]any{
@@ -319,15 +335,18 @@ func validatePlaygroundRequest(req *ChatCompletionRequest) error {
 	return nil
 }
 
-func (s *Server) preparePlaygroundRoutedCall(ctx context.Context, user AdminUser, req ChatCompletionRequest, startedAt time.Time) (RoutedCall, error) {
-	call := CallContext{
+func (s *Server) newPlaygroundCallContext(user AdminUser, model string, startedAt time.Time) CallContext {
+	return CallContext{
 		RequestID:  NewID("pg"),
 		Project:    Project{ID: "admin_playground", Name: "Admin Playground", Status: StatusActive},
 		Key:        APIKey{ID: user.ID, Name: "Admin Playground"},
-		Model:      playgroundModel(s.store, req.Model),
+		Model:      playgroundModel(s.store, model),
 		StartedAt:  startedAt.UTC(),
 		measuredAt: startedAt,
 	}
+}
+
+func (s *Server) preparePlaygroundRoutedCall(ctx context.Context, req ChatCompletionRequest, call CallContext) (RoutedCall, error) {
 	routed := RoutedCall{Call: call}
 	routes, err := s.store.SelectRouteCandidates(req.Model)
 	if err != nil {
@@ -478,6 +497,7 @@ func (s *Server) finishFailedPlaygroundStream(
 	user AdminUser,
 	routed RoutedCall,
 	req ChatCompletionRequest,
+	requestAuditPayload any,
 	result playgroundStreamResult,
 	route RouteSelection,
 	usage Usage,
@@ -496,7 +516,7 @@ func (s *Server) finishFailedPlaygroundStream(
 	}
 	s.finishRoutedCall(r, GatewayCallCompletion{
 		Kind: CompletionKindPlayground, Call: routed.Call, Route: route, Usage: usage, Attempts: attempts,
-		StatusCode: status, ErrorCode: code, ErrorMessage: errorMessage(err), RequestPayload: req,
+		StatusCode: status, ErrorCode: code, ErrorMessage: errorMessage(err), RequestPayload: requestAuditPayload,
 		ResponsePayload: auditErrorPayload(err, routed.Call.RequestID),
 	})
 	s.recordAdminAudit(r, user, "chat_"+state, "playground", req.Model, "", map[string]any{
@@ -512,10 +532,10 @@ func (s *Server) finishFailedPlaygroundStream(
 	_ = events.emit("playground."+state, payload)
 }
 
-func (s *Server) finishPlaygroundClientCancellation(r *http.Request, routed RoutedCall, req ChatCompletionRequest, attempts []RouteAttempt) {
+func (s *Server) finishPlaygroundClientCancellation(r *http.Request, routed RoutedCall, requestAuditPayload any, attempts []RouteAttempt) {
 	s.finishRoutedCall(r, GatewayCallCompletion{
 		Kind: CompletionKindPlayground, Call: routed.Call, Attempts: attempts,
-		StatusCode: playgroundClientClosedStatus, ErrorCode: "client_cancelled", RequestPayload: req,
+		StatusCode: playgroundClientClosedStatus, ErrorCode: "client_cancelled", RequestPayload: requestAuditPayload,
 	})
 }
 

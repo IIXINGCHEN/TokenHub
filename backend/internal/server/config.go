@@ -99,13 +99,20 @@ type Config struct {
 	// concurrent sessions share the value, pinning all their traffic to a single
 	// account and creating a hotspot.
 	CacheAffinityAllowUserScope bool
-	ImageStorageDir             string
-	ImageWorkerConcurrency      int
-	ImageQueueCapacity          int
-	ImageJobTimeoutSeconds      int
-	ImageCapabilityRetrySecs    int
-	MaxJSONRequestBytes         int64
-	MaxMultimodalRequestBytes   int64
+	// GuardrailModelURL is the complete OpenAI-compatible chat completions URL
+	// for the dedicated Qwen3Guard service. Empty keeps model detection offline;
+	// each policy decides whether that condition audits or blocks.
+	GuardrailModelURL            string
+	GuardrailModelAPIKey         string
+	GuardrailModelName           string
+	GuardrailModelTimeoutSeconds int
+	ImageStorageDir              string
+	ImageWorkerConcurrency       int
+	ImageQueueCapacity           int
+	ImageJobTimeoutSeconds       int
+	ImageCapabilityRetrySecs     int
+	MaxJSONRequestBytes          int64
+	MaxMultimodalRequestBytes    int64
 }
 
 func ConfigFromEnv() Config {
@@ -150,16 +157,20 @@ func ConfigFromEnv() Config {
 		DBMaxIdleConns:                   getenvInt("TOKENHUB_DB_MAX_IDLE_CONNS", 5),
 		DBConnMaxLifetimeMinutes:         getenvInt("TOKENHUB_DB_CONN_MAX_LIFETIME_MINUTES", 30),
 
-		CacheAffinityEnabled:        getenvBool("TOKENHUB_CACHE_AFFINITY_ENABLED", false),
-		CacheAffinityModels:         getenvList("TOKENHUB_CACHE_AFFINITY_MODELS"),
-		CacheAffinityAllowUserScope: getenvBool("TOKENHUB_CACHE_AFFINITY_ALLOW_USER_SCOPE", false),
-		ImageStorageDir:             getenv("TOKENHUB_IMAGE_STORAGE_DIR", defaultImageStorageDir()),
-		ImageWorkerConcurrency:      getenvInt("TOKENHUB_IMAGE_WORKER_CONCURRENCY", 2),
-		ImageQueueCapacity:          getenvInt("TOKENHUB_IMAGE_QUEUE_CAPACITY", 64),
-		ImageJobTimeoutSeconds:      getenvInt("TOKENHUB_IMAGE_JOB_TIMEOUT_SECONDS", 300),
-		ImageCapabilityRetrySecs:    getenvInt("TOKENHUB_IMAGE_CAPABILITY_RETRY_SECONDS", 86400),
-		MaxJSONRequestBytes:         getenvBytes("TOKENHUB_MAX_JSON_REQUEST_BYTES", defaultMaxJSONRequestBytes),
-		MaxMultimodalRequestBytes:   getenvBytes("TOKENHUB_MAX_MULTIMODAL_REQUEST_BYTES", defaultMaxMultimodalRequestBytes),
+		CacheAffinityEnabled:         getenvBool("TOKENHUB_CACHE_AFFINITY_ENABLED", false),
+		CacheAffinityModels:          getenvList("TOKENHUB_CACHE_AFFINITY_MODELS"),
+		CacheAffinityAllowUserScope:  getenvBool("TOKENHUB_CACHE_AFFINITY_ALLOW_USER_SCOPE", false),
+		GuardrailModelURL:            getenv("TOKENHUB_GUARDRAIL_MODEL_URL", ""),
+		GuardrailModelAPIKey:         getenv("TOKENHUB_GUARDRAIL_MODEL_API_KEY", ""),
+		GuardrailModelName:           getenv("TOKENHUB_GUARDRAIL_MODEL_NAME", "Qwen/Qwen3Guard-Gen-0.6B"),
+		GuardrailModelTimeoutSeconds: getenvInt("TOKENHUB_GUARDRAIL_MODEL_TIMEOUT_SECONDS", 10),
+		ImageStorageDir:              getenv("TOKENHUB_IMAGE_STORAGE_DIR", defaultImageStorageDir()),
+		ImageWorkerConcurrency:       getenvInt("TOKENHUB_IMAGE_WORKER_CONCURRENCY", 2),
+		ImageQueueCapacity:           getenvInt("TOKENHUB_IMAGE_QUEUE_CAPACITY", 64),
+		ImageJobTimeoutSeconds:       getenvInt("TOKENHUB_IMAGE_JOB_TIMEOUT_SECONDS", 300),
+		ImageCapabilityRetrySecs:     getenvInt("TOKENHUB_IMAGE_CAPABILITY_RETRY_SECONDS", 86400),
+		MaxJSONRequestBytes:          getenvBytes("TOKENHUB_MAX_JSON_REQUEST_BYTES", defaultMaxJSONRequestBytes),
+		MaxMultimodalRequestBytes:    getenvBytes("TOKENHUB_MAX_MULTIMODAL_REQUEST_BYTES", defaultMaxMultimodalRequestBytes),
 	}
 }
 
