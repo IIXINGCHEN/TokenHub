@@ -537,22 +537,12 @@ func (s *Server) handleAdminPlaygroundChat(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	req := playgroundReq.ChatCompletionRequest
-	req.Model = strings.TrimSpace(req.Model)
+	if err := validatePlaygroundRequest(&req); err != nil {
+		writeError(w, r, err)
+		return
+	}
 	req.Stream = false
-	if req.Model == "" {
-		writeError(w, r, NewHTTPError(400, "missing_model", "model is required"))
-		return
-	}
-	if len(req.Messages) == 0 {
-		writeError(w, r, NewHTTPError(400, "missing_messages", "messages are required"))
-		return
-	}
-	for _, message := range req.Messages {
-		if strings.TrimSpace(message.Role) == "" {
-			writeError(w, r, NewHTTPError(400, "invalid_message", "message role is required"))
-			return
-		}
-	}
+	req.StreamOptions = nil
 	guardrailProjectID, err := s.resolvePlaygroundGuardrailProjectID(user, playgroundReq.ProjectID)
 	if err != nil {
 		writeError(w, r, err)
@@ -564,7 +554,7 @@ func (s *Server) handleAdminPlaygroundChat(w http.ResponseWriter, r *http.Reques
 	requestID := call.RequestID
 	w.Header().Set("x-request-id", requestID)
 	decision, guardrailErr := s.evaluateOutboundGuardrails(r.Context(), guardrailProjectID, chatGuardrailTargets(&req))
-	requestAuditPayload := guardrailRequestAuditPayload(req.Model, decision, req)
+	requestAuditPayload := guardrailRequestAuditPayload(req.Model, decision, playgroundAuditRequest(req))
 	if guardrailErr != nil {
 		httpErr := AsHTTPError(guardrailErr)
 		s.finishRoutedCall(r, GatewayCallCompletion{

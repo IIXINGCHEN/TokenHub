@@ -264,7 +264,7 @@ func (s *Server) handleAdminPlaygroundChatStream(w http.ResponseWriter, r *http.
 	call := s.newPlaygroundCallContext(user, req.Model, admittedAt)
 	w.Header().Set("x-request-id", call.RequestID)
 	decision, guardrailErr := s.evaluateOutboundGuardrails(r.Context(), guardrailProjectID, chatGuardrailTargets(&req))
-	requestAuditPayload := guardrailRequestAuditPayload(req.Model, decision, req)
+	requestAuditPayload := guardrailRequestAuditPayload(req.Model, decision, playgroundAuditRequest(req))
 	if guardrailErr != nil {
 		httpErr := AsHTTPError(guardrailErr)
 		s.finishRoutedCall(r, GatewayCallCompletion{
@@ -361,7 +361,7 @@ func validatePlaygroundRequest(req *ChatCompletionRequest) error {
 			return NewHTTPError(http.StatusBadRequest, "invalid_message", "message role is required")
 		}
 	}
-	return nil
+	return validatePlaygroundImages(req.Messages)
 }
 
 func (s *Server) resolvePlaygroundGuardrailProjectID(user AdminUser, requestedID string) (string, error) {
