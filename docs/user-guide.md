@@ -27,6 +27,8 @@ Console login tokens cannot call model APIs. Use a project API key from **Key Ma
 
 Open **Model Playground** in the console to test an available chat model without creating an API script. Each response shows streaming or buffered delivery, TTFT when it can be measured, output throughput, total duration, full-context input tokens, output tokens, estimated cost, local completion time, and a request ID. Expand the response for the actual response details. Provider and route internals appear only when your role has routing-read permission.
 
+Image upload is available only when the selected model's `input_modalities` includes `image`; configure this value in the model directory for multimodal models. The Playground accepts JPEG, PNG, and WebP images, with limits of 4 images per message, 5 MiB per image, and 12 MiB of images across the current conversation. Exported sessions retain image names, media types, and sizes for context, but omit the image data.
+
 The session is temporary and remains only on the current page unless you choose **Export Playground**. **Stop** keeps partial output. **Rerun** creates another candidate from that turn and removes later turns. Changing models starts a new session unless you explicitly choose to keep the existing context. For an upstream that does not support streaming, the page uses buffered mode and marks TTFT as not applicable.
 
 ## List Models
