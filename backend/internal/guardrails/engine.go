@@ -283,7 +283,7 @@ func sensitiveDataDefinitions(dataType string) []sensitiveDataDefinition {
 	case "address":
 		return []sensitiveDataDefinition{{expression: `(?:联系地址|家庭住址|户籍地址|收件地址|通讯地址|地址)\s*[:：]\s*([^\r\n]{6,120})`, captureGroup: 1}}
 	case "birth_date":
-		return []sensitiveDataDefinition{{expression: `(?:出生日期|出生年月|生日)\s*[:：]\s*((?:18|19|20)[0-9]{2}\s*(?:年|[-/.])\s*(?:1[0-2]|0?[1-9])\s*(?:月|[-/.])\s*(?:3[01]|[12][0-9]|0?[1-9])\s*日?)`, captureGroup: 1}}
+		return []sensitiveDataDefinition{{expression: `(?:出生日期|出生年月|生日)\s*[:：]\s*((?:18|19|20)[0-9]{2}\s*(?:年|[-/.])\s*(?:1[0-2]|0?[1-9])\s*(?:月|[-/.])\s*(?:3[01]|[12][0-9]|0?[1-9])\s*日?)`, captureGroup: 1, validator: validCalendarDate}}
 	default:
 		return nil
 	}
@@ -346,6 +346,15 @@ func digitsOnly(value string) string {
 func validCardLength(value string) bool {
 	length := len(digitsOnly(value))
 	return length >= 13 && length <= 19
+}
+
+func validCalendarDate(value string) bool {
+	digits := digitsOnly(value)
+	if len(digits) != 8 {
+		return false
+	}
+	_, err := time.Parse("20060102", digits)
+	return err == nil
 }
 
 func validLuhnCard(value string) bool {

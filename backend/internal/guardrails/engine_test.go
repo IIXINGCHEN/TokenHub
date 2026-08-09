@@ -148,6 +148,7 @@ func TestSensitiveDataValidationAvoidsCommonNumericFalsePositives(t *testing.T) 
 	}{
 		{name: "invalid identity checksum", dataType: "cn_id_card", text: "身份证号码：110105194912310021"},
 		{name: "invalid calendar date", dataType: "cn_id_card", text: "身份证号码：11010519990230002X"},
+		{name: "invalid labelled birth date", dataType: "birth_date", text: "出生日期：1999 年 02 月 30 日"},
 		{name: "unlabelled non-luhn account", dataType: "bank_card", text: "订单号 6222020200123456789"},
 		{name: "phone embedded in longer number", dataType: "phone", text: "流水号 9138123456787"},
 		{name: "unlabelled chinese name", dataType: "person_name", text: "王浩宇参加了会议"},

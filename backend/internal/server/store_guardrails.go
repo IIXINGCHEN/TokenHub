@@ -1,6 +1,7 @@
 package server
 
 import (
+	"database/sql"
 	"net/http"
 	"sort"
 	"time"
@@ -53,15 +54,30 @@ func (s *GormStore) CreateGuardrailPolicy(policy guardrails.Policy) (guardrails.
 
 func (s *GormStore) ListGuardrailPolicies() ([]guardrails.Policy, error) {
 	policies := []guardrails.Policy{}
-	query := preloadGuardrailPolicy(s.db).Order("created_at ASC, id ASC").Find(&policies)
-	if query.Error != nil {
-		return nil, query.Error
+	err := s.withGuardrailReadSnapshot(func(tx *gorm.DB) error {
+		return preloadGuardrailPolicy(tx).Order("created_at ASC, id ASC").Find(&policies).Error
+	})
+	if err != nil {
+		return nil, err
 	}
 	return policies, nil
 }
 
 func (s *GormStore) GetGuardrailPolicy(id string) (guardrails.Policy, error) {
-	return loadGuardrailPolicy(s.db, id)
+	var policy guardrails.Policy
+	err := s.withGuardrailReadSnapshot(func(tx *gorm.DB) error {
+		var err error
+		policy, err = loadGuardrailPolicy(tx, id)
+		return err
+	})
+	return policy, err
+}
+
+func (s *GormStore) withGuardrailReadSnapshot(read func(*gorm.DB) error) error {
+	if s.dbDriver == "postgres" {
+		return s.db.Transaction(read, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	}
+	return s.db.Transaction(read)
 }
 
 func (s *GormStore) UpdateGuardrailPolicy(id string, policy guardrails.Policy) (guardrails.Policy, guardrails.Policy, error) {
