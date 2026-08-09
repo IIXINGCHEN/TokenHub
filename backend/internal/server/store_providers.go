@@ -231,8 +231,8 @@ func (s *GormStore) AddProviderResource(resource ProviderResource) (ProviderReso
 	resource.Name = strings.TrimSpace(resource.Name)
 	// routeSelection lets a non-empty resource BaseURL override the provider's
 	// validated one, so resource-level URLs must pass the same SSRF guard at
-	// persistence time (operator allowlist and localhost exception included).
-	if err := validateProviderUpstreamBaseURLString(resource.BaseURL, allowedProviderUpstreamCIDRs(), true); err != nil {
+	// persistence time (operator allowlist and explicit loopback opt-in included).
+	if err := ValidateProviderUpstreamBaseURL(resource.BaseURL); err != nil {
 		return ProviderResource{}, err
 	}
 	now := time.Now().UTC()
@@ -317,7 +317,7 @@ func (s *GormStore) UpdateProviderResource(id string, patch ProviderResource) (P
 	// Same SSRF persistence guard as AddProviderResource: an empty value
 	// clears the override (the provider URL applies again), a non-empty one
 	// must be a routable upstream.
-	if err := validateProviderUpstreamBaseURLString(resource.BaseURL, allowedProviderUpstreamCIDRs(), true); err != nil {
+	if err := ValidateProviderUpstreamBaseURL(resource.BaseURL); err != nil {
 		return ProviderResource{}, err
 	}
 	shouldEncryptAPIKey := false
@@ -574,7 +574,7 @@ func (s *GormStore) ImportProviderResources(resources []ProviderResource) (Provi
 		}
 		// Same SSRF persistence guard as AddProviderResource: a rejected row
 		// fails the row, not the whole import, matching the per-row contract.
-		if err := validateProviderUpstreamBaseURLString(resource.BaseURL, allowedProviderUpstreamCIDRs(), true); err != nil {
+		if err := ValidateProviderUpstreamBaseURL(resource.BaseURL); err != nil {
 			result.Failed++
 			result.Errors = append(result.Errors, "row "+row+": "+err.Error())
 			continue

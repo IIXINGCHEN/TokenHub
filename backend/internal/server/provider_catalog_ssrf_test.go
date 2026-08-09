@@ -8,11 +8,19 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+func TestMain(m *testing.M) {
+	// Most server integration tests use httptest loopback upstreams. Opt in for
+	// the package, while the default-deny regression tests explicitly unset it.
+	_ = os.Setenv("TOKENHUB_PROVIDER_UPSTREAM_ALLOW_LOOPBACK", "true")
+	os.Exit(m.Run())
+}
 
 func validateBaseURL(t *testing.T, raw string) error {
 	t.Helper()
@@ -489,6 +497,22 @@ func TestAdminCreateProviderRejectsSSRFBaseURL(t *testing.T) {
 		if !strings.Contains(resp.Body, "provider_base_url_not_allowed") {
 			t.Fatalf("expected provider_base_url_not_allowed for %q, got %s", baseURL, resp.Body)
 		}
+	}
+}
+
+func TestAdminCreateProviderRejectsLoopbackByDefault(t *testing.T) {
+	t.Setenv("TOKENHUB_PROVIDER_UPSTREAM_ALLOW_LOOPBACK", "")
+	store := NewMemoryStore()
+	if err := SeedDemoData(store); err != nil {
+		t.Fatal(err)
+	}
+	resp := doJSON(t, New(store).Handler(), http.MethodPost, "/api/admin/providers", map[string]any{
+		"name":     "Loopback attempt",
+		"type":     ProviderOpenAICompatible,
+		"base_url": "http://127.0.0.1:11434/v1",
+	}, "")
+	if resp.Code != http.StatusBadRequest || !strings.Contains(resp.Body, "provider_base_url_not_allowed") {
+		t.Fatalf("expected loopback provider create to be rejected, got %d: %s", resp.Code, resp.Body)
 	}
 }
 

@@ -20,12 +20,11 @@ import (
 // special-use addresses (which include the cloud metadata endpoint
 // 169.254.169.254).
 //
-// Trade-off: loopback/localhost is explicitly allowed when allowLocalhost is
-// set, because the project supports self-hosted local providers out of the box
-// (see normalizeProviderBaseURL, which defaults ollama/lmstudio to
-// http://127.0.0.1:...). Blocking loopback there would break that documented
-// development/self-host workflow. Operators that need to reach providers on a
-// private network list the trusted ranges in
+// Trade-off: loopback/localhost is allowed only when the operator explicitly
+// opts in with TOKENHUB_PROVIDER_UPSTREAM_ALLOW_LOOPBACK. The default remains
+// closed because a compromised administrator session must not be able to turn
+// an arbitrary provider into a loopback SSRF primitive. Operators that need to
+// reach providers on a private network list the trusted ranges in
 // TOKENHUB_PROVIDER_UPSTREAM_ALLOWED_CIDRS and use literal IPs from those
 // ranges; the allowlist only ever applies to literal IPs an administrator
 // typed, never to resolved hostnames (DNS rebinding) or redirect targets.
@@ -92,7 +91,11 @@ func validateProviderUpstreamBaseURLString(raw string, allowedPrivate []*net.IPN
 // callers that persist providers outside the admin HTTP path (for example
 // migration sinks writing directly to the store).
 func ValidateProviderUpstreamBaseURL(raw string) error {
-	return validateProviderUpstreamBaseURLString(raw, allowedProviderUpstreamCIDRs(), true)
+	return validateProviderUpstreamBaseURLString(raw, allowedProviderUpstreamCIDRs(), providerUpstreamLoopbackAllowed())
+}
+
+func providerUpstreamLoopbackAllowed() bool {
+	return getenvBool("TOKENHUB_PROVIDER_UPSTREAM_ALLOW_LOOPBACK", false)
 }
 
 func allowedProviderUpstreamCIDRs() []*net.IPNet {
@@ -161,6 +164,8 @@ var disallowedProviderUpstreamCIDRs = func() []*net.IPNet {
 	cidrs := []string{
 		"0.0.0.0/8",
 		"100.64.0.0/10",
+		"192.0.0.0/29",
+		"192.0.0.170/31",
 		"192.0.2.0/24",
 		"198.18.0.0/15",
 		"198.51.100.0/24",
@@ -275,8 +280,8 @@ type upstreamLookupFunc func(ctx context.Context, host string) ([]net.IPAddr, er
 type upstreamDialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
 // dialGuardedUpstream dials addr while enforcing the SSRF classification:
-// loopback identifiers pass through (local providers), literal IPs are checked
-// directly, and hostnames are resolved with only validated addresses dialed,
+// loopback identifiers pass only after explicit operator opt-in, literal IPs
+// are checked directly, and hostnames resolve to validated dial candidates,
 // so the checked IP is the one actually connected to (DNS rebinding cannot
 // slip a private address past the save-time check).
 //
@@ -293,9 +298,12 @@ func dialGuardedUpstream(ctx context.Context, network string, addr string, allow
 	if err != nil {
 		return nil, err
 	}
-	// Loopback identifiers are intentionally allowed for local providers.
+	// Loopback is disabled by default and requires an explicit operator opt-in.
 	if isLocalProviderHostname(host) {
-		return dial(ctx, network, addr)
+		if providerUpstreamLoopbackAllowed() {
+			return dial(ctx, network, addr)
+		}
+		return nil, errProviderUpstreamDialDisallowed
 	}
 	if ip := net.ParseIP(host); ip != nil {
 		if err := checkProviderUpstreamLiteralDial(ip, allowedPrivate); err != nil {

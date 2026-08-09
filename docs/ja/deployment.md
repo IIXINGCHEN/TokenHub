@@ -343,6 +343,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_TRUSTED_PROXY_CIDRS` | 空 | `X-Forwarded-For` を提供できるプロキシ IP または CIDR（カンマ区切り） |
 | `TOKENHUB_PROVIDER_UPSTREAM_ALLOWED_CIDRS` | 空 | カスタムプロバイダーの base URL としてリテラル IP を許可するプライベート CIDR（RFC1918/ULA のみ、カンマ区切り、社内モデルサーバー向け）。プライベートアドレスに解決されるホスト名とリダイレクト先は引き続き拒否 |
 | `TOKENHUB_PROVIDER_UPSTREAM_NAT64_PREFIX` | 空 | 埋め込まれた IPv4 宛先を分類するための任意の RFC 6052 DNS64/NAT64 プレフィックス。32、40、48、56、64、96 ビット長をサポートします。`64:ff9b:1::/48` などのネットワーク固有プレフィックスを使用する場合に設定します。標準の `64:ff9b::/96` は設定不要です |
+| `TOKENHUB_PROVIDER_UPSTREAM_ALLOW_LOOPBACK` | `false` | ローカルの Ollama/LM Studio 開発用に、provider base URL の `localhost`、`127.0.0.1`、`::1` を明示的に許可します。本番環境では無効のままにしてください |
 | `TOKENHUB_CORS_ALLOWED_ORIGINS` | 公開 URL | バックエンドを呼び出せるブラウザー Origin（カンマ区切り） |
 | `TOKENHUB_ADMIN_TOKEN` | `change-me-tokenhub-admin-token` | Admin API 用の初期 Token |
 | `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD` | `change-me-tokenhub-admin-password` | 初期 `admin` ユーザーのパスワード。本番起動前に変更が必要 |

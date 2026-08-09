@@ -1,11 +1,13 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/http"
 	"net/url"
 	"testing"
+	"time"
 )
 
 func redirectRequest(t *testing.T, raw string) *http.Request {
@@ -110,5 +112,67 @@ func TestInvalidProviderUpstreamNAT64PrefixFailsClosed(t *testing.T) {
 	t.Setenv(providerUpstreamNAT64PrefixEnv, "64:ff9b:1::/72")
 	if err := checkProviderUpstreamLiteralDial(net.ParseIP("64:ff9b:1:808:8:800::"), nil); !errors.Is(err, errProviderUpstreamDialDisallowed) {
 		t.Fatalf("expected local-use NAT64 address to stay rejected with an invalid prefix, got %v", err)
+	}
+}
+
+func TestProviderUpstreamLoopbackRequiresExplicitOptIn(t *testing.T) {
+	t.Setenv("TOKENHUB_PROVIDER_UPSTREAM_ALLOW_LOOPBACK", "")
+	if err := ValidateProviderUpstreamBaseURL("http://127.0.0.1:11434/v1"); err == nil {
+		t.Fatal("expected loopback base URL to be rejected by default")
+	}
+
+	dialed := false
+	_, err := dialGuardedUpstream(
+		context.Background(), "tcp", "127.0.0.1:11434", nil, time.Second,
+		nil,
+		func(context.Context, string, string) (net.Conn, error) {
+			dialed = true
+			return nil, nil
+		},
+	)
+	if err == nil || dialed {
+		t.Fatalf("expected loopback dial to fail before connecting, got err=%v dialed=%v", err, dialed)
+	}
+}
+
+func TestProviderUpstreamLoopbackExplicitOptIn(t *testing.T) {
+	t.Setenv("TOKENHUB_PROVIDER_UPSTREAM_ALLOW_LOOPBACK", "true")
+	if err := ValidateProviderUpstreamBaseURL("http://localhost:11434/v1"); err != nil {
+		t.Fatalf("expected opted-in loopback base URL to pass, got %v", err)
+	}
+
+	dialed := false
+	_, err := dialGuardedUpstream(
+		context.Background(), "tcp", "127.0.0.1:11434", nil, time.Second,
+		nil,
+		func(context.Context, string, string) (net.Conn, error) {
+			dialed = true
+			return nil, nil
+		},
+	)
+	if err != nil || !dialed {
+		t.Fatalf("expected opted-in loopback dial to connect, got err=%v dialed=%v", err, dialed)
+	}
+}
+
+func TestProviderUpstreamClassifiesIPv4ProtocolAssignments(t *testing.T) {
+	for _, raw := range []string{"192.0.0.1", "192.0.0.6", "192.0.0.170", "192.0.0.171"} {
+		ip := net.ParseIP(raw)
+		if err := checkProviderUpstreamLiteralDial(ip, nil); !errors.Is(err, errProviderUpstreamDialDisallowed) {
+			t.Fatalf("expected dial target %s to be rejected, got %v", raw, err)
+		}
+		if err := ValidateProviderUpstreamBaseURL("http://" + raw + "/v1"); err == nil {
+			t.Fatalf("expected save-time target %s to be rejected", raw)
+		}
+	}
+
+	for _, raw := range []string{"192.0.0.9", "192.0.0.10"} {
+		ip := net.ParseIP(raw)
+		if err := checkProviderUpstreamLiteralDial(ip, nil); err != nil {
+			t.Fatalf("expected globally reachable target %s to pass dial classification, got %v", raw, err)
+		}
+		if err := ValidateProviderUpstreamBaseURL("http://" + raw + "/v1"); err != nil {
+			t.Fatalf("expected globally reachable target %s to pass save-time validation, got %v", raw, err)
+		}
 	}
 }

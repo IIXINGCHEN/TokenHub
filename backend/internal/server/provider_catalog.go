@@ -522,7 +522,7 @@ func CustomProviderCatalogFromUpstream(ctx context.Context, client *http.Client,
 	if err != nil || endpoint.Scheme == "" || endpoint.Host == "" {
 		return ProviderCatalogEntry{}, NewHTTPError(http.StatusBadRequest, "provider_base_url_invalid", "Base URL is invalid")
 	}
-	if err := validateProviderUpstreamBaseURL(endpoint, allowedProviderUpstreamCIDRs(), true); err != nil {
+	if err := validateProviderUpstreamBaseURL(endpoint, allowedProviderUpstreamCIDRs(), providerUpstreamLoopbackAllowed()); err != nil {
 		return ProviderCatalogEntry{}, err
 	}
 	client = ssrfGuardedProviderClient(client)

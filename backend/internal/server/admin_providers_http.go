@@ -233,9 +233,9 @@ func (s *Server) providerFromCreateRequest(ctx context.Context, req ProviderCrea
 	// SSRF guard at persistence time: create and update both flow through here,
 	// so a provider can never be saved with a base URL that points at loopback,
 	// private, link-local or other special-use addresses. The operator
-	// allowlist (TOKENHUB_PROVIDER_UPSTREAM_ALLOWED_CIDRS) and the localhost
-	// exception apply exactly as they do for upstream model discovery.
-	if err := validateProviderUpstreamBaseURLString(provider.BaseURL, allowedProviderUpstreamCIDRs(), true); err != nil {
+	// allowlist (TOKENHUB_PROVIDER_UPSTREAM_ALLOWED_CIDRS) and the explicit
+	// loopback opt-in apply exactly as they do for upstream model discovery.
+	if err := ValidateProviderUpstreamBaseURL(provider.BaseURL); err != nil {
 		return Provider{}, ProviderCatalogEntry{}, catalogSource, err
 	}
 	if provider.Options == nil {
