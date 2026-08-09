@@ -36,6 +36,16 @@ Rerunning an assistant turn creates another candidate for that turn and removes 
 
 All permitted Playground users can see performance, usage, request ID, and their response details. Provider, resource, upstream request ID, and per-attempt routing details are visible only to roles with routing-read permission. Cost is labelled as an estimate because it uses the external model's configured price rather than an upstream invoice.
 
+## Content Security Policies
+
+Open **Security Policies > Content Security** to create policies for all Projects or selected Projects. A policy can combine keyword or regular-expression matching, sensitive-data detection, and the optional Qwen3Guard model detector. Detection items are evaluated together, and the strictest matching action wins: `block` over `mask` over `audit`. Changes take effect when saved.
+
+Sensitive-data detection includes labelled or structurally validated examples such as Chinese identity-card numbers, mainland mobile numbers, email addresses, bank-card numbers, credentials and private keys, person names, addresses, and birth dates. Validators such as date checks, identity-card checksums, and Luhn checks reduce common numeric false positives. Use **Test Policy** with representative positive and negative samples before enabling a policy broadly.
+
+Request-side enforcement currently covers `/v1/chat/completions`, `/v1/responses`, and `/v1/messages`, including requests sent from Model Playground. TokenHub inspects ordinary user-visible text before routing to a Provider. Structured tool arguments, JSON payload values, code-specific parsing, and Provider responses are not inspected in this version. Inspectable text above 64 KiB is rejected with HTTP 413 and `guardrail_input_too_large`.
+
+When a policy blocks a request, compatible APIs return HTTP 403 with `guardrail_blocked`. The error details include `categories`, `reason_codes`, and `policy_matches`; each policy match identifies the policy, detection item, detector type, category, and reason code. The response also includes `request_id` for audit correlation. Original matched text is not included in the error details. Model Playground presents the same policy and reason information so administrators can report a reproducible finding instead of only seeing “Request blocked by a content security policy.”
+
 ## API Key Ownership and Usage Attribution
 
 When issuing an API Key, select the actual user in **Owner User**. The issuer remains in audit metadata, but the Key's usage is attributed to its owner. Platform administrators may select any active user; team leaders may select an active user in their own team; ordinary users can only assign Keys to themselves.
