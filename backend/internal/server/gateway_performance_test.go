@@ -17,9 +17,10 @@ import (
 const benchmarkModel = "tokenhub-benchmark-model"
 
 type gatewayBenchmarkOptions struct {
-	config         Config
-	failover       bool
-	requestPadding int
+	config                    Config
+	failover                  bool
+	requestPadding            int
+	disablePayloadPersistence bool
 }
 
 type gatewayBenchmarkFixture struct {
@@ -59,7 +60,8 @@ func BenchmarkGatewayGovernanceCosts(b *testing.B) {
 		options gatewayBenchmarkOptions
 	}{
 		{name: "AuditSmall"},
-		{name: "AuditLargePayload", options: gatewayBenchmarkOptions{requestPadding: 32 * 1024}},
+		{name: "LargePayloadAuditPersistenceOff", options: gatewayBenchmarkOptions{requestPadding: 32 * 1024, disablePayloadPersistence: true}},
+		{name: "LargePayloadAuditPersistenceOn", options: gatewayBenchmarkOptions{requestPadding: 32 * 1024}},
 		{name: "Metrics", options: gatewayBenchmarkOptions{config: Config{MetricsEnabled: true}}},
 		{name: "Tracing", options: gatewayBenchmarkOptions{config: Config{TracingEnabled: true}}},
 		{name: "TracingWithPayloads", options: gatewayBenchmarkOptions{config: Config{TracingEnabled: true, TracingCapturePayloads: true}}},
@@ -71,6 +73,28 @@ func BenchmarkGatewayGovernanceCosts(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkGatewayPayloadAuditRendering(b *testing.B) {
+	for _, size := range []int{256, 32 * 1024} {
+		b.Run(fmt.Sprintf("Bytes%d", size), func(b *testing.B) {
+			payload := map[string]any{"prompt": strings.Repeat("x", size), "metadata": map[string]any{"source": "benchmark"}}
+			b.ReportAllocs()
+			b.SetBytes(int64(size))
+			for range b.N {
+				body, truncated := auditPayloadBody(payload)
+				if body == "" || truncated {
+					b.Fatal("unexpected rendered audit payload")
+				}
+			}
+		})
+	}
+}
+
+type benchmarkPayloadPersistenceStore struct {
+	Store
+}
+
+func (benchmarkPayloadPersistenceStore) RecordRequestPayload(string, string, bool, string, bool) {}
 
 func benchmarkDatabaseMatrix(b *testing.B, benchmark func(*testing.B, *GormStore)) {
 	b.Helper()
@@ -187,7 +211,11 @@ func newGatewayBenchmarkFixture(b *testing.B, store *GormStore, path string, str
 		config.TracingEndpoint = traceCollector.URL + "/v1/traces"
 		b.Cleanup(traceCollector.Close)
 	}
-	app := NewWithConfig(store, config)
+	var appStore Store = store
+	if options.disablePayloadPersistence {
+		appStore = benchmarkPayloadPersistenceStore{Store: store}
+	}
+	app := NewWithConfig(appStore, config)
 	if config.TracingEnabled && app.traceEmitter == nil {
 		b.Fatal("tracing benchmark did not enable the trace emitter")
 	}

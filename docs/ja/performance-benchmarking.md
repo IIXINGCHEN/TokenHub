@@ -12,7 +12,7 @@ max(0, クライアントのエンドツーエンド遅延 - fake upstream の�
 
 この推定値には HTTP 転送とスケジューリングのノイズが含まれ、ゲートウェイ内部のタイマーではありません。JSON シリアライズや HTTP 呼び出しを除外したベンチマークと直接比較できません。Bifrost の公開されたマイクロ秒オーバーヘッドには特定の除外条件があるため、公平な製品比較では同じ Runner と upstream を使用します。
 
-各 JSON 結果にはシナリオ、commit、時刻、Go バージョン、OS、アーキテクチャ、CPU 数が記録されます。API Key、ホスト名、ユーザー名、ローカルパスは保存されません。
+各 JSON 結果にはシナリオ、commit、時刻、Go バージョン、OS、アーキテクチャ、CPU のモデルと数、システムメモリが記録されます。API Key、ホスト名、ユーザー名、ローカルパスは保存されません。
 
 ## ツールと制御可能な upstream
 
@@ -23,7 +23,7 @@ mkdir -p .tmp
 (cd backend && go build -o ../.tmp/tokenhub-benchmark ./cmd/tokenhub-benchmark)
 ```
 
-CLI の `mocker`、`gateway`、`run`、`check` は、それぞれ決定的 upstream、ゼロ設定のインメモリ TokenHub ゲートウェイ、ウォームアップ付き固定並列数/固定 RPS 負荷、トレランス付きベースライン検査を提供します。Runner はレスポンスキャッシュを回避するため、プロンプトを一意にします。
+CLI の `mocker`、`gateway`、`run`、`check`、`summarize-go`、`check-go` は、それぞれ決定的 upstream、ゼロ設定のインメモリ TokenHub ゲートウェイ、ウォームアップ付き固定並列数/固定 RPS 負荷、ブラックボックスのベースライン検査、Go ベンチマーク中央値の集計、プロセス内 `ns/op`・`B/op`・`allocs/op` の検査を提供します。Runner はレスポンスキャッシュを回避するため、プロンプトを一意にします。
 
 TokenHub 単体のスモークベンチマークでは、別のターミナルで自己完結型ゲートウェイを起動します。Key はインメモリテスト DB にのみ存在しますが、引数ではなく環境変数で渡します。
 
@@ -70,7 +70,7 @@ export TOKENHUB_BENCHMARK_MODEL=benchmark-model
 ./benchmarks/run-internal.sh
 ```
 
-マトリクスは Chat Completions、Responses、ストリーミング、フェイルオーバー、SQLite、小/大 payload の常時監査、metrics、payload 取得なし/ありの tracing を含みます。`ReportAllocs` により、Go 出力に `ns/op`、`B/op`、`allocs/op` が含まれます。
+マトリクスは Chat Completions、Responses、ストリーミング、フェイルオーバー、SQLite、同一の 32 KiB リクエストによる payload 監査永続化のオン/オフ比較、小/大 payload の直接監査レンダリング、metrics、payload 取得なし/ありの tracing を含みます。`ReportAllocs` により、Go 出力に `ns/op`、`B/op`、`allocs/op` が含まれます。スクリプトは反復サンプルの中央値を集計し、`benchmarks/internal-budget.json` の閾値（時間 25%、バイト 15%、割り当て回数 10%）を超えると非ゼロで終了します。
 
 PostgreSQL は共有サービスへの意図しない接続を防ぐため、明示的に有効化します。各ケースは最後にロールバックされるトランザクション内で実行され、ルートや監査データを残しません。
 
@@ -80,6 +80,14 @@ TOKENHUB_BENCHMARK_POSTGRES_URL='postgres://tokenhub:password@127.0.0.1:5432/tok
 ```
 
 使い捨ての空データベースを使用してください。セットアップとマイグレーションは計測外、リクエストの永続化は計測内です。
+
+プロセス内ベースラインは profile ごとに分かれます。既定は `benchmarks/baselines/internal/sqlite.json`、`TOKENHUB_BENCHMARK_POSTGRES_URL` を設定した実行では `sqlite-postgresql.json` です。commit 済みでクリーンな revision からのみ生成または意図的に更新します。
+
+```bash
+TOKENHUB_BENCHMARK_UPDATE_BASELINE=1 ./benchmarks/run-internal.sh
+```
+
+PostgreSQL profile の更新時は PostgreSQL URL も設定します。ベンチマーク集合、Go バージョン、OS、アーキテクチャ、CPU のモデル/数、システムメモリが異なる場合、検査は比較を拒否します。
 
 ## ベースラインとバジェット
 
@@ -92,7 +100,7 @@ TOKENHUB_BENCHMARK_POSTGRES_URL='postgres://tokenhub:password@127.0.0.1:5432/tok
   --budget benchmarks/budget.json
 ```
 
-schema、プロトコル、ストリームモード、負荷モード/レベル、モデル、リクエストサイズ、upstream 遅延が異なる結果は比較されません。安定したマシンで 5 回以上実行し、意図した性能変更がある場合のみ中央値の実行をベースラインとして更新します。
+schema、プロトコル、ストリームモード、負荷モード/レベル、モデル、リクエストサイズ、upstream 遅延、ランタイム/ハードウェア profile が異なる結果は比較されません。安定したマシンで 5 回以上実行し、意図した性能変更がある場合のみ中央値の実行をベースラインとして更新します。
 
 4 つの現在結果を `benchmarks/baselines/*.json` と同じファイル名で 1 つのディレクトリに配置し、スイート全体を検査できます。
 

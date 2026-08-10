@@ -12,7 +12,7 @@ max(0, end-to-end client latency - configured fake-upstream latency)
 
 This estimate includes HTTP transport and scheduling noise. It is not an internal gateway timer and must not be compared directly with a benchmark that excludes JSON serialization or HTTP calls. In particular, Bifrost's published microsecond overhead is measured with specific exclusions; use the same external runner and upstream for a fair product comparison.
 
-Every JSON result records the scenario, commit, timestamp, Go version, operating system, architecture, and CPU count. It deliberately excludes API keys, hostnames, usernames, and local paths.
+Every JSON result records the scenario, commit, timestamp, Go version, operating system, architecture, CPU model and count, and system memory. It deliberately excludes API keys, hostnames, usernames, and local paths.
 
 ## Build the tool
 
@@ -23,12 +23,14 @@ mkdir -p .tmp
 (cd backend && go build -o ../.tmp/tokenhub-benchmark ./cmd/tokenhub-benchmark)
 ```
 
-The tool provides four commands:
+The tool provides six commands:
 
 - `mocker`: deterministic OpenAI-compatible Chat Completions, Responses, Embeddings, and SSE endpoints.
 - `gateway`: self-contained in-memory TokenHub plus the deterministic upstream, for a zero-configuration TokenHub smoke baseline.
 - `run`: fixed-concurrency or fixed-rate HTTP load with warmup and unique prompts that defeat response caching.
 - `check`: scenario-compatible baseline comparison using a tolerant performance budget.
+- `summarize-go`: convert repeated standard Go benchmark output into median JSON metrics.
+- `check-go`: compare internal `ns/op`, `B/op`, and `allocs/op` metrics with a tracked baseline.
 
 For a quick TokenHub-only smoke run, start the self-contained gateway in one terminal. The key is synthetic, exists only in the in-memory benchmark database, and is still passed through the environment rather than a command-line argument:
 
@@ -100,7 +102,7 @@ For a streaming run, `--upstream-latency` means total upstream response duration
 ./benchmarks/run-internal.sh
 ```
 
-The matrix covers Chat Completions, Responses, streaming, failover, SQLite, always-on payload audit with small and large bodies, metrics, and tracing with and without payload capture. It uses `ReportAllocs`, so standard Go output includes `ns/op`, `B/op`, and `allocs/op`.
+The matrix covers Chat Completions, Responses, streaming, failover, SQLite, isolated payload-audit persistence with identical 32 KiB controls, direct small/large audit rendering, metrics, and tracing with and without payload capture. It uses `ReportAllocs`, so standard Go output includes `ns/op`, `B/op`, and `allocs/op`. The script aggregates repeated samples by median and exits non-zero when any metric exceeds `benchmarks/internal-budget.json` (25% time, 15% bytes, or 10% allocations over baseline).
 
 PostgreSQL is opt-in to prevent ordinary test runs from accessing a shared service. Each benchmark case runs in a transaction that is rolled back, so repeated cases do not retain routes or audit rows:
 
@@ -110,6 +112,14 @@ TOKENHUB_BENCHMARK_POSTGRES_URL='postgres://tokenhub:password@127.0.0.1:5432/tok
 ```
 
 Use a disposable empty database. Setup and migrations are outside the timed interval, while request persistence is included.
+
+Internal baselines are profile-specific: the default uses `benchmarks/baselines/internal/sqlite.json`, while a run with `TOKENHUB_BENCHMARK_POSTGRES_URL` uses `sqlite-postgresql.json`. Generate or intentionally refresh one only from a clean committed revision:
+
+```bash
+TOKENHUB_BENCHMARK_UPDATE_BASELINE=1 ./benchmarks/run-internal.sh
+```
+
+Set the PostgreSQL URL as well when updating that profile. Baseline checks fail closed when the benchmark set, Go version, OS, architecture, CPU model/count, or system memory differs.
 
 ## Check and update a baseline
 
@@ -123,7 +133,7 @@ The tracked budget in `benchmarks/budget.json` requires at least 99.9% success, 
   --markdown output/benchmarks/budget-check.md
 ```
 
-The check refuses results whose schema, protocol, stream mode, load mode, load level, model, request size, or configured upstream latency differs. Update a tracked baseline only after an intentional performance change, using a stable machine and at least five repeated runs. Keep the median run, describe the hardware and command in the pull request, and never add credentials or ad hoc local output.
+The check refuses results whose schema, protocol, stream mode, load mode, load level, model, request size, configured upstream latency, or runtime/hardware profile differs. Update a tracked baseline only after an intentional performance change, using a stable machine and at least five repeated runs. Keep the median run, describe the hardware and command in the pull request, and never add credentials or ad hoc local output.
 
 To check all four scenarios, place current results with the same filenames as `benchmarks/baselines/*.json` in one directory, then run:
 

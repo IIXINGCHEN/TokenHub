@@ -1,6 +1,7 @@
 package perfbench_test
 
 import (
+	"strings"
 	"testing"
 
 	"tokenhub/backend/internal/perfbench"
@@ -52,6 +53,20 @@ func TestCheckBudgetAppliesDocumentedRegressionTolerances(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestCheckBudgetRejectsDifferentRuntimeProfiles(t *testing.T) {
+	t.Parallel()
+
+	baseline := perfbench.Result{SchemaVersion: perfbench.SchemaVersion, Metadata: perfbench.Metadata{
+		GoVersion: "go1.26.5", OS: "darwin", Arch: "arm64", CPUCount: 18, CPUModel: "Apple M5 Pro", MemoryBytes: 48 << 30,
+	}}
+	current := baseline
+	current.Metadata.OS = "linux"
+	report := perfbench.CheckBudget(baseline, current, perfbench.Budget{})
+	if report.Passed || !strings.Contains(report.Error, "operating system") {
+		t.Fatalf("expected runtime incompatibility: %+v", report)
+	}
 }
 
 func hasFailedCheck(report perfbench.BudgetReport, name string) bool {

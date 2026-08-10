@@ -41,6 +41,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return runBenchmark(ctx, args[1:], stdout, stderr)
 	case "check":
 		return runCheck(args[1:], stdout, stderr)
+	case "summarize-go":
+		return runSummarizeGo(args[1:], stdout, stderr)
+	case "check-go":
+		return runCheckGo(args[1:], stdout, stderr)
 	case "help", "-h", "--help":
 		usage(stdout)
 		return nil
@@ -51,7 +55,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 }
 
 func usage(writer io.Writer) {
-	fmt.Fprintln(writer, "usage: tokenhub-benchmark <mocker|gateway|run|check> [flags]")
+	fmt.Fprintln(writer, "usage: tokenhub-benchmark <mocker|gateway|run|check|summarize-go|check-go> [flags]")
 }
 
 func runMocker(args []string, stderr io.Writer) error {
@@ -251,6 +255,88 @@ func runCheck(args []string, stdout, stderr io.Writer) error {
 	}
 	if !report.Passed {
 		return errors.New("performance budget failed")
+	}
+	return nil
+}
+
+func runSummarizeGo(args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("summarize-go", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	inputPath := flags.String("input", "", "raw go test benchmark output")
+	outputPath := flags.String("output", "", "summary JSON path (stdout when empty)")
+	gitCommit := flags.String("git-commit", "", "commit under test (auto-detected when empty)")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *inputPath == "" {
+		return errors.New("--input is required")
+	}
+	input, err := os.Open(*inputPath)
+	if err != nil {
+		return fmt.Errorf("open Go benchmark output: %w", err)
+	}
+	suite, parseErr := perfbench.ParseGoBenchmarks(input)
+	closeErr := input.Close()
+	if parseErr != nil {
+		return parseErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	suite.Metadata.GitCommit = strings.TrimSpace(*gitCommit)
+	if suite.Metadata.GitCommit == "" {
+		suite.Metadata.GitCommit = detectGitCommit()
+	}
+	suite.Metadata.GitDirty = detectGitDirty()
+	write := func(writer io.Writer) error {
+		encoder := json.NewEncoder(writer)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(suite)
+	}
+	if *outputPath == "" {
+		return write(stdout)
+	}
+	return writeFile(*outputPath, write)
+}
+
+func runCheckGo(args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("check-go", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	baselinePath := flags.String("baseline", "", "Go benchmark baseline JSON")
+	currentPath := flags.String("current", "", "raw current go test benchmark output")
+	budgetPath := flags.String("budget", "", "Go benchmark budget JSON")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *baselinePath == "" || *currentPath == "" || *budgetPath == "" {
+		return errors.New("--baseline, --current, and --budget are required")
+	}
+	var baseline perfbench.GoBenchmarkSuite
+	if err := readJSONFile(*baselinePath, &baseline); err != nil {
+		return fmt.Errorf("read Go benchmark baseline: %w", err)
+	}
+	currentFile, err := os.Open(*currentPath)
+	if err != nil {
+		return fmt.Errorf("open current Go benchmark output: %w", err)
+	}
+	current, parseErr := perfbench.ParseGoBenchmarks(currentFile)
+	closeErr := currentFile.Close()
+	if parseErr != nil {
+		return parseErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	var budget perfbench.GoBenchmarkBudget
+	if err := readJSONFile(*budgetPath, &budget); err != nil {
+		return fmt.Errorf("read Go benchmark budget: %w", err)
+	}
+	report := perfbench.CheckGoBenchmarkBudget(baseline, current, budget)
+	if err := perfbench.WriteJSON(stdout, report); err != nil {
+		return err
+	}
+	if !report.Passed {
+		return errors.New("Go benchmark performance budget failed")
 	}
 	return nil
 }

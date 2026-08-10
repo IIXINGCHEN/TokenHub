@@ -70,6 +70,9 @@ func compatibleScenarios(baseline, current Result) error {
 			return fmt.Errorf("incompatible scenarios: %s differs (baseline %v, current %v)", check.name, check.a, check.b)
 		}
 	}
+	if err := compatibleMetadata(baseline.Metadata, current.Metadata); err != nil {
+		return err
+	}
 	return nil
 }
 

@@ -77,7 +77,7 @@ func TestAnalyzeSeparatesStreamingTTFTAndTotalUpstreamTime(t *testing.T) {
 	t.Parallel()
 
 	result := perfbench.Analyze(perfbench.Config{
-		Stream:                   true,
+		Stream:                  true,
 		ExpectedUpstreamLatency: 13 * time.Millisecond,
 		ExpectedUpstreamTTFT:    5 * time.Millisecond,
 	}, perfbench.Metadata{}, []perfbench.Observation{{
