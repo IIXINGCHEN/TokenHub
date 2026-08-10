@@ -38,7 +38,6 @@ func TestValidateProviderUpstreamBaseURLAllowsPublicHTTPS(t *testing.T) {
 	for _, raw := range []string{
 		"https://api.example.com/v1",
 		"https://api.openai.com/v1",
-		"http://api.example.com:8080/v1",
 		// A globally routable literal (Google Public DNS): special-purpose
 		// literals such as 203.0.113.x are rejected instead, see below.
 		"https://8.8.8.8/v1",
@@ -48,6 +47,18 @@ func TestValidateProviderUpstreamBaseURLAllowsPublicHTTPS(t *testing.T) {
 	} {
 		if err := validateBaseURL(t, raw); err != nil {
 			t.Fatalf("expected %q to be allowed, got %v", raw, err)
+		}
+	}
+}
+
+func TestValidateProviderUpstreamBaseURLRejectsPublicHTTP(t *testing.T) {
+	for _, raw := range []string{
+		"http://api.example.com/v1",
+		"http://8.8.8.8/v1",
+	} {
+		err := validateBaseURL(t, raw)
+		if code := AsHTTPError(err).Code; code != "provider_base_url_insecure_scheme" {
+			t.Fatalf("expected %q to require HTTPS, got %q", raw, code)
 		}
 	}
 }
@@ -516,6 +527,21 @@ func TestAdminCreateProviderRejectsLoopbackByDefault(t *testing.T) {
 	}
 }
 
+func TestAdminCreateProviderRejectsPublicHTTP(t *testing.T) {
+	store := NewMemoryStore()
+	if err := SeedDemoData(store); err != nil {
+		t.Fatal(err)
+	}
+	resp := doJSON(t, New(store).Handler(), http.MethodPost, "/api/admin/providers", map[string]any{
+		"name":     "Plaintext public provider",
+		"type":     ProviderOpenAICompatible,
+		"base_url": "http://api.example.com/v1",
+	}, "")
+	if resp.Code != http.StatusBadRequest || !strings.Contains(resp.Body, "provider_base_url_insecure_scheme") {
+		t.Fatalf("expected public HTTP provider create to be rejected, got %d: %s", resp.Code, resp.Body)
+	}
+}
+
 // TestAdminPatchProviderRejectsSSRFBaseURL verifies the same guard on update:
 // an existing healthy provider must not be repointed at a metadata endpoint.
 func TestAdminPatchProviderRejectsSSRFBaseURL(t *testing.T) {
@@ -549,6 +575,13 @@ func TestAdminPatchProviderRejectsSSRFBaseURL(t *testing.T) {
 	if !strings.Contains(patched.Body, "provider_base_url_not_allowed") {
 		t.Fatalf("expected provider_base_url_not_allowed, got %s", patched.Body)
 	}
+
+	patched = doJSON(t, app, http.MethodPatch, "/api/admin/providers/"+payload.Provider.ID, map[string]any{
+		"base_url": "http://api.example.com/v1",
+	}, "")
+	if patched.Code != http.StatusBadRequest || !strings.Contains(patched.Body, "provider_base_url_insecure_scheme") {
+		t.Fatalf("expected public HTTP provider patch to be rejected, got %d: %s", patched.Code, patched.Body)
+	}
 }
 
 // TestAdminCreateProviderAllowsAllowlistedPrivateLiteral covers the operator
@@ -578,7 +611,11 @@ func TestAdminCreateProviderAllowsAllowlistedPrivateLiteral(t *testing.T) {
 func TestUpstreamClientsGuardInferenceDial(t *testing.T) {
 	client, streamClient, _ := newUpstreamClients(Config{})
 	for name, candidate := range map[string]*http.Client{"non-streaming": client, "streaming": streamClient} {
-		transport, ok := candidate.Transport.(*http.Transport)
+		policy, ok := candidate.Transport.(*providerUpstreamPolicyTransport)
+		if !ok {
+			t.Fatalf("expected %s client to validate each request before sending it", name)
+		}
+		transport, ok := policy.next.(*http.Transport)
 		if !ok || transport.DialContext == nil {
 			t.Fatalf("expected %s client to install a guarded DialContext", name)
 		}
@@ -604,6 +641,10 @@ func TestUpstreamClientsGuardInferenceDial(t *testing.T) {
 		conn.Close()
 		_ = listener.Close()
 	}
+	server := New(NewMemoryStore())
+	if _, ok := server.codexSubscription.Client.Transport.(*providerUpstreamPolicyTransport); !ok {
+		t.Fatal("expected Codex subscription client to validate each request before sending it")
+	}
 }
 
 // TestProviderResourceBaseURLSSRFGuard covers the resource-level persistence
@@ -628,6 +669,7 @@ func TestProviderResourceBaseURLSSRFGuard(t *testing.T) {
 	t.Run("create rejects metadata and private URLs", func(t *testing.T) {
 		store, provider := newStore(t)
 		for _, baseURL := range []string{
+			"http://api.example.com/v1",
 			"http://169.254.169.254/latest/meta-data",
 			"http://192.168.1.10/v1",
 			"http://203.0.113.10/v1",

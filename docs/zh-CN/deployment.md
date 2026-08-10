@@ -341,9 +341,9 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_MANAGED_UPDATES` | `false` | 允许容器部署执行在线更新与回退；原生部署始终允许 |
 | `TOKENHUB_INSTALL_ROOT` | `/opt/tokenhub` | 托管 Release 在线更新与回退使用的安装根目录 |
 | `TOKENHUB_TRUSTED_PROXY_CIDRS` | 空 | 允许提供 `X-Forwarded-For` 的代理 IP 或 CIDR，逗号分隔 |
-| `TOKENHUB_PROVIDER_UPSTREAM_ALLOWED_CIDRS` | 空 | 逗号分隔的私网 CIDR（仅 RFC1918/ULA），网段内的字面量 IP 可用作自定义 provider base URL（用于内网模型服务）。解析到私网地址的域名与重定向目标仍被拒绝 |
+| `TOKENHUB_PROVIDER_UPSTREAM_ALLOWED_CIDRS` | 空 | 逗号分隔的私网 CIDR（仅 RFC1918/ULA），网段内的字面量 IP 可用作自定义 provider base URL（用于内网模型服务）。这些显式放行的私网字面量可使用 HTTP；公网 provider URL 必须使用 HTTPS。解析到私网地址的域名与重定向目标仍被拒绝 |
 | `TOKENHUB_PROVIDER_UPSTREAM_NAT64_PREFIX` | 空 | 可选的 RFC 6052 DNS64/NAT64 前缀，用于识别其中嵌入的 IPv4 目标。支持 32、40、48、56、64、96 位前缀；使用 `64:ff9b:1::/48` 等网络专用前缀时需要配置，标准 `64:ff9b::/96` 前缀无需配置 |
-| `TOKENHUB_PROVIDER_UPSTREAM_ALLOW_LOOPBACK` | `false` | 显式允许 provider base URL 使用 `localhost`、`127.0.0.1` 或 `::1`，用于本地 Ollama/LM Studio 开发；生产环境应保持关闭 |
+| `TOKENHUB_PROVIDER_UPSTREAM_ALLOW_LOOPBACK` | `false` | 显式允许 provider base URL（包括 HTTP URL）使用 `localhost`、`127.0.0.1` 或 `::1`，用于本地 Ollama/LM Studio 开发；公网 provider URL 必须使用 HTTPS；生产环境应保持关闭 |
 | `TOKENHUB_CORS_ALLOWED_ORIGINS` | 公网地址 | 允许调用后端的浏览器 Origin，逗号分隔 |
 | `TOKENHUB_ADMIN_TOKEN` | `change-me-tokenhub-admin-token` | Admin API 启动访问 Token |
 | `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD` | `change-me-tokenhub-admin-password` | 初始 `admin` 用户密码；生产启动前必须修改 |

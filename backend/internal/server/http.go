@@ -59,6 +59,7 @@ func NewWithConfig(store Store, config Config) *Server {
 	}
 	imageContext, imageCancel := context.WithCancel(context.Background())
 	client, streamClient, streamIdleTimeout := newUpstreamClients(config)
+	allowedProviderUpstreams := allowedProviderUpstreamCIDRs()
 	openai := OpenAICompatibleAdapter{Client: client, StreamClient: streamClient, StreamIdleTimeout: streamIdleTimeout}
 	codexSubscription := &CodexSubscriptionAdapter{
 		Client: &http.Client{
@@ -68,7 +69,7 @@ func NewWithConfig(store Store, config Config) *Server {
 			// credential-bearing responses/compact/probe/image calls into
 			// the internal network. No Client.Timeout: streaming stays
 			// bounded by StreamIdleTimeout, exactly as before.
-			Transport:     ssrfGuardedProviderTransport(allowedProviderUpstreamCIDRs()),
+			Transport:     guardProviderUpstreamRequests(ssrfGuardedProviderTransport(allowedProviderUpstreams), allowedProviderUpstreams),
 			CheckRedirect: strictProviderUpstreamRedirect,
 		},
 		StreamIdleTimeout:  streamIdleTimeout,

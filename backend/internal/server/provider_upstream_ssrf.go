@@ -15,8 +15,10 @@ import (
 
 // validateProviderUpstreamBaseURL guards against server-side request forgery
 // (SSRF) when the gateway calls an administrator-supplied custom provider base
-// URL. It requires an http(s) scheme, forbids credentials embedded in the URL,
-// and rejects literal IP hosts in loopback, private, link-local and curated
+// URL. Public endpoints must use HTTPS before credentials are attached; HTTP
+// is reserved for explicitly allowed loopback/private literal endpoints. The
+// guard also forbids credentials embedded in the URL and rejects literal IP
+// hosts in loopback, private, link-local and curated
 // high-risk/non-provider ranges (including cloud metadata). Hostnames receive
 // the same address policy after resolution at dial time.
 //
@@ -47,19 +49,21 @@ func validateProviderUpstreamBaseURL(endpoint *url.URL, allowedPrivate []*net.IP
 	if host == "" {
 		return NewHTTPError(http.StatusBadRequest, "provider_base_url_invalid", "Base URL is invalid")
 	}
+	plaintextAllowed := false
 	if isLocalProviderHostname(host) {
-		if allowLocalhost {
-			return nil
+		if !allowLocalhost {
+			return NewHTTPError(http.StatusBadRequest, "provider_base_url_not_allowed", "Base URL host must not be a loopback address")
 		}
-		return NewHTTPError(http.StatusBadRequest, "provider_base_url_not_allowed", "Base URL host must not be a loopback address")
-	}
-	if ip := net.ParseIP(host); ip != nil {
+		plaintextAllowed = true
+	} else if ip := net.ParseIP(host); ip != nil {
 		if isAllowlistedPrivateProviderUpstreamIP(ip, allowedPrivate) {
-			return nil
-		}
-		if isDisallowedProviderUpstreamIP(ip) {
+			plaintextAllowed = true
+		} else if isDisallowedProviderUpstreamIP(ip) {
 			return NewHTTPError(http.StatusBadRequest, "provider_base_url_not_allowed", "Base URL host must not be a private, loopback, or link-local address")
 		}
+	}
+	if scheme == "http" && !plaintextAllowed {
+		return NewHTTPError(http.StatusBadRequest, "provider_base_url_insecure_scheme", "Public provider base URLs must use https")
 	}
 	return nil
 }
@@ -259,26 +263,26 @@ func checkProviderUpstreamLiteralDial(ip net.IP, allowedPrivate []*net.IPNet) er
 // when none are allowed; otherwise it dials one of the validated addresses
 // directly, so the checked IP is the one actually connected to. When the
 // caller passes a custom client (used by tests with in-process httptest
-// servers) we keep its Transport untouched so the test transport keeps
-// working, and only enforce redirect re-validation. This keeps the dial guard
-// strictly on the production path without breaking existing tests that rely on
-// a custom Transport or localhost servers.
+// servers) we keep its Transport as the underlying sender so it keeps working,
+// while still applying request and redirect validation. This keeps the dial
+// guard strictly on the production path without breaking custom transports.
 //
 // In both cases the CheckRedirect hook re-runs validateProviderUpstreamBaseURL
 // on every redirect target so a hop to a private or non-http(s) URL is refused.
 func ssrfGuardedProviderClient(client *http.Client) *http.Client {
+	allowedPrivate := allowedProviderUpstreamCIDRs()
 	guard := &http.Client{
 		// Re-validate every redirect target before following it, with no
 		// allowlist and no localhost exception.
 		CheckRedirect: strictProviderUpstreamRedirect,
 	}
 	if client == nil || client == http.DefaultClient {
-		guard.Transport = ssrfGuardedProviderTransport(allowedProviderUpstreamCIDRs())
+		guard.Transport = guardProviderUpstreamRequests(ssrfGuardedProviderTransport(allowedPrivate), allowedPrivate)
 		return guard
 	}
-	// Custom client (tests): preserve its Transport and timeouts, enforce the
-	// redirect guard on top.
-	guard.Transport = client.Transport
+	// Custom client (tests): preserve its Transport and timeouts underneath the
+	// request and redirect guards.
+	guard.Transport = guardProviderUpstreamRequests(client.Transport, allowedPrivate)
 	guard.Timeout = client.Timeout
 	guard.Jar = client.Jar
 	return guard

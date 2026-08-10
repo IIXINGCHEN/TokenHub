@@ -41,6 +41,32 @@ func TestStrictProviderUpstreamRedirectRejectsOriginChanges(t *testing.T) {
 	}
 }
 
+func TestProviderUpstreamPolicyTransportRejectsPublicHTTPBeforeSendingCredentials(t *testing.T) {
+	called := false
+	next := roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		called = true
+		return &http.Response{StatusCode: http.StatusNoContent, Body: http.NoBody}, nil
+	})
+	transport := guardProviderUpstreamRequests(next, nil)
+	req, err := http.NewRequest(http.MethodPost, "http://api.example.com/v1/chat?key=secret", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("x-api-key", "secret")
+	if _, err := transport.RoundTrip(req); AsHTTPError(err).Code != "provider_base_url_insecure_scheme" {
+		t.Fatalf("expected public HTTP request to require HTTPS, got %v", err)
+	}
+	if called {
+		t.Fatal("underlying transport was called after credentials were attached to public HTTP")
+	}
+
+	req.URL.Scheme = "https"
+	if _, err := transport.RoundTrip(req); err != nil || !called {
+		t.Fatalf("expected HTTPS request to reach the underlying transport, called=%v err=%v", called, err)
+	}
+}
+
 func TestConfiguredProviderUpstreamNAT64PrefixClassifiesEmbeddedIPv4(t *testing.T) {
 	t.Setenv(providerUpstreamNAT64PrefixEnv, "64:ff9b:1::/48")
 	for _, ip := range []string{
@@ -188,7 +214,7 @@ func TestProviderUpstreamRejectsCuratedNonProviderRanges(t *testing.T) {
 		if ip.To4() == nil {
 			host = "[" + raw + "]"
 		}
-		if err := ValidateProviderUpstreamBaseURL("http://" + host + "/v1"); err != nil {
+		if err := ValidateProviderUpstreamBaseURL("https://" + host + "/v1"); err != nil {
 			t.Fatalf("expected globally reachable target %s to pass save-time validation, got %v", raw, err)
 		}
 	}

@@ -40,15 +40,16 @@ var errProviderStreamIdle = NewHTTPError(
 // because http.Client.Timeout covers reading the response body: a total deadline
 // that suits a normal request truncates a stream that is still delivering.
 //
-// Both clients dial through the SSRF guard and follow the strict redirect
-// policy: provider base URLs are validated at save time, but DNS answers can
-// change afterwards (rebinding), and a redirect must never bounce inference
-// traffic — which carries provider API keys — into the internal network.
+// Both clients validate the actual request before sending credentials, dial
+// through the SSRF guard, and follow the strict redirect policy. Save-time
+// validation alone cannot protect old records or later DNS rebinding, and a
+// redirect must never bounce inference traffic into the internal network.
 func newUpstreamClients(config Config) (*http.Client, *http.Client, time.Duration) {
 	idleTimeout := upstreamTimeout(config.UpstreamStreamIdleTimeoutSeconds, defaultUpstreamStreamIdleTimeoutSeconds)
+	allowedPrivate := allowedProviderUpstreamCIDRs()
 	client := &http.Client{
 		Timeout:       upstreamTimeout(config.UpstreamNonStreamTimeoutSeconds, defaultUpstreamNonStreamTimeoutSeconds),
-		Transport:     ssrfGuardedProviderTransport(allowedProviderUpstreamCIDRs()),
+		Transport:     guardProviderUpstreamRequests(ssrfGuardedProviderTransport(allowedPrivate), allowedPrivate),
 		CheckRedirect: strictProviderUpstreamRedirect,
 	}
 	return client, newUpstreamStreamClient(idleTimeout), idleTimeout
@@ -62,9 +63,10 @@ func newUpstreamStreamClient(idleTimeout time.Duration) *http.Client {
 	// ssrfGuardedProviderTransport already clones the default transport (never
 	// mutates the process-global one) and installs the guarded DialContext with
 	// proxying disabled; only the header timeout is added here.
-	transport := ssrfGuardedProviderTransport(allowedProviderUpstreamCIDRs())
+	allowedPrivate := allowedProviderUpstreamCIDRs()
+	transport := ssrfGuardedProviderTransport(allowedPrivate)
 	transport.ResponseHeaderTimeout = idleTimeout
-	return &http.Client{Transport: transport, CheckRedirect: strictProviderUpstreamRedirect}
+	return &http.Client{Transport: guardProviderUpstreamRequests(transport, allowedPrivate), CheckRedirect: strictProviderUpstreamRedirect}
 }
 
 // upstreamTimeout converts a configured second count into a duration, falling
