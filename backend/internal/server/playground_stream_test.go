@@ -159,6 +159,37 @@ type playgroundCaptureAdapter struct {
 	request ChatCompletionRequest
 }
 
+func TestAdminPlaygroundNeverForwardsCaseInsensitiveProjectContext(t *testing.T) {
+	for _, path := range []string{"/api/admin/playground/chat", "/api/admin/playground/chat/stream"} {
+		t.Run(path, func(t *testing.T) {
+			server, _ := newPlaygroundTestServer(t)
+			adapter := &playgroundCaptureAdapter{}
+			server.adapterRegistry.Register(ProviderMock, adapter, AdapterCapabilityChat)
+			response := doJSON(t, server.Handler(), http.MethodPost, path, map[string]any{
+				"PROJECT_ID": "prj_demo",
+				"model":      "gpt-4.1-mini",
+				"messages":   []map[string]any{{"role": "user", "content": "do not leak context"}},
+			}, "")
+			if response.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d: %s", response.Code, response.Body)
+			}
+			forwarded, err := json.Marshal(adapter.request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(forwarded, &fields); err != nil {
+				t.Fatal(err)
+			}
+			for key := range fields {
+				if strings.EqualFold(key, "project_id") {
+					t.Fatalf("playground project context leaked to the provider as %q: %s", key, forwarded)
+				}
+			}
+		})
+	}
+}
+
 func (a *playgroundCaptureAdapter) Chat(_ context.Context, _ Provider, _ string, req ChatCompletionRequest) (any, Usage, error) {
 	a.request = req
 	return a.MockAdapter.Chat(context.Background(), Provider{}, "", req)

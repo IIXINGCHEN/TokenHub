@@ -3,6 +3,7 @@ package guardrails
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -232,6 +233,120 @@ func TestEngineInspectsLargeInput(t *testing.T) {
 	})
 	if err != nil || decision.Action != ActionAudit || len(decision.Findings) != 1 {
 		t.Fatalf("unexpected large-input decision=%#v err=%v", decision, err)
+	}
+}
+
+func TestEngineInspectsLongContextWithDozensOfSimpleRules(t *testing.T) {
+	items := make([]DetectionItem, 32)
+	for index := range items {
+		items[index] = DetectionItem{
+			Name: "Keyword", DetectorType: DetectorPattern, Action: ActionAudit,
+			Config: map[string]any{"keywords": []string{"needle"}},
+		}
+	}
+	policy := mustNormalizePolicy(t, Policy{
+		Name: "Long context", DetectionItems: items,
+		Bindings: []Binding{{ScopeType: ScopeAllProjects}},
+	})
+	decision, err := NewEngine(nil).Evaluate(context.Background(), EvaluationRequest{
+		Fragments: []Fragment{{ID: "input", Text: strings.Repeat("x", 4*1024*1024)}}, Policies: []Policy{policy},
+	})
+	if err != nil || decision.Action != ActionAllow || len(decision.Findings) != 0 {
+		t.Fatalf("unexpected long-context decision=%#v err=%v", decision, err)
+	}
+}
+
+func TestEngineRejectsPathologicalAggregateRegexWorkBeforeScanning(t *testing.T) {
+	expressions := make([]string, 64)
+	for index := range expressions {
+		expressions[index] = fmt.Sprintf("a{%d,512}b", index+1)
+	}
+	items := make([]DetectionItem, 32)
+	for index := range items {
+		items[index] = DetectionItem{
+			Name: "Expensive regex", DetectorType: DetectorPattern, Action: ActionAudit,
+			Config: map[string]any{"regex": expressions},
+		}
+	}
+	policy := mustNormalizePolicy(t, Policy{
+		Name: "Pathological workload", DetectionItems: items,
+		Bindings: []Binding{{ScopeType: ScopeAllProjects}},
+	})
+	decision, err := NewEngine(nil).Evaluate(context.Background(), EvaluationRequest{
+		Fragments: []Fragment{{ID: "input", Text: strings.Repeat("a", 64*1024)}}, Policies: []Policy{policy},
+	})
+	if !errors.Is(err, ErrDeterministicWorkBudgetExceeded) || decision.Action != ActionAllow || len(decision.Findings) != 0 {
+		t.Fatalf("expected deterministic budget rejection, decision=%#v err=%v", decision, err)
+	}
+}
+
+func TestEngineRejectsLongCaseInsensitiveKeywordWorkBeforeScanning(t *testing.T) {
+	keywords := make([]string, 64)
+	for index := range keywords {
+		keywords[index] = strings.Repeat("a", 510) + fmt.Sprintf("%02d", index)
+	}
+	policy := mustNormalizePolicy(t, Policy{
+		Name: "Long keywords", DetectionItems: []DetectionItem{{
+			Name: "Expensive keywords", DetectorType: DetectorPattern, Action: ActionAudit,
+			Config: map[string]any{"keywords": keywords},
+		}},
+		Bindings: []Binding{{ScopeType: ScopeAllProjects}},
+	})
+	decision, err := NewEngine(nil).Evaluate(context.Background(), EvaluationRequest{
+		Fragments: []Fragment{{ID: "input", Text: strings.Repeat("x", 2*1024*1024)}}, Policies: []Policy{policy},
+	})
+	if !errors.Is(err, ErrDeterministicWorkBudgetExceeded) || decision.Action != ActionAllow || len(decision.Findings) != 0 {
+		t.Fatalf("expected keyword budget rejection, decision=%#v err=%v", decision, err)
+	}
+}
+
+func TestEngineRejectsDenseMaskMatchesBeforeMaterializingUnboundedFindings(t *testing.T) {
+	policy := mustNormalizePolicy(t, Policy{
+		Name: "Dense emails", DetectionItems: []DetectionItem{{
+			Name: "Email", DetectorType: DetectorSensitiveData, Action: ActionMask,
+			Config: map[string]any{"data_types": []string{"email"}},
+		}},
+		Bindings: []Binding{{ScopeType: ScopeAllProjects}},
+	})
+	decision, err := NewEngine(nil).Evaluate(context.Background(), EvaluationRequest{
+		Fragments: []Fragment{{ID: "input", Text: strings.Repeat("a@b.co ", maxDeterministicFindings+1), Mutable: true}}, Policies: []Policy{policy},
+	})
+	if !errors.Is(err, ErrDeterministicWorkBudgetExceeded) || decision.Action != ActionAllow || len(decision.Findings) != 0 || len(decision.Replacements) != 0 {
+		t.Fatalf("expected finding budget rejection, decision=%#v err=%v", decision, err)
+	}
+}
+
+func TestEngineStopsBeforeDeterministicScanningWhenContextIsCanceled(t *testing.T) {
+	policy := mustNormalizePolicy(t, Policy{
+		Name: "Canceled", DetectionItems: []DetectionItem{{
+			Name: "Keyword", DetectorType: DetectorPattern, Action: ActionAudit,
+			Config: map[string]any{"keywords": []string{"needle"}},
+		}},
+		Bindings: []Binding{{ScopeType: ScopeAllProjects}},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := NewEngine(nil).Evaluate(ctx, EvaluationRequest{
+		Fragments: []Fragment{{ID: "input", Text: strings.Repeat("x", 1024*1024)}}, Policies: []Policy{policy},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context cancellation, got %v", err)
+	}
+}
+
+func TestEngineFindsValidSensitiveValueAfterInvalidCandidate(t *testing.T) {
+	policy := mustNormalizePolicy(t, Policy{
+		Name: "Birth dates", DetectionItems: []DetectionItem{{
+			Name: "Birth date", DetectorType: DetectorSensitiveData, Action: ActionBlock,
+			Config: map[string]any{"data_types": []string{"birth_date"}},
+		}},
+		Bindings: []Binding{{ScopeType: ScopeAllProjects}},
+	})
+	decision, err := NewEngine(nil).Evaluate(context.Background(), EvaluationRequest{
+		Fragments: []Fragment{{ID: "input", Text: "出生日期：1999 年 02 月 30 日；出生日期：1992 年 05 月 16 日"}}, Policies: []Policy{policy},
+	})
+	if err != nil || decision.Action != ActionBlock || len(decision.Findings) != 1 {
+		t.Fatalf("expected the later valid date to match, decision=%#v err=%v", decision, err)
 	}
 }
 

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -54,7 +55,7 @@ func (s *Server) evaluateOutboundGuardrails(ctx context.Context, projectID strin
 		Policies:   policies,
 	})
 	if err != nil {
-		return decision, NewHTTPError(http.StatusInternalServerError, "guardrail_evaluation_failed", "Content security evaluation failed")
+		return decision, guardrailEvaluationError(err)
 	}
 	for _, target := range targets {
 		if replacement, ok := decision.Replacements[target.fragment.ID]; ok && target.replace != nil {
@@ -65,6 +66,13 @@ func (s *Server) evaluateOutboundGuardrails(ctx context.Context, projectID strin
 		return decision, newGuardrailBlockedError(decision)
 	}
 	return decision, nil
+}
+
+func guardrailEvaluationError(err error) error {
+	if errors.Is(err, guardrails.ErrDeterministicWorkBudgetExceeded) {
+		return NewHTTPError(http.StatusServiceUnavailable, "guardrail_evaluation_budget_exceeded", "Content security evaluation exceeded its work budget")
+	}
+	return NewHTTPError(http.StatusInternalServerError, "guardrail_evaluation_failed", "Content security evaluation failed")
 }
 
 func newGuardrailBlockedError(decision guardrails.Decision) *HTTPError {

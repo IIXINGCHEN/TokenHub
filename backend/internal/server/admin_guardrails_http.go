@@ -62,7 +62,7 @@ func (s *Server) handleAdminGuardrailPolicyTest(w http.ResponseWriter, r *http.R
 		IgnoreBindings: true,
 	})
 	if err != nil {
-		writeError(w, r, NewHTTPError(http.StatusInternalServerError, "guardrail_evaluation_failed", "Content security evaluation failed"))
+		writeError(w, r, guardrailEvaluationError(err))
 		return
 	}
 	findings := make([]guardrailPolicyTestFinding, 0, len(decision.Findings))

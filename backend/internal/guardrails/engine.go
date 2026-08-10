@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"regexp/syntax"
 	"sort"
 	"strconv"
 	"strings"
@@ -12,9 +13,19 @@ import (
 
 const (
 	ActionAllow = "allow"
+	// Work is estimated as input bytes multiplied by matcher complexity. The
+	// aggregate budget permits 32 simple full-text scans over a 4 MiB prompt,
+	// while the per-matcher budget rejects one pathological regex on long text.
+	maxDeterministicMatcherWork     = 64 << 20
+	maxDeterministicEvaluationWork  = 128 << 20
+	maxDeterministicFindings        = 10_000
+	regexpInstructionsPerWorkFactor = 8
 )
 
-var ErrModelUnavailable = errors.New("guardrail model detector is unavailable")
+var (
+	ErrModelUnavailable                = errors.New("guardrail model detector is unavailable")
+	ErrDeterministicWorkBudgetExceeded = errors.New("guardrail deterministic work budget exceeded")
+)
 
 type Fragment struct {
 	ID      string
@@ -88,14 +99,28 @@ func (e *Engine) Evaluate(ctx context.Context, request EvaluationRequest) (decis
 	}
 
 	modelItems := make([]policyItem, 0)
+	deterministicPlans := make([]deterministicPlan, 0)
+	var deterministicWork uint64
 	for _, policy := range policies {
 		for _, item := range policy.DetectionItems {
 			if item.DetectorType == DetectorModel {
 				modelItems = append(modelItems, policyItem{policy: policy, item: item})
 				continue
 			}
-			decision.Findings = append(decision.Findings, deterministicFindings(policy, item, request.Fragments)...)
+			matchers := deterministicMatchers(item)
+			if err := addDeterministicWork(ctx, &deterministicWork, matchers, request.Fragments); err != nil {
+				return decision, err
+			}
+			deterministicPlans = append(deterministicPlans, deterministicPlan{policy: policy, item: item, matchers: matchers})
 		}
+	}
+	remainingFindings := maxDeterministicFindings
+	for _, plan := range deterministicPlans {
+		findings, err := deterministicFindings(ctx, plan.policy, plan.item, plan.matchers, request.Fragments, &remainingFindings)
+		if err != nil {
+			return decision, err
+		}
+		decision.Findings = append(decision.Findings, findings...)
 	}
 
 	decision.Action = strictestAction(decision.Findings)
@@ -139,6 +164,12 @@ func (e *Engine) Evaluate(ctx context.Context, request EvaluationRequest) (decis
 type policyItem struct {
 	policy Policy
 	item   DetectionItem
+}
+
+type deterministicPlan struct {
+	policy   Policy
+	item     DetectionItem
+	matchers []deterministicMatcher
 }
 
 func (e *Engine) detectModel(ctx context.Context, fragments []Fragment) (ModelResult, error) {
@@ -185,30 +216,69 @@ type deterministicMatcher struct {
 	category     string
 	reasonCode   string
 	validator    func(string) bool
+	workFactor   uint64
 }
 
-func deterministicFindings(policy Policy, item DetectionItem, fragments []Fragment) []Finding {
-	matchers := deterministicMatchers(item)
+func deterministicFindings(ctx context.Context, policy Policy, item DetectionItem, matchers []deterministicMatcher, fragments []Fragment, remainingFindings *int) ([]Finding, error) {
 	if item.Action != ActionMask {
 		for _, fragment := range fragments {
 			for _, matcher := range matchers {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
 				if indexes := matcher.firstValidMatch(fragment.Text); indexes != nil {
-					return []Finding{newDeterministicFinding(policy, item, fragment.ID, matcher, indexes)}
+					if *remainingFindings == 0 {
+						return nil, ErrDeterministicWorkBudgetExceeded
+					}
+					*remainingFindings = *remainingFindings - 1
+					return []Finding{newDeterministicFinding(policy, item, fragment.ID, matcher, indexes)}, nil
 				}
 			}
 		}
-		return nil
+		return nil, nil
 	}
 
 	findings := make([]Finding, 0)
 	for _, fragment := range fragments {
 		for _, matcher := range matchers {
-			for _, indexes := range matcher.allValidMatches(fragment.Text) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			matches, exceeded := matcher.allValidMatches(fragment.Text, *remainingFindings)
+			if exceeded {
+				return nil, ErrDeterministicWorkBudgetExceeded
+			}
+			*remainingFindings -= len(matches)
+			for _, indexes := range matches {
 				findings = append(findings, newDeterministicFinding(policy, item, fragment.ID, matcher, indexes))
 			}
 		}
 	}
-	return findings
+	return findings, nil
+}
+
+func addDeterministicWork(ctx context.Context, totalWork *uint64, matchers []deterministicMatcher, fragments []Fragment) error {
+	for _, fragment := range fragments {
+		for _, matcher := range matchers {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			factor := matcher.workFactor
+			if factor == 0 {
+				factor = 1
+			}
+			textBytes := uint64(len(fragment.Text))
+			if textBytes > maxDeterministicMatcherWork/factor {
+				return ErrDeterministicWorkBudgetExceeded
+			}
+			work := textBytes * factor
+			if *totalWork > maxDeterministicEvaluationWork-work {
+				return ErrDeterministicWorkBudgetExceeded
+			}
+			*totalWork += work
+		}
+	}
+	return nil
 }
 
 func deterministicMatchers(item DetectionItem) []deterministicMatcher {
@@ -230,10 +300,10 @@ func patternMatchers(item DetectionItem) []deterministicMatcher {
 		if !caseSensitive {
 			expression = "(?i)" + expression
 		}
-		matchers = appendMatcher(matchers, expression, "pattern", "guardrail_pattern_match")
+		matchers = appendConfiguredMatcherWithWorkFactor(matchers, expression, 0, "pattern", "guardrail_pattern_match", nil, regexpWorkFactor(expression))
 	}
 	for _, expression := range stringSliceConfig(item.Config, "regex") {
-		matchers = appendMatcher(matchers, expression, "pattern", "guardrail_pattern_match")
+		matchers = appendConfiguredMatcherWithWorkFactor(matchers, expression, 0, "pattern", "guardrail_pattern_match", nil, regexpWorkFactor(expression))
 	}
 	return matchers
 }
@@ -297,40 +367,86 @@ func sensitiveDefinitions(expressions ...string) []sensitiveDataDefinition {
 	return definitions
 }
 
-func appendMatcher(matchers []deterministicMatcher, expression string, category string, reasonCode string) []deterministicMatcher {
-	return appendConfiguredMatcher(matchers, expression, 0, category, reasonCode, nil)
+func appendConfiguredMatcher(matchers []deterministicMatcher, expression string, captureGroup int, category string, reasonCode string, validator func(string) bool) []deterministicMatcher {
+	return appendConfiguredMatcherWithWorkFactor(matchers, expression, captureGroup, category, reasonCode, validator, 1)
 }
 
-func appendConfiguredMatcher(matchers []deterministicMatcher, expression string, captureGroup int, category string, reasonCode string, validator func(string) bool) []deterministicMatcher {
+func appendConfiguredMatcherWithWorkFactor(matchers []deterministicMatcher, expression string, captureGroup int, category string, reasonCode string, validator func(string) bool, workFactor uint64) []deterministicMatcher {
 	compiled, err := regexp.Compile(expression)
 	if err != nil {
 		return matchers
 	}
-	return append(matchers, deterministicMatcher{expression: compiled, captureGroup: captureGroup, category: category, reasonCode: reasonCode, validator: validator})
+	return append(matchers, deterministicMatcher{
+		expression: compiled, captureGroup: captureGroup, category: category,
+		reasonCode: reasonCode, validator: validator, workFactor: workFactor,
+	})
+}
+
+func regexpWorkFactor(expression string) uint64 {
+	parsed, err := syntax.Parse(expression, syntax.Perl)
+	if err != nil {
+		return 1
+	}
+	program, err := syntax.Compile(parsed.Simplify())
+	if err != nil {
+		return 1
+	}
+	// Small RE2 programs count as one full-text scan. Larger keyword and custom
+	// regex programs are weighted by compiled instruction count so long literals
+	// and counted repetitions cannot hide expensive scans behind short configs.
+	factor := (uint64(len(program.Inst)) + regexpInstructionsPerWorkFactor - 1) / regexpInstructionsPerWorkFactor
+	if factor == 0 {
+		return 1
+	}
+	return factor
 }
 
 func (matcher deterministicMatcher) firstValidMatch(text string) []int {
-	matches := matcher.allValidMatches(text)
-	if len(matches) == 0 {
-		return nil
+	for offset := 0; offset <= len(text); {
+		indexes := matcher.expression.FindStringSubmatchIndex(text[offset:])
+		if indexes == nil {
+			return nil
+		}
+		position := matcher.captureGroup * 2
+		if position+1 < len(indexes) && indexes[position] >= 0 && indexes[position+1] > indexes[position] {
+			start, end := offset+indexes[position], offset+indexes[position+1]
+			if matcher.validator == nil || matcher.validator(text[start:end]) {
+				return []int{start, end}
+			}
+		}
+		advance := indexes[1]
+		if advance <= indexes[0] {
+			advance = indexes[0] + 1
+		}
+		offset += advance
 	}
-	return matches[0]
+	return nil
 }
 
-func (matcher deterministicMatcher) allValidMatches(text string) [][]int {
+func (matcher deterministicMatcher) allValidMatches(text string, limit int) ([][]int, bool) {
 	result := make([][]int, 0)
-	for _, indexes := range matcher.expression.FindAllStringSubmatchIndex(text, -1) {
+	for offset := 0; offset <= len(text); {
+		indexes := matcher.expression.FindStringSubmatchIndex(text[offset:])
+		if indexes == nil {
+			return result, false
+		}
 		position := matcher.captureGroup * 2
-		if position+1 >= len(indexes) || indexes[position] < 0 || indexes[position+1] <= indexes[position] {
-			continue
+		if position+1 < len(indexes) && indexes[position] >= 0 && indexes[position+1] > indexes[position] {
+			start, end := offset+indexes[position], offset+indexes[position+1]
+			if matcher.validator == nil || matcher.validator(text[start:end]) {
+				if len(result) == limit {
+					return nil, true
+				}
+				result = append(result, []int{start, end})
+			}
 		}
-		start, end := indexes[position], indexes[position+1]
-		if matcher.validator != nil && !matcher.validator(text[start:end]) {
-			continue
+		advance := indexes[1]
+		if advance <= indexes[0] {
+			advance = indexes[0] + 1
 		}
-		result = append(result, []int{start, end})
+		offset += advance
 	}
-	return result
+	return result, false
 }
 
 func digitsOnly(value string) string {

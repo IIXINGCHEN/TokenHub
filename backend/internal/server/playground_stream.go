@@ -28,7 +28,11 @@ func (r *playgroundChatRequest) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &context); err != nil {
 		return err
 	}
-	delete(request.raw, "project_id")
+	for key := range request.raw {
+		if strings.EqualFold(key, "project_id") {
+			delete(request.raw, key)
+		}
+	}
 	r.ChatCompletionRequest = request
 	r.ProjectID = strings.TrimSpace(context.ProjectID)
 	return nil

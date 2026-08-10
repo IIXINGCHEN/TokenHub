@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -12,6 +13,41 @@ import (
 
 	"tokenhub/backend/internal/guardrails"
 )
+
+func TestGuardrailsRejectPathologicalDeterministicWorkBeforeRouting(t *testing.T) {
+	store := NewMemoryStore()
+	if err := SeedDemoData(store); err != nil {
+		t.Fatal(err)
+	}
+	expressions := make([]string, 64)
+	for index := range expressions {
+		expressions[index] = fmt.Sprintf("a{%d,512}b", index+1)
+	}
+	items := make([]guardrails.DetectionItem, 32)
+	for index := range items {
+		items[index] = guardrails.DetectionItem{
+			Name: "Expensive regex", DetectorType: guardrails.DetectorPattern, Action: guardrails.ActionAudit,
+			Config: map[string]any{"regex": expressions},
+		}
+	}
+	if _, err := store.CreateGuardrailPolicy(guardrails.Policy{
+		Name: "Pathological workload", DetectionItems: items,
+		Bindings: []guardrails.Binding{{ScopeType: guardrails.ScopeAllProjects}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	usageBefore := len(store.ListUsageRecords())
+	response := doGuardrailProtocolRequest(t, New(store).Handler(), "/v1/chat/completions", map[string]any{
+		"model":    "gpt-4.1-mini",
+		"messages": []any{map[string]any{"role": "user", "content": strings.Repeat("a", 64*1024)}},
+	}, "thk_demo_local")
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), `"code":"guardrail_evaluation_budget_exceeded"`) {
+		t.Fatalf("expected work-budget rejection, got %d: %s", response.Code, response.Body)
+	}
+	if usageAfter := len(store.ListUsageRecords()); usageAfter != usageBefore {
+		t.Fatalf("work-budget rejection reached provider usage: before=%d after=%d", usageBefore, usageAfter)
+	}
+}
 
 func TestGuardrailsBlockAllSupportedOutboundProtocolsBeforeRouting(t *testing.T) {
 	store := NewMemoryStore()
