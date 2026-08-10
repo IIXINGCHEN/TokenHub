@@ -21,9 +21,9 @@
     "chunk_interval": "1ms"
   },
   "metadata": {
-    "generated_at": "2026-08-10T01:28:05.235394Z",
-    "git_commit": "25c481a387365846620375080b83795af6227add",
-    "git_dirty": true,
+    "generated_at": "2026-08-10T10:11:24.359434Z",
+    "git_commit": "cbad27b17bf4d357fd7099352ce993bb55ac8c48",
+    "git_dirty": false,
     "go_version": "go1.26.4",
     "os": "darwin",
     "arch": "arm64",
@@ -32,19 +32,19 @@
     "memory_bytes": 51539607552
   },
   "summary": {
-    "offered_requests": 2116,
-    "requests": 2116,
+    "offered_requests": 2150,
+    "requests": 2150,
     "dropped_requests": 0,
-    "successes": 2116,
+    "successes": 2150,
     "failures": 0,
     "success_rate_percent": 100,
-    "achieved_rps": 1054.2215161697065,
+    "achieved_rps": 1071.7342916465666,
     "latency_ms": {
-      "mean": 7.572897041115306,
-      "p50": 7.50475,
-      "p95": 8.681167,
-      "p99": 9.277584,
-      "max": 12.993291
+      "mean": 7.450306452093034,
+      "p50": 7.393667,
+      "p95": 8.524417,
+      "p99": 9.64925,
+      "max": 11.71025
     },
     "ttft_ms": {
       "mean": 0,
@@ -61,15 +61,15 @@
       "max": 0
     },
     "estimated_gateway_overhead_ms": {
-      "mean": 2.5728970411153136,
-      "p50": 2.5047499999999996,
-      "p95": 3.6811670000000003,
-      "p99": 4.277583999999999,
-      "max": 7.993290999999999
+      "mean": 2.450306452093021,
+      "p50": 2.3936669999999998,
+      "p95": 3.5244169999999997,
+      "p99": 4.64925,
+      "max": 6.71025
     },
-    "response_bytes": 2801584,
+    "response_bytes": 2846600,
     "status_code_counts": {
-      "200": 2116
+      "200": 2150
     },
     "drop_reasons": {}
   }
