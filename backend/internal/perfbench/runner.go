@@ -20,6 +20,11 @@ import (
 	"time"
 )
 
+const (
+	defaultMaxInFlight      = 1000
+	maxRateResultBufferSize = 1000
+)
+
 func Run(ctx context.Context, config Config) (Result, error) {
 	config = withRunDefaults(config)
 	if err := validateRunConfig(config); err != nil {
@@ -66,7 +71,7 @@ func withRunDefaults(config Config) Config {
 		config.RequestBytes = 256
 	}
 	if config.MaxInFlight <= 0 {
-		config.MaxInFlight = 1000
+		config.MaxInFlight = defaultMaxInFlight
 	}
 	return config
 }
@@ -156,7 +161,7 @@ func (r *loadRunner) runConcurrency(ctx context.Context, deadline time.Time) []O
 }
 
 func (r *loadRunner) runRate(ctx context.Context, started, deadline time.Time) []Observation {
-	results := make(chan Observation, min(r.config.MaxInFlight, max(1, r.config.Rate)))
+	results := make(chan Observation, rateResultBufferSize(r.config))
 	collected := make(chan []Observation, 1)
 	go func() { collected <- collectObservations(results) }()
 	semaphore := make(chan struct{}, r.config.MaxInFlight)
@@ -211,6 +216,10 @@ loop:
 		close(results)
 	}()
 	return <-collected
+}
+
+func rateResultBufferSize(config Config) int {
+	return min(maxRateResultBufferSize, config.MaxInFlight, max(1, config.Rate))
 }
 
 func scheduledOfferCount(duration time.Duration, rate int) int {
