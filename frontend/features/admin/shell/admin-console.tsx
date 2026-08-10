@@ -35,6 +35,7 @@ import { PlaygroundPage } from "../views/playground";
 import { ProviderUpsertModal } from "../views/provider-editor";
 import { ProjectWorkspace, type ProjectWorkspaceDraft, type ProjectWorkspaceMode, ProjectWorkspaceSaveError, saveProjectWorkspaceDraft } from "../views/project-workspace";
 import { RoutingPolicySimulator } from "../views/routing-policy-simulator";
+import { ContentSecurityPolicies, SecurityPolicyTabs } from "../views/security-policies";
 import { EditModal, SettingsView, usePagination } from "../views/settings-table";
 import { BillingView, UsageView } from "../views/usage-billing";
 
@@ -63,6 +64,7 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
   const [modelCategoryFilter, setModelCategoryFilter] = useState("all");
   const [routeModelQuery, setRouteModelQuery] = useState("");
   const [settingsTab, setSettingsTab] = useState<SettingsTabKey>("settings");
+  const [securityPolicyTab, setSecurityPolicyTab] = useState<"access" | "content">("access");
   const [modal, setModal] = useState<ModalState<any> | null>(null);
   const [projectWorkspace, setProjectWorkspace] = useState<{ mode: ProjectWorkspaceMode; projectID?: string } | null>(null);
   const [providerCreateOpen, setProviderCreateOpen] = useState(false);
@@ -846,6 +848,35 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
               onAction={(action, item) => void runResourceAction(action, item, data)}
               onToolbarAction={(action, items) => void runToolbarAction(action, items)}
             />
+          ) : activeView === "security-policies" && activeConfig ? (
+            <div className="security-policies-view">
+              <SecurityPolicyTabs active={securityPolicyTab} onChange={setSecurityPolicyTab} />
+              {securityPolicyTab === "content" ? (
+                <ContentSecurityPolicies api={api} data={data} />
+              ) : (
+                <CrudView
+                  config={activeConfig}
+                  data={data}
+                  api={api}
+                  user={currentUser}
+                  items={pagedItems}
+                  monitorItems={filteredItems}
+                  totalItems={filteredItems.length}
+                  loading={loading}
+                  query={query}
+                  currentUser={currentUser}
+                  pagination={crudPagination}
+                  categoryFilter={modelCategoryFilter}
+                  onCategoryFilter={setModelCategoryFilter}
+                  onQuery={setQuery}
+                  onCreate={openCreateForCurrentView}
+                  onEdit={(item) => setModal({ config: activeConfig, item })}
+                  onDelete={(item) => setConfirmDelete({ config: activeConfig, item })}
+                  onAction={(action, item) => void runResourceAction(action, item, data)}
+                  onToolbarAction={(action) => void runToolbarAction(action, filteredItems)}
+                />
+              )}
+            </div>
           ) : activeView === "routes" && activeConfig ? (
             <RouteStrategyView
               config={activeConfig as ResourceConfig<ModelRoute>}

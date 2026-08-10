@@ -350,7 +350,7 @@ func consumeCodexResponsesStream(body io.Reader, destination io.Writer) (map[str
 	}
 }
 
-func (s *Server) handleStreamingResponses(w http.ResponseWriter, r *http.Request, routed RoutedCall, request ResponsesRequest) {
+func (s *Server) handleStreamingResponses(w http.ResponseWriter, r *http.Request, routed RoutedCall, request ResponsesRequest, auditPayload any) {
 	tracker := &streamWriteTracker{writer: w}
 	attemptNumber := 0
 	allowEffortFallback := normalizedReasoningEffort(responsesReasoningEffort(request)) != nil
@@ -413,11 +413,11 @@ func (s *Server) handleStreamingResponses(w http.ResponseWriter, r *http.Request
 				StatusCode:      httpErr.Status,
 				ErrorCode:       httpErr.Code,
 				ErrorMessage:    httpErr.Message,
-				RequestPayload:  request,
+				RequestPayload:  auditPayload,
 				ResponsePayload: auditErrorPayload(err, routed.Call.RequestID),
 			})
 		} else {
-			s.finishFailedRoutedCall(r, routed, attempts, usage, err, request)
+			s.finishFailedRoutedCall(r, routed, attempts, usage, err, auditPayload)
 		}
 		if !streamStarted {
 			writeError(w, r, err)
@@ -429,7 +429,7 @@ func (s *Server) handleStreamingResponses(w http.ResponseWriter, r *http.Request
 	}
 	s.store.MarkRouteUsed(route.Route.ID)
 	s.store.MarkProviderResourceUsed(routeResourceID(route))
-	s.finishSuccessfulRoutedCall(r, routed, route, usage, attempts, request, response)
+	s.finishSuccessfulRoutedCall(r, routed, route, usage, attempts, auditPayload, response)
 }
 
 func codexStreamEventError(event map[string]any) error {

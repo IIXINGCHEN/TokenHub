@@ -67,6 +67,7 @@ type HTTPError struct {
 	Status         int
 	Code           string
 	Message        string
+	Details        any               `json:"-"`
 	UpstreamStatus int               `json:"-"`
 	Headers        map[string]string `json:"-"`
 }

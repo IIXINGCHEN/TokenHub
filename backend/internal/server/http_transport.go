@@ -151,12 +151,16 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	httpErr := AsHTTPError(err)
 	requestID := errorResponseHeaders(w, err)
+	errorPayload := map[string]any{
+		"message": httpErr.Message,
+		"type":    httpErr.Code,
+		"code":    httpErr.Code,
+	}
+	if httpErr.Details != nil {
+		errorPayload["details"] = httpErr.Details
+	}
 	writeJSON(w, httpErr.Status, map[string]any{
-		"error": map[string]any{
-			"message": httpErr.Message,
-			"type":    httpErr.Code,
-			"code":    httpErr.Code,
-		},
+		"error":      errorPayload,
 		"request_id": requestID,
 	})
 }
@@ -395,7 +399,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 			}
 		}
 
-		w.Header().Set("access-control-allow-methods", "GET,POST,PATCH,DELETE,OPTIONS")
+		w.Header().Set("access-control-allow-methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
 		allowHeaders := "authorization,content-type"
 		if reqHeaders := r.Header.Get("access-control-request-headers"); reqHeaders != "" {
 			seen := map[string]bool{"authorization": true, "content-type": true}
