@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -31,30 +32,35 @@ type gatewayBenchmarkFixture struct {
 }
 
 func BenchmarkGatewayChat(b *testing.B) {
+	silenceGatewayBenchmarkLogs(b)
 	benchmarkDatabaseMatrix(b, func(b *testing.B, store *GormStore) {
 		runGatewayBenchmark(b, store, "/v1/chat/completions", false, gatewayBenchmarkOptions{})
 	})
 }
 
 func BenchmarkGatewayResponses(b *testing.B) {
+	silenceGatewayBenchmarkLogs(b)
 	benchmarkDatabaseMatrix(b, func(b *testing.B, store *GormStore) {
 		runGatewayBenchmark(b, store, "/v1/responses", false, gatewayBenchmarkOptions{})
 	})
 }
 
 func BenchmarkGatewayStreaming(b *testing.B) {
+	silenceGatewayBenchmarkLogs(b)
 	benchmarkDatabaseMatrix(b, func(b *testing.B, store *GormStore) {
 		runGatewayBenchmark(b, store, "/v1/chat/completions", true, gatewayBenchmarkOptions{})
 	})
 }
 
 func BenchmarkGatewayFailover(b *testing.B) {
+	silenceGatewayBenchmarkLogs(b)
 	benchmarkDatabaseMatrix(b, func(b *testing.B, store *GormStore) {
 		runGatewayBenchmark(b, store, "/v1/chat/completions", false, gatewayBenchmarkOptions{failover: true})
 	})
 }
 
 func BenchmarkGatewayGovernanceCosts(b *testing.B) {
+	silenceGatewayBenchmarkLogs(b)
 	cases := []struct {
 		name    string
 		options gatewayBenchmarkOptions
@@ -88,6 +94,13 @@ func BenchmarkGatewayPayloadAuditRendering(b *testing.B) {
 			}
 		})
 	}
+}
+
+func silenceGatewayBenchmarkLogs(b *testing.B) {
+	b.Helper()
+	previous := log.Writer()
+	log.SetOutput(io.Discard)
+	b.Cleanup(func() { log.SetOutput(previous) })
 }
 
 type benchmarkPayloadPersistenceStore struct {
