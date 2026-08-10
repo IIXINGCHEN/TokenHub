@@ -144,6 +144,7 @@ type Store interface {
 	SetProviderHealth(providerID string, healthy bool) (Provider, error)
 	AddProviderResource(resource ProviderResource) (ProviderResource, error)
 	ListProviderResources() []ProviderResource
+	GetProviderResource(id string) (ProviderResource, bool)
 	UpdateProviderResource(id string, patch ProviderResource) (ProviderResource, error)
 	UpdateProviderResourceOptions(id string, options map[string]string) (ProviderResource, error)
 	DeleteProviderResource(id string) error

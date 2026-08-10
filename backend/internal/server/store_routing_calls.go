@@ -30,6 +30,9 @@ func (s *GormStore) TestProvider(id string) (Provider, error) {
 	}
 	provider.Healthy = healthy
 	provider.APIKey = ""
+	provider.Headers, provider.HeaderValidationErrors = s.revealProviderHeaderConfig(provider.Headers, provider.SensitiveHeaders)
+	provider.HeaderValidationErrors = providerHeaderValidationErrorsForType(provider.Type, provider.Headers)
+	provider.Headers = maskedProviderHeaders(provider.Headers, provider.SensitiveHeaders)
 	return provider, nil
 }
 
@@ -60,6 +63,14 @@ func (s *GormStore) TestProviderResource(id string) (ProviderResource, error) {
 	resource.FailureCount = 0
 	resource.CooldownUntil = nil
 	resource.UpdatedAt = now
+	resource.Headers, resource.HeaderValidationErrors = s.revealProviderHeaderConfig(resource.Headers, resource.SensitiveHeaders)
+	var provider Provider
+	if err := s.db.First(&provider, "id = ?", resource.ProviderID).Error; err == nil {
+		if validationErr := validateEffectiveProviderHeaders(provider.Type, s.revealProviderHeaders(provider.Headers, provider.SensitiveHeaders), resource.Headers); validationErr != nil {
+			resource.HeaderValidationErrors = []string{AsHTTPError(validationErr).Code}
+		}
+	}
+	resource.Headers = maskedProviderHeaders(resource.Headers, resource.SensitiveHeaders)
 	redactProviderResourceSecrets(&resource)
 	return resource, nil
 }
@@ -413,41 +424,21 @@ func routeRuntimeStatsKey(routeID string, resourceID string) string {
 
 func (s *GormStore) routeSelection(provider Provider, resource *ProviderResource, route ModelRoute) RouteSelection {
 	provider.APIKey = s.decryptSecret(provider.APIKey)
+	provider.Headers = s.revealProviderHeaders(provider.Headers, provider.SensitiveHeaders)
 	if resource == nil {
 		return RouteSelection{
-			Provider:      provider,
+			Provider:      effectiveProviderResourceConfig(provider, nil),
 			ProviderModel: route.ProviderModel,
 			Route:         route,
 		}
 	}
-	effective := provider
-	if resource.BaseURL != "" {
-		effective.BaseURL = resource.BaseURL
-	}
-	if resource.APIKey != "" {
-		effective.APIKey = s.decryptSecret(resource.APIKey)
-	}
-	if len(resource.Headers) > 0 {
-		headers := map[string]string{}
-		for key, value := range provider.Headers {
-			headers[key] = value
-		}
-		for key, value := range resource.Headers {
-			headers[key] = value
-		}
-		effective.Headers = headers
-	}
-	if len(resource.Options) > 0 {
-		options := map[string]string{}
-		for key, value := range provider.Options {
-			options[key] = value
-		}
-		for key, value := range resource.Options {
-			options[key] = value
-		}
-		effective.Options = options
-	}
+	internalResource := *resource
+	internalResource.APIKey = s.decryptSecret(resource.APIKey)
+	internalResource.Headers = s.revealProviderHeaders(resource.Headers, resource.SensitiveHeaders)
+	effective := effectiveProviderResourceConfig(provider, &internalResource)
+	resourceHeaders := usableProviderHeaders(provider.Type, internalResource.Headers)
 	publicResource := *resource
+	publicResource.Headers = maskedProviderHeaders(resourceHeaders, resource.SensitiveHeaders)
 	redactProviderResourceSecrets(&publicResource)
 	return RouteSelection{
 		Provider:      effective,

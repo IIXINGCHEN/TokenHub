@@ -94,6 +94,16 @@ Provider 模型价格代表真实上游成本，用于内部审计；模型目�
 
 「发布状态」与「运行健康」相互独立。模型要出现在 `GET /v1/models` 中，必须同时满足：对外 `Model` 已启用、至少有一条已启用 `ModelRoute`，且在 API Key 配置了模型白名单时获得授权。Provider 或 Provider Resource 短时不健康不会改变该列表，只会影响当前请求能否成功，并在目录和路由诊断中单独展示。下线对外模型会将它从 `GET /v1/models` 移除，但保留映射，便于之后重新发布。
 
+## 自定义上游请求头
+
+在「Provider 渠道」中，可以在 Provider 连接设置或 Provider Resource 高级设置里添加固定自定义请求头。Provider 请求头是默认值；Resource 中名称相同（不区分大小写）的请求头会在该次实际路由尝试中覆盖 Provider 值。因此切换账号资源时，TokenHub 会为每个选中的 Resource 重新计算最终请求头。例如，可在 Provider 级设置 `User-Agent: TokenHub-Custom-Client/1.0`，再在各 Resource 上分别覆盖 `X-Tenant`。
+
+最终请求头会一致应用于连接测试、自定义模型发现、OpenAI 兼容的 Chat Completions、Responses、Embeddings、Images（包括流式请求和图片编辑）、原生 Anthropic Messages 以及 Gemini 请求。Azure OpenAI 与 OpenAI Codex 适配器会自行管理协议身份，因此不支持自定义请求头。
+
+凭据或租户 Token 应标记为敏感值。TokenHub 会加密保存敏感值，在管理响应和预览中遮盖，并从审计快照中排除所有请求头值。编辑已保存的敏感行时，保持遮盖值不变或留空即可保留原密钥；删除整行才会清除。非敏感值仍对管理员可见。
+
+TokenHub 禁止鉴权头、API Key 与 Cookie 凭据头、转发身份头、`Content-Type`、`Content-Length`、`Host`、`Anthropic-Version`、`Anthropic-Beta`、`OpenAI-Organization`、`OpenAI-Project` 等协议专用头，以及逐跳和传输头。请求头名称必须合法且不区分大小写唯一；值不能为空，也不能包含 CR/LF。最终合并配置最多 32 个请求头，名称最长 128 字节，单值最长 4 KiB，总大小不超过 16 KiB。违反规则的旧数据会通过 `header_validation_errors` 提示，修正前不会应用到上游请求。
+
 ## 模型路由策略
 
 管理控制台按整个对外模型配置一次路由策略。打开模型卡片并选择策略 Tab，当前 Tab 会说明适合场景、实际选择行为、参数含义和具体示例。在该策略下调整各 Provider 显示的参数，然后点击「应用策略」。策略及全部 Provider 参数会原子保存，模型不会处于部分更新的中间状态。

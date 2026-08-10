@@ -513,12 +513,21 @@ func (s *StoreSink) Plan(b *bundle.CanonicalMigrationBundle) (*MigrationReport, 
 
 func (s *StoreSink) applyProvider(item bundle.ProviderRef) (Change, error) {
 	spec := item.Spec
+	resolvedHeaders, sensitiveHeaders, err := resolveHeaderSecrets(s.secrets, spec.Headers, item.HeaderSecrets)
+	if err != nil {
+		return Change{}, fmt.Errorf("resolve provider header secret %s: %w", item.ExternalRef.ID, err)
+	}
+	spec.Headers = resolvedHeaders
+	spec.SensitiveHeaders = sensitiveHeaders
 	if item.APIKeySecret != nil && !item.APIKeySecret.IsZero() {
 		secret, err := s.secrets.Resolve(*item.APIKeySecret)
 		if err != nil {
 			return Change{}, fmt.Errorf("resolve provider secret %s: %w", item.ExternalRef.ID, err)
 		}
 		spec.APIKey = secret
+	}
+	if err := server.ValidateProviderHeaderConfigForWrite(&spec); err != nil {
+		return Change{}, fmt.Errorf("validate provider headers %s: %w", item.ExternalRef.ID, err)
 	}
 
 	for _, existing := range s.store.ListProviders() {
@@ -542,6 +551,12 @@ func (s *StoreSink) applyProvider(item bundle.ProviderRef) (Change, error) {
 
 func (s *StoreSink) applyProviderResource(item bundle.ProviderResourceRef) (Change, error) {
 	spec := item.Spec
+	resolvedHeaders, sensitiveHeaders, err := resolveHeaderSecrets(s.secrets, spec.Headers, item.HeaderSecrets)
+	if err != nil {
+		return Change{}, fmt.Errorf("resolve provider resource header secret %s: %w", item.ExternalRef.ID, err)
+	}
+	spec.Headers = resolvedHeaders
+	spec.SensitiveHeaders = sensitiveHeaders
 	if providerID := s.refIndex.providers[item.ProviderRef]; providerID != "" {
 		spec.ProviderID = providerID
 	}
@@ -551,6 +566,14 @@ func (s *StoreSink) applyProviderResource(item bundle.ProviderResourceRef) (Chan
 			return Change{}, fmt.Errorf("resolve provider resource secret %s: %w", item.ExternalRef.ID, err)
 		}
 		spec.APIKey = secret
+	}
+	for _, provider := range s.store.ListProviders() {
+		if provider.ID == spec.ProviderID {
+			if err := server.ValidateProviderHeaderSupportForWrite(provider.Type, spec.Headers); err != nil {
+				return Change{}, fmt.Errorf("validate provider resource headers %s: %w", item.ExternalRef.ID, err)
+			}
+			break
+		}
 	}
 
 	for _, existing := range s.store.ListProviderResources() {
@@ -829,7 +852,8 @@ func sameProvider(existing server.Provider, desired server.Provider) bool {
 	if desired.Priority != 0 && existing.Priority != desired.Priority {
 		return false
 	}
-	return reflect.DeepEqual(normalizeStringMap(existing.Headers), normalizeStringMap(desired.Headers)) &&
+	return reflect.DeepEqual(normalizeHeaderMap(existing.Headers, existing.SensitiveHeaders), normalizeHeaderMap(desired.Headers, desired.SensitiveHeaders)) &&
+		reflect.DeepEqual(normalizeHeaderNames(existing.SensitiveHeaders), normalizeHeaderNames(desired.SensitiveHeaders)) &&
 		reflect.DeepEqual(normalizeStringMap(existing.Options), normalizeStringMap(desired.Options))
 }
 
@@ -877,7 +901,8 @@ func sameProviderResource(existing server.ProviderResource, desired server.Provi
 	if desired.MaxConcurrency != 0 && existing.MaxConcurrency != desired.MaxConcurrency {
 		return false
 	}
-	return reflect.DeepEqual(normalizeStringMap(existing.Headers), normalizeStringMap(desired.Headers)) &&
+	return reflect.DeepEqual(normalizeHeaderMap(existing.Headers, existing.SensitiveHeaders), normalizeHeaderMap(desired.Headers, desired.SensitiveHeaders)) &&
+		reflect.DeepEqual(normalizeHeaderNames(existing.SensitiveHeaders), normalizeHeaderNames(desired.SensitiveHeaders)) &&
 		reflect.DeepEqual(normalizeStringMap(existing.Options), normalizeStringMap(desired.Options))
 }
 
@@ -1117,6 +1142,86 @@ func normalizeStringSlice(input []string) []string {
 		return nil
 	}
 	return input
+}
+
+func normalizeHeaderNames(input []string) []string {
+	seen := make(map[string]bool, len(input))
+	result := make([]string, 0, len(input))
+	for _, value := range input {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value != "" && !seen[value] {
+			seen[value] = true
+			result = append(result, value)
+		}
+	}
+	slices.Sort(result)
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func resolveHeaderSecrets(resolver bundle.SecretResolver, headers map[string]string, refs map[string]bundle.SecretRef) (map[string]string, []string, error) {
+	resolved, sensitive, err := headerSecretComparisonConfig(headers, refs)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, name := range sensitive {
+		secret, err := resolver.Resolve(refs[name])
+		if err != nil {
+			return nil, nil, fmt.Errorf("resolve header %q: %w", name, err)
+		}
+		resolved[name] = secret
+	}
+	return resolved, sensitive, nil
+}
+
+func headerSecretComparisonConfig(headers map[string]string, refs map[string]bundle.SecretRef) (map[string]string, []string, error) {
+	resolved := make(map[string]string, len(headers)+len(refs))
+	for name, value := range headers {
+		resolved[name] = value
+	}
+	if len(refs) == 0 {
+		if len(resolved) == 0 {
+			return nil, nil, nil
+		}
+		return resolved, nil, nil
+	}
+	names := make([]string, 0, len(refs))
+	for name := range refs {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	sensitive := make([]string, 0, len(names))
+	for _, name := range names {
+		for existing := range resolved {
+			if strings.EqualFold(strings.TrimSpace(existing), strings.TrimSpace(name)) {
+				return nil, nil, fmt.Errorf("header %q is declared as both plaintext and sensitive", name)
+			}
+		}
+		resolved[name] = "<sensitive>"
+		sensitive = append(sensitive, name)
+	}
+	return resolved, sensitive, nil
+}
+
+func normalizeHeaderMap(headers map[string]string, sensitive []string) map[string]string {
+	if len(headers) == 0 {
+		return nil
+	}
+	sensitiveSet := make(map[string]bool, len(sensitive))
+	for _, name := range normalizeHeaderNames(sensitive) {
+		sensitiveSet[name] = true
+	}
+	result := make(map[string]string, len(headers))
+	for name, value := range headers {
+		name = strings.ToLower(strings.TrimSpace(name))
+		if sensitiveSet[name] {
+			value = "<sensitive>"
+		}
+		result[name] = value
+	}
+	return result
 }
 
 func normalizedMigrationModelAccess(mode string, allowed []string) (string, []string) {

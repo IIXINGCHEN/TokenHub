@@ -2,10 +2,12 @@ import { Check, CircleAlert, CircleCheck, Eye, EyeOff, KeyRound, LoaderCircle, P
 import { useRef, useState } from "react";
 import { type ApiContext, type ProviderCatalogEntry, type ProviderCatalogModel } from "../core/types";
 import { providerTypeLabel } from "../domain/labels";
+import { providerHeaderFormError, providerHeadersPayload } from "../domain/provider-headers";
 import { formatModelPrice } from "../domain/formatting";
 import { clearCustomValidity, countWithUnit, handleRequiredFieldInvalid, tx } from "../i18n/runtime";
 import { adminFetch, isAuthExpiredError, readAdminError } from "../resources/payloads";
 import { providerTypeOptions } from "../shared/ui";
+import { ProviderCustomHeaders } from "./provider-custom-headers";
 
 type ProviderConnectionTestState = {
   status: "idle" | "testing" | "success" | "error";
@@ -120,6 +122,8 @@ export function ProviderAPIQuickConnect({
   }
 
   async function testConnection() {
+    const headerError = providerHeaderFormError(values.custom_headers);
+    if (headerError) { setConnectionTest({ status: "error", message: tx(headerError) }); return; }
     if (!connectionReady) {
       setConnectionTest({ status: "error", message: tx("请填写 Base URL 和 API Key 后测试。") });
       return;
@@ -137,6 +141,7 @@ export function ProviderAPIQuickConnect({
           type: values.type,
           base_url: values.base_url,
           api_key: values.api_key,
+          ...providerHeadersPayload(values.custom_headers),
         }),
       });
       if (!resp.ok) throw new Error(await readAdminError(resp, tx("测试 Provider 连接")));
@@ -317,6 +322,11 @@ export function ProviderAPIQuickConnect({
               <input value={values.priority ?? "10"} type="number" onChange={(event) => onUpdate("priority", event.target.value)} />
             </label>
           </div>
+          <ProviderCustomHeaders
+            disabled={values.type === "azure_openai" || values.type === "openai_codex"}
+            onChange={(value) => onUpdate("custom_headers", value)}
+            value={values.custom_headers ?? "[]"}
+          />
         </div>
       ) : null}
     </section>

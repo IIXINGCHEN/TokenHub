@@ -17,6 +17,7 @@ import { ProviderAccountQuotaReset } from "./provider-account-quota-reset";
 import { ProviderInlineField, customUpstreamConnectionKey, customUpstreamModelsAreCurrent, providerAccountResourceReady, providerCreateWizardSteps, providerCreateWizardStepTitle, providerCredentialModeLabel, providerCredentialOptions } from "./provider-editor-fields";
 import { ProviderAdvancedFields, ProviderConnectionFields, providerReasoningFormValues } from "./provider-editor-sections";
 import { ProviderResourceReasoningSettings } from "./provider-resource-reasoning-settings";
+import { providerHeaderFormError, providerHeadersFormValue, providerHeadersPayload } from "../domain/provider-headers";
 import { formatImageGenerationCapability, formatImageGenerationCapabilityTag, formatQuotaPercent, launchProviderAccountAuthorization, type OpenAIQuotaWindow, type ProviderAccountOAuthAction, ProviderAccountDetails, ProviderOAuthCallbackModal, ProviderOAuthNoticeModal, providerResourceAccountLabel, QuotaMetric, quotaUsagePercent, quotaWindowResetLabel } from "./provider-account-ui";
 const openAIAccountOAuthRedirectURI = "http://localhost:1455/auth/callback";
 type OpenAIAccountQuota = {
@@ -42,7 +43,6 @@ type OpenAIAccountQuota = {
   rate_limit_reset_credits?: { available_count: number };
   fetched_at: number;
 };
-
 type CodexSubscriptionTestResult = {
   resource_id: string;
   model: string;
@@ -57,7 +57,6 @@ type CodexSubscriptionTestResult = {
     total_tokens: number;
   };
 };
-
 type ProviderEditTab = "connect" | "models" | "advanced";
 
 type ProviderAccountConfirmation = {
@@ -79,7 +78,6 @@ const codexProviderCatalogSummary: ProviderCatalogEntry = {
 };
 
 const accountProviderCatalogOptions = [codexProviderCatalogSummary];
-
 const fallbackCodexReasoningEfforts = ["low", "medium", "high", "xhigh", "max"];
 
 export function ProviderUpsertModal({
@@ -153,8 +151,8 @@ export function ProviderUpsertModal({
   const [modelLoading, setModelLoading] = useState(false);
   const [modelError, setModelError] = useState("");
   const [catalogReloadKey, setCatalogReloadKey] = useState(0);
-  const catalogRefreshRequested = useRef(false);
   const [selectedModels, setSelectedModels] = useState<Record<string, boolean>>({});
+  const catalogRefreshRequested = useRef(false);
   const [values, setValues] = useState<Record<string, string>>(() => ({
     id: mode === "edit" ? provider?.id ?? "" : "",
     name: mode === "edit" ? editingCodexSubscription ? "OpenAI Codex" : provider?.name ?? "" : initialEntry?.display_name ?? "",
@@ -164,6 +162,7 @@ export function ProviderUpsertModal({
     priority: String(provider?.priority ?? 10),
     status: provider?.status ?? "active",
     healthy: String(provider?.healthy ?? true),
+    custom_headers: providerHeadersFormValue(provider?.headers, provider?.sensitive_headers),
     ...providerReasoningFormValues(provider?.options),
   }));
   const [credentialMode, setCredentialMode] = useState<ProviderCredentialMode>(editingCodexSubscription ? "account_integration" : "provider_api_key");
@@ -285,6 +284,7 @@ export function ProviderUpsertModal({
           type: values.type || "openai_compatible",
           base_url: values.base_url,
           api_key: values.api_key,
+          ...providerHeadersPayload(values.custom_headers),
           model_category: modelCategory,
         }),
       })
@@ -1038,9 +1038,9 @@ export function ProviderUpsertModal({
     setError("");
     return true;
   }
-
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const headerError = providerHeaderFormError(values.custom_headers); if (headerError) { setError(tx(headerError)); return; }
     if (mode === "create" && createStep < lastCreateStep) {
       if (!validateCreateStep(createStep)) return;
       setCreateStep((current) => Math.min(current + 1, lastCreateStep));
@@ -1513,7 +1513,7 @@ export function ProviderUpsertModal({
               </section>
             ) : null}
             {mode === "edit" && editTab === "connect" ? (
-              <ProviderConnectionFields values={values} onUpdate={update} />
+              <ProviderConnectionFields values={values} onUpdate={update} validationErrors={provider?.header_validation_errors} />
             ) : null}
             {mode === "edit" && editTab === "advanced" ? (
               <ProviderAdvancedFields

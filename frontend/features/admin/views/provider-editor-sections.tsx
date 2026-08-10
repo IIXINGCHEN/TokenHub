@@ -3,6 +3,7 @@ import { providerReasoningFieldConfigs, providerSupportsAnthropicReasoning } fro
 import { tx } from "../i18n/runtime";
 import { providerTypeOptions } from "../shared/ui";
 import { ProviderInlineField } from "./provider-editor-fields";
+import { ProviderCustomHeaders } from "./provider-custom-headers";
 
 export { providerReasoningFormValues } from "../domain/provider-reasoning";
 
@@ -11,7 +12,7 @@ type ProviderEditSectionProps = {
   onUpdate: (key: string, value: string) => void;
 };
 
-export function ProviderConnectionFields({ values, onUpdate }: ProviderEditSectionProps) {
+export function ProviderConnectionFields({ values, onUpdate, validationErrors = [] }: ProviderEditSectionProps & { validationErrors?: string[] }) {
   return (
     <section className="provider-edit-section">
       <div className="provider-form-grid provider-connect-form-grid">
@@ -30,6 +31,12 @@ export function ProviderConnectionFields({ values, onUpdate }: ProviderEditSecti
           <small>{tx("留空表示不修改现有 Key；填写新值才会覆盖。")}</small>
         </label>
       </div>
+      <ProviderCustomHeaders
+        disabled={values.type === "azure_openai" || values.type === "openai_codex"}
+        onChange={(value) => onUpdate("custom_headers", value)}
+        validationErrors={validationErrors}
+        value={values.custom_headers ?? "[]"}
+      />
     </section>
   );
 }

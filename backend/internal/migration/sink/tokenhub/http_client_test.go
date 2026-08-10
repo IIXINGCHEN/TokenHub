@@ -35,11 +35,13 @@ func TestProviderRequestsCarryAPIKey(t *testing.T) {
 
 	client := NewAdminAPIClient(ts.URL, "test-admin-token", http.DefaultClient)
 	provider := server.Provider{
-		Name:    "openai",
-		Type:    "openai",
-		BaseURL: "https://api.openai.com/v1",
-		APIKey:  "sk-super-secret",
-		Status:  server.StatusActive,
+		Name:             "openai",
+		Type:             "openai",
+		BaseURL:          "https://api.openai.com/v1",
+		APIKey:           "sk-super-secret",
+		Status:           server.StatusActive,
+		Headers:          map[string]string{"X-Tenant": "tenant-secret"},
+		SensitiveHeaders: []string{"X-Tenant"},
 	}
 
 	if _, err := client.CreateProvider(context.Background(), provider); err != nil {
@@ -58,6 +60,9 @@ func TestProviderRequestsCarryAPIKey(t *testing.T) {
 		}
 		if createRoutes, ok := payload["create_routes"].(bool); !ok || createRoutes {
 			t.Fatalf("request %d expected create_routes=false, payload=%v", i, payload)
+		}
+		if sensitive, ok := payload["sensitive_headers"].([]any); !ok || len(sensitive) != 1 || sensitive[0] != "X-Tenant" {
+			t.Fatalf("request %d missing sensitive_headers, payload=%v", i, payload)
 		}
 	}
 }

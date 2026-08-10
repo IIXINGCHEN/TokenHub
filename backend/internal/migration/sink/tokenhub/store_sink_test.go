@@ -14,6 +14,8 @@ func TestStoreSinkApplyIdempotent(t *testing.T) {
 	sink := NewStoreSink(store, bundle.StaticResolver{
 		"PROVIDER_API_KEY": "provider-secret",
 		"RESOURCE_API_KEY": "resource-secret",
+		"PROVIDER_HEADER":  "provider-header-secret",
+		"RESOURCE_HEADER":  "resource-header-secret",
 		"CLIENT_API_KEY":   "client-secret",
 	})
 
@@ -25,15 +27,17 @@ func TestStoreSinkApplyIdempotent(t *testing.T) {
 		},
 		GeneratedAt: time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC),
 		Providers: []bundle.ProviderRef{{
-			ExternalRef:  bundle.ExternalRef{System: "litellm", ID: "provider/openai"},
-			Spec:         server.Provider{ID: "prv_litellm_openai", Name: "OpenAI", Type: server.ProviderOpenAICompatible, Status: server.StatusActive, Healthy: true},
-			APIKeySecret: &bundle.SecretRef{Ref: "PROVIDER_API_KEY"},
+			ExternalRef:   bundle.ExternalRef{System: "litellm", ID: "provider/openai"},
+			Spec:          server.Provider{ID: "prv_litellm_openai", Name: "OpenAI", Type: server.ProviderOpenAICompatible, Status: server.StatusActive, Healthy: true},
+			APIKeySecret:  &bundle.SecretRef{Ref: "PROVIDER_API_KEY"},
+			HeaderSecrets: map[string]bundle.SecretRef{"X-Provider-Secret": {Ref: "PROVIDER_HEADER"}},
 		}},
 		ProviderResources: []bundle.ProviderResourceRef{{
-			ExternalRef:  bundle.ExternalRef{System: "litellm", ID: "resource/openai/default"},
-			ProviderRef:  "provider/openai",
-			Spec:         server.ProviderResource{ID: "rsrc_litellm_openai_default", Name: "OpenAI Default", ResourceType: "openai", Status: server.StatusActive, Healthy: true, Weight: 100},
-			APIKeySecret: &bundle.SecretRef{Ref: "RESOURCE_API_KEY"},
+			ExternalRef:   bundle.ExternalRef{System: "litellm", ID: "resource/openai/default"},
+			ProviderRef:   "provider/openai",
+			Spec:          server.ProviderResource{ID: "rsrc_litellm_openai_default", Name: "OpenAI Default", ResourceType: "openai", Status: server.StatusActive, Healthy: true, Weight: 100},
+			APIKeySecret:  &bundle.SecretRef{Ref: "RESOURCE_API_KEY"},
+			HeaderSecrets: map[string]bundle.SecretRef{"X-Resource-Secret": {Ref: "RESOURCE_HEADER"}},
 		}},
 		Models: []bundle.ModelRef{{
 			ExternalRef: bundle.ExternalRef{System: "litellm", ID: "model/gpt-4o-mini"},
@@ -79,6 +83,12 @@ func TestStoreSinkApplyIdempotent(t *testing.T) {
 	}
 	if len(store.ListProviders()) != 1 || len(store.ListProviderResources()) != 1 || len(store.ListModels()) != 1 || len(store.ListRoutes()) != 1 || len(store.ListAdminUsers()) != 1 || len(store.ListProjects()) != 1 || len(store.ListAPIKeys()) != 1 {
 		t.Fatal("expected all resources to be created once")
+	}
+	if provider, ok := store.GetProvider("prv_litellm_openai"); !ok || provider.Headers["X-Provider-Secret"] != "provider-header-secret" {
+		t.Fatalf("provider sensitive header was not encrypted and recoverable: %+v", provider)
+	}
+	if resource, ok := store.GetProviderResource("rsrc_litellm_openai_default"); !ok || resource.Headers["X-Resource-Secret"] != "resource-header-secret" {
+		t.Fatalf("resource sensitive header was not encrypted and recoverable: %+v", resource)
 	}
 	if project := store.ListProjects()[0]; project.ModelAccessMode != server.ModelAccessModeRestricted || !slices.Equal(project.AllowedModels, []string{"gpt-4o-mini"}) {
 		t.Fatalf("project model access was not migrated: %+v", project)
@@ -545,5 +555,27 @@ func TestSameProviderIgnoresTargetDefaults(t *testing.T) {
 	drifted.BaseURL = "https://other.example.com/v1"
 	if sameProvider(existing, drifted) {
 		t.Fatal("expected a drifted base URL to be reported")
+	}
+}
+
+func TestProviderEqualityIncludesSensitiveHeaders(t *testing.T) {
+	existing := server.Provider{ID: "prv-1", Name: "openai", Type: "openai", Headers: map[string]string{"X-Tenant": "••••••••"}, SensitiveHeaders: []string{"X-Tenant"}}
+	desired := server.Provider{ID: "prv-1", Name: "openai", Type: "openai", Headers: map[string]string{"x-tenant": "tenant-secret"}, SensitiveHeaders: []string{"x-tenant"}}
+	if !sameProvider(existing, desired) {
+		t.Fatal("expected case-insensitive sensitive Provider headers to converge")
+	}
+	desired.SensitiveHeaders = nil
+	if sameProvider(existing, desired) {
+		t.Fatal("expected Provider sensitivity drift to require an update")
+	}
+
+	existingResource := server.ProviderResource{ID: "rsrc-1", ProviderID: "prv-1", Name: "account", Headers: existing.Headers, SensitiveHeaders: existing.SensitiveHeaders}
+	desiredResource := server.ProviderResource{ID: "rsrc-1", ProviderID: "prv-1", Name: "account", Headers: desired.Headers, SensitiveHeaders: []string{"x-tenant"}}
+	if !sameProviderResource(existingResource, desiredResource) {
+		t.Fatal("expected case-insensitive sensitive Resource headers to converge")
+	}
+	desiredResource.SensitiveHeaders = nil
+	if sameProviderResource(existingResource, desiredResource) {
+		t.Fatal("expected Resource sensitivity drift to require an update")
 	}
 }

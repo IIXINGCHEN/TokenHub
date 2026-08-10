@@ -3,6 +3,7 @@ package server
 import (
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 )
 
@@ -113,12 +114,35 @@ func newProviderMisconfigured(message string) error {
 //
 // A nil error leaves the body open and owned by the caller.
 func checkProviderResponse(resp *http.Response) error {
+	return checkProviderResponseForProvider(resp, Provider{})
+}
+
+func checkProviderResponseForProvider(resp *http.Response, provider Provider) error {
 	if resp.StatusCode < http.StatusBadRequest {
 		return nil
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, providerErrorBodyPrefix))
+	data = redactProviderErrorSecrets(data, provider)
 	return newProviderHTTPError(resp.StatusCode, resp.Header, data)
+}
+
+func redactProviderErrorSecrets(data []byte, provider Provider) []byte {
+	message := string(data)
+	values := make([]string, 0, len(provider.SensitiveHeaders)+1)
+	if value := strings.TrimSpace(provider.APIKey); value != "" {
+		values = append(values, value)
+	}
+	for _, name := range provider.SensitiveHeaders {
+		if value, ok := providerHeaderValue(provider.Headers, name); ok && value != "" && value != providerHeaderMask {
+			values = append(values, value)
+		}
+	}
+	sort.Slice(values, func(i, j int) bool { return len(values[i]) > len(values[j]) })
+	for _, value := range values {
+		message = strings.ReplaceAll(message, value, providerHeaderMask)
+	}
+	return []byte(message)
 }
 
 // newProviderHTTPError turns one upstream failure into the error the rest of the

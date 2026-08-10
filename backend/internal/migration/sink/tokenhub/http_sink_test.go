@@ -557,16 +557,20 @@ func TestHTTPSinkApplyProviderAndRouteOnCleanTarget(t *testing.T) {
 	defer ts.Close()
 
 	client := NewAdminAPIClient(ts.URL, "test-admin-token", http.DefaultClient)
-	sink := NewHTTPSink(client, bundle.StaticResolver{"PROVIDER_API_KEY": "provider-secret"})
+	sink := NewHTTPSink(client, bundle.StaticResolver{
+		"PROVIDER_API_KEY": "provider-secret",
+		"PROVIDER_HEADER":  "provider-header-secret",
+	})
 
 	migrationBundle := &bundle.CanonicalMigrationBundle{
 		SchemaVersion: bundle.SchemaVersion,
 		Source:        bundle.Source{Adapter: "litellm", AdapterVersion: "1.60.0"},
 		GeneratedAt:   time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC),
 		Providers: []bundle.ProviderRef{{
-			ExternalRef:  bundle.ExternalRef{System: "litellm", ID: "provider/openai"},
-			APIKeySecret: &bundle.SecretRef{Ref: "PROVIDER_API_KEY"},
-			Spec:         server.Provider{ID: "litellm-provider-openai", Name: "openai-migrated", Type: "openai", BaseURL: "https://api.openai.com/v1", Status: server.StatusActive},
+			ExternalRef:   bundle.ExternalRef{System: "litellm", ID: "provider/openai"},
+			APIKeySecret:  &bundle.SecretRef{Ref: "PROVIDER_API_KEY"},
+			HeaderSecrets: map[string]bundle.SecretRef{"X-Tenant": {Ref: "PROVIDER_HEADER"}},
+			Spec:          server.Provider{ID: "litellm-provider-openai", Name: "openai-migrated", Type: "openai", BaseURL: "https://api.openai.com/v1", Status: server.StatusActive},
 		}},
 		ProviderResources: []bundle.ProviderResourceRef{{
 			ExternalRef: bundle.ExternalRef{System: "litellm", ID: "resource/openai-main"},
@@ -588,6 +592,10 @@ func TestHTTPSinkApplyProviderAndRouteOnCleanTarget(t *testing.T) {
 
 	if _, err := sink.Apply(context.Background(), migrationBundle); err != nil {
 		t.Fatalf("apply provider+route bundle on a clean target: %v", err)
+	}
+	provider, ok := store.GetProvider("litellm-provider-openai")
+	if !ok || provider.Headers["X-Tenant"] != "provider-header-secret" || len(provider.SensitiveHeaders) != 1 {
+		t.Fatalf("sensitive provider header was not resolved through the HTTP sink: %+v", provider)
 	}
 
 	routes, err := client.ListRoutes(context.Background())

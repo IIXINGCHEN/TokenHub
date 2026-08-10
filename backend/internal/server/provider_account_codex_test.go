@@ -1207,13 +1207,15 @@ func TestProviderAdapterCompatibilityAndLegacyMigration(t *testing.T) {
 	}
 
 	legacy := store.AddProvider(Provider{
-		ID:       "prv_legacy_mixed",
-		Name:     "Legacy Mixed",
-		Type:     ProviderOpenAI,
-		APIKey:   "legacy-upstream-key",
-		Status:   StatusActive,
-		Healthy:  true,
-		Priority: 3,
+		ID:               "prv_legacy_mixed",
+		Name:             "Legacy Mixed",
+		Type:             ProviderOpenAI,
+		APIKey:           "legacy-upstream-key",
+		Status:           StatusActive,
+		Healthy:          true,
+		Priority:         3,
+		Headers:          map[string]string{"X-Tenant": "legacy-tenant-secret"},
+		SensitiveHeaders: []string{"X-Tenant"},
 	})
 	direct := ProviderResource{
 		ID:           "rsrc_legacy_direct",
@@ -1273,6 +1275,13 @@ func TestProviderAdapterCompatibilityAndLegacyMigration(t *testing.T) {
 	}
 	if splitProvider.ID == "" {
 		t.Fatal("mixed legacy Provider was not split")
+	}
+	if len(splitProvider.Headers) != 0 || len(splitProvider.SensitiveHeaders) != 0 {
+		t.Fatalf("Codex split inherited unsupported custom headers: %+v", splitProvider)
+	}
+	directProvider, ok := integrationProvider(store, legacy.ID)
+	if !ok || directProvider.Headers["X-Tenant"] != "legacy-tenant-secret" {
+		t.Fatalf("direct Provider lost its sensitive custom header: %+v", directProvider)
 	}
 	migratedSubscription, ok := integrationProviderResource(store, subscription.ID)
 	if !ok || migratedSubscription.ProviderID != splitProvider.ID {

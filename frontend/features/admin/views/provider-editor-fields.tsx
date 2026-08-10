@@ -146,7 +146,7 @@ export function providerAccountResourceReady(values: Record<string, string>) {
 // selection, so the wizard compares this key before doing it. An out-of-date key
 // also means the listed models no longer describe the configured upstream.
 export function customUpstreamConnectionKey(values: Record<string, string>) {
-  return JSON.stringify([values.base_url, values.api_key]);
+	return JSON.stringify([values.base_url, values.api_key, values.custom_headers]);
 }
 
 // Whether a custom Provider's listed models can be imported. Creating a

@@ -135,17 +135,18 @@ type providerCreateResult struct {
 // credential resolved by the sink. This DTO mirrors the server-side
 // ProviderCreateRequest and carries api_key explicitly.
 type providerWriteRequest struct {
-	ID           string            `json:"id,omitempty"`
-	Name         string            `json:"name"`
-	Type         string            `json:"type"`
-	BaseURL      string            `json:"base_url,omitempty"`
-	APIKey       string            `json:"api_key,omitempty"`
-	Status       string            `json:"status,omitempty"`
-	Healthy      *bool             `json:"healthy,omitempty"`
-	Priority     int               `json:"priority"`
-	Headers      map[string]string `json:"headers,omitempty"`
-	Options      map[string]string `json:"options,omitempty"`
-	CreateRoutes *bool             `json:"create_routes,omitempty"`
+	ID               string            `json:"id,omitempty"`
+	Name             string            `json:"name"`
+	Type             string            `json:"type"`
+	BaseURL          string            `json:"base_url,omitempty"`
+	APIKey           string            `json:"api_key,omitempty"`
+	Status           string            `json:"status,omitempty"`
+	Healthy          *bool             `json:"healthy,omitempty"`
+	Priority         int               `json:"priority"`
+	Headers          map[string]string `json:"headers,omitempty"`
+	SensitiveHeaders []string          `json:"sensitive_headers,omitempty"`
+	Options          map[string]string `json:"options,omitempty"`
+	CreateRoutes     *bool             `json:"create_routes,omitempty"`
 }
 
 func providerWriteRequestFrom(p server.Provider) providerWriteRequest {
@@ -154,17 +155,18 @@ func providerWriteRequestFrom(p server.Provider) providerWriteRequest {
 	// not auto-create catalog routes as a side effect of provider writes.
 	createRoutes := false
 	return providerWriteRequest{
-		ID:           p.ID,
-		Name:         p.Name,
-		Type:         p.Type,
-		BaseURL:      p.BaseURL,
-		APIKey:       p.APIKey,
-		Status:       p.Status,
-		Healthy:      &healthy,
-		Priority:     p.Priority,
-		Headers:      p.Headers,
-		Options:      p.Options,
-		CreateRoutes: &createRoutes,
+		ID:               p.ID,
+		Name:             p.Name,
+		Type:             p.Type,
+		BaseURL:          p.BaseURL,
+		APIKey:           p.APIKey,
+		Status:           p.Status,
+		Healthy:          &healthy,
+		Priority:         p.Priority,
+		Headers:          p.Headers,
+		SensitiveHeaders: p.SensitiveHeaders,
+		Options:          p.Options,
+		CreateRoutes:     &createRoutes,
 	}
 }
 

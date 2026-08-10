@@ -7,6 +7,7 @@ import { compactNumber } from "../domain/formatting";
 import { enumValueLabel, numberFromUnknown, numberOr, parseLooseValue, splitList } from "../domain/labels";
 import { initialModelRoutes } from "../domain/provider-model-selection";
 import { providerReasoningFormValues, providerReasoningOptions, providerReasoningOverrideFormValues } from "../domain/provider-reasoning";
+import { providerHeadersFormValue, providerHeadersPayload } from "../domain/provider-headers";
 import { activeLanguage, tx } from "../i18n/runtime";
 import { handleApprovalOrJSON } from "./governance-config";
 import { projectQuotaFields, type ProjectQuotaValues } from "../views/crud-projects";
@@ -21,10 +22,11 @@ export function providerPayload(values: Record<string, string>) {
     status: values.status || "active",
     healthy: values.healthy !== "false",
     priority: numberOr(values.priority, 10),
-		catalog_id: values.catalog_id,
-		model_category: values.model_category,
+    ...providerHeadersPayload(values.custom_headers),
+    catalog_id: values.catalog_id,
+    model_category: values.model_category,
     options: providerReasoningOptions(values),
-		selected_models: splitList(values.selected_models),
+    selected_models: splitList(values.selected_models),
     custom_models: parseProviderCatalogModels(values.custom_models),
   };
 }
@@ -80,6 +82,7 @@ export function providerResourcePayload(values: Record<string, string>) {
     rate_limit_rpm: numberOr(values.rate_limit_rpm, 0),
     token_limit_tpm: numberOr(values.token_limit_tpm, 0),
     max_concurrency: numberOr(values.max_concurrency, 0),
+    ...providerHeadersPayload(values.custom_headers),
     credentials,
     options: providerResourceOptions(values),
   };
@@ -139,6 +142,7 @@ export function providerResourceToForm(item: ProviderResource, providerOptions?:
     environment: item.environment ?? "",
     status: item.status,
     healthy: String(item.healthy),
+    custom_headers: providerHeadersFormValue(item.headers, item.sensitive_headers),
     ...providerReasoningOverrideFormValues(item.options, providerOptions),
   };
 }
