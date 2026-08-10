@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "config": {
+    "label": "tokenhub-local-smoke",
+    "base_url": "http://127.0.0.1:18080",
+    "model": "benchmark-model",
+    "protocol": "chat",
+    "stream": false,
+    "mode": "concurrency",
+    "concurrency": 8,
+    "max_in_flight": 1000,
+    "request_bytes": 256,
+    "response_bytes": 1024,
+    "stream_chunks": 8,
+    "deployment_profile": "sqlite-audit-on-metrics-off-tracing-off",
+    "duration": "2s",
+    "warmup": "500ms",
+    "timeout": "30s",
+    "expected_upstream_latency": "5ms",
+    "expected_upstream_ttft": "5ms",
+    "chunk_interval": "1ms"
+  },
+  "metadata": {
+    "generated_at": "2026-08-10T01:27:47.399332Z",
+    "git_commit": "25c481a387365846620375080b83795af6227add",
+    "git_dirty": true,
+    "go_version": "go1.26.4",
+    "os": "darwin",
+    "arch": "arm64",
+    "cpu_count": 18,
+    "cpu_model": "Apple M5 Pro",
+    "memory_bytes": 51539607552
+  },
+  "summary": {
+    "offered_requests": 2199,
+    "requests": 2199,
+    "dropped_requests": 0,
+    "successes": 2199,
+    "failures": 0,
+    "success_rate_percent": 100,
+    "achieved_rps": 1095.7295491486034,
+    "latency_ms": {
+      "mean": 7.283574478854029,
+      "p50": 7.237917,
+      "p95": 8.1085,
+      "p99": 8.788292,
+      "max": 12.17075
+    },
+    "ttft_ms": {
+      "mean": 0,
+      "p50": 0,
+      "p95": 0,
+      "p99": 0,
+      "max": 0
+    },
+    "estimated_gateway_ttft_ms": {
+      "mean": 0,
+      "p50": 0,
+      "p95": 0,
+      "p99": 0,
+      "max": 0
+    },
+    "estimated_gateway_overhead_ms": {
+      "mean": 2.2835744788540313,
+      "p50": 2.2379170000000004,
+      "p95": 3.1084999999999994,
+      "p99": 3.788292,
+      "max": 7.17075
+    },
+    "response_bytes": 2821317,
+    "status_code_counts": {
+      "200": 2199
+    },
+    "drop_reasons": {}
+  }
+}
