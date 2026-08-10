@@ -132,7 +132,11 @@ func (r *loadRunner) runPhase(ctx context.Context, duration time.Duration) ([]Ob
 	default:
 		return nil, 0, fmt.Errorf("unsupported load mode %q", r.config.Mode)
 	}
-	return observations, time.Since(started), nil
+	elapsed := time.Since(started)
+	if err := ctx.Err(); err != nil {
+		return observations, elapsed, err
+	}
+	return observations, elapsed, nil
 }
 
 func (r *loadRunner) runConcurrency(ctx context.Context, deadline time.Time) []Observation {
@@ -199,7 +203,7 @@ loop:
 			}
 			accountedOffers += dueOffers
 			if accountedOffers >= targetOffers {
-				break loop
+				continue
 			}
 			nextOffer := started.Add(scheduledOfferOffset(accountedOffers, r.config.Rate))
 			timer.Reset(max(0, time.Until(nextOffer)))

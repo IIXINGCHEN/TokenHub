@@ -1,7 +1,9 @@
 package perfbench_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -194,6 +196,9 @@ func TestRunFixedRateStopsSchedulingAtDeadline(t *testing.T) {
 	if result.Summary.Requests != 1 {
 		t.Fatalf("requests = %d, want exactly the initial request", result.Summary.Requests)
 	}
+	if result.Summary.AchievedRPS < 5 || result.Summary.AchievedRPS > 20 {
+		t.Fatalf("achieved RPS = %.2f, want approximately 10 over the full 100ms offer window", result.Summary.AchievedRPS)
+	}
 }
 
 func TestRunFixedRateAccountsForEveryScheduledOffer(t *testing.T) {
@@ -262,5 +267,57 @@ func TestRunThroughputIncludesOutstandingRequestDrainTime(t *testing.T) {
 	}
 	if result.Summary.AchievedRPS >= 20 {
 		t.Fatalf("throughput %.2f did not include request drain time", result.Summary.AchievedRPS)
+	}
+}
+
+func TestRunPropagatesMidPhaseCancellation(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		config perfbench.Config
+	}{
+		{name: "concurrency", config: perfbench.Config{Mode: perfbench.ModeConcurrency, Concurrency: 1}},
+		{name: "rate", config: perfbench.Config{Mode: perfbench.ModeRate, Rate: 100, MaxInFlight: 1}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			requestStarted := make(chan struct{}, 1)
+			releaseHandler := make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requestStarted <- struct{}{}
+				select {
+				case <-r.Context().Done():
+				case <-releaseHandler:
+				}
+			}))
+			t.Cleanup(server.Close)
+			t.Cleanup(func() { close(releaseHandler) })
+
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			config := test.config
+			config.BaseURL = server.URL
+			config.Protocol = perfbench.ProtocolChat
+			config.Duration = time.Second
+			config.Timeout = time.Second
+			done := make(chan error, 1)
+			go func() {
+				_, err := perfbench.Run(ctx, config)
+				done <- err
+			}()
+
+			select {
+			case <-requestStarted:
+				cancel()
+			case <-time.After(time.Second):
+				t.Fatal("benchmark request did not start")
+			}
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("error = %v, want context cancellation", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("benchmark did not drain after cancellation")
+			}
+		})
 	}
 }
