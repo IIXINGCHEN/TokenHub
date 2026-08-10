@@ -9,6 +9,7 @@ TokenHub のドキュメントは、企業 AI ゲートウェイで使う 3 つ�
 - [全体アーキテクチャ](architecture.md)：デプロイ形態、コントロール/データプレーン、モデルリクエスト経路、永続化、セキュリティ境界。
 - [デプロイ](deployment.md)：Docker Compose、環境変数、データベース、リバースプロキシ、ヘルスチェック。
 - [PostgreSQL 設定ガイド](../postgresql-setup.md)：PostgreSQL の設定、運用、移行。
+- [パフォーマンスベンチマーク](performance-benchmarking.md)：再現可能なゲートウェイ比較、プロセス内割り当てベンチマーク、回帰バジェット。
 
 ## ロールガイド
 
