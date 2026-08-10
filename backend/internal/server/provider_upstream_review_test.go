@@ -155,10 +155,10 @@ func TestProviderUpstreamLoopbackExplicitOptIn(t *testing.T) {
 	}
 }
 
-func TestProviderUpstreamClassifiesSpecialPurposeAssignments(t *testing.T) {
+func TestProviderUpstreamRejectsCuratedNonProviderRanges(t *testing.T) {
 	for _, raw := range []string{
 		"192.0.0.1", "192.0.0.6", "192.0.0.8", "192.0.0.170", "192.0.0.171",
-		"192.88.99.2",
+		"192.88.99.1", "192.88.99.2",
 		"100::1", "100:0:0:1::1", "2001:2::1", "3fff::1", "5f00::1",
 	} {
 		t.Run(raw, func(t *testing.T) {

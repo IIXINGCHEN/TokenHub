@@ -16,9 +16,9 @@ import (
 // validateProviderUpstreamBaseURL guards against server-side request forgery
 // (SSRF) when the gateway calls an administrator-supplied custom provider base
 // URL. It requires an http(s) scheme, forbids credentials embedded in the URL,
-// and rejects hosts that resolve to loopback, private, link-local or other
-// special-use addresses (which include the cloud metadata endpoint
-// 169.254.169.254).
+// and rejects literal IP hosts in loopback, private, link-local and curated
+// high-risk/non-provider ranges (including cloud metadata). Hostnames receive
+// the same address policy after resolution at dial time.
 //
 // Trade-off: loopback/localhost is allowed only when the operator explicitly
 // opts in with TOKENHUB_PROVIDER_UPSTREAM_ALLOW_LOOPBACK. The default remains
@@ -83,7 +83,8 @@ func validateProviderUpstreamBaseURLString(raw string, allowedPrivate []*net.IPN
 // allowedProviderUpstreamCIDRs parses TOKENHUB_PROVIDER_UPSTREAM_ALLOWED_CIDRS
 // (comma/semicolon/whitespace-separated CIDRs). The allowlist only relaxes the
 // RFC1918/ULA private-range check for literal IPs; loopback, link-local
-// (cloud metadata), CGNAT and other special-use ranges stay rejected
+// (cloud metadata), CGNAT and other curated high-risk/non-provider ranges stay
+// rejected
 // regardless of the configured ranges. Invalid entries are skipped so a typo
 // cannot accidentally widen or disable validation.
 // ValidateProviderUpstreamBaseURL applies the save-time provider base URL
@@ -114,7 +115,7 @@ func allowedProviderUpstreamCIDRs() []*net.IPNet {
 // isAllowlistedPrivateProviderUpstreamIP reports whether ip is an RFC1918/ULA
 // private address inside the operator-configured allowlist. Only private
 // addresses qualify: loopback, link-local (metadata), unspecified and
-// special-use ranges can never be allowlisted.
+// curated high-risk/non-provider ranges can never be allowlisted.
 func isAllowlistedPrivateProviderUpstreamIP(ip net.IP, allowedPrivate []*net.IPNet) bool {
 	if isAlwaysDeniedProviderUpstreamIP(ip) {
 		return false
@@ -147,16 +148,19 @@ func isLocalProviderHostname(host string) bool {
 	return false
 }
 
-// disallowedProviderUpstreamCIDRs lists special-use ranges that net.IP's
-// private/loopback/link-local predicates do not cover but that must never be
-// reached from a provider base URL: this-host (0.0.0.0/8), the shared/CGNAT
+// disallowedProviderUpstreamCIDRs lists curated ranges that net.IP's
+// private/loopback/link-local predicates do not cover and that are unsafe or
+// never meaningful provider endpoints. This is intentionally a trust-boundary
+// policy, not an exhaustive mirror of the IANA special-purpose registries.
+// It covers this-host (0.0.0.0/8), the shared/CGNAT
 // range (100.64.0.0/10, which hosts Alibaba Cloud's metadata endpoint
 // 100.100.100.200), the IPv4/IPv6 documentation ranges (192.0.2.0/24,
 // 198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32), the benchmarking range
 // (198.18.0.0/15), the reserved range (240.0.0.0/4, which includes the
-// limited-broadcast address), the deprecated IPv6 site-local range
-// (fec0::/10, still routable inside sites that kept it), and AWS's IPv6
-// instance-metadata endpoint. NAT64 ranges are handled separately so a
+// limited-broadcast address), the deprecated 6to4 relay-anycast allocation,
+// the deprecated IPv6 site-local range (fec0::/10, still routable inside
+// sites that kept it), and AWS's IPv6 instance-metadata endpoint. NAT64 ranges
+// are handled separately so a
 // configured RFC 6052 prefix can distinguish public from private embedded
 // IPv4 targets. IPv4-mapped IPv6 spellings need no entry: To4-based
 // predicates already classify ::ffff:10.x as private.
@@ -168,7 +172,7 @@ var disallowedProviderUpstreamCIDRs = func() []*net.IPNet {
 		"192.0.0.8/32",
 		"192.0.0.170/31",
 		"192.0.2.0/24",
-		"192.88.99.2/32",
+		"192.88.99.0/24",
 		"198.18.0.0/15",
 		"198.51.100.0/24",
 		"203.0.113.0/24",
