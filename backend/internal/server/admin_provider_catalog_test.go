@@ -962,3 +962,82 @@ func TestExternalModelRoleSurvivesCandidateCatalogRefresh(t *testing.T) {
 		t.Fatalf("candidate refresh must preserve external role and publication state: %+v", model)
 	}
 }
+
+// TestAdminProviderCatalogItemDecodesEscapedID guards the escaped-path
+// parsing in the provider-catalog item handler: a catalog ID containing "/"
+// arrives as %2F and must be looked up under its decoded value, while
+// malformed escapes are rejected.
+func TestAdminProviderCatalogItemDecodesEscapedID(t *testing.T) {
+	store := NewMemoryStore()
+	entry := ProviderCatalogEntry{
+		ID:          "vendor/model-with-slash",
+		Name:        "Vendor Model",
+		DisplayName: "Vendor Model",
+		Type:        ProviderOpenAICompatible,
+		BaseURL:     "https://example.invalid/v1",
+		Categories:  []string{"openai"},
+		ModelsCount: 1,
+		Models:      []ProviderCatalogModel{{ID: "vendor/model-with-slash", Name: "vendor-model"}},
+	}
+	if err := store.SaveProviderCatalogSnapshot([]ProviderCatalogEntry{entry}, "test", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	app := New(store).Handler()
+
+	resp := doJSON(t, app, http.MethodGet, "/api/admin/provider-catalog/vendor%2Fmodel-with-slash", nil, "")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected escaped catalog id to resolve, got %d: %s", resp.Code, resp.Body)
+	}
+	if !strings.Contains(resp.Body, `"id":"vendor/model-with-slash"`) {
+		t.Fatalf("expected decoded catalog entry in body: %s", resp.Body)
+	}
+}
+
+// TestAdminRouteCreationDoesNotMarkExternalModelWhenRouteWriteFails guards
+// route create ordering: when the route write itself fails, the model
+// directory must not be marked external as if the route had been created.
+func TestAdminRouteCreationDoesNotMarkExternalModelWhenRouteWriteFails(t *testing.T) {
+	store := NewMemoryStore()
+	if err := SeedDemoData(store); err != nil {
+		t.Fatal(err)
+	}
+	store.AddModel(Model{Name: "atomic-route-model", Family: "atomic", Modality: "chat", Status: StatusActive})
+	store.AddProviderModel(ProviderModel{
+		ProviderID:    "prv_mock",
+		UpstreamModel: "atomic-upstream",
+		DisplayName:   "Atomic Upstream",
+		Status:        StatusActive,
+	})
+	if err := store.db.Exec(`
+		CREATE TRIGGER fail_atomic_route_insert
+		BEFORE INSERT ON model_routes
+		WHEN NEW.model_name = 'atomic-route-model'
+		BEGIN
+			SELECT RAISE(FAIL, 'forced route write failure');
+		END;
+	`).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	created := doJSON(t, New(store).Handler(), http.MethodPost, "/api/admin/routing-rules", map[string]any{
+		"model_name":     "atomic-route-model",
+		"provider_id":    "prv_mock",
+		"provider_model": "atomic-upstream",
+		"status":         StatusActive,
+	}, "")
+	if created.Code != http.StatusInternalServerError {
+		t.Fatalf("expected route write failure 500, got %d: %s", created.Code, created.Body)
+	}
+	for _, route := range store.ListRoutes() {
+		if route.ModelName == "atomic-route-model" {
+			t.Fatalf("route write failure must not persist a route: %+v", route)
+		}
+	}
+	model, ok := modelByNameForTest(store.ListModels(), "atomic-route-model")
+	if !ok {
+		t.Fatal("expected the model to exist")
+	}
+	if model.Metadata[modelDirectoryRoleKey] == modelDirectoryRoleExternal {
+		t.Fatal("route write failure must not mark the model external")
+	}
+}

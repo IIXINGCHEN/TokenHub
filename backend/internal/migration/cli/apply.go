@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"strings"
 
@@ -159,9 +158,16 @@ func writeApplyArtifacts(cmd *cobra.Command, bundlePath string, result *migratio
 	return nil
 }
 
-func newHTTPSink(baseURL string, token string, resolver bundle.SecretResolver) *migrationtokenhub.HTTPSink {
-	client := migrationtokenhub.NewAdminAPIClient(baseURL, token, http.DefaultClient)
-	return migrationtokenhub.NewHTTPSink(client, resolver)
+// newHTTPSink builds the production Admin API sink. The client is constructed
+// with a nil httpClient so it receives the package default total timeout, and
+// a malformed --to value is rejected here as a controlled error instead of
+// surfacing mid-flight.
+func newHTTPSink(baseURL string, token string, resolver bundle.SecretResolver) (*migrationtokenhub.HTTPSink, error) {
+	client, err := migrationtokenhub.NewAdminAPIClient(baseURL, token, nil)
+	if err != nil {
+		return nil, err
+	}
+	return migrationtokenhub.NewHTTPSink(client, resolver), nil
 }
 
 func handleApplyResult(cmd *cobra.Command, bundlePath string, result *migrationtokenhub.ApplyResult, applyErr error) error {
@@ -200,7 +206,11 @@ var planCmd = &cobra.Command{
 		if err != nil {
 			return errExit(ExitSourceUnreadable, err.Error())
 		}
-		report, err := newHTTPSink(baseURL, token, resolver).Plan(context.Background(), migrationBundle)
+		sink, err := newHTTPSink(baseURL, token, resolver)
+		if err != nil {
+			return errExit(ExitSinkRejected, err.Error())
+		}
+		report, err := sink.Plan(context.Background(), migrationBundle)
 		if err != nil {
 			return errExit(ExitSinkRejected, err.Error())
 		}
@@ -227,15 +237,19 @@ var applyCmd = &cobra.Command{
 		if err != nil {
 			return errExit(ExitSourceUnreadable, err.Error())
 		}
+		sink, err := newHTTPSink(baseURL, token, resolver)
+		if err != nil {
+			return errExit(ExitSinkRejected, err.Error())
+		}
 		if dryRun {
-			report, err := newHTTPSink(baseURL, token, resolver).Plan(context.Background(), migrationBundle)
+			report, err := sink.Plan(context.Background(), migrationBundle)
 			if err != nil {
 				return errExit(ExitSinkRejected, err.Error())
 			}
 			fmt.Printf("Dry-run plan:\n  Created: %d\n  Updated: %d\n  Skipped: %d\n", report.Created, report.Updated, report.Skipped)
 			return nil
 		}
-		result, applyErr := newHTTPSink(baseURL, token, resolver).Apply(context.Background(), migrationBundle)
+		result, applyErr := sink.Apply(context.Background(), migrationBundle)
 		if err := handleApplyResult(cmd, bundlePath, result, applyErr); err != nil {
 			return errExit(ExitSinkRejected, err.Error())
 		}
@@ -260,7 +274,11 @@ var verifyCmd = &cobra.Command{
 		if err != nil {
 			return errExit(ExitSourceUnreadable, err.Error())
 		}
-		result, err := newHTTPSink(baseURL, token, resolver).Verify(context.Background(), migrationBundle)
+		sink, err := newHTTPSink(baseURL, token, resolver)
+		if err != nil {
+			return errExit(ExitSinkRejected, err.Error())
+		}
+		result, err := sink.Verify(context.Background(), migrationBundle)
 		if err != nil {
 			return errExit(ExitSinkRejected, err.Error())
 		}
@@ -293,7 +311,11 @@ var rollbackCmd = &cobra.Command{
 		if err := requireRemoteTarget("rollback", baseURL); err != nil {
 			return err
 		}
-		result, err := newHTTPSink(baseURL, token, bundle.EnvResolver{}).Rollback(context.Background(), checkpoint)
+		sink, err := newHTTPSink(baseURL, token, bundle.EnvResolver{})
+		if err != nil {
+			return errExit(ExitSinkRejected, err.Error())
+		}
+		result, err := sink.Rollback(context.Background(), checkpoint)
 		if err != nil {
 			return errExit(ExitSinkRejected, err.Error())
 		}

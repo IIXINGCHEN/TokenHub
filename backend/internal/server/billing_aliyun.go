@@ -204,12 +204,15 @@ func normalizeAliyunBillingRecord(item map[string]any, connector BillingConnecto
 	if err != nil {
 		return BillingRecord{}, err
 	}
-	discount := billingDecimalAdd(
+	discount, err := billingDecimalAdd(
 		firstValue(item, "InvoiceDiscount", "invoice_discount"),
 		firstValue(item, "DeductedByCoupons", "deducted_by_coupons"),
 		firstValue(item, "DeductedByCashCoupons", "deducted_by_cash_coupons"),
 		firstValue(item, "DeductedByPrepaidCard", "deducted_by_prepaid_card"),
 	)
+	if err != nil {
+		return BillingRecord{}, err
+	}
 	tax, err := billingDecimalValue(firstValue(item, "TaxAmount", "tax_amount", "Tax"))
 	if err != nil {
 		return BillingRecord{}, err
@@ -303,14 +306,23 @@ func billingDecimalValue(value any) (string, error) {
 	return billingRatText(ratio), nil
 }
 
-func billingDecimalAdd(values ...any) string {
+// billingDecimalAdd sums discount components. A value that is present but
+// cannot be parsed is an upstream contract violation: silently skipping it
+// would understate the discount, so it is rejected instead.
+func billingDecimalAdd(values ...any) (string, error) {
 	total := new(big.Rat)
 	for _, value := range values {
-		if parsed, ok := new(big.Rat).SetString(defaultString(stringValue(value), "0")); ok {
-			total.Add(total, parsed)
+		text := strings.TrimSpace(defaultString(stringValue(value), "0"))
+		if text == "" {
+			continue
 		}
+		parsed, ok := new(big.Rat).SetString(text)
+		if !ok {
+			return "", NewHTTPError(http.StatusBadGateway, "billing_upstream_invalid_response", fmt.Sprintf("Invalid decimal amount from billing upstream: %q", text))
+		}
+		total.Add(total, parsed)
 	}
-	return billingRatText(total)
+	return billingRatText(total), nil
 }
 
 func billingDecimalCalculate(gross string, discount string, tax string, refund string) string {

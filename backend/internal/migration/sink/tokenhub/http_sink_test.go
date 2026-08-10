@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"net"
-	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -134,7 +133,11 @@ func TestHTTPSinkApplyAndVerifyModelOnly(t *testing.T) {
 	ts := newHTTPMigrationTestServer(t)
 	defer ts.Close()
 
-	sink := NewHTTPSink(NewAdminAPIClient(ts.URL, "test-admin-token", http.DefaultClient), bundle.StaticResolver{})
+	client, err := NewAdminAPIClient(ts.URL, "test-admin-token", nil)
+	if err != nil {
+		t.Fatalf("new admin api client: %v", err)
+	}
+	sink := NewHTTPSink(client, bundle.StaticResolver{})
 	migrationBundle := &bundle.CanonicalMigrationBundle{
 		SchemaVersion: bundle.SchemaVersion,
 		Source:        bundle.Source{Adapter: "litellm", AdapterVersion: "1.60.0"},
@@ -166,7 +169,10 @@ func TestHTTPSinkVerifyDetectsDrift(t *testing.T) {
 	ts := newHTTPMigrationTestServer(t)
 	defer ts.Close()
 
-	client := NewAdminAPIClient(ts.URL, "test-admin-token", http.DefaultClient)
+	client, err := NewAdminAPIClient(ts.URL, "test-admin-token", nil)
+	if err != nil {
+		t.Fatalf("new admin api client: %v", err)
+	}
 	sink := NewHTTPSink(client, bundle.StaticResolver{})
 	migrationBundle := &bundle.CanonicalMigrationBundle{
 		SchemaVersion: bundle.SchemaVersion,
@@ -208,7 +214,10 @@ func TestHTTPSinkApplyUserCreatesAndUpdates(t *testing.T) {
 	ts := newHTTPMigrationTestServer(t)
 	defer ts.Close()
 
-	client := NewAdminAPIClient(ts.URL, "test-admin-token", http.DefaultClient)
+	client, err := NewAdminAPIClient(ts.URL, "test-admin-token", nil)
+	if err != nil {
+		t.Fatalf("new admin api client: %v", err)
+	}
 	sink := NewHTTPSink(client, bundle.StaticResolver{})
 	migrationBundle := &bundle.CanonicalMigrationBundle{
 		SchemaVersion: bundle.SchemaVersion,
@@ -327,7 +336,10 @@ func TestHTTPSinkApplyAPIKeyMinuteLimits(t *testing.T) {
 	ts := newHTTPMigrationTestServer(t)
 	defer ts.Close()
 
-	client := NewAdminAPIClient(ts.URL, "test-admin-token", http.DefaultClient)
+	client, err := NewAdminAPIClient(ts.URL, "test-admin-token", nil)
+	if err != nil {
+		t.Fatalf("new admin api client: %v", err)
+	}
 	sink := NewHTTPSink(client, bundle.StaticResolver{})
 	rpm, tpm := int64(60), int64(10_000)
 	migrationBundle := &bundle.CanonicalMigrationBundle{
@@ -398,7 +410,10 @@ func TestHTTPSinkReturnsCheckpointAfterPartialApplyFailure(t *testing.T) {
 	ts := newHTTPMigrationTestServerWithoutSMTP(t)
 	defer ts.Close()
 
-	client := NewAdminAPIClient(ts.URL, "test-admin-token", http.DefaultClient)
+	client, err := NewAdminAPIClient(ts.URL, "test-admin-token", nil)
+	if err != nil {
+		t.Fatalf("new admin api client: %v", err)
+	}
 	sink := NewHTTPSink(client, bundle.StaticResolver{})
 	migrationBundle := &bundle.CanonicalMigrationBundle{
 		SchemaVersion: bundle.SchemaVersion,
@@ -446,7 +461,10 @@ func TestHTTPSinkSeededModelConvergesAfterOneUpdate(t *testing.T) {
 	ts := newHTTPMigrationTestServer(t)
 	defer ts.Close()
 
-	client := NewAdminAPIClient(ts.URL, "test-admin-token", http.DefaultClient)
+	client, err := NewAdminAPIClient(ts.URL, "test-admin-token", nil)
+	if err != nil {
+		t.Fatalf("new admin api client: %v", err)
+	}
 	migrationBundle := &bundle.CanonicalMigrationBundle{
 		SchemaVersion: bundle.SchemaVersion,
 		Source:        bundle.Source{Adapter: "litellm", AdapterVersion: "1.60.0"},
@@ -556,7 +574,10 @@ func TestHTTPSinkApplyProviderAndRouteOnCleanTarget(t *testing.T) {
 	ts := httptest.NewServer(server.NewWithConfig(store, config).Handler())
 	defer ts.Close()
 
-	client := NewAdminAPIClient(ts.URL, "test-admin-token", http.DefaultClient)
+	client, err := NewAdminAPIClient(ts.URL, "test-admin-token", nil)
+	if err != nil {
+		t.Fatalf("new admin api client: %v", err)
+	}
 	sink := NewHTTPSink(client, bundle.StaticResolver{"PROVIDER_API_KEY": "provider-secret"})
 
 	migrationBundle := &bundle.CanonicalMigrationBundle{
@@ -629,7 +650,10 @@ func TestHTTPSinkUpdatesRouteWhenInventoryMissing(t *testing.T) {
 	ts := httptest.NewServer(server.NewWithConfig(store, config).Handler())
 	defer ts.Close()
 
-	client := NewAdminAPIClient(ts.URL, "test-admin-token", http.DefaultClient)
+	client, err := NewAdminAPIClient(ts.URL, "test-admin-token", nil)
+	if err != nil {
+		t.Fatalf("new admin api client: %v", err)
+	}
 	sink := NewHTTPSink(client, bundle.StaticResolver{"PROVIDER_API_KEY": "provider-secret"})
 
 	newBundle := func(priority int) *bundle.CanonicalMigrationBundle {
