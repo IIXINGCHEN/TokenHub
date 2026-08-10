@@ -252,6 +252,26 @@ func TestRunFixedRateRecordsSchedulerLagAsGeneratorDrops(t *testing.T) {
 	}
 }
 
+func TestRunKeepsImplicitMaxInFlightBoundedAtExtremeRate(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	result, err := perfbench.Run(t.Context(), perfbench.Config{
+		BaseURL: server.URL, Protocol: perfbench.ProtocolChat, Mode: perfbench.ModeRate,
+		Rate: int(time.Second), Duration: time.Nanosecond, Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Config.MaxInFlight != 1000 {
+		t.Fatalf("implicit max in flight = %d, want 1000", result.Config.MaxInFlight)
+	}
+}
+
 func TestRunThroughputIncludesOutstandingRequestDrainTime(t *testing.T) {
 	t.Parallel()
 

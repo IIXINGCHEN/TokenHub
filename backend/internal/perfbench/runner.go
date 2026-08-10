@@ -67,9 +67,6 @@ func withRunDefaults(config Config) Config {
 	}
 	if config.MaxInFlight <= 0 {
 		config.MaxInFlight = 1000
-		if config.Rate > 0 && config.Rate <= int(time.Second) {
-			config.MaxInFlight = max(config.MaxInFlight, config.Rate*2)
-		}
 	}
 	return config
 }
