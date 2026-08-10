@@ -148,10 +148,6 @@ func (s *Server) handleAdminProviderAdapters(w http.ResponseWriter, r *http.Requ
 	if _, ok := s.requireAdmin(w, r, "providers", r.Method); !ok {
 		return
 	}
-	if r.Method != http.MethodGet {
-		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": s.adapterRegistry.List()})
 }
 

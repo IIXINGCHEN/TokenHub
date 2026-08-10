@@ -18,3 +18,23 @@ func jsonMethodNotAllowed(allowedMethod string) http.HandlerFunc {
 		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
 	}
 }
+
+func (s *Server) adminAuthenticationMethodNotAllowed(allowedMethod string) http.HandlerFunc {
+	reject := jsonMethodNotAllowed(allowedMethod)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := s.authorizeAdminUser(w, r); !ok {
+			return
+		}
+		reject(w, r)
+	}
+}
+
+func (s *Server) adminMethodNotAllowed(resource string, allowedMethod string) http.HandlerFunc {
+	reject := jsonMethodNotAllowed(allowedMethod)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := s.requireAdmin(w, r, resource, r.Method); !ok {
+			return
+		}
+		reject(w, r)
+	}
+}

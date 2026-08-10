@@ -54,10 +54,6 @@ func (s *Server) handleAdminProviderMonitoring(w http.ResponseWriter, r *http.Re
 	if _, ok := s.requireAdmin(w, r, "provider", r.Method); !ok {
 		return
 	}
-	if r.Method != http.MethodGet {
-		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": s.providerMonitoringSnapshots(r.Context(), "")})
 }
 
@@ -835,10 +831,6 @@ func (s *Server) handleAdminModels(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAdminModelsRestoreDefaults(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAdmin(w, r, "model", r.Method)
 	if !ok {
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
 		return
 	}
 	catalogFile := strings.TrimSpace(s.config.ModelCatalogFile)
