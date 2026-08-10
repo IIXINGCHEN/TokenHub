@@ -146,6 +146,7 @@ func (s *Server) handleAdminProviderCatalogItem(w http.ResponseWriter, r *http.R
 				if req.APIKey == "" {
 					req.APIKey = provider.APIKey
 				}
+				req.Options = mergedStringMap(provider.Options, req.Options)
 			}
 		}
 		entry, err := CustomProviderCatalogFromUpstream(r.Context(), http.DefaultClient, req)

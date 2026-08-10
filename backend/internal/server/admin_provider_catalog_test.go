@@ -228,6 +228,58 @@ func TestAdminTestsUnsavedAnthropicProviderAuthentication(t *testing.T) {
 	}
 }
 
+func TestAdminSavedAnthropicProviderCatalogAuthentication(t *testing.T) {
+	seenHeaders := make(chan http.Header, 2)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenHeaders <- r.Header.Clone()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"data": []map[string]any{{"id": "claude-test"}},
+		})
+	}))
+	defer upstream.Close()
+
+	app := newTestServer()
+	created := doJSON(t, app, http.MethodPost, "/api/admin/providers", map[string]any{
+		"id":                  "prv_anthropic_bearer",
+		"name":                "Anthropic Bearer",
+		"type":                ProviderAnthropic,
+		"base_url":            upstream.URL + "/v1",
+		"api_key":             "saved-secret",
+		"anthropic_auth_type": anthropicAuthTypeBearer,
+	}, "")
+	if created.Code != http.StatusCreated {
+		t.Fatalf("expected provider creation 201, got %d: %s", created.Code, created.Body)
+	}
+
+	for _, testCase := range []struct {
+		name              string
+		authType          string
+		wantAuthorization string
+		wantAPIKey        string
+	}{
+		{name: "inherit saved bearer", wantAuthorization: "Bearer saved-secret"},
+		{name: "explicit x-api-key override", authType: anthropicAuthTypeAPIKey, wantAPIKey: "saved-secret"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			body := map[string]any{"provider_id": "prv_anthropic_bearer"}
+			if testCase.authType != "" {
+				body["anthropic_auth_type"] = testCase.authType
+			}
+			resp := doJSON(t, app, http.MethodPost, "/api/admin/provider-catalog/custom", body, "")
+			if resp.Code != http.StatusOK {
+				t.Fatalf("expected saved provider catalog 200, got %d: %s", resp.Code, resp.Body)
+			}
+			headers := <-seenHeaders
+			if got := headers.Get("authorization"); got != testCase.wantAuthorization {
+				t.Errorf("authorization = %q, want %q", got, testCase.wantAuthorization)
+			}
+			if got := headers.Get("x-api-key"); got != testCase.wantAPIKey {
+				t.Errorf("x-api-key = %q, want %q", got, testCase.wantAPIKey)
+			}
+		})
+	}
+}
+
 func TestAdminValidatesAnthropicProviderAuthentication(t *testing.T) {
 	app := newTestServer()
 	valid := doJSON(t, app, http.MethodPost, "/api/admin/providers", map[string]any{
