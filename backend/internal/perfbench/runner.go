@@ -43,6 +43,7 @@ func Run(ctx context.Context, config Config) (Result, error) {
 		return Result{}, err
 	}
 	safeConfig := config
+	safeConfig.BaseURL = ""
 	safeConfig.APIKey = ""
 	safeConfig.HTTPClient = nil
 	return Analyze(safeConfig, runtimeMetadata(), observations, elapsed), nil
@@ -65,7 +66,10 @@ func withRunDefaults(config Config) Config {
 		config.RequestBytes = 256
 	}
 	if config.MaxInFlight <= 0 {
-		config.MaxInFlight = max(1000, config.Rate*2)
+		config.MaxInFlight = 1000
+		if config.Rate > 0 && config.Rate <= int(time.Second) {
+			config.MaxInFlight = max(config.MaxInFlight, config.Rate*2)
+		}
 	}
 	return config
 }
@@ -98,6 +102,9 @@ func validateRunConfig(config Config) error {
 		if config.Rate <= 0 || config.Concurrency != 0 {
 			return fmt.Errorf("rate mode requires positive rate and zero concurrency")
 		}
+		if config.Rate > int(time.Second) {
+			return fmt.Errorf("rate cannot exceed %d requests per second", time.Second)
+		}
 	default:
 		return fmt.Errorf("unsupported load mode %q", config.Mode)
 	}
@@ -121,7 +128,7 @@ func (r *loadRunner) runPhase(ctx context.Context, duration time.Duration) ([]Ob
 	case ModeConcurrency:
 		observations = r.runConcurrency(ctx, deadline)
 	case ModeRate:
-		observations = r.runRate(ctx, deadline)
+		observations = r.runRate(ctx, started, deadline)
 	default:
 		return nil, 0, fmt.Errorf("unsupported load mode %q", r.config.Mode)
 	}
@@ -147,17 +154,15 @@ func (r *loadRunner) runConcurrency(ctx context.Context, deadline time.Time) []O
 	return collectObservations(results)
 }
 
-func (r *loadRunner) runRate(ctx context.Context, deadline time.Time) []Observation {
-	interval := time.Second / time.Duration(r.config.Rate)
-	if interval <= 0 {
-		interval = time.Nanosecond
-	}
+func (r *loadRunner) runRate(ctx context.Context, started, deadline time.Time) []Observation {
 	results := make(chan Observation, min(r.config.MaxInFlight, max(1, r.config.Rate)))
 	collected := make(chan []Observation, 1)
 	go func() { collected <- collectObservations(results) }()
 	semaphore := make(chan struct{}, r.config.MaxInFlight)
 	var requests sync.WaitGroup
-	timer := time.NewTimer(0)
+	targetOffers := scheduledOfferCount(deadline.Sub(started), r.config.Rate)
+	accountedOffers := 0
+	timer := time.NewTimer(max(0, time.Until(started)))
 	defer timer.Stop()
 	deadlineTimer := time.NewTimer(max(0, time.Until(deadline)))
 	defer deadlineTimer.Stop()
@@ -167,8 +172,20 @@ loop:
 		case <-ctx.Done():
 			break loop
 		case <-deadlineTimer.C:
+			recordMissedOffers(results, targetOffers-accountedOffers)
 			break loop
 		case <-timer.C:
+			now := time.Now()
+			if !now.Before(deadline) {
+				recordMissedOffers(results, targetOffers-accountedOffers)
+				break loop
+			}
+			dueOffers := min(targetOffers, scheduledOffersDue(now.Sub(started), r.config.Rate)) - accountedOffers
+			if dueOffers <= 0 {
+				timer.Reset(max(0, time.Until(started.Add(scheduledOfferOffset(accountedOffers, r.config.Rate)))))
+				continue
+			}
+			recordMissedOffers(results, dueOffers-1)
 			select {
 			case semaphore <- struct{}{}:
 				requests.Add(1)
@@ -180,7 +197,12 @@ loop:
 			default:
 				results <- Observation{Error: "load_generator_saturated", Dropped: true}
 			}
-			timer.Reset(interval)
+			accountedOffers += dueOffers
+			if accountedOffers >= targetOffers {
+				break loop
+			}
+			nextOffer := started.Add(scheduledOfferOffset(accountedOffers, r.config.Rate))
+			timer.Reset(max(0, time.Until(nextOffer)))
 		}
 	}
 	go func() {
@@ -188,6 +210,31 @@ loop:
 		close(results)
 	}()
 	return <-collected
+}
+
+func scheduledOfferCount(duration time.Duration, rate int) int {
+	whole := int64(duration/time.Second) * int64(rate)
+	remainder := int64(duration % time.Second)
+	fractional := (remainder*int64(rate) + int64(time.Second) - 1) / int64(time.Second)
+	return int(whole + fractional)
+}
+
+func scheduledOffersDue(elapsed time.Duration, rate int) int {
+	whole := int64(elapsed/time.Second) * int64(rate)
+	remainder := int64(elapsed % time.Second)
+	return int(whole + remainder*int64(rate)/int64(time.Second) + 1)
+}
+
+func scheduledOfferOffset(index, rate int) time.Duration {
+	wholeSeconds := index / rate
+	remainder := index % rate
+	return time.Duration(wholeSeconds)*time.Second + time.Duration(int64(remainder)*int64(time.Second)/int64(rate))
+}
+
+func recordMissedOffers(results chan<- Observation, count int) {
+	if count > 0 {
+		results <- Observation{Error: "load_generator_missed_schedule", Dropped: true, DroppedCount: count}
+	}
 }
 
 func collectObservations(results <-chan Observation) []Observation {

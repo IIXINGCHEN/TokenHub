@@ -32,6 +32,9 @@ func TestResultJSONUsesReadableDurationsAndRoundTrips(t *testing.T) {
 		t.Fatal(err)
 	}
 	jsonText := output.String()
+	if strings.Contains(jsonText, "base_url") {
+		t.Fatalf("JSON retained the private benchmark target:\n%s", jsonText)
+	}
 	for _, field := range []string{`"duration": "10s"`, `"warmup": "2s"`, `"expected_upstream_latency": "5ms"`} {
 		if !strings.Contains(jsonText, field) {
 			t.Fatalf("JSON missing %s:\n%s", field, jsonText)

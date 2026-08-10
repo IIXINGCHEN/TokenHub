@@ -73,6 +73,22 @@ func TestAnalyzeExcludesGeneratorDropsFromGatewayStatistics(t *testing.T) {
 	}
 }
 
+func TestAnalyzeCountsAggregatedMissedOffers(t *testing.T) {
+	t.Parallel()
+
+	result := perfbench.Analyze(perfbench.Config{}, perfbench.Metadata{}, []perfbench.Observation{
+		{Duration: time.Millisecond, StatusCode: 200},
+		{Dropped: true, DroppedCount: 9, Error: "load_generator_missed_schedule"},
+	}, time.Second)
+
+	if result.Summary.OfferedRequests != 10 || result.Summary.Requests != 1 || result.Summary.DroppedRequests != 9 {
+		t.Fatalf("unexpected aggregated offer counts: %+v", result.Summary)
+	}
+	if result.Summary.DropReasons["load_generator_missed_schedule"] != 9 || result.Summary.SuccessRatePercent != 10 {
+		t.Fatalf("unexpected aggregated drop accounting: %+v", result.Summary)
+	}
+}
+
 func TestAnalyzeSeparatesStreamingTTFTAndTotalUpstreamTime(t *testing.T) {
 	t.Parallel()
 

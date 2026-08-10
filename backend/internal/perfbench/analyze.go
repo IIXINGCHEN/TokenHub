@@ -28,7 +28,7 @@ const (
 
 type Config struct {
 	Label                   string        `json:"label"`
-	BaseURL                 string        `json:"base_url"`
+	BaseURL                 string        `json:"-"`
 	APIKey                  string        `json:"-"`
 	Model                   string        `json:"model"`
 	Protocol                Protocol      `json:"protocol"`
@@ -136,6 +136,7 @@ type Observation struct {
 	ResponseBytes int64         `json:"response_bytes"`
 	Error         string        `json:"error,omitempty"`
 	Dropped       bool          `json:"-"`
+	DroppedCount  int           `json:"-"`
 }
 
 type Distribution struct {
@@ -176,7 +177,6 @@ func Analyze(config Config, metadata Metadata, observations []Observation, elaps
 	ttftOverheads := make([]float64, 0, len(observations))
 	overheads := make([]float64, 0, len(observations))
 	summary := Summary{
-		OfferedRequests:  len(observations),
 		StatusCodeCounts: make(map[int]int),
 		DropReasons:      make(map[string]int),
 	}
@@ -184,14 +184,17 @@ func Analyze(config Config, metadata Metadata, observations []Observation, elaps
 	expectedTTFTMS := float64(config.ExpectedUpstreamTTFT) / float64(time.Millisecond)
 	for _, observation := range observations {
 		if observation.Dropped {
-			summary.DroppedRequests++
+			dropped := max(1, observation.DroppedCount)
+			summary.OfferedRequests += dropped
+			summary.DroppedRequests += dropped
 			reason := observation.Error
 			if reason == "" {
 				reason = "load_generator_drop"
 			}
-			summary.DropReasons[reason]++
+			summary.DropReasons[reason] += dropped
 			continue
 		}
+		summary.OfferedRequests++
 		summary.Requests++
 		latencyMS := float64(observation.Duration) / float64(time.Millisecond)
 		latencies = append(latencies, latencyMS)

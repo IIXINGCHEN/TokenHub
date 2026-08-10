@@ -87,12 +87,13 @@ TOKENHUB_BENCHMARK_API_KEY=YOUR_LOCAL_BENCHMARK_KEY \
   --concurrency 32 \
   --warmup 5s \
   --duration 30s \
-  --upstream-latency 5ms \
+  --upstream-latency 13ms \
+  --upstream-ttft 5ms \
   --json output/benchmarks/tokenhub-stream-c32.json \
   --markdown output/benchmarks/tokenhub-stream-c32.md
 ```
 
-In fixed-rate mode, set `--mode rate --rate N --concurrency 0`. A `load_generator_saturated` failure means the client reached `--max-in-flight`; it is not a gateway response and the run should be repeated with adequate generator capacity.
+In fixed-rate mode, set `--mode rate --rate N --concurrency 0`. A `load_generator_saturated` failure means the client reached `--max-in-flight`; `load_generator_missed_schedule` means the client could not dispatch at the requested cadence. Neither is a gateway response, and a run containing either must not be used as a passing latency comparison.
 
 For a streaming run, `--upstream-latency` means total upstream response duration, while `--upstream-ttft` means upstream time to first byte. With the mocker defaults, total duration is initial latency plus `stream-chunks * chunk-interval` (5 ms + 8 * 1 ms = 13 ms). Supplying both keeps full-response and TTFT overhead estimates from attributing deterministic chunk delivery to the gateway.
 

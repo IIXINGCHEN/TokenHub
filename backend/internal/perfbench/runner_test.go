@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -64,6 +65,41 @@ func TestRunConcurrentLoadUsesAuthenticatedUniqueRequests(t *testing.T) {
 	}
 	if result.Metadata.GoVersion == "" || result.Metadata.OS == "" || result.Metadata.Arch == "" || result.Metadata.CPUCount == 0 {
 		t.Fatalf("missing runtime metadata: %+v", result.Metadata)
+	}
+}
+
+func TestRunRedactsTargetURLFromExportedResults(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	t.Cleanup(server.Close)
+	target, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target.User = url.UserPassword("private-user", "private-password")
+
+	result, err := perfbench.Run(t.Context(), perfbench.Config{
+		BaseURL: target.String(), Protocol: perfbench.ProtocolChat, Mode: perfbench.ModeConcurrency,
+		Concurrency: 1, Duration: 10 * time.Millisecond, Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Config.BaseURL != "" {
+		t.Fatalf("result retained base URL %q", result.Config.BaseURL)
+	}
+	exported, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"base_url", "private-user", "private-password", target.Host} {
+		if strings.Contains(string(exported), secret) {
+			t.Fatalf("exported result contains %q: %s", secret, exported)
+		}
 	}
 }
 
@@ -157,6 +193,57 @@ func TestRunFixedRateStopsSchedulingAtDeadline(t *testing.T) {
 	}
 	if result.Summary.Requests != 1 {
 		t.Fatalf("requests = %d, want exactly the initial request", result.Summary.Requests)
+	}
+}
+
+func TestRunFixedRateAccountsForEveryScheduledOffer(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	const (
+		rate     = 100_000
+		duration = 20 * time.Millisecond
+	)
+	result, err := perfbench.Run(t.Context(), perfbench.Config{
+		BaseURL: server.URL, Protocol: perfbench.ProtocolChat, Mode: perfbench.ModeRate,
+		Rate: rate, MaxInFlight: 100, Duration: duration, Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantOffers := int(duration / (time.Second / rate))
+	if result.Summary.OfferedRequests != wantOffers {
+		t.Fatalf("offered requests = %d, want %d: %+v", result.Summary.OfferedRequests, wantOffers, result.Summary)
+	}
+	if result.Summary.Requests+result.Summary.DroppedRequests != wantOffers {
+		t.Fatalf("scheduled offers were not fully accounted for: %+v", result.Summary)
+	}
+}
+
+func TestRunFixedRateRecordsSchedulerLagAsGeneratorDrops(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	result, err := perfbench.Run(t.Context(), perfbench.Config{
+		BaseURL: server.URL, Protocol: perfbench.ProtocolChat, Mode: perfbench.ModeRate,
+		Rate: int(time.Second), MaxInFlight: 1, Duration: time.Millisecond, Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Summary.OfferedRequests != 1_000_000 {
+		t.Fatalf("offered requests = %d, want 1000000", result.Summary.OfferedRequests)
+	}
+	if result.Summary.DropReasons["load_generator_missed_schedule"] == 0 {
+		t.Fatalf("scheduler lag was not reported: %+v", result.Summary)
 	}
 }
 

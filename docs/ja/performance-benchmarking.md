@@ -62,7 +62,7 @@ export TOKENHUB_BENCHMARK_MODEL=benchmark-model
 ./benchmarks/run-comparison.sh
 ```
 
-スクリプトはデフォルトで 5 回、ターゲット順を交互に実行し、番号付き結果を Git で無視される `output/benchmarks/` に保存します。反復数、期間、ウォームアップ、並列数、出力先、upstream 遅延、DB/テレメトリ profile は `TOKENHUB_BENCHMARK_*` 変数で変更できます。ストリーミング、Responses、Embeddings、固定 RPS は `run` を直接使用します。固定 RPS では `--mode rate --rate N --concurrency 0` を指定します。`load_generator_saturated` はクライアントが `--max-in-flight` に達したことを示し、ゲートウェイのレスポンスではありません。ストリーミングでは `--upstream-latency` を upstream 全体の応答時間、`--upstream-ttft` を最初のバイトまでの時間とします。デフォルト mocker は 5 ms + 8 * 1 ms = 13 ms です。
+スクリプトはデフォルトで 5 回、ターゲット順を交互に実行し、番号付き結果を Git で無視される `output/benchmarks/` に保存します。反復数、期間、ウォームアップ、並列数、出力先、upstream 遅延、DB/テレメトリ profile は `TOKENHUB_BENCHMARK_*` 変数で変更できます。ストリーミング、Responses、Embeddings、固定 RPS は `run` を直接使用します。固定 RPS では `--mode rate --rate N --concurrency 0` を指定します。`load_generator_saturated` はクライアントが `--max-in-flight` に達したこと、`load_generator_missed_schedule` は要求された頻度で送信できなかったことを示します。どちらもゲートウェイのレスポンスではなく、発生した実行を合格した遅延比較として扱うことはできません。ストリーミングでは `--upstream-latency` を upstream 全体の応答時間、`--upstream-ttft` を最初のバイトまでの時間とします。デフォルト mocker では `--upstream-latency 13ms --upstream-ttft 5ms` を指定します。
 
 ## プロセス内マトリクス
 

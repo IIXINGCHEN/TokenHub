@@ -62,7 +62,7 @@ export TOKENHUB_BENCHMARK_MODEL=benchmark-model
 ./benchmarks/run-comparison.sh
 ```
 
-脚本默认执行五次并交替两个目标的先后顺序，带序号的结果写入 Git 忽略的 `output/benchmarks/`。脚本顶部的 `TOKENHUB_BENCHMARK_*` 变量可调整重复次数、时长、预热、并发、输出目录、upstream 延迟和数据库/可观测性 profile。流式、Responses、Embeddings 或定 RPS 场景可直接调用 `run`。定 RPS 模式需设置 `--mode rate --rate N --concurrency 0`；出现 `load_generator_saturated` 表示压测端达到 `--max-in-flight`，它不是网关响应。流式场景的 `--upstream-latency` 应填写 upstream 总响应时间，`--upstream-ttft` 填写首字节时间；默认 mocker 的总时间为 5 ms + 8 * 1 ms = 13 ms。
+脚本默认执行五次并交替两个目标的先后顺序，带序号的结果写入 Git 忽略的 `output/benchmarks/`。脚本顶部的 `TOKENHUB_BENCHMARK_*` 变量可调整重复次数、时长、预热、并发、输出目录、upstream 延迟和数据库/可观测性 profile。流式、Responses、Embeddings 或定 RPS 场景可直接调用 `run`。定 RPS 模式需设置 `--mode rate --rate N --concurrency 0`；`load_generator_saturated` 表示压测端达到 `--max-in-flight`，`load_generator_missed_schedule` 表示压测端未能按请求速率及时调度，两者都不是网关响应，出现时不能让延迟对比通过。流式场景的 `--upstream-latency` 应填写 upstream 总响应时间，`--upstream-ttft` 填写首字节时间；使用默认 mocker 时应设置 `--upstream-latency 13ms --upstream-ttft 5ms`。
 
 ## 运行进程内基准
 
