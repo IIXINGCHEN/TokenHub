@@ -55,7 +55,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 }
 
 func usage(writer io.Writer) {
-	fmt.Fprintln(writer, "usage: tokenhub-benchmark <mocker|gateway|run|check|summarize-go|check-go> [flags]")
+	_, _ = fmt.Fprintln(writer, "usage: tokenhub-benchmark <mocker|gateway|run|check|summarize-go|check-go> [flags]")
 }
 
 func runMocker(args []string, stderr io.Writer) error {
@@ -76,7 +76,7 @@ func runMocker(args []string, stderr io.Writer) error {
 	}
 	handler := perfbench.NewMockHandler(perfbench.MockConfig{Latency: *latency, ResponseBytes: *responseBytes, StreamChunks: *streamChunks, ChunkInterval: *chunkInterval, FailureEvery: uint64(*failureEvery), FailureStatus: *failureStatus})
 	server := &http.Server{Addr: *listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
-	fmt.Fprintf(stderr, "deterministic upstream listening on http://%s\n", *listen)
+	_, _ = fmt.Fprintf(stderr, "deterministic upstream listening on http://%s\n", *listen)
 	err := server.ListenAndServe()
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
@@ -136,8 +136,8 @@ func runGateway(args []string, stderr io.Writer) error {
 		store.AddRoute(server.ModelRoute{ModelName: *model, ProviderID: provider.ID, ProviderResourceID: resource.ID, ProviderModel: *model, Priority: index + 1, Weight: 100, Status: server.StatusActive, Strategy: server.RouteStrategyPriorityOnly})
 	}
 	app := server.NewWithConfig(store, config)
-	defer app.Shutdown(context.Background())
-	fmt.Fprintf(stderr, "self-contained TokenHub benchmark gateway listening on http://%s\n", *listen)
+	defer func() { _ = app.Shutdown(context.Background()) }()
+	_, _ = fmt.Fprintf(stderr, "self-contained TokenHub benchmark gateway listening on http://%s\n", *listen)
 	httpServer := &http.Server{Addr: *listen, Handler: app.Handler(), ReadHeaderTimeout: 5 * time.Second}
 	err := httpServer.ListenAndServe()
 	if errors.Is(err, http.ErrServerClosed) {
@@ -336,7 +336,7 @@ func runCheckGo(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if !report.Passed {
-		return errors.New("Go benchmark performance budget failed")
+		return errors.New("go benchmark performance budget failed")
 	}
 	return nil
 }
