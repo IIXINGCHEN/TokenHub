@@ -187,6 +187,7 @@ type Store interface {
 	RenewResponseJobLease(id string, owner string, epoch int64, leaseTTL time.Duration) (time.Duration, bool, error)
 	AdmitResponseJob(ctx context.Context, id string, owner string, epoch int64, key APIKey, modelName string, tokenReservation int64) (CallContext, bool, error)
 	ReleaseResponseJobAdmission(requestID string)
+	ShutdownResponseJob(id string, owner string, epoch int64, resultTTL time.Duration) (string, bool, error)
 	MarkResponseJobPhase(id string, owner string, epoch int64, phase string, requestID string) (bool, error)
 	CancelResponseJob(id string, actor string, resultTTL time.Duration) (ResponseJob, bool, error)
 	FinalizeResponseJob(call CallContext, id string, owner string, epoch int64, status string, resultJSON []byte, route RouteSelection, usage Usage, statusCode int, errorCode string, errorMessage string, clientIP string, userAgent string, resultTTL time.Duration) (ResponseJob, bool, error)

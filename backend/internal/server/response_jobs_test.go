@@ -298,6 +298,116 @@ func (s *rejectResponseDispatchStore) MarkResponseJobPhase(id string, owner stri
 	return s.GormStore.MarkResponseJobPhase(id, owner, epoch, phase, requestID)
 }
 
+type pauseAfterResponseClaimStore struct {
+	*GormStore
+	claimed chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *pauseAfterResponseClaimStore) ClaimResponseJob(owner string, leaseTTL time.Duration, resultTTL time.Duration) (ResponseJob, bool, error) {
+	job, claimed, err := s.GormStore.ClaimResponseJob(owner, leaseTTL, resultTTL)
+	if claimed && err == nil {
+		s.once.Do(func() { close(s.claimed) })
+		<-s.release
+	}
+	return job, claimed, err
+}
+
+func TestBackgroundResponsesShutdownAfterClaimRequeuesForRestart(t *testing.T) {
+	config := responseJobTestConfig()
+	config.ResponseLeaseTTLSeconds = 10
+	store, secret := newBackgroundResponseTestStore(t, config)
+	key := store.ListAPIKeys()[0]
+	project, ok := store.GetProject(key.ProjectID)
+	if !ok {
+		t.Fatal("background test project not found")
+	}
+	requestJSON, _ := json.Marshal(ResponsesRequest{Model: "gpt-background", Input: "resume after shutdown", Background: true})
+	envelopeJSON, _ := json.Marshal(responseJobEnvelope{Request: requestJSON})
+	job, err := store.CreateResponseJob(ResponseJob{
+		ID: NewID("resp"), ProjectID: project.ID, APIKeyID: key.ID,
+		AttributedUserID: usageAttributionUserID(key, project), Model: "gpt-background",
+	}, envelopeJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pausedStore := &pauseAfterResponseClaimStore{
+		GormStore: store,
+		claimed:   make(chan struct{}),
+		release:   make(chan struct{}),
+	}
+	server := NewWithConfig(pausedStore, config)
+	select {
+	case <-pausedStore.claimed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("response worker did not claim the queued job")
+	}
+	shutdownDone := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		shutdownDone <- server.Shutdown(ctx)
+	}()
+	select {
+	case <-server.responseContext.Done():
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not stop response claims")
+	}
+	close(pausedStore.release)
+	if err := <-shutdownDone; err != nil {
+		t.Fatalf("shutdown failed: %v", err)
+	}
+	requeued, ok, err := store.GetResponseJob(job.ID)
+	if err != nil || !ok || requeued.Status != responseJobStatusQueued || requeued.Phase != responseJobPhaseQueued || requeued.RequestID != "" {
+		t.Fatalf("claimed job was not returned to the queue: %+v ok=%v err=%v", requeued, ok, err)
+	}
+	if logs := store.ListRequestLogs(); len(logs) != 0 {
+		t.Fatalf("shutdown turned an undispatched claim into a request failure: %+v", logs)
+	}
+
+	restarted := NewWithConfig(store, config)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = restarted.Shutdown(ctx)
+	})
+	completed := waitForResponseJobStatus(t, restarted.Handler(), secret, job.ID, "completed")
+	if completed["output_text"] != "Echo: resume after shutdown" {
+		t.Fatalf("restarted worker returned an unexpected result: %#v", completed)
+	}
+	if logs := store.ListRequestLogs(); len(logs) != 1 || logs[0].StatusCode != http.StatusOK {
+		t.Fatalf("restarted job was not accounted exactly once: %+v", logs)
+	}
+}
+
+func TestBackgroundResponsesShutdownAfterDispatchRecordsExecutionLost(t *testing.T) {
+	config := responseJobTestConfig()
+	config.ResponseJobTimeoutSeconds = 10
+	server, store, secret := newBackgroundResponseTestServerWithConfig(t, config)
+	adapter := &blockingResponseAdapter{started: make(chan struct{})}
+	server.adapterRegistry.Register(ProviderMock, adapter, AdapterCapabilityResponses)
+	id := submitBackgroundResponse(t, server.Handler(), secret, "dispatched before shutdown")
+	select {
+	case <-adapter.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("background response did not reach upstream")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	if err := server.Shutdown(ctx); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	cancel()
+	job, ok, err := store.GetResponseJob(id)
+	if err != nil || !ok || job.Status != responseJobStatusFailed || job.ErrorCode != "response_execution_lost" {
+		t.Fatalf("dispatched shutdown did not record explicit execution loss: %+v ok=%v err=%v", job, ok, err)
+	}
+	if logs := store.ListRequestLogs(); len(logs) != 1 || logs[0].RequestID != job.RequestID || logs[0].ErrorCode != "response_execution_lost" {
+		t.Fatalf("dispatched shutdown was not audited once: %+v", logs)
+	}
+}
+
 func TestBackgroundResponsesPersistsUpstreamFailure(t *testing.T) {
 	server, store, secret := newBackgroundResponseTestServer(t)
 	server.adapterRegistry.Register(ProviderMock, failingResponseJobAdapter{}, AdapterCapabilityResponses)
@@ -323,7 +433,7 @@ func TestBackgroundResponsesPersistsUpstreamFailure(t *testing.T) {
 	}
 }
 
-func TestBackgroundResponsesLostBeforeDispatchUsesSingleMetadataOnlySettlement(t *testing.T) {
+func TestBackgroundResponsesLostBeforeDispatchReturnsToQueueWithoutSettlement(t *testing.T) {
 	config := responseJobTestConfig()
 	config.ResponseLeaseTTLSeconds = 5
 	store, secret := newBackgroundResponseTestStore(t, config)
@@ -369,26 +479,38 @@ func TestBackgroundResponsesLostBeforeDispatchUsesSingleMetadataOnlySettlement(t
 	if _, loaded := store.leaseHeartbeats.Load(admitted.RequestID); loaded {
 		t.Fatal("dispatch rejection retained its process-local heartbeat registration")
 	}
+	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	if err := server.Shutdown(shutdownContext); err != nil {
+		shutdownCancel()
+		t.Fatal(err)
+	}
+	shutdownCancel()
 	past := time.Now().UTC().Add(-time.Second)
 	if err := store.db.Model(&ResponseJob{}).Where("id = ?", id).Update("lease_expires_at", past).Error; err != nil {
 		t.Fatal(err)
 	}
-	failed := waitForResponseJobStatus(t, server.Handler(), secret, id, "failed")
-	errorObject, _ := failed["error"].(map[string]any)
-	if errorObject["code"] != "response_execution_lost" {
-		t.Fatalf("unexpected lost-dispatch result: %#v", failed)
+	requeued, failed, _, err := store.RecoverResponseJobs(time.Minute)
+	if err != nil || requeued != 1 || failed != 0 {
+		t.Fatalf("recover undispatched job: requeued=%d failed=%d err=%v", requeued, failed, err)
 	}
-	logs := store.ListRequestLogs()
-	if len(logs) != 1 || logs[0].ErrorCode != "response_execution_lost" {
-		t.Fatalf("lost dispatch was not settled exactly once: %+v", logs)
+	current, ok, err := store.GetResponseJob(id)
+	if err != nil || !ok || current.Status != responseJobStatusQueued || current.Phase != responseJobPhaseQueued || current.RequestID != "" {
+		t.Fatalf("undispatched job was not requeued: %+v ok=%v err=%v", current, ok, err)
+	}
+	if logs := store.ListRequestLogs(); len(logs) != 0 {
+		t.Fatalf("undispatched recovery created a terminal request audit: %+v", logs)
 	}
 	var payloadLogs int64
-	if err := store.db.Model(&RequestPayloadLog{}).Where("request_id = ?", logs[0].RequestID).Count(&payloadLogs).Error; err != nil || payloadLogs != 0 {
-		t.Fatalf("lost dispatch copied background content into plaintext audit storage: count=%d err=%v", payloadLogs, err)
+	if err := store.db.Model(&RequestPayloadLog{}).Where("request_id = ?", admitted.RequestID).Count(&payloadLogs).Error; err != nil || payloadLogs != 0 {
+		t.Fatalf("undispatched recovery copied background content into plaintext audit storage: count=%d err=%v", payloadLogs, err)
 	}
 	var minuteTokens int64
 	if err := store.db.Model(&QuotaBucket{}).Where("scope = ?", "minute").Select("COALESCE(SUM(total_tokens), 0)").Scan(&minuteTokens).Error; err != nil || minuteTokens != 0 {
-		t.Fatalf("lost dispatch retained or double-reconciled token reservation: tokens=%d err=%v", minuteTokens, err)
+		t.Fatalf("undispatched recovery retained token reservation: tokens=%d err=%v", minuteTokens, err)
+	}
+	var requests int64
+	if err := store.db.Model(&QuotaBucket{}).Select("COALESCE(SUM(requests), 0)").Scan(&requests).Error; err != nil || requests != 0 {
+		t.Fatalf("undispatched recovery retained request quota: requests=%d err=%v", requests, err)
 	}
 }
 
@@ -480,6 +602,7 @@ func TestBackgroundResponsesExpiryScrubsSensitivePayloads(t *testing.T) {
 func TestBackgroundResponsesExposeQueueExecutionAndStatusMetrics(t *testing.T) {
 	config := responseJobTestConfig()
 	config.MetricsEnabled = true
+	config.ResponseResultTTLSeconds = 1
 	server, _, secret := newBackgroundResponseTestServerWithConfig(t, config)
 	id := submitBackgroundResponse(t, server.Handler(), secret, "metrics")
 	waitForResponseJobStatus(t, server.Handler(), secret, id, "completed")
@@ -496,6 +619,15 @@ func TestBackgroundResponsesExposeQueueExecutionAndStatusMetrics(t *testing.T) {
 		if !strings.Contains(metrics.Body, name) {
 			t.Fatalf("response job metric %s missing from exposition", name)
 		}
+	}
+	expiredSeries := `tokenhub_gateway_response_jobs_total{error_code="response_expired",status="expired"} 1`
+	deadline := time.Now().Add(3 * time.Second)
+	for !strings.Contains(metrics.Body, expiredSeries) && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+		metrics = doJSON(t, server.Handler(), http.MethodGet, "/metrics", nil, "dev_admin_token")
+	}
+	if !strings.Contains(metrics.Body, expiredSeries) {
+		t.Fatalf("expired response transition was not counted: %s", metrics.Body)
 	}
 }
 
@@ -643,7 +775,7 @@ func TestResponseJobCancellationBeforeDispatchPreventsUpstreamTransition(t *test
 	if err != nil || !retained {
 		t.Fatalf("admit cancellation job: retained=%v err=%v", retained, err)
 	}
-	defer store.stopInFlightLeaseHeartbeat(call.RequestID)
+	defer func() { _ = store.stopInFlightLeaseHeartbeat(call.RequestID) }()
 	if _, ok, err := store.CancelResponseJob(job.ID, "test", time.Minute); err != nil || !ok {
 		t.Fatalf("request cancellation: ok=%v err=%v", ok, err)
 	}
@@ -735,9 +867,9 @@ func TestResponseJobAdmissionPersistsAtomicallyAndRecoversWithoutDoubleCharging(
 	if err := store.db.Model(&ResponseJob{}).Where("id = ?", created.ID).Update("lease_expires_at", past).Error; err != nil {
 		t.Fatal(err)
 	}
-	_, failed, _, err := store.RecoverResponseJobs(time.Minute)
-	if err != nil || failed != 1 {
-		t.Fatalf("recover admitted job: failed=%d err=%v", failed, err)
+	requeued, failed, _, err := store.RecoverResponseJobs(time.Minute)
+	if err != nil || requeued != 1 || failed != 0 {
+		t.Fatalf("recover admitted job: requeued=%d failed=%d err=%v", requeued, failed, err)
 	}
 	if err := store.db.Model(&InFlightLease{}).Count(&leases).Error; err != nil || leases != 0 {
 		t.Fatalf("recovery leaked concurrency: count=%d err=%v", leases, err)
@@ -745,9 +877,29 @@ func TestResponseJobAdmissionPersistsAtomicallyAndRecoversWithoutDoubleCharging(
 	if err := store.db.Model(&QuotaBucket{}).Where("key_id = ? AND scope = ?", key.ID, "minute").Select("COALESCE(SUM(total_tokens), 0)").Scan(&minuteTokens).Error; err != nil || minuteTokens != 0 {
 		t.Fatalf("undispatched recovery retained token reservation: tokens=%d err=%v", minuteTokens, err)
 	}
-	var dayRequests int64
-	if err := store.db.Model(&QuotaBucket{}).Where("key_id = ? AND scope = ?", key.ID, "day").Select("COALESCE(SUM(requests), 0)").Scan(&dayRequests).Error; err != nil || dayRequests != 1 {
-		t.Fatalf("atomic admission request count was lost or duplicated: requests=%d err=%v", dayRequests, err)
+	var heldRequests int64
+	if err := store.db.Model(&QuotaBucket{}).Where("key_id = ?", key.ID).Select("COALESCE(SUM(requests), 0)").Scan(&heldRequests).Error; err != nil || heldRequests != 0 {
+		t.Fatalf("undispatched recovery retained request quota: requests=%d err=%v", heldRequests, err)
+	}
+	recovered, ok, err := store.GetResponseJob(created.ID)
+	if err != nil || !ok || recovered.Status != responseJobStatusQueued || recovered.Phase != responseJobPhaseQueued || recovered.RequestID != "" {
+		t.Fatalf("admitted job was not returned to the queue: %+v ok=%v err=%v", recovered, ok, err)
+	}
+	claimedAgain, ok, err := store.ClaimResponseJob("worker-retry", time.Second, time.Minute)
+	if err != nil || !ok || claimedAgain.ID != created.ID {
+		t.Fatalf("claim recovered job: job=%+v ok=%v err=%v", claimedAgain, ok, err)
+	}
+	retryCall, retained, err := store.AdmitResponseJob(context.Background(), claimedAgain.ID, "worker-retry", claimedAgain.LeaseEpoch, key, "gpt-atomic", 5)
+	if err != nil || !retained {
+		t.Fatalf("readmit recovered job: retained=%v err=%v", retained, err)
+	}
+	_ = store.stopInFlightLeaseHeartbeat(retryCall.RequestID)
+	retained, err = store.MarkResponseJobPhase(claimedAgain.ID, "worker-retry", claimedAgain.LeaseEpoch, responseJobPhaseDispatched, retryCall.RequestID)
+	if err != nil || !retained {
+		t.Fatalf("dispatch recovered job: retained=%v err=%v", retained, err)
+	}
+	if _, settled, err := store.FinalizeResponseJob(retryCall, created.ID, "worker-retry", claimedAgain.LeaseEpoch, responseJobStatusSucceeded, []byte(`{"id":"response-retry"}`), RouteSelection{}, Usage{}, http.StatusOK, "", "", "", "", time.Minute); err != nil || !settled {
+		t.Fatalf("settle recovered job: settled=%v err=%v", settled, err)
 	}
 	if err := store.db.Model(&QuotaBucket{}).Where("key_id = ? AND scope = ?", key.ID, "minute").Update("total_tokens", 7).Error; err != nil {
 		t.Fatal(err)
@@ -758,7 +910,7 @@ func TestResponseJobAdmissionPersistsAtomicallyAndRecoversWithoutDoubleCharging(
 	if err := store.db.Model(&QuotaBucket{}).Where("key_id = ? AND scope = ?", key.ID, "minute").Select("COALESCE(SUM(total_tokens), 0)").Scan(&minuteTokens).Error; err != nil || minuteTokens != 7 {
 		t.Fatalf("stale settlement refunded another request's tokens: tokens=%d err=%v", minuteTokens, err)
 	}
-	if logs := store.ListRequestLogs(); len(logs) != 1 || logs[0].ErrorCode != "response_execution_lost" {
+	if logs := store.ListRequestLogs(); len(logs) != 1 || logs[0].RequestID != retryCall.RequestID || logs[0].ErrorCode != "" {
 		t.Fatalf("stale settlement duplicated the request audit: %+v", logs)
 	}
 }

@@ -93,6 +93,18 @@ func (a *multiInstanceResponseAdapter) Responses(ctx context.Context, provider P
 	return a.MockAdapter.Responses(ctx, provider, providerModel, request)
 }
 
+type multiInstanceBlockingResponseAdapter struct {
+	MockAdapter
+	started chan struct{}
+	once    sync.Once
+}
+
+func (a *multiInstanceBlockingResponseAdapter) Responses(ctx context.Context, provider Provider, providerModel string, request ResponsesRequest) (any, Usage, error) {
+	a.once.Do(func() { close(a.started) })
+	<-ctx.Done()
+	return nil, Usage{}, ctx.Err()
+}
+
 func testSharedResponseJobExecution(t *testing.T, storeA *GormStore, storeB *GormStore, config Config) {
 	t.Helper()
 	config.ResponseWorkerConcurrency = 1
@@ -145,33 +157,100 @@ func testSharedResponseJobExecution(t *testing.T, storeA *GormStore, storeB *Gor
 	}
 	shutdownCancel()
 
-	requestJSON, _ := json.Marshal(ResponsesRequest{Model: modelName, Input: "once", Background: true})
-	envelopeJSON, _ := json.Marshal(responseJobEnvelope{Request: requestJSON})
-	job, err := storeA.CreateResponseJob(ResponseJob{
-		ID: NewID("resp") + "_" + suffix, ProjectID: project.ID, APIKeyID: key.ID,
-		AttributedUserID: usageAttributionUserID(key, project), Model: modelName,
-	}, envelopeJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		current, ok, err := storeA.GetResponseJob(job.ID)
+	createJob := func(input string) ResponseJob {
+		t.Helper()
+		requestJSON, _ := json.Marshal(ResponsesRequest{Model: modelName, Input: input, Background: true})
+		envelopeJSON, _ := json.Marshal(responseJobEnvelope{Request: requestJSON})
+		job, err := storeA.CreateResponseJob(ResponseJob{
+			ID: NewID("resp") + "_" + suffix, ProjectID: project.ID, APIKeyID: key.ID,
+			AttributedUserID: usageAttributionUserID(key, project), Model: modelName,
+		}, envelopeJSON)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if ok && responseJobTerminal(current.Status) {
-			if current.Status != responseJobStatusSucceeded {
-				t.Fatalf("shared job failed: %+v", current)
-			}
-			if calls := adapter.calls.Load(); calls != 1 {
-				t.Fatalf("shared job reached upstream %d times", calls)
-			}
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
+		return job
 	}
-	t.Fatal("shared response job did not complete")
+	waitTerminal := func(id string) ResponseJob {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			current, ok, err := storeA.GetResponseJob(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ok && responseJobTerminal(current.Status) {
+				return current
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Fatalf("shared response job %s did not complete", id)
+		return ResponseJob{}
+	}
+
+	secretInput := "postgres ciphertext secret " + suffix
+	job := createJob(secretInput)
+	current := waitTerminal(job.ID)
+	if current.Status != responseJobStatusSucceeded {
+		t.Fatalf("shared job failed: %+v", current)
+	}
+	if calls := adapter.calls.Load(); calls != 1 {
+		t.Fatalf("shared job reached upstream %d times", calls)
+	}
+	var persisted ResponseJob
+	if err := storeA.db.First(&persisted, "id = ?", job.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(persisted.RequestCiphertext, "enc:v1:") || strings.Contains(persisted.RequestCiphertext, secretInput) ||
+		!strings.HasPrefix(persisted.ResultCiphertext, "enc:v1:") || strings.Contains(persisted.ResultCiphertext, secretInput) {
+		t.Fatalf("PostgreSQL did not retain encrypted response payloads: %+v", persisted)
+	}
+	var requestLogs int64
+	if err := storeA.db.Model(&RequestLog{}).Where("request_id = ?", current.RequestID).Count(&requestLogs).Error; err != nil || requestLogs != 1 {
+		t.Fatalf("shared response request accounting: logs=%d err=%v", requestLogs, err)
+	}
+	var usageRecords int64
+	if err := storeA.db.Model(&UsageRecord{}).Where("request_id = ?", current.RequestID).Count(&usageRecords).Error; err != nil || usageRecords != 1 {
+		t.Fatalf("shared response usage accounting: records=%d err=%v", usageRecords, err)
+	}
+	var payloadLogs int64
+	if err := storeA.db.Model(&RequestPayloadLog{}).Where("request_id = ?", current.RequestID).Count(&payloadLogs).Error; err != nil || payloadLogs != 0 {
+		t.Fatalf("background payload escaped encrypted retention: logs=%d err=%v", payloadLogs, err)
+	}
+	past := time.Now().UTC().Add(-time.Second)
+	if err := storeA.db.Model(&ResponseJob{}).Where("id = ?", job.ID).Update("expires_at", past).Error; err != nil {
+		t.Fatal(err)
+	}
+	if expired, err := storeB.ExpireResponseJobs(); err != nil || expired > 1 {
+		t.Fatalf("expire shared response job: expired=%d err=%v", expired, err)
+	}
+	if err := storeA.db.First(&persisted, "id = ?", job.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Status != responseJobStatusExpired || persisted.RequestCiphertext != "" || persisted.ResultCiphertext != "" {
+		t.Fatalf("PostgreSQL retention did not scrub response ciphertext: %+v", persisted)
+	}
+
+	blocking := &multiInstanceBlockingResponseAdapter{started: make(chan struct{})}
+	serverB.adapterRegistry.Register(ProviderMock, blocking, AdapterCapabilityResponses)
+	cancelJob := createJob("cancel on peer " + suffix)
+	select {
+	case <-blocking.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shared cancellation job did not reach the provider")
+	}
+	if _, retained, err := storeA.CancelResponseJob(cancelJob.ID, "postgres-e2e", time.Minute); err != nil || !retained {
+		t.Fatalf("cancel shared response job: retained=%v err=%v", retained, err)
+	}
+	cancelled := waitTerminal(cancelJob.ID)
+	if cancelled.Status != responseJobStatusCancelled || cancelled.ErrorCode != "response_cancelled" {
+		t.Fatalf("shared cancellation did not win: %+v", cancelled)
+	}
+	if err := storeA.db.Model(&RequestLog{}).Where("request_id = ?", cancelled.RequestID).Count(&requestLogs).Error; err != nil || requestLogs != 1 {
+		t.Fatalf("cancelled response request accounting: logs=%d err=%v", requestLogs, err)
+	}
+	if err := storeA.db.Model(&UsageRecord{}).Where("request_id = ?", cancelled.RequestID).Count(&usageRecords).Error; err != nil || usageRecords != 0 {
+		t.Fatalf("cancelled response created usage: records=%d err=%v", usageRecords, err)
+	}
 }
 
 func testResponseRecoveryRenewalRace(t *testing.T, storeA *GormStore, storeB *GormStore) {

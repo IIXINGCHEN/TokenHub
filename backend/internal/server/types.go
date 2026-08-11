@@ -554,7 +554,9 @@ type ResponseJob struct {
 	AttributedUserID   string     `json:"attributed_user_id,omitempty" gorm:"index"`
 	RequestID          string     `json:"request_id,omitempty" gorm:"index"`
 	TokenLimitBucket   string     `json:"-"`
+	MinuteRequestHeld  bool       `json:"-"`
 	ReservedTokens     int64      `json:"-"`
+	AdmittedAt         *time.Time `json:"-"`
 	Status             string     `json:"status" gorm:"index:idx_response_job_claim,priority:1;index:idx_response_job_lease,priority:1"`
 	Phase              string     `json:"phase" gorm:"index"`
 	Model              string     `json:"model" gorm:"index"`
@@ -1212,9 +1214,10 @@ type CallContext struct {
 	measuredAt time.Time
 	// RateLimitHeaders is calculated atomically with minute-bucket admission so
 	// every compatible HTTP surface reports the same effective limits.
-	RateLimitHeaders map[string]string
-	TokenLimitBucket string
-	ReservedTokens   int64
+	RateLimitHeaders  map[string]string
+	TokenLimitBucket  string
+	MinuteRequestHeld bool
+	ReservedTokens    int64
 	// StreamOutputCommitted keeps the reservation when a stream delivered data but
 	// ended before an authoritative usage event was received.
 	StreamOutputCommitted bool

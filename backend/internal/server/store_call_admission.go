@@ -121,6 +121,9 @@ func (s *GormStore) admitCallTransaction(ctx context.Context, tx *gorm.DB, key A
 		RateLimitHeaders: apiKeyRateLimitHeaders(effectiveLimits, minuteCounter, now, false),
 		requestContext:   ctx,
 	}
+	if effectiveLimits.RateLimitRPM > 0 {
+		admission.call.MinuteRequestHeld = true
+	}
 	if effectiveLimits.TokenLimitTPM > 0 {
 		admission.call.TokenLimitBucket = minuteBucket(now)
 		admission.call.ReservedTokens = maxInt64(tokenReservation, 0)

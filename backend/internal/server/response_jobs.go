@@ -40,7 +40,8 @@ func (s *Server) handleResponseJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	_, _ = s.store.ExpireResponseJobs()
+	expired, _ := s.store.ExpireResponseJobs()
+	s.metrics.ObserveResponseJobTerminalCount(responseJobStatusExpired, "response_expired", expired)
 	job, ok := s.authorizedResponseJob(project, key, parts[0])
 	if !ok || job.Status == responseJobStatusExpired {
 		writeError(w, r, NewHTTPError(http.StatusNotFound, "response_not_found", "Response job not found"))
@@ -249,8 +250,15 @@ func (s *Server) responseWorker(index int) {
 		s.metrics.ObserveResponseJobRecovery("cancelled_unsafe", cancelled)
 		s.metrics.ObserveResponseJobTerminalCount(responseJobStatusFailed, "response_execution_lost", failed)
 		s.metrics.ObserveResponseJobTerminalCount(responseJobStatusCancelled, "response_cancelled_worker_lost", cancelled)
-		if _, err := s.store.ExpireResponseJobs(); err != nil {
+		expired, err := s.store.ExpireResponseJobs()
+		if err != nil {
 			log.Printf("[tokenhub] response job expiry failed worker=%d: %v", index, err)
+		}
+		s.metrics.ObserveResponseJobTerminalCount(responseJobStatusExpired, "response_expired", expired)
+		select {
+		case <-s.responseContext.Done():
+			return
+		default:
 		}
 		job, claimed, err := s.store.ClaimResponseJob(owner, leaseTTL, resultTTL)
 		if err != nil {
@@ -267,12 +275,18 @@ func (s *Server) responseWorker(index int) {
 			s.metrics.ObserveResponseJobClaim(job.CreatedAt, *job.StartedAt)
 		}
 		s.observeResponseQueueDepth()
+		if s.stopResponseJobForShutdown(job, owner, resultTTL) {
+			return
+		}
 		s.processResponseJob(job, owner, leaseTTL, resultTTL)
 		timer.Reset(0)
 	}
 }
 
 func (s *Server) processResponseJob(job ResponseJob, owner string, leaseTTL time.Duration, resultTTL time.Duration) {
+	if s.stopResponseJobForShutdown(job, owner, resultTTL) {
+		return
+	}
 	var envelope responseJobEnvelope
 	if err := json.Unmarshal(job.RequestJSON, &envelope); err != nil {
 		s.finalizeResponseJob(job, owner, CallContext{}, RouteSelection{}, Usage{}, nil, http.StatusInternalServerError, "response_payload_invalid", "Persisted response request is invalid", nil, resultTTL)
@@ -300,22 +314,37 @@ func (s *Server) processResponseJob(job ResponseJob, owner string, leaseTTL time
 	}()
 	ctx, cancel := context.WithTimeout(watchContext, time.Duration(s.config.ResponseJobTimeoutSeconds)*time.Second)
 	defer cancel()
+	if s.stopResponseJobForShutdown(job, owner, resultTTL) {
+		return
+	}
 
 	project, projectOK := s.store.GetProject(job.ProjectID)
 	key, keyOK := responseJobAPIKey(s.store, job.ProjectID, job.APIKeyID)
 	if !projectOK || !keyOK || usageAttributionUserID(key, project) != job.AttributedUserID {
+		if s.stopResponseJobForShutdown(job, owner, resultTTL) {
+			return
+		}
 		s.finalizeResponseJob(job, owner, CallContext{}, RouteSelection{}, Usage{}, nil, http.StatusUnauthorized, "response_authorization_lost", "Response job authorization is no longer valid", request, resultTTL)
 		return
 	}
 	if !responseJobAuthorizationValid(project, key, envelope.ClientIP) {
+		if s.stopResponseJobForShutdown(job, owner, resultTTL) {
+			return
+		}
 		rejectedAt := time.Now()
 		requestID := s.store.RecordRejectedRequest(project, key, request.Model, false, http.StatusUnauthorized, "response_authorization_lost", envelope.ClientIP, envelope.UserAgent)
 		rejectedCall := CallContext{RequestID: requestID, Project: project, Key: key, Model: Model{Name: request.Model}, StartedAt: rejectedAt, measuredAt: rejectedAt}
 		s.finalizeResponseJob(job, owner, rejectedCall, RouteSelection{}, Usage{}, nil, http.StatusUnauthorized, "response_authorization_lost", "Response job authorization is no longer valid", request, resultTTL)
 		return
 	}
+	if s.stopResponseJobForShutdown(job, owner, resultTTL) {
+		return
+	}
 	call, retained, err := s.store.AdmitResponseJob(ctx, job.ID, owner, job.LeaseEpoch, key, request.Model, requestTokenReservation(request))
 	if err != nil {
+		if s.stopResponseJobForShutdown(job, owner, resultTTL) {
+			return
+		}
 		httpErr := AsHTTPError(err)
 		rejectedAt := time.Now()
 		requestID := s.store.RecordRejectedRequest(project, key, request.Model, false, httpErr.Status, httpErr.Code, envelope.ClientIP, envelope.UserAgent)
@@ -337,28 +366,46 @@ func (s *Server) processResponseJob(job ResponseJob, owner string, leaseTTL time
 	if call.requestContext != nil {
 		ctx = call.requestContext
 	}
+	if s.stopResponseJobForShutdown(job, owner, resultTTL) {
+		return
+	}
 
 	decision, err := s.evaluateOutboundGuardrails(ctx, call.Project.ID, responsesGuardrailTargets(&request))
 	auditPayload := guardrailRequestAuditPayload(request.Model, decision, request)
 	if err != nil {
+		if s.stopResponseJobForShutdown(job, owner, resultTTL) {
+			return
+		}
 		httpErr := AsHTTPError(err)
 		s.finalizeResponseJob(job, owner, call, RouteSelection{}, Usage{}, nil, httpErr.Status, httpErr.Code, httpErr.Message, auditPayload, resultTTL)
 		return
 	}
 	routed, err := s.prepareAdmittedRoutedCall(ctx, call, request.Model)
 	if err != nil {
+		if s.stopResponseJobForShutdown(job, owner, resultTTL) {
+			return
+		}
 		httpErr := AsHTTPError(err)
 		s.finalizeResponseJob(job, owner, routed.Call, RouteSelection{}, Usage{}, nil, httpErr.Status, httpErr.Code, httpErr.Message, auditPayload, resultTTL)
 		return
 	}
 	routed.Routes = s.routesWithAdapterCapability(routed.Routes, AdapterCapabilityResponses)
 	if len(routed.Routes) == 0 {
+		if s.stopResponseJobForShutdown(job, owner, resultTTL) {
+			return
+		}
 		s.finalizeResponseJob(job, owner, routed.Call, RouteSelection{}, Usage{}, nil, http.StatusNotImplemented, "provider_capability_not_supported", "Responses are not supported", auditPayload, resultTTL)
 		return
 	}
 	if err := s.applyResponseJobAffinity(&routed, key, envelope.Headers, request); err != nil {
+		if s.stopResponseJobForShutdown(job, owner, resultTTL) {
+			return
+		}
 		httpErr := AsHTTPError(err)
 		s.finalizeResponseJob(job, owner, routed.Call, RouteSelection{}, Usage{}, nil, httpErr.Status, httpErr.Code, httpErr.Message, auditPayload, resultTTL)
+		return
+	}
+	if s.stopResponseJobForShutdown(job, owner, resultTTL) {
 		return
 	}
 	retained, err = s.store.MarkResponseJobPhase(job.ID, owner, job.LeaseEpoch, responseJobPhaseDispatched, call.RequestID)
@@ -385,6 +432,9 @@ func (s *Server) processResponseJob(job ResponseJob, owner string, leaseTTL time
 	}
 
 	current, _, _ := s.store.GetResponseJob(job.ID)
+	if s.stopResponseJobForShutdown(job, owner, resultTTL) {
+		return
+	}
 	if current.Status == responseJobStatusCancelled || errors.Is(context.Cause(watchContext), errResponseJobCancelled) {
 		s.finalizeResponseJob(job, owner, routed.Call, lastAttemptRoute(attempts), usage, attempts, 499, "response_cancelled", "Response job was cancelled", auditPayload, resultTTL)
 		return
@@ -399,6 +449,30 @@ func (s *Server) processResponseJob(job ResponseJob, owner string, leaseTTL time
 	}
 	httpErr := AsHTTPError(invokeErr)
 	s.finalizeResponseJob(job, owner, routed.Call, lastAttemptRoute(attempts), usage, attempts, httpErr.Status, httpErr.Code, httpErr.Message, auditPayload, resultTTL)
+}
+
+func (s *Server) stopResponseJobForShutdown(job ResponseJob, owner string, resultTTL time.Duration) bool {
+	if s.responseContext.Err() == nil {
+		return false
+	}
+	status, retained, err := s.store.ShutdownResponseJob(job.ID, owner, job.LeaseEpoch, resultTTL)
+	if err != nil {
+		log.Printf("[tokenhub] failed to settle response job during shutdown id=%s: %v", job.ID, err)
+		return true
+	}
+	if !retained {
+		return true
+	}
+	switch status {
+	case responseJobStatusQueued:
+		s.metrics.ObserveResponseJobRecovery("shutdown_requeued", 1)
+	case responseJobStatusFailed:
+		s.metrics.ObserveResponseJobTerminalCount(responseJobStatusFailed, "response_execution_lost", 1)
+	case responseJobStatusCancelled:
+		s.metrics.ObserveResponseJobTerminalCount(responseJobStatusCancelled, "response_cancelled_worker_lost", 1)
+	}
+	s.observeResponseQueueDepth()
+	return true
 }
 
 func responseJobAPIKey(store Store, projectID string, keyID string) (APIKey, bool) {
@@ -497,7 +571,6 @@ func (s *Server) finalizeResponseJob(job ResponseJob, owner string, call CallCon
 		statusCode = 499
 		errorCode = "response_cancelled"
 		errorMessage = "Response job was cancelled"
-		payload = nil
 	}
 	s.metrics.ObserveResponseJobTerminal(finishedJob.Status, finishedJob.ErrorCode, finishedJob.StartedAt, finishedJob.CompletedAt)
 	s.observeResponseQueueDepth()
