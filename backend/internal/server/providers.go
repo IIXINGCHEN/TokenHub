@@ -962,7 +962,7 @@ func copyOpenAIStreamAndUsageForProvider(w io.Writer, body io.Reader, provider P
 		}
 		output := event.Raw
 		if providerStreamEventIsError(event) {
-			output = redactProviderErrorSecrets(output, provider)
+			output = redactProviderStreamEventSecrets(event, provider)
 		}
 		if _, err := w.Write(output); err != nil {
 			return usage, err

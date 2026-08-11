@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -129,7 +130,6 @@ func checkProviderResponseForProvider(resp *http.Response, provider Provider) er
 }
 
 func redactProviderErrorSecrets(data []byte, provider Provider) []byte {
-	message := string(data)
 	values := make([]string, 0, len(provider.SensitiveHeaders)+1)
 	if value := strings.TrimSpace(provider.APIKey); value != "" {
 		values = append(values, value)
@@ -139,6 +139,14 @@ func redactProviderErrorSecrets(data []byte, provider Provider) []byte {
 			values = append(values, value)
 		}
 	}
+	if len(values) == 0 {
+		return data
+	}
+	sort.Slice(values, func(i, j int) bool { return len(values[i]) > len(values[j]) })
+	if redacted, changed := redactProviderJSONSecrets(data, values); changed {
+		return redacted
+	}
+	message := string(data)
 	representations := make(map[string]bool, len(values)*3)
 	for _, value := range values {
 		for _, representation := range providerSecretRepresentations(value) {
@@ -154,6 +162,69 @@ func redactProviderErrorSecrets(data []byte, provider Provider) []byte {
 		message = strings.ReplaceAll(message, pattern, providerHeaderMask)
 	}
 	return []byte(message)
+}
+
+func redactProviderJSONSecrets(data []byte, secrets []string) ([]byte, bool) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var payload any
+	if err := decoder.Decode(&payload); err != nil {
+		return nil, false
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, false
+	}
+	redacted, changed := redactProviderJSONValue(payload, secrets)
+	if !changed {
+		return nil, false
+	}
+	encoded, err := json.Marshal(redacted)
+	if err != nil {
+		return nil, false
+	}
+	return encoded, true
+}
+
+func redactProviderJSONValue(value any, secrets []string) (any, bool) {
+	switch typed := value.(type) {
+	case string:
+		redacted := typed
+		for _, secret := range secrets {
+			redacted = strings.ReplaceAll(redacted, secret, providerHeaderMask)
+		}
+		return redacted, redacted != typed
+	case []any:
+		changed := false
+		for index, item := range typed {
+			redacted, itemChanged := redactProviderJSONValue(item, secrets)
+			if itemChanged {
+				typed[index] = redacted
+				changed = true
+			}
+		}
+		return typed, changed
+	case map[string]any:
+		changed := false
+		redactedMap := make(map[string]any, len(typed))
+		for key, item := range typed {
+			redactedKey, keyChanged := redactProviderJSONValue(key, secrets)
+			redactedItem, itemChanged := redactProviderJSONValue(item, secrets)
+			redactedMap[redactedKey.(string)] = redactedItem
+			changed = changed || keyChanged || itemChanged
+		}
+		return redactedMap, changed
+	default:
+		return value, false
+	}
+}
+
+func redactProviderStreamEventSecrets(event serverSentEvent, provider Provider) []byte {
+	redacted := redactProviderErrorSecrets([]byte(event.Data), provider)
+	if bytes.Equal(redacted, []byte(event.Data)) {
+		return event.Raw
+	}
+	return rewriteSSEEventData(event.Raw, string(redacted))
 }
 
 func providerSecretRepresentations(value string) []string {

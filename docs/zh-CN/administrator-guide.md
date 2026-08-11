@@ -102,7 +102,7 @@ Provider 模型价格代表真实上游成本，用于内部审计；模型目�
 
 凭据或租户 Token 应标记为敏感值。TokenHub 会加密保存敏感值，在管理响应和预览中遮盖，并从审计快照中排除所有请求头值。编辑已保存的敏感行时，保持遮盖值不变或留空即可保留原密钥；删除整行才会清除。非敏感值仍对管理员可见。
 
-TokenHub 禁止鉴权头、API Key 与 Cookie 凭据头、转发身份头、`Content-Type`、`Content-Length`、`Host`、`Anthropic-Version`、`Anthropic-Beta`、`OpenAI-Organization`、`OpenAI-Project` 等协议专用头，以及逐跳和传输头。请求头名称必须合法且不区分大小写唯一；值不能为空，也不能包含 CR/LF。最终合并配置最多 32 个请求头，名称最长 128 字节，单值最长 4 KiB，总大小不超过 16 KiB。违反规则的旧数据会通过 `header_validation_errors` 提示，修正前不会应用到上游请求。
+TokenHub 禁止鉴权头、API Key 与 Cookie 凭据头、转发身份头、`Content-Type`、`Content-Length`、`Host`、`Anthropic-Version`、`Anthropic-Beta`、`OpenAI-Organization`、`OpenAI-Project` 等协议专用头，以及逐跳和传输头。请求头名称必须合法且不区分大小写唯一；值不能为空，也不能包含 HTTP transport 拒绝的控制字符。最终合并配置最多 32 个请求头，名称最长 128 字节，单值最长 4 KiB，总大小不超过 16 KiB。违反规则的旧数据会通过 `header_validation_errors` 提示，修正前不会应用到上游请求。
 
 ## 模型路由策略
 

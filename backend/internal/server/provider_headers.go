@@ -76,8 +76,8 @@ func normalizeProviderHeaders(headers map[string]string) (map[string]string, err
 		if value == "" {
 			return nil, NewHTTPError(http.StatusBadRequest, "provider_header_value_required", "Custom request header value cannot be empty")
 		}
-		if strings.ContainsAny(value, "\r\n") {
-			return nil, NewHTTPError(http.StatusBadRequest, "provider_header_value_invalid", "Custom request header value cannot contain line breaks")
+		if !validHTTPHeaderValue(value) {
+			return nil, NewHTTPError(http.StatusBadRequest, "provider_header_value_invalid", "Custom request header value contains invalid control characters")
 		}
 		if len(value) > providerHeaderValueMaxBytes {
 			return nil, NewHTTPError(http.StatusBadRequest, "provider_header_value_too_long", "Custom request header value is too long")
@@ -96,6 +96,17 @@ func validHTTPHeaderName(name string) bool {
 		character := name[index]
 		if ('a' <= character && character <= 'z') || ('A' <= character && character <= 'Z') ||
 			('0' <= character && character <= '9') || strings.ContainsRune("!#$%&'*+-.^_`|~", rune(character)) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validHTTPHeaderValue(value string) bool {
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if character == '\t' || character >= 0x20 && character != 0x7f {
 			continue
 		}
 		return false

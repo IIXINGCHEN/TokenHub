@@ -646,7 +646,7 @@ func (s *HTTPSink) applyProviderHTTP(ctx context.Context, existing []server.Prov
 		if action == ActionSkip {
 			return Change{Resource: "provider", ID: current.ID, Action: ActionSkip}, server.Provider{}, nil
 		}
-		updated, err := s.client.UpdateProvider(ctx, current.ID, spec)
+		updated, err := s.client.UpdateProvider(ctx, current.ID, providerUpdateSpec(current, spec))
 		return Change{Resource: "provider", ID: current.ID, Action: ActionUpdate}, updated, err
 	}
 	created, err := s.client.CreateProvider(ctx, spec)
@@ -682,7 +682,7 @@ func (s *HTTPSink) applyProviderResourceHTTP(ctx context.Context, existing []ser
 		if action == ActionSkip {
 			return Change{Resource: "provider_resource", ID: current.ID, Action: ActionSkip}, server.ProviderResource{}, nil
 		}
-		updated, err := s.client.UpdateProviderResource(ctx, current.ID, spec)
+		updated, err := s.client.UpdateProviderResource(ctx, current.ID, providerResourceUpdateSpec(current, spec))
 		return Change{Resource: "provider_resource", ID: current.ID, Action: ActionUpdate}, updated, err
 	}
 	created, err := s.client.CreateProviderResource(ctx, spec)

@@ -538,7 +538,7 @@ func (s *StoreSink) applyProvider(item bundle.ProviderRef) (Change, error) {
 				s.refIndex.providers[item.ExternalRef.ID] = existing.ID
 				return Change{Resource: "provider", ID: existing.ID, Action: ActionSkip}, nil
 			}
-			updated, err := s.store.UpdateProvider(existing.ID, spec)
+			updated, err := s.store.UpdateProvider(existing.ID, providerUpdateSpec(existing, spec))
 			if err != nil {
 				return Change{}, err
 			}
@@ -585,7 +585,7 @@ func (s *StoreSink) applyProviderResource(item bundle.ProviderResourceRef) (Chan
 				s.refIndex.resources[item.ExternalRef.ID] = existing.ID
 				return Change{Resource: "provider_resource", ID: existing.ID, Action: ActionSkip}, nil
 			}
-			updated, err := s.store.UpdateProviderResource(existing.ID, spec)
+			updated, err := s.store.UpdateProviderResource(existing.ID, providerResourceUpdateSpec(existing, spec))
 			if err != nil {
 				return Change{}, err
 			}
@@ -860,6 +860,15 @@ func sameProvider(existing server.Provider, desired server.Provider) bool {
 		reflect.DeepEqual(normalizeStringMap(existing.Options), normalizeStringMap(desired.Options))
 }
 
+func providerUpdateSpec(existing server.Provider, desired server.Provider) server.Provider {
+	merged := desired
+	merged.Healthy = existing.Healthy
+	if desired.BaseURL == "" {
+		merged.BaseURL = existing.BaseURL
+	}
+	return merged
+}
+
 // sameProviderResource follows sameProvider: only the fields the bundle owns
 // take part. The target defaults Healthy to true and Weight to 100 on create,
 // and credential material, timestamps and observation state are either
@@ -907,6 +916,30 @@ func sameProviderResource(existing server.ProviderResource, desired server.Provi
 	return reflect.DeepEqual(normalizeHeaderMap(existing.Headers, existing.SensitiveHeaders), normalizeHeaderMap(desired.Headers, desired.SensitiveHeaders)) &&
 		reflect.DeepEqual(normalizeHeaderNames(existing.SensitiveHeaders), normalizeHeaderNames(desired.SensitiveHeaders)) &&
 		reflect.DeepEqual(normalizeStringMap(existing.Options), normalizeStringMap(desired.Options))
+}
+
+func providerResourceUpdateSpec(existing server.ProviderResource, desired server.ProviderResource) server.ProviderResource {
+	merged := desired
+	merged.Healthy = existing.Healthy
+	if desired.BaseURL == "" {
+		merged.BaseURL = existing.BaseURL
+	}
+	if desired.Region == "" {
+		merged.Region = existing.Region
+	}
+	if desired.Environment == "" {
+		merged.Environment = existing.Environment
+	}
+	if desired.RateLimitRPM == 0 {
+		merged.RateLimitRPM = existing.RateLimitRPM
+	}
+	if desired.TokenLimitTPM == 0 {
+		merged.TokenLimitTPM = existing.TokenLimitTPM
+	}
+	if desired.MaxConcurrency == 0 {
+		merged.MaxConcurrency = existing.MaxConcurrency
+	}
+	return merged
 }
 
 // metadataContains reports whether every key the bundle declares is present on

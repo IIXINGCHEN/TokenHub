@@ -38,6 +38,15 @@ export function serializeProviderHeaderEntries(entries: ProviderHeaderEntry[]) {
   return JSON.stringify(entries);
 }
 
+function validProviderHeaderValue(value: string) {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code === 0x09 || (code >= 0x20 && code !== 0x7f)) continue;
+    return false;
+  }
+  return true;
+}
+
 export function providerHeadersPayload(value?: string) {
   const entries = parseProviderHeaderEntries(value);
   return {
@@ -61,7 +70,7 @@ export function providerHeaderEntryErrors(entries: ProviderHeaderEntry[]) {
     else if (reservedProviderHeaders.has(comparable)) errors.push("该请求头由 TokenHub 管理，不能覆盖。");
     else seen.add(comparable);
     if ((!entry.value || entry.value === providerHeaderMask) && (!entry.sensitive || !entry.retained)) errors.push("请求头值不能为空。");
-    if (/\r|\n/.test(entry.name) || /\r|\n/.test(entry.value)) errors.push("请求头不能包含换行。");
+    if (!validProviderHeaderValue(entry.value)) errors.push("请求头值不能包含非法控制字符。");
     if (encoder.encode(entry.value).length > 4096) errors.push("单个请求头值不能超过 4 KiB。");
     totalBytes += encoder.encode(name).length + encoder.encode(entry.value).length;
   }

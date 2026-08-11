@@ -131,6 +131,17 @@ func TestStoreSinkApplyRefreshesSecretBackedHeadersWithoutDuplicates(t *testing.
 		t.Fatalf("expected second apply to emit no new keys, got %+v", second.NewKeys)
 	}
 
+	if _, err := store.UpdateProvider("prv_litellm_openai", server.Provider{
+		BaseURL: "https://runtime-provider.example/v1", Healthy: false,
+	}); err != nil {
+		t.Fatalf("set Provider runtime fields: %v", err)
+	}
+	if _, err := store.UpdateProviderResource("rsrc_litellm_openai_default", server.ProviderResource{
+		BaseURL: "https://runtime-resource.example/v1", Region: "runtime-region", Environment: "runtime-environment",
+		Healthy: false, RateLimitRPM: 91, TokenLimitTPM: 92, MaxConcurrency: 93,
+	}); err != nil {
+		t.Fatalf("set Resource runtime fields: %v", err)
+	}
 	resolver["PROVIDER_HEADER"] = "rotated-provider-header-secret"
 	resolver["RESOURCE_HEADER"] = "rotated-resource-header-secret"
 	third, err := sink.Apply(migrationBundle)
@@ -144,9 +155,13 @@ func TestStoreSinkApplyRefreshesSecretBackedHeadersWithoutDuplicates(t *testing.
 	}
 	if provider, ok := store.GetProvider("prv_litellm_openai"); !ok || provider.Headers["X-Provider-Secret"] != "rotated-provider-header-secret" {
 		t.Fatalf("provider sensitive header did not rotate: %+v", provider)
+	} else if provider.Healthy || provider.BaseURL != "https://runtime-provider.example/v1" {
+		t.Fatalf("provider header rotation overwrote runtime fields: %+v", provider)
 	}
 	if resource, ok := store.GetProviderResource("rsrc_litellm_openai_default"); !ok || resource.Headers["X-Resource-Secret"] != "rotated-resource-header-secret" {
 		t.Fatalf("resource sensitive header did not rotate: %+v", resource)
+	} else if resource.Healthy || resource.BaseURL != "https://runtime-resource.example/v1" || resource.Region != "runtime-region" || resource.Environment != "runtime-environment" || resource.RateLimitRPM != 91 || resource.TokenLimitTPM != 92 || resource.MaxConcurrency != 93 {
+		t.Fatalf("resource header rotation overwrote runtime fields: %+v", resource)
 	}
 }
 

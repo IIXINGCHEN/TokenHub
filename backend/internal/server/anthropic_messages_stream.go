@@ -87,7 +87,7 @@ func copyNativeAnthropicStreamForProvider(writer io.Writer, body io.Reader, mode
 			}
 		}
 		if isErrorEvent {
-			output = redactProviderErrorSecrets(output, provider)
+			output = redactProviderStreamEventSecrets(event, provider)
 		}
 		if _, err := writer.Write(output); err != nil {
 			return usage, err

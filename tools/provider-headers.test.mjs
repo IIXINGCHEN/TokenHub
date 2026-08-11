@@ -56,5 +56,8 @@ describe("Provider custom request headers", () => {
     assert.equal(providerHeaderFormError(JSON.stringify([{ name: "Authorization", value: "mine", sensitive: true }])), "该请求头由 TokenHub 管理，不能覆盖。");
     assert.equal(providerHeaderFormError(JSON.stringify([{ name: "Bad Header", value: "value", sensitive: false }])), "请求头名称格式不合法。");
     assert.equal(providerHeaderFormError(JSON.stringify([{ name: "X-Large", value: "x".repeat(4097), sensitive: false }])), "单个请求头值不能超过 4 KiB。");
+    assert.equal(providerHeaderFormError(JSON.stringify([{ name: "X-Nul", value: "a\0b", sensitive: false }])), "请求头值不能包含非法控制字符。");
+    assert.equal(providerHeaderFormError(JSON.stringify([{ name: "X-Del", value: "a\x7fb", sensitive: false }])), "请求头值不能包含非法控制字符。");
+    assert.equal(providerHeaderFormError(JSON.stringify([{ name: "X-Tab", value: "a\tb", sensitive: false }])), "");
   });
 });

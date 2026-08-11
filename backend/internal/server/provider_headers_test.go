@@ -384,18 +384,33 @@ func TestProviderErrorsRedactJSONEscapedSensitiveHeaderValues(t *testing.T) {
 	if !strings.Contains(redacted, providerHeaderMask) {
 		t.Fatalf("provider error did not show redaction: %s", redacted)
 	}
+
+	arbitraryEscape := []byte(`{"error":{"message":"\u0073ecret"}}`)
+	arbitraryRedacted := redactProviderErrorSecrets(arbitraryEscape, Provider{
+		Headers: map[string]string{"X-Tenant": "secret"}, SensitiveHeaders: []string{"X-Tenant"},
+	})
+	if strings.Contains(string(arbitraryRedacted), `\u0073ecret`) {
+		t.Fatalf("provider error leaked an arbitrary JSON escape: %s", arbitraryRedacted)
+	}
+	var decoded map[string]map[string]string
+	if err := json.Unmarshal(arbitraryRedacted, &decoded); err != nil {
+		t.Fatalf("redacted provider error is not valid JSON: %v", err)
+	}
+	if message := decoded["error"]["message"]; message != providerHeaderMask {
+		t.Fatalf("decoded provider error message = %q, want mask", message)
+	}
 }
 
 func TestStreamingProviderErrorsRedactEffectiveSensitiveHeaderValues(t *testing.T) {
 	provider := Provider{
 		APIKey: "provider-api-secret", Headers: map[string]string{"X-Tenant": "tenant-secret"}, SensitiveHeaders: []string{"X-Tenant"},
 	}
-	openAIStream := "data: {\"error\":{\"message\":\"tenant-secret provider-api-secret\"}}\n\n"
+	openAIStream := "data: {\"error\":{\"message\":\"\\u0074enant-secret provider-api-secret\"}}\n\n"
 	var openAIOutput bytes.Buffer
 	if _, err := copyOpenAIStreamAndUsageForProvider(&openAIOutput, strings.NewReader(openAIStream), provider); err != nil {
 		t.Fatal(err)
 	}
-	if output := openAIOutput.String(); strings.Contains(output, "tenant-secret") || strings.Contains(output, "provider-api-secret") {
+	if output := openAIOutput.String(); strings.Contains(output, "tenant-secret") || strings.Contains(output, `\u0074enant-secret`) || strings.Contains(output, "provider-api-secret") {
 		t.Fatalf("OpenAI stream leaked a secret: %s", output)
 	}
 	responsesStream := "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"error\":{\"message\":\"tenant-secret\"}}}\n\n"
@@ -884,6 +899,9 @@ func TestNormalizeProviderHeadersRejectsUnsafeConfiguration(t *testing.T) {
 		{name: "reserved forwarding identity", headers: map[string]string{"X-Forwarded-For": "127.0.0.1"}, code: "provider_header_reserved"},
 		{name: "invalid name", headers: map[string]string{"Bad Header": "value"}, code: "provider_header_name_invalid"},
 		{name: "newline", headers: map[string]string{"X-Client": "safe\r\ninjected: true"}, code: "provider_header_value_invalid"},
+		{name: "nul", headers: map[string]string{"X-Client": "safe\x00value"}, code: "provider_header_value_invalid"},
+		{name: "control", headers: map[string]string{"X-Client": "safe\x01value"}, code: "provider_header_value_invalid"},
+		{name: "delete", headers: map[string]string{"X-Client": "safe\x7fvalue"}, code: "provider_header_value_invalid"},
 		{name: "empty", headers: map[string]string{"X-Client": ""}, code: "provider_header_value_required"},
 		{name: "long value", headers: map[string]string{"X-Client": strings.Repeat("x", providerHeaderValueMaxBytes+1)}, code: "provider_header_value_too_long"},
 		{name: "total too large", headers: map[string]string{
@@ -904,5 +922,8 @@ func TestNormalizeProviderHeadersRejectsUnsafeConfiguration(t *testing.T) {
 				t.Fatalf("error code = %q, want %q", got, test.code)
 			}
 		})
+	}
+	if _, err := normalizeProviderHeaders(map[string]string{"X-Client": "tab\tvalue"}); err != nil {
+		t.Fatalf("horizontal tab should be transport-safe: %v", err)
 	}
 }

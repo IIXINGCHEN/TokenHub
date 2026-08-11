@@ -102,7 +102,7 @@ Provider Channels、Model Directory、Routing Policies に設定データがな�
 
 認証情報やテナント Token は機密値として指定してください。TokenHub は機密値を暗号化して保存し、管理レスポンスとプレビューではマスクし、監査スナップショットからすべてのヘッダー値を除外します。保存済みの機密行を編集するときは、マスク値を変更しないか空欄にすると秘密値を保持し、行を削除した場合だけ消去します。非機密値は引き続き管理者に表示されます。
 
-TokenHub は、認証ヘッダー、API Key と Cookie の認証情報ヘッダー、転送元 ID ヘッダー、`Content-Type`、`Content-Length`、`Host`、`Anthropic-Version`、`Anthropic-Beta`、`OpenAI-Organization`、`OpenAI-Project` などプロトコル管理のヘッダー、および hop-by-hop・転送ヘッダーを拒否します。ヘッダー名は有効で、大文字小文字を区別せず一意である必要があります。値は空にできず、CR/LF を含められません。最終的にマージされた設定は最大 32 ヘッダー、名前は 128 バイトまで、値は 1 件 4 KiB まで、合計 16 KiB までです。規則に違反する旧データは `header_validation_errors` で通知され、修正するまで上流リクエストへ適用されません。
+TokenHub は、認証ヘッダー、API Key と Cookie の認証情報ヘッダー、転送元 ID ヘッダー、`Content-Type`、`Content-Length`、`Host`、`Anthropic-Version`、`Anthropic-Beta`、`OpenAI-Organization`、`OpenAI-Project` などプロトコル管理のヘッダー、および hop-by-hop・転送ヘッダーを拒否します。ヘッダー名は有効で、大文字小文字を区別せず一意である必要があります。値は空にできず、HTTP transport が拒否する制御文字を含められません。最終的にマージされた設定は最大 32 ヘッダー、名前は 128 バイトまで、値は 1 件 4 KiB まで、合計 16 KiB までです。規則に違反する旧データは `header_validation_errors` で通知され、修正するまで上流リクエストへ適用されません。
 
 ## モデルルーティングポリシー
 
