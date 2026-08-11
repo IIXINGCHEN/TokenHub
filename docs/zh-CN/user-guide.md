@@ -195,6 +195,27 @@ claude
 
 `ANTHROPIC_AUTH_TOKEN` 通过 `Authorization: Bearer` 发送 TokenHub Key。没有 Authorization Header 时，也可通过 `ANTHROPIC_API_KEY` 使用 `x-api-key`。Token 估算会检查 Key 和模型权限，但不生成计费推理记录。
 
+## 持久化后台 Responses
+
+在 `POST /v1/responses` 中设置 `background: true`，即可持久化 Responses 请求并立即获得由网关生成的稳定 Response ID：
+
+```bash
+curl http://localhost:8080/v1/responses \
+  -H "Authorization: Bearer $TOKENHUB_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-5.4","input":"Summarize the report","background":true}'
+```
+
+通过 `GET /v1/responses/{id}` 查询状态或最终结果，通过 `POST /v1/responses/{id}/cancel` 请求取消。查询与取消必须使用原始任务对应的项目、API Key、归属用户，并且该 Key 当前仍有模型访问权限；任一条件不匹配均返回 `404`。暂不支持可恢复的后台 SSE，因此同时设置 `background: true` 与 `stream: true` 会被拒绝。
+
+对外状态包括 `queued`、`in_progress`、`completed`、`failed` 和 `cancelled`。Worker 会在上游调用前后应用配额、预算、并发限制、路由、Guardrail、缓存亲和、成本核算、请求日志和链路追踪。取消与完成竞态只有一个持久化结果；如果上游已经产生用量，仍会且只会结算一次。
+
+排队中的任务可跨服务重启继续执行。租约在准入前丢失的任务会安全地重新排队；准入后丢失 Worker 的任务不会盲目重放，而是以 `response_execution_lost` 明确失败，因为上游可能已经收到请求。PostgreSQL 多实例通过带隔离代次的租约和行锁协调领取。SQLite 支持重启恢复，但仍限定为单后端部署，不得让多个后端实例共享同一个 SQLite 文件。
+
+请求信封与结果使用 `TOKENHUB_SECRET_KEY` 静态加密；认证 Header 不会落库，只保留有长度限制的协议 Header 白名单。后台请求与响应正文不会复制到明文请求载荷审计记录或链路追踪导出中，路由尝试记录也会移除上游错误文本。加解密失败时流程会关闭并返回错误，不会回退到明文。终态载荷保留 `TOKENHUB_RESPONSE_RESULT_TTL_SECONDS`，到期后会擦除请求与结果密文，后续查询返回 `404`。返回的 ID 是 TokenHub 查询 ID，不会转换为上游 `previous_response_id`。
+
+启用指标后，Prometheus 会提供 `tokenhub_gateway_response_jobs_queued`、`tokenhub_gateway_response_job_queue_wait_seconds`、`tokenhub_gateway_response_job_execution_seconds`、`tokenhub_gateway_response_jobs_total` 和 `tokenhub_gateway_response_job_recoveries_total`。Worker 并发数、轮询间隔、超时、租约、保留时间与队列上限见[部署文档](deployment.md#后端环境变量)。
+
 ## Gemini CLI 使用 Codex 订阅 GPT
 
 Gemini CLI 可以直接连接 TokenHub 的 Gemini 原生 `v1beta` 接口，并使用路由到 OpenAI Codex Subscription 账号的 GPT 模型。将 `GEMINI_API_KEY` 设置为 TokenHub 项目 Key，将 `GOOGLE_GEMINI_BASE_URL` 设置为不含 `/v1beta` 的 TokenHub Host，并选择对应 GPT 模型即可，不需要 CCswitch。隔离启动、项目级配置、支持端点、验证步骤和限制见 [Gemini CLI 通过 TokenHub 使用 Codex 订阅 GPT](gemini-cli-codex-subscription.md)。

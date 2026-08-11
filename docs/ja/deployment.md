@@ -390,6 +390,12 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_IMAGE_QUEUE_CAPACITY` | `64` | キューで待機できる画像ジョブの上限 |
 | `TOKENHUB_IMAGE_JOB_TIMEOUT_SECONDS` | `300` | 単一の画像生成ジョブのタイムアウト。超過すると失敗として扱われます |
 | `TOKENHUB_IMAGE_CAPABILITY_RETRY_SECONDS` | `86400` | 画像生成非対応と記録されたプロバイダーリソースを再検査するまでの待機時間 |
+| `TOKENHUB_RESPONSE_WORKER_CONCURRENCY` | `2` | 永続化されたバックグラウンド Responses ジョブを取得する Worker 数 |
+| `TOKENHUB_RESPONSE_POLL_INTERVAL_MILLIS` | `250` | バックグラウンド Responses ジョブとキャンセル状態を確認するデータベースのポーリング間隔 |
+| `TOKENHUB_RESPONSE_JOB_TIMEOUT_SECONDS` | `300` | 1 件のバックグラウンド Responses ジョブの実行タイムアウト |
+| `TOKENHUB_RESPONSE_LEASE_TTL_SECONDS` | `30` | 複数レプリカ間でバックグラウンド Responses Worker を保護するリース期間 |
+| `TOKENHUB_RESPONSE_RESULT_TTL_SECONDS` | `3600` | 完了後に暗号化されたリクエストと結果 payload を保持する期間 |
+| `TOKENHUB_RESPONSE_MAX_QUEUED_JOBS` | `1000` | 1 つのデプロイが受け付ける待機中および実行中のバックグラウンド Responses ジョブ上限 |
 | `TOKENHUB_API` | 空 | `tokenhub-migrate` CLI が対象とする Admin API の URL。この CLI のみが読み取り、バックエンドサーバーは読み取りません。`--to` で上書きされます |
 
 ## フロントエンド環境変数
