@@ -381,7 +381,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_CACHE_AFFINITY_ENABLED` | `false` | Chat Completions、Anthropic Messages、Responses で同一セッションを同一の上流アカウントに固定し、上流の prompt cache が継続的にヒットするようにします。ルーティング挙動を変えるため既定では無効 |
 | `TOKENHUB_CACHE_AFFINITY_MODELS` | 空 | 段階的ロールアウト用のモデル許可リスト（カンマ区切り）。空の場合は全モデルが対象 |
 | `TOKENHUB_CACHE_AFFINITY_ALLOW_USER_SCOPE` | `false` | Chat/Responses の `user` と Anthropic の `metadata.user_id` もアフィニティキーとして受け入れるか。同一ユーザーの並行セッションが同じ値を共有し単一アカウントに集中するため既定では無効 |
-| `TOKENHUB_GUARDRAIL_MODEL_URL` | 空 | 専用 Qwen3Guard サービスの完全な OpenAI-compatible chat-completions URL。有効化すると検査対象のユーザー表示リクエストテキストをそのサービスへ送信する。空の場合はモデルを呼び出さず、各ポリシーの利用不可時設定を適用 |
+| `TOKENHUB_GUARDRAIL_MODEL_URL` | 空 | 専用 Qwen3Guard サービスの完全な OpenAI-compatible chat-completions URL。呼び出し前にローカルの `mask` ルールで一致した値を `[REDACTED]` に置き換え、一致しなかった検査対象テキストはそのサービスへ送信する。空の場合はモデルを呼び出さず、各ポリシーの利用不可時設定を適用 |
 | `TOKENHUB_GUARDRAIL_MODEL_API_KEY` | 空 | 専用ガードレールモデルサービス用の任意 Bearer 資格情報 |
 | `TOKENHUB_GUARDRAIL_MODEL_NAME` | `Qwen/Qwen3Guard-Gen-0.6B` | ガードレールサービスへ送信するモデル識別子 |
 | `TOKENHUB_GUARDRAIL_MODEL_TIMEOUT_SECONDS` | `10` | 1 回のガードレールモデル分類の制限時間 |
