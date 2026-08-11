@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -398,6 +399,32 @@ func TestProviderErrorsRedactJSONEscapedSensitiveHeaderValues(t *testing.T) {
 	}
 	if message := decoded["error"]["message"]; message != providerHeaderMask {
 		t.Fatalf("decoded provider error message = %q, want mask", message)
+	}
+}
+
+func TestProviderErrorsRedactEscapedSecretsFromTruncatedJSON(t *testing.T) {
+	prefix := `{"error":{"message":"\u0073ecret"},"padding":"`
+	body := prefix + strings.Repeat("x", providerErrorBodyPrefix)
+	response := &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Header:     http.Header{},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+	provider := Provider{
+		Headers:          map[string]string{"X-Tenant": "secret"},
+		SensitiveHeaders: []string{"X-Tenant"},
+	}
+
+	err := checkProviderResponseForProvider(response, provider)
+	if err == nil {
+		t.Fatal("expected the truncated upstream error to be reported")
+	}
+	message := AsHTTPError(err).Message
+	if strings.Contains(message, `\u0073ecret`) || strings.Contains(message, "secret") {
+		t.Fatalf("truncated provider error leaked a decoder-equivalent secret: %s", message)
+	}
+	if !strings.Contains(message, providerHeaderMask) {
+		t.Fatalf("truncated provider error did not show redaction: %s", message)
 	}
 }
 

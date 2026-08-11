@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"unicode/utf16"
+	"unicode/utf8"
 )
 
 // providerErrorBodyPrefix is how much of a failed upstream response is read for
@@ -146,6 +148,12 @@ func redactProviderErrorSecrets(data []byte, provider Provider) []byte {
 	if redacted, changed := redactProviderJSONSecrets(data, values); changed {
 		return redacted
 	}
+	// The bounded error body may end before the enclosing JSON closes. Decode
+	// individual string prefixes as far as they are complete so arbitrary JSON
+	// escapes cannot bypass redaction merely because the overall body was cut.
+	if redacted, changed := redactProviderJSONPrefixSecrets(data, values); changed {
+		data = redacted
+	}
 	message := string(data)
 	representations := make(map[string]bool, len(values)*3)
 	for _, value := range values {
@@ -162,6 +170,169 @@ func redactProviderErrorSecrets(data []byte, provider Provider) []byte {
 		message = strings.ReplaceAll(message, pattern, providerHeaderMask)
 	}
 	return []byte(message)
+}
+
+type providerJSONByteSpan struct {
+	start int
+	end   int
+}
+
+type providerJSONReplacement struct {
+	start int
+	end   int
+}
+
+// redactProviderJSONPrefixSecrets redacts decoder-equivalent secret values in
+// each JSON string that can be read from data. Unlike redactProviderJSONSecrets,
+// it does not require the enclosing object, array, or final string to be closed.
+func redactProviderJSONPrefixSecrets(data []byte, secrets []string) ([]byte, bool) {
+	replacements := make([]providerJSONReplacement, 0)
+	for offset := 0; offset < len(data); {
+		if data[offset] != '"' {
+			offset++
+			continue
+		}
+		decoded, spans, next := decodeProviderJSONStringPrefix(data, offset)
+		for index := 0; index < len(decoded); {
+			matched := ""
+			for _, secret := range secrets {
+				if secret != "" && strings.HasPrefix(decoded[index:], secret) {
+					matched = secret
+					break
+				}
+			}
+			if matched == "" {
+				index++
+				continue
+			}
+			last := index + len(matched) - 1
+			if last < len(spans) {
+				replacements = append(replacements, providerJSONReplacement{
+					start: spans[index].start,
+					end:   spans[last].end,
+				})
+			}
+			index += len(matched)
+		}
+		if next <= offset {
+			break
+		}
+		offset = next
+	}
+	if len(replacements) == 0 {
+		return data, false
+	}
+	var redacted bytes.Buffer
+	previous := 0
+	for _, replacement := range replacements {
+		if replacement.start < previous {
+			continue
+		}
+		redacted.Write(data[previous:replacement.start])
+		redacted.WriteString(providerHeaderMask)
+		previous = replacement.end
+	}
+	redacted.Write(data[previous:])
+	return redacted.Bytes(), true
+}
+
+// decodeProviderJSONStringPrefix decodes complete characters from the JSON
+// string beginning at quote. Each decoded byte retains the source range that
+// produced it, allowing a decoded match to be replaced in the original prefix.
+func decodeProviderJSONStringPrefix(data []byte, quote int) (string, []providerJSONByteSpan, int) {
+	decoded := make([]byte, 0)
+	spans := make([]providerJSONByteSpan, 0)
+	appendDecoded := func(value []byte, start, end int) {
+		decoded = append(decoded, value...)
+		for range value {
+			spans = append(spans, providerJSONByteSpan{start: start, end: end})
+		}
+	}
+
+	for index := quote + 1; index < len(data); {
+		if data[index] == '"' {
+			return string(decoded), spans, index + 1
+		}
+		if data[index] != '\\' {
+			_, size := utf8.DecodeRune(data[index:])
+			if size == 0 {
+				break
+			}
+			appendDecoded(data[index:index+size], index, index+size)
+			index += size
+			continue
+		}
+
+		start := index
+		if index+1 >= len(data) {
+			break
+		}
+		switch data[index+1] {
+		case '"', '\\', '/':
+			appendDecoded([]byte{data[index+1]}, start, index+2)
+			index += 2
+		case 'b':
+			appendDecoded([]byte{'\b'}, start, index+2)
+			index += 2
+		case 'f':
+			appendDecoded([]byte{'\f'}, start, index+2)
+			index += 2
+		case 'n':
+			appendDecoded([]byte{'\n'}, start, index+2)
+			index += 2
+		case 'r':
+			appendDecoded([]byte{'\r'}, start, index+2)
+			index += 2
+		case 't':
+			appendDecoded([]byte{'\t'}, start, index+2)
+			index += 2
+		case 'u':
+			first, ok := decodeProviderJSONHexRune(data, index)
+			if !ok {
+				return string(decoded), spans, len(data)
+			}
+			end := index + 6
+			runeValue := rune(first)
+			if 0xD800 <= first && first <= 0xDBFF {
+				second, secondOK := decodeProviderJSONHexRune(data, end)
+				if !secondOK || second < 0xDC00 || second > 0xDFFF {
+					return string(decoded), spans, len(data)
+				}
+				runeValue = utf16.DecodeRune(rune(first), rune(second))
+				end += 6
+			} else if 0xDC00 <= first && first <= 0xDFFF {
+				return string(decoded), spans, len(data)
+			}
+			encoded := make([]byte, utf8.RuneLen(runeValue))
+			utf8.EncodeRune(encoded, runeValue)
+			appendDecoded(encoded, start, end)
+			index = end
+		default:
+			return string(decoded), spans, len(data)
+		}
+	}
+	return string(decoded), spans, len(data)
+}
+
+func decodeProviderJSONHexRune(data []byte, slash int) (uint16, bool) {
+	if slash+6 > len(data) || data[slash] != '\\' || data[slash+1] != 'u' {
+		return 0, false
+	}
+	var value uint16
+	for _, digit := range data[slash+2 : slash+6] {
+		value <<= 4
+		switch {
+		case '0' <= digit && digit <= '9':
+			value += uint16(digit - '0')
+		case 'a' <= digit && digit <= 'f':
+			value += uint16(digit-'a') + 10
+		case 'A' <= digit && digit <= 'F':
+			value += uint16(digit-'A') + 10
+		default:
+			return 0, false
+		}
+	}
+	return value, true
 }
 
 func redactProviderJSONSecrets(data []byte, secrets []string) ([]byte, bool) {
