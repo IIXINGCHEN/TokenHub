@@ -9,15 +9,16 @@ import (
 	"tokenhub/backend/internal/server"
 )
 
-func TestStoreSinkApplyIdempotent(t *testing.T) {
+func TestStoreSinkApplyRefreshesSecretBackedHeadersWithoutDuplicates(t *testing.T) {
 	store := server.NewMemoryStore()
-	sink := NewStoreSink(store, bundle.StaticResolver{
+	resolver := bundle.StaticResolver{
 		"PROVIDER_API_KEY": "provider-secret",
 		"RESOURCE_API_KEY": "resource-secret",
 		"PROVIDER_HEADER":  "provider-header-secret",
 		"RESOURCE_HEADER":  "resource-header-secret",
 		"CLIENT_API_KEY":   "client-secret",
-	})
+	}
+	sink := NewStoreSink(store, resolver)
 
 	migrationBundle := &bundle.CanonicalMigrationBundle{
 		SchemaVersion: bundle.SchemaVersion,
@@ -115,8 +116,12 @@ func TestStoreSinkApplyIdempotent(t *testing.T) {
 		t.Fatal("expected apply to be idempotent")
 	}
 	for _, change := range second.Changes {
-		if change.Action != ActionSkip {
-			t.Fatalf("expected second apply to perform zero writes, got %s for %s", change.Action, change.Resource)
+		want := ActionSkip
+		if change.Resource == "provider" || change.Resource == "provider_resource" {
+			want = ActionUpdate
+		}
+		if change.Action != want {
+			t.Fatalf("second apply action for %s = %s, want %s", change.Resource, change.Action, want)
 		}
 	}
 	if got := first.NewKeys["key/default"]; got != "client-secret" {
@@ -124,6 +129,24 @@ func TestStoreSinkApplyIdempotent(t *testing.T) {
 	}
 	if len(second.NewKeys) != 0 {
 		t.Fatalf("expected second apply to emit no new keys, got %+v", second.NewKeys)
+	}
+
+	resolver["PROVIDER_HEADER"] = "rotated-provider-header-secret"
+	resolver["RESOURCE_HEADER"] = "rotated-resource-header-secret"
+	third, err := sink.Apply(migrationBundle)
+	if err != nil {
+		t.Fatalf("apply rotated header secrets: %v", err)
+	}
+	for _, change := range third.Changes {
+		if (change.Resource == "provider" || change.Resource == "provider_resource") && change.Action != ActionUpdate {
+			t.Fatalf("rotated header secret action for %s = %s, want %s", change.Resource, change.Action, ActionUpdate)
+		}
+	}
+	if provider, ok := store.GetProvider("prv_litellm_openai"); !ok || provider.Headers["X-Provider-Secret"] != "rotated-provider-header-secret" {
+		t.Fatalf("provider sensitive header did not rotate: %+v", provider)
+	}
+	if resource, ok := store.GetProviderResource("rsrc_litellm_openai_default"); !ok || resource.Headers["X-Resource-Secret"] != "rotated-resource-header-secret" {
+		t.Fatalf("resource sensitive header did not rotate: %+v", resource)
 	}
 }
 

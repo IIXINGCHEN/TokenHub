@@ -250,7 +250,7 @@ func (s *HTTPSink) Plan(ctx context.Context, migrationBundle *bundle.CanonicalMi
 		}
 		if existing, found := findProviderByBusinessKey(providers, item.Spec.Name, item.Spec.Type); found {
 			planIndex.providers[item.ExternalRef.ID] = existing.ID
-			changes = append(changes, Change{Resource: "provider", ID: existing.ID, Action: chooseActionProvider(existing, spec)})
+			changes = append(changes, Change{Resource: "provider", ID: existing.ID, Action: chooseActionProvider(existing, spec, len(item.HeaderSecrets) > 0)})
 		} else {
 			changes = append(changes, Change{Resource: "provider", ID: item.Spec.ID, Action: ActionCreate})
 		}
@@ -265,7 +265,7 @@ func (s *HTTPSink) Plan(ctx context.Context, migrationBundle *bundle.CanonicalMi
 		}
 		if existing, found := findProviderResourceByBusinessKey(resources, providerID, item.Spec.Name); found {
 			planIndex.resources[item.ExternalRef.ID] = existing.ID
-			changes = append(changes, Change{Resource: "provider_resource", ID: existing.ID, Action: chooseActionResource(existing, spec)})
+			changes = append(changes, Change{Resource: "provider_resource", ID: existing.ID, Action: chooseActionResource(existing, spec, len(item.HeaderSecrets) > 0)})
 		} else {
 			changes = append(changes, Change{Resource: "provider_resource", ID: item.Spec.ID, Action: ActionCreate})
 		}
@@ -566,14 +566,22 @@ func buildReportFromChanges(changes []Change, newKeys map[string]string) Migrati
 	return report
 }
 
-func chooseActionProvider(existing server.Provider, desired server.Provider) Action {
+func chooseActionProvider(existing server.Provider, desired server.Provider, refreshHeaderSecrets bool) Action {
+	// The Admin API only returns masked values, and resolver material may rotate
+	// without a bundle diff. A HeaderSecrets entry therefore forces a refresh.
+	if refreshHeaderSecrets {
+		return ActionUpdate
+	}
 	if sameProvider(existing, desired) {
 		return ActionSkip
 	}
 	return ActionUpdate
 }
 
-func chooseActionResource(existing server.ProviderResource, desired server.ProviderResource) Action {
+func chooseActionResource(existing server.ProviderResource, desired server.ProviderResource, refreshHeaderSecrets bool) Action {
+	if refreshHeaderSecrets {
+		return ActionUpdate
+	}
 	if sameProviderResource(existing, desired) {
 		return ActionSkip
 	}
@@ -634,7 +642,7 @@ func (s *HTTPSink) applyProviderHTTP(ctx context.Context, existing []server.Prov
 	}
 	if current, found := findProviderByBusinessKey(existing, spec.Name, spec.Type); found {
 		s.refIndex.providers[item.ExternalRef.ID] = current.ID
-		action := chooseActionProvider(current, spec)
+		action := chooseActionProvider(current, spec, len(item.HeaderSecrets) > 0)
 		if action == ActionSkip {
 			return Change{Resource: "provider", ID: current.ID, Action: ActionSkip}, server.Provider{}, nil
 		}
@@ -670,7 +678,7 @@ func (s *HTTPSink) applyProviderResourceHTTP(ctx context.Context, existing []ser
 	}
 	if current, found := findProviderResourceByBusinessKey(existing, spec.ProviderID, spec.Name); found {
 		s.refIndex.resources[item.ExternalRef.ID] = current.ID
-		action := chooseActionResource(current, spec)
+		action := chooseActionResource(current, spec, len(item.HeaderSecrets) > 0)
 		if action == ActionSkip {
 			return Change{Resource: "provider_resource", ID: current.ID, Action: ActionSkip}, server.ProviderResource{}, nil
 		}

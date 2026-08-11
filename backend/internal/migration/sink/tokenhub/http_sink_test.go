@@ -557,10 +557,12 @@ func TestHTTPSinkApplyProviderAndRouteOnCleanTarget(t *testing.T) {
 	defer ts.Close()
 
 	client := NewAdminAPIClient(ts.URL, "test-admin-token", http.DefaultClient)
-	sink := NewHTTPSink(client, bundle.StaticResolver{
+	resolver := bundle.StaticResolver{
 		"PROVIDER_API_KEY": "provider-secret",
 		"PROVIDER_HEADER":  "provider-header-secret",
-	})
+		"RESOURCE_HEADER":  "resource-header-secret",
+	}
+	sink := NewHTTPSink(client, resolver)
 
 	migrationBundle := &bundle.CanonicalMigrationBundle{
 		SchemaVersion: bundle.SchemaVersion,
@@ -573,9 +575,10 @@ func TestHTTPSinkApplyProviderAndRouteOnCleanTarget(t *testing.T) {
 			Spec:          server.Provider{ID: "litellm-provider-openai", Name: "openai-migrated", Type: "openai", BaseURL: "https://api.openai.com/v1", Status: server.StatusActive},
 		}},
 		ProviderResources: []bundle.ProviderResourceRef{{
-			ExternalRef: bundle.ExternalRef{System: "litellm", ID: "resource/openai-main"},
-			ProviderRef: "provider/openai",
-			Spec:        server.ProviderResource{ID: "litellm-resource-openai-main", Name: "openai-main", ResourceType: "openai", BaseURL: "https://api.openai.com/v1", Status: server.StatusActive},
+			ExternalRef:   bundle.ExternalRef{System: "litellm", ID: "resource/openai-main"},
+			ProviderRef:   "provider/openai",
+			HeaderSecrets: map[string]bundle.SecretRef{"X-Resource-Tenant": {Ref: "RESOURCE_HEADER"}},
+			Spec:          server.ProviderResource{ID: "litellm-resource-openai-main", Name: "openai-main", ResourceType: "openai", BaseURL: "https://api.openai.com/v1", Status: server.StatusActive},
 		}},
 		Models: []bundle.ModelRef{{
 			ExternalRef: bundle.ExternalRef{System: "litellm", ID: "model/gpt-4o-mini"},
@@ -596,6 +599,10 @@ func TestHTTPSinkApplyProviderAndRouteOnCleanTarget(t *testing.T) {
 	provider, ok := store.GetProvider("litellm-provider-openai")
 	if !ok || provider.Headers["X-Tenant"] != "provider-header-secret" || len(provider.SensitiveHeaders) != 1 {
 		t.Fatalf("sensitive provider header was not resolved through the HTTP sink: %+v", provider)
+	}
+	resource, ok := store.GetProviderResource("litellm-resource-openai-main")
+	if !ok || resource.Headers["X-Resource-Tenant"] != "resource-header-secret" || len(resource.SensitiveHeaders) != 1 {
+		t.Fatalf("sensitive resource header was not resolved through the HTTP sink: %+v", resource)
 	}
 
 	routes, err := client.ListRoutes(context.Background())
@@ -618,6 +625,26 @@ func TestHTTPSinkApplyProviderAndRouteOnCleanTarget(t *testing.T) {
 	}
 	if !verifyResult.OK {
 		t.Fatalf("expected verification to pass, got %+v", verifyResult.Issues)
+	}
+
+	resolver["PROVIDER_HEADER"] = "rotated-provider-header-secret"
+	resolver["RESOURCE_HEADER"] = "rotated-resource-header-secret"
+	second, err := sink.Apply(context.Background(), migrationBundle)
+	if err != nil {
+		t.Fatalf("apply rotated header secrets: %v", err)
+	}
+	for _, change := range second.Changes {
+		if (change.Resource == "provider" || change.Resource == "provider_resource") && change.Action != ActionUpdate {
+			t.Fatalf("rotated header secret action for %s = %s, want %s", change.Resource, change.Action, ActionUpdate)
+		}
+	}
+	provider, ok = store.GetProvider("litellm-provider-openai")
+	if !ok || provider.Headers["X-Tenant"] != "rotated-provider-header-secret" {
+		t.Fatalf("HTTP sink did not rotate Provider header secret: %+v", provider)
+	}
+	resource, ok = store.GetProviderResource("litellm-resource-openai-main")
+	if !ok || resource.Headers["X-Resource-Tenant"] != "rotated-resource-header-secret" {
+		t.Fatalf("HTTP sink did not rotate Resource header secret: %+v", resource)
 	}
 }
 

@@ -360,6 +360,32 @@ func TestProviderErrorsRedactEffectiveSensitiveHeaderValues(t *testing.T) {
 	}
 }
 
+func TestProviderErrorsRedactJSONEscapedSensitiveHeaderValues(t *testing.T) {
+	headerSecret := `secret"token<&>/tenant`
+	apiSecret := `api\key`
+	payload, err := json.Marshal(map[string]any{"error": map[string]string{"message": headerSecret + " " + apiSecret}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := Provider{
+		APIKey: apiSecret, Headers: map[string]string{"X-Tenant": headerSecret}, SensitiveHeaders: []string{"X-Tenant"},
+	}
+	redacted := string(redactProviderErrorSecrets(payload, provider))
+	for _, secret := range []string{headerSecret, apiSecret} {
+		encoded, marshalErr := json.Marshal(secret)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		escaped := string(encoded[1 : len(encoded)-1])
+		if strings.Contains(redacted, secret) || strings.Contains(redacted, escaped) {
+			t.Fatalf("provider error leaked JSON-escaped secret %q: %s", secret, redacted)
+		}
+	}
+	if !strings.Contains(redacted, providerHeaderMask) {
+		t.Fatalf("provider error did not show redaction: %s", redacted)
+	}
+}
+
 func TestStreamingProviderErrorsRedactEffectiveSensitiveHeaderValues(t *testing.T) {
 	provider := Provider{
 		APIKey: "provider-api-secret", Headers: map[string]string{"X-Tenant": "tenant-secret"}, SensitiveHeaders: []string{"X-Tenant"},

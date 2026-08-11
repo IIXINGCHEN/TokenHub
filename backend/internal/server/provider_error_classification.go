@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"sort"
@@ -138,11 +139,46 @@ func redactProviderErrorSecrets(data []byte, provider Provider) []byte {
 			values = append(values, value)
 		}
 	}
-	sort.Slice(values, func(i, j int) bool { return len(values[i]) > len(values[j]) })
+	representations := make(map[string]bool, len(values)*3)
 	for _, value := range values {
-		message = strings.ReplaceAll(message, value, providerHeaderMask)
+		for _, representation := range providerSecretRepresentations(value) {
+			representations[representation] = true
+		}
+	}
+	patterns := make([]string, 0, len(representations))
+	for representation := range representations {
+		patterns = append(patterns, representation)
+	}
+	sort.Slice(patterns, func(i, j int) bool { return len(patterns[i]) > len(patterns[j]) })
+	for _, pattern := range patterns {
+		message = strings.ReplaceAll(message, pattern, providerHeaderMask)
 	}
 	return []byte(message)
+}
+
+func providerSecretRepresentations(value string) []string {
+	representations := []string{value}
+	encoded, err := json.Marshal(value)
+	if err != nil || len(encoded) < 2 {
+		return representations
+	}
+	escaped := string(encoded[1 : len(encoded)-1])
+	if escaped != value {
+		representations = append(representations, escaped)
+	}
+	slashEscaped := strings.ReplaceAll(escaped, "/", `\/`)
+	if slashEscaped != escaped {
+		representations = append(representations, slashEscaped)
+	}
+	uppercaseUnicodeEscapes := strings.NewReplacer(
+		`\u003c`, `\u003C`,
+		`\u003e`, `\u003E`,
+		`\u0026`, `\u0026`,
+	).Replace(escaped)
+	if uppercaseUnicodeEscapes != escaped {
+		representations = append(representations, uppercaseUnicodeEscapes)
+	}
+	return representations
 }
 
 // newProviderHTTPError turns one upstream failure into the error the rest of the

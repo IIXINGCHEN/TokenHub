@@ -532,7 +532,9 @@ func (s *StoreSink) applyProvider(item bundle.ProviderRef) (Change, error) {
 
 	for _, existing := range s.store.ListProviders() {
 		if existing.Name == spec.Name && existing.Type == spec.Type {
-			if sameProvider(existing, spec) {
+			// Header secrets are write-only on the target and their resolver values
+			// may rotate without changing the bundle, so every apply reasserts them.
+			if len(item.HeaderSecrets) == 0 && sameProvider(existing, spec) {
 				s.refIndex.providers[item.ExternalRef.ID] = existing.ID
 				return Change{Resource: "provider", ID: existing.ID, Action: ActionSkip}, nil
 			}
@@ -578,7 +580,8 @@ func (s *StoreSink) applyProviderResource(item bundle.ProviderResourceRef) (Chan
 
 	for _, existing := range s.store.ListProviderResources() {
 		if existing.ProviderID == spec.ProviderID && existing.Name == spec.Name {
-			if sameProviderResource(existing, spec) {
+			// See applyProvider: a SecretRef is authoritative on every apply.
+			if len(item.HeaderSecrets) == 0 && sameProviderResource(existing, spec) {
 				s.refIndex.resources[item.ExternalRef.ID] = existing.ID
 				return Change{Resource: "provider_resource", ID: existing.ID, Action: ActionSkip}, nil
 			}
