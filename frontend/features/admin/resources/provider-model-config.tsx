@@ -118,11 +118,11 @@ export function providerResourceConfig(provider?: Provider): ResourceConfig<Prov
     remove: (ctx, item) => adminDelete(ctx, `/api/admin/provider-resources/${item.id}`),
     actions: [
       {
-        label: "刷新 Token",
-        title: "使用保存的 refresh token 更新账号访问 Token",
+        label: "续租 Token",
+        title: "使用保存的 refresh token 续租账号访问 Token",
         visible: (item) => item.resource_type === "openai_subscription" && item.credential_summary?.has_refresh_token === "true",
         run: (ctx, item) => adminMutate(ctx, `/api/admin/provider-resources/${item.id}/refresh-token`, "POST", {}),
-        doneMessage: (item) => `${item.name} ${tx("Token 已刷新")}`,
+        doneMessage: (item) => `${item.name} ${tx("Token 已续租")}`,
       },
     ],
     toForm: (item) => providerResourceToForm(item, provider?.options),

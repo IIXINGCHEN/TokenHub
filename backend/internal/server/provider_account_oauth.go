@@ -416,6 +416,9 @@ func refreshOpenAIAccountOAuthCredentials(ctx context.Context, current ProviderR
 	form.Set("scope", openAIAccountOAuthRefreshScope)
 	token, err := requestOpenAIAccountOAuthToken(ctx, form)
 	if err != nil {
+		if isOpenAIAccountOAuthReauthorizationRequired(err) {
+			return current, NewHTTPError(http.StatusConflict, "provider_resource_reauthorization_required", "OpenAI/Codex account session has ended. Reauthorize the account.")
+		}
 		return current, err
 	}
 	if strings.TrimSpace(token.AccessToken) == "" {
@@ -427,6 +430,11 @@ func refreshOpenAIAccountOAuthCredentials(ctx context.Context, current ProviderR
 		creds.RefreshToken = current.RefreshToken
 	}
 	return creds, nil
+}
+
+func isOpenAIAccountOAuthReauthorizationRequired(err error) bool {
+	httpErr := AsHTTPError(err)
+	return httpErr.Code == "oauth_token_failed" && strings.Contains(strings.ToLower(httpErr.Message), "refresh_token_invalidated")
 }
 
 func requestOpenAIAccountOAuthToken(ctx context.Context, form url.Values) (oauthTokenResponse, error) {

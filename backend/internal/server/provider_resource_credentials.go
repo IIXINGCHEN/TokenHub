@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+const openAIAccountReauthorizationRequiredOption = "oauth_reauthorization_required"
+
 type openAIIDTokenClaims struct {
 	Email      string            `json:"email"`
 	OpenAIAuth *openAIAuthClaims `json:"https://api.openai.com/auth,omitempty"`
@@ -84,6 +86,9 @@ func (s *GormStore) mergeOpenAIAccountCredentials(resource *ProviderResource, pa
 		resource.CredentialBlob = ""
 	}
 	applyOpenAIAccountOptions(resource.Options, creds)
+	if patch != nil && patch.Credentials != nil && hasOpenAIAccountSecret(creds) {
+		delete(resource.Options, openAIAccountReauthorizationRequiredOption)
+	}
 	resource.Credentials = nil
 }
 
@@ -167,6 +172,7 @@ func providerResourceCredentialSummary(resource ProviderResource) map[string]str
 		"plan_type",
 		"token_expires_at",
 		"has_refresh_token",
+		openAIAccountReauthorizationRequiredOption,
 	} {
 		if value := strings.TrimSpace(resource.Options[key]); value != "" {
 			summary[key] = value
@@ -242,6 +248,7 @@ func (s *GormStore) RefreshProviderResourceCredentials(ctx context.Context, reso
 		if current.Options == nil {
 			current.Options = map[string]string{}
 		}
+		delete(current.Options, openAIAccountReauthorizationRequiredOption)
 		current.Credentials = &refreshed
 		s.mergeOpenAIAccountCredentials(&current, &ProviderResource{Credentials: &refreshed})
 		if strings.TrimSpace(current.APIKey) != "" {

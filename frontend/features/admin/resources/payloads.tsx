@@ -659,7 +659,8 @@ export async function readAdminError(resp: Response, fallback: string) {
   const body = await resp.text().catch(() => "");
   if (!body) return `${fallback} (${resp.status})`;
   try {
-    const parsed = JSON.parse(body) as { error?: { message?: string }; message?: string };
+    const parsed = JSON.parse(body) as { error?: { code?: string; message?: string }; message?: string };
+    if (parsed.error?.code === "provider_resource_reauthorization_required") return tx("OpenAI/Codex 账号会话已失效，请重新进行账号授权。");
     return parsed.error?.message || parsed.message || `${fallback} (${resp.status})`;
   } catch {
     return body.length > 180 ? `${body.slice(0, 180)}...` : body;
