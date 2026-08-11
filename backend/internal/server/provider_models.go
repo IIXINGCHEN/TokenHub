@@ -39,10 +39,6 @@ func (s *Server) handleAdminProviderModels(w http.ResponseWriter, r *http.Reques
 	if _, ok := s.requireAdmin(w, r, "provider", r.Method); !ok {
 		return
 	}
-	if r.Method != http.MethodGet {
-		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	providerID := strings.TrimSpace(r.URL.Query().Get("provider_id"))
 	models := s.store.ListProviderModels()
 	if providerID != "" {
@@ -60,10 +56,6 @@ func (s *Server) handleAdminProviderModels(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleAdminProviderModelImport(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAdmin(w, r, "model", r.Method)
 	if !ok {
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
 		return
 	}
 	var req ProviderModelImportRequest

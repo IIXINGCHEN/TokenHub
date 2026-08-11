@@ -35,10 +35,6 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if r.Method != http.MethodGet {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	providers := []Provider{}
 	providerResources := []ProviderResource{}
 	alerts := []AlertEvent{}
