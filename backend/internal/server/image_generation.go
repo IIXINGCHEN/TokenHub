@@ -344,10 +344,6 @@ func (s *Server) handleAdminImageJobs(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAdmin(w, r, "audit", r.Method); !ok {
 		return
 	}
-	if r.Method != http.MethodGet {
-		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	limit := 200
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
 		parsed, err := strconv.Atoi(raw)
