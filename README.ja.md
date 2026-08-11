@@ -164,15 +164,15 @@ TokenHub は、実際のエンタープライズ利用からのフィードバ�
   </tr>
   <tr>
     <td align="center" valign="top" width="12.5%">
-      <a href="https://github.com/exgliuzhi">
-        <img src="https://avatars.githubusercontent.com/u/6261701?v=4" width="80px" alt="exgliuzhi" />
-        <br /><sub><b>exgliuzhi</b></sub>
-      </a>
-    </td>
-    <td align="center" valign="top" width="12.5%">
       <a href="https://github.com/bailu-ZZ">
         <img src="https://avatars.githubusercontent.com/u/311096537?v=4" width="80px" alt="bailu-ZZ" />
         <br /><sub><b>bailu-ZZ</b></sub>
+      </a>
+    </td>
+    <td align="center" valign="top" width="12.5%">
+      <a href="https://github.com/exgliuzhi">
+        <img src="https://avatars.githubusercontent.com/u/6261701?v=4" width="80px" alt="exgliuzhi" />
+        <br /><sub><b>exgliuzhi</b></sub>
       </a>
     </td>
     <td align="center" valign="top" width="12.5%">
