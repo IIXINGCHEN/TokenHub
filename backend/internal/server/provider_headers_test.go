@@ -433,14 +433,15 @@ func TestPendingStreamErrorRedactsEscapedSecretAfterMalformedString(t *testing.T
 		Headers:          map[string]string{"X-Tenant": "secret"},
 		SensitiveHeaders: []string{"X-Tenant"},
 	}
-	malformedValues := map[string]string{
-		"invalid escape":    `invalid\q`,
-		"invalid hex":       `invalid\uZZZZ`,
-		"invalid surrogate": `invalid\uD800\u0061`,
+	streams := map[string]string{
+		"invalid escape before error":    `data: {"bad":"invalid\q","error":"\u0073ecret"}` + "\n",
+		"invalid hex before error":       `data: {"bad":"invalid\uZZZZ","error":"\u0073ecret"}` + "\n",
+		"invalid surrogate before error": `data: {"bad":"invalid\uD800\u0061","error":"\u0073ecret"}` + "\n",
+		"metadata quote before error":    "id: \"\n" + `data: {"error":"\u0073ecret"}` + "\n",
+		"invalid escape in error string": `data: {"error":"invalid\q then \u0073ecret"}` + "\n",
 	}
-	for name, malformed := range malformedValues {
+	for name, stream := range streams {
 		t.Run(name, func(t *testing.T) {
-			stream := `data: {"bad":"` + malformed + `","error":"\u0073ecret"}` + "\n"
 			failure := NewHTTPError(http.StatusGatewayTimeout, "provider_stream_idle", "provider stalled")
 			var output strings.Builder
 
@@ -458,7 +459,28 @@ func TestPendingStreamErrorRedactsEscapedSecretAfterMalformedString(t *testing.T
 			if !strings.Contains(redacted, providerHeaderMask) {
 				t.Fatalf("pending stream error did not show redaction: %s", redacted)
 			}
+			if strings.Contains(stream, "id: \"") && !strings.HasPrefix(redacted, "id: \"\n") {
+				t.Fatalf("SSE metadata changed during redaction: %q", redacted)
+			}
 		})
+	}
+}
+
+func BenchmarkRedactMalformedProviderErrorNearSSELimit(b *testing.B) {
+	prefix := `{"error":"`
+	payload := []byte(prefix + strings.Repeat("x", maxSSEEventBytes-len(prefix)))
+	provider := Provider{
+		Headers:          map[string]string{"X-Tenant": "secret"},
+		SensitiveHeaders: []string{"X-Tenant"},
+	}
+	b.SetBytes(int64(len(payload)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		redacted := redactProviderErrorSecrets(payload, provider)
+		if string(redacted) != providerHeaderMask {
+			b.Fatalf("malformed provider error was not masked: %q", redacted)
+		}
 	}
 }
 

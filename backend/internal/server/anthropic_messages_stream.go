@@ -45,10 +45,10 @@ func copyNativeAnthropicStreamForProvider(writer io.Writer, body io.Reader, mode
 		}
 		if err != nil {
 			// A stream that fails mid-frame has already put those bytes on the
-			// wire. They are forwarded unrewritten: the model-name swap needs a
-			// whole frame, and the failure itself is what the client must see.
-			if pending := events.Pending(); len(pending) > 0 {
-				if _, writeErr := writer.Write(redactProviderErrorSecrets(pending, provider)); writeErr != nil {
+			// wire. Preserve its framing, but redact the parsed data fields before
+			// forwarding so metadata cannot interfere with secret detection.
+			if pending := events.PendingEvent(); len(pending.Raw) > 0 {
+				if _, writeErr := writer.Write(redactProviderStreamEventSecrets(pending, provider)); writeErr != nil {
 					return usage, writeErr
 				}
 			}

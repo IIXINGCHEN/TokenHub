@@ -953,8 +953,8 @@ func copyOpenAIStreamAndUsageForProvider(w io.Writer, body io.Reader, provider P
 		if err != nil {
 			// A stream that fails mid-frame has already put those bytes on the
 			// wire; the client is owed them before the failure surfaces.
-			if pending := events.Pending(); len(pending) > 0 {
-				if _, writeErr := w.Write(redactProviderErrorSecrets(pending, provider)); writeErr != nil {
+			if pending := events.PendingEvent(); len(pending.Raw) > 0 {
+				if _, writeErr := w.Write(redactProviderStreamEventSecrets(pending, provider)); writeErr != nil {
 					return usage, writeErr
 				}
 			}
