@@ -428,6 +428,40 @@ func TestProviderErrorsRedactEscapedSecretsFromTruncatedJSON(t *testing.T) {
 	}
 }
 
+func TestPendingStreamErrorRedactsEscapedSecretAfterMalformedString(t *testing.T) {
+	provider := Provider{
+		Headers:          map[string]string{"X-Tenant": "secret"},
+		SensitiveHeaders: []string{"X-Tenant"},
+	}
+	malformedValues := map[string]string{
+		"invalid escape":    `invalid\q`,
+		"invalid hex":       `invalid\uZZZZ`,
+		"invalid surrogate": `invalid\uD800\u0061`,
+	}
+	for name, malformed := range malformedValues {
+		t.Run(name, func(t *testing.T) {
+			stream := `data: {"bad":"` + malformed + `","error":"\u0073ecret"}` + "\n"
+			failure := NewHTTPError(http.StatusGatewayTimeout, "provider_stream_idle", "provider stalled")
+			var output strings.Builder
+
+			_, err := copyOpenAIStreamAndUsageForProvider(&output, &failingReader{
+				data: []byte(stream),
+				err:  failure,
+			}, provider)
+			if err != failure {
+				t.Fatalf("err = %v, want the upstream failure", err)
+			}
+			redacted := output.String()
+			if strings.Contains(redacted, `\u0073ecret`) || strings.Contains(redacted, "secret") {
+				t.Fatalf("pending stream error leaked a decoder-equivalent secret: %s", redacted)
+			}
+			if !strings.Contains(redacted, providerHeaderMask) {
+				t.Fatalf("pending stream error did not show redaction: %s", redacted)
+			}
+		})
+	}
+}
+
 func TestStreamingProviderErrorsRedactEffectiveSensitiveHeaderValues(t *testing.T) {
 	provider := Provider{
 		APIKey: "provider-api-secret", Headers: map[string]string{"X-Tenant": "tenant-secret"}, SensitiveHeaders: []string{"X-Tenant"},

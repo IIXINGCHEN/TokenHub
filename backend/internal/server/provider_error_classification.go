@@ -289,29 +289,47 @@ func decodeProviderJSONStringPrefix(data []byte, quote int) (string, []providerJ
 		case 'u':
 			first, ok := decodeProviderJSONHexRune(data, index)
 			if !ok {
-				return string(decoded), spans, len(data)
+				return string(decoded), spans, skipProviderMalformedJSONString(data, index)
 			}
 			end := index + 6
 			runeValue := rune(first)
 			if 0xD800 <= first && first <= 0xDBFF {
 				second, secondOK := decodeProviderJSONHexRune(data, end)
 				if !secondOK || second < 0xDC00 || second > 0xDFFF {
-					return string(decoded), spans, len(data)
+					return string(decoded), spans, skipProviderMalformedJSONString(data, index)
 				}
 				runeValue = utf16.DecodeRune(rune(first), rune(second))
 				end += 6
 			} else if 0xDC00 <= first && first <= 0xDFFF {
-				return string(decoded), spans, len(data)
+				return string(decoded), spans, skipProviderMalformedJSONString(data, index)
 			}
 			encoded := make([]byte, utf8.RuneLen(runeValue))
 			utf8.EncodeRune(encoded, runeValue)
 			appendDecoded(encoded, start, end)
 			index = end
 		default:
-			return string(decoded), spans, len(data)
+			return string(decoded), spans, skipProviderMalformedJSONString(data, index)
 		}
 	}
 	return string(decoded), spans, len(data)
+}
+
+// skipProviderMalformedJSONString finds the candidate string's closing quote
+// without interpreting its escapes. This lets the outer scanner resume at the
+// next JSON string after an invalid escape instead of failing open for the rest
+// of the bounded body.
+func skipProviderMalformedJSONString(data []byte, offset int) int {
+	for offset < len(data) {
+		switch data[offset] {
+		case '\\':
+			offset += 2
+		case '"':
+			return offset + 1
+		default:
+			offset++
+		}
+	}
+	return len(data)
 }
 
 func decodeProviderJSONHexRune(data []byte, slash int) (uint16, bool) {
