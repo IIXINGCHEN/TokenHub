@@ -8,6 +8,7 @@ const {
   customUpstreamModelsAreCurrent,
   customUpstreamModelsVisible,
   providerAnthropicAuthType,
+  providerConnectionTestRunAfterUpdate,
 } = await importTypeScript(new URL("./provider-custom-upstream.ts", import.meta.url));
 
 const bearerAnthropicValues = {
@@ -68,6 +69,17 @@ test("changing the provider type invalidates the custom model cache key", () => 
   const anthropicConnection = customUpstreamConnectionKey(bearerAnthropicValues);
 
   assert.notEqual(openAIConnection, anthropicConnection);
+});
+
+test("connection inputs invalidate completed and in-flight connection tests", () => {
+  const testedRun = 7;
+
+  for (const key of ["base_url", "api_key", "type", "anthropic_auth_type"]) {
+    assert.equal(providerConnectionTestRunAfterUpdate(testedRun, key), testedRun + 1, key);
+  }
+  for (const key of ["name", "priority"]) {
+    assert.equal(providerConnectionTestRunAfterUpdate(testedRun, key), testedRun, key);
+  }
 });
 
 test("custom model discovery becomes visible in both create and edit flows", () => {

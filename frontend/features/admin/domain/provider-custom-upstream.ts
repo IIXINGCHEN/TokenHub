@@ -3,6 +3,12 @@ export function providerAnthropicAuthType(values: Record<string, string>) {
   return values.anthropic_auth_type || "x-api-key";
 }
 
+const providerConnectionTestFields = new Set(["base_url", "api_key", "type", "anthropic_auth_type"]);
+
+export function providerConnectionTestRunAfterUpdate(currentRun: number, key: string) {
+  return providerConnectionTestFields.has(key) ? currentRun + 1 : currentRun;
+}
+
 export function customUpstreamDiscoveryPayload(
   values: Record<string, string>,
   providerID: string,
