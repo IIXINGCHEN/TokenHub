@@ -164,6 +164,18 @@ TokenHub は、実際のエンタープライズ利用からのフィードバ�
   </tr>
   <tr>
     <td align="center" valign="top" width="12.5%">
+      <a href="https://github.com/CLukeLi">
+        <img src="https://avatars.githubusercontent.com/u/252523101?v=4" width="80px" alt="CLukeLi" />
+        <br /><sub><b>CLukeLi</b></sub>
+      </a>
+    </td>
+    <td align="center" valign="top" width="12.5%">
+      <a href="https://github.com/imaben">
+        <img src="https://avatars.githubusercontent.com/u/3390195?v=4" width="80px" alt="imaben" />
+        <br /><sub><b>imaben</b></sub>
+      </a>
+    </td>
+    <td align="center" valign="top" width="12.5%">
       <a href="https://github.com/bailu-ZZ">
         <img src="https://avatars.githubusercontent.com/u/311096537?v=4" width="80px" alt="bailu-ZZ" />
         <br /><sub><b>bailu-ZZ</b></sub>
@@ -179,12 +191,6 @@ TokenHub は、実際のエンタープライズ利用からのフィードバ�
       <a href="https://github.com/exgliuzhi">
         <img src="https://avatars.githubusercontent.com/u/6261701?v=4" width="80px" alt="exgliuzhi" />
         <br /><sub><b>exgliuzhi</b></sub>
-      </a>
-    </td>
-    <td align="center" valign="top" width="12.5%">
-      <a href="https://github.com/CLukeLi">
-        <img src="https://avatars.githubusercontent.com/u/252523101?v=4" width="80px" alt="CLukeLi" />
-        <br /><sub><b>CLukeLi</b></sub>
       </a>
     </td>
     <td align="center" valign="top" width="12.5%">
@@ -205,10 +211,18 @@ TokenHub は、実際のエンタープライズ利用からのフィードバ�
         <br /><sub><b>yujiewanwan</b></sub>
       </a>
     </td>
+  </tr>
+  <tr>
     <td align="center" valign="top" width="12.5%">
       <a href="https://github.com/lxm">
         <img src="https://avatars.githubusercontent.com/u/1918195?v=4" width="80px" alt="lxm" />
         <br /><sub><b>lxm</b></sub>
+      </a>
+    </td>
+    <td align="center" valign="top" width="12.5%">
+      <a href="https://github.com/susunola">
+        <img src="https://avatars.githubusercontent.com/u/38539169?v=4" width="80px" alt="susunola" />
+        <br /><sub><b>susunola</b></sub>
       </a>
     </td>
   </tr>
