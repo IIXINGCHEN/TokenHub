@@ -26,6 +26,8 @@ This guide is for platform administrators, security operators, and infrastructur
 7. Validate the flow with Model Playground and request logs.
 8. Review usage attribution before issuing keys broadly.
 
+Anthropic Providers use `x-api-key` authentication by default. If an Anthropic-compatible upstream requires `Authorization: Bearer`, open the Provider's **Advanced** tab, keep **Provider Type** set to **Claude / Anthropic**, and select **Authorization Bearer** under **Anthropic Authentication**. TokenHub derives either header from the encrypted Provider API Key and sends only the selected authentication header; do not duplicate the credential in custom headers.
+
 ## Model Playground Diagnostics
 
 Open **Model Playground** from the console to validate a model through the same routing and Provider adapters used by gateway traffic. Every assistant turn keeps its own compact diagnostic summary: delivery mode, gateway-measured time to first token (TTFT), output throughput, total duration, full-context input tokens, output tokens, estimated cost, local completion time, and request ID. Expand **Diagnostics** to inspect millisecond timestamps plus the actual response details. Sessions remain in the current browser page unless explicitly exported.
@@ -40,7 +42,7 @@ All permitted Playground users can see performance, usage, request ID, and their
 
 Open **Security Policies > Content Security** to create policies for all Projects or selected Projects. A policy can combine keyword or regular-expression matching, sensitive-data detection, and the optional Qwen3Guard model detector. Detection items are evaluated together, and the strictest matching action wins: `block` over `mask` over `audit`. Changes take effect when saved.
 
-Deterministic detectors run inside TokenHub. Enabling the Qwen3Guard detector sends the inspected user-visible request text to the service configured by `TOKENHUB_GUARDRAIL_MODEL_URL`. Deploy that service only within an approved data boundary and review its transport, logging, and retention controls; TokenHub cannot govern copies retained by a remote service. Leaving the URL empty prevents model calls and applies each model detection item's configured unavailable behavior.
+Deterministic detectors run inside TokenHub. Before calling a configured Qwen3Guard detector, TokenHub replaces sensitive values already matched by local `mask` rules with `[REDACTED]` in a detector-only copy, so those raw values are not sent to the model service. Text not matched by a local mask rule is still sent to the service configured by `TOKENHUB_GUARDRAIL_MODEL_URL`. Deploy that service only within an approved data boundary and review its transport, logging, and retention controls; TokenHub cannot govern copies retained by a remote service. Leaving the URL empty prevents model calls and applies each model detection item's configured unavailable behavior.
 
 Sensitive-data detection includes labelled or structurally validated examples such as Chinese identity-card numbers, mainland mobile numbers, email addresses, bank-card numbers, credentials and private keys, person names, addresses, and birth dates. Validators such as date checks, identity-card checksums, and Luhn checks reduce common numeric false positives. Use **Test Policy** with representative positive and negative samples before enabling a policy broadly.
 
@@ -69,6 +71,14 @@ An exceeded limit returns HTTP 429 with `api_key_rpm_exceeded` or `api_key_tpm_e
 ## Provider Catalog Availability
 
 TokenHub stores the last known-good provider catalog in the database. On every backend startup, it validates and loads the configured local `provider-catalog.json`, then atomically replaces the database snapshot. Ordinary **Provider Channels** requests only read the database snapshot, and administrators can manually refresh the same local catalog. If local catalog reading, parsing, or completeness validation fails, TokenHub keeps using the last known-good snapshot.
+
+## Claude Code Attribution Handling
+
+Claude Code can place an attribution text block at the start of an Anthropic Messages `system` array. The block contains client metadata that can vary between requests and prevent a third-party upstream from reusing an otherwise stable prompt prefix.
+
+Each Provider has a `claude_code_attribution_policy` setting. New official Anthropic Providers default to `preserve`, while Providers that are known to be non-official default to `strip` for better third-party prefix-cache reuse. Custom Anthropic endpoints whose origin is unknown default to `preserve`. Existing Providers without this setting also continue to preserve the block. `strip` removes a block only when the first top-level `system` item has `type: "text"` and its text begins exactly with `x-anthropic-billing-header:`. String-valued `system` prompts, later blocks, leading whitespace, and other block types are never removed.
+
+Provider Resources inherit the Provider policy by default and can override it with `options.claude_code_attribution_policy` set to `preserve` or `strip`. Omitting that Resource option restores inheritance. TokenHub applies the effective policy separately for every route attempt, so a failover Resource receives the original request and applies its own setting. Audit payloads also retain the original request. `POST /v1/messages/count_tokens` continues to count the original request because it does not select a concrete Provider Resource.
 
 ## Codex Usage Reset Credits
 

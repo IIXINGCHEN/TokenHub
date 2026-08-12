@@ -26,6 +26,8 @@ Language: [English](../administrator-guide.md) | [简体中文](../zh-CN/adminis
 7. Model Playground と Request Logs でフローを検証します。
 8. Key を広く発行する前に利用量配賦を確認します。
 
+Anthropic Provider は既定で `x-api-key` 認証を使用します。Anthropic 互換の上流サービスが `Authorization: Bearer` を要求する場合は、Provider の **詳細** タブを開き、**Provider タイプ**を **Claude / Anthropic** にしたまま、**Anthropic 認証方式**で **Authorization Bearer** を選択します。TokenHub は暗号化して保存された Provider API Key から選択した Header を生成し、認証 Header は 1 種類だけ送信します。カスタム Header に同じ認証情報を重複して設定しないでください。
+
 ## Model Playground の診断
 
 コンソールの **Model Playground** では、通常のゲートウェイトラフィックと同じルーティングおよび Provider adapter を使ってモデルを検証できます。各 assistant ターンには、配信モード、ゲートウェイ計測の Time to First Token（TTFT）、出力スループット、総所要時間、コンテキスト全体の input tokens、output tokens、推定コスト、ローカル完了時刻、Request ID の要約が残ります。**診断詳細**を開くと、ミリ秒単位の時刻と実レスポンスの詳細を確認できます。明示的にエクスポートしない限り、セッションは現在のブラウザページだけに保持されます。
@@ -40,7 +42,7 @@ Playground の利用を許可されたすべてのユーザーは、性能、利
 
 **セキュリティポリシー > コンテンツセキュリティ**では、すべての Project または選択した Project を対象とするポリシーを作成できます。1 つのポリシーに、キーワードまたは正規表現、機密データ検出、任意の Qwen3Guard モデル検出を組み合わせられます。検出項目はまとめて評価され、最も厳しいアクションが適用されます。優先順位は `block`、`mask`、`audit` の順です。変更は保存後すぐに反映されます。
 
-決定論的な検出器は TokenHub 内で実行されます。Qwen3Guard 検出器を有効にすると、検査対象のユーザー表示リクエストテキストが `TOKENHUB_GUARDRAIL_MODEL_URL` で設定したサービスへ送信されます。そのサービスは承認済みのデータ境界内にデプロイし、転送、ログ、保持の管理を確認してください。リモートサービスが保持するコピーは TokenHub では管理できません。URL が空の場合はモデルを呼び出さず、各モデル検出項目に設定された利用不可時の動作を適用します。
+決定論的な検出器は TokenHub 内で実行されます。設定済みの Qwen3Guard 検出器を呼び出す前に、TokenHub は検出専用のテキストコピーで、ローカルの `mask` ルールがすでに検出した機密値を `[REDACTED]` に置き換えます。これらの生の値はモデルサービスへ送信されません。ローカルのマスクルールに一致しなかったテキストは、引き続き `TOKENHUB_GUARDRAIL_MODEL_URL` で設定したサービスへ送信されます。そのサービスは承認済みのデータ境界内にデプロイし、転送、ログ、保持の管理を確認してください。リモートサービスが保持するコピーは TokenHub では管理できません。URL が空の場合はモデルを呼び出さず、各モデル検出項目に設定された利用不可時の動作を適用します。
 
 機密データ検出は、ラベル付きまたは構造検証済みの中国身分証番号、中国本土の携帯電話番号、メールアドレス、銀行カード番号、Credential と秘密鍵、氏名、住所、生年月日などを対象とします。日付の妥当性、身分証のチェックサム、Luhn 検証などにより、一般的な数値の誤検知を抑えます。広く有効化する前に、**ポリシーをテスト**で代表的な陽性例と陰性例を確認してください。
 
@@ -69,6 +71,14 @@ RPM は Provider 呼び出し前に消費されます。TPM も同じ時点で�
 ## Provider カタログの可用性
 
 TokenHub は、最後に正常に読み込んだ Provider カタログをデータベースに保存します。バックエンドの起動時には毎回、設定済みのローカル `provider-catalog.json` を検証して読み込み、データベースのスナップショットをアトミックに置き換えます。通常の **Provider Channels** リクエストはデータベースのスナップショットだけを読み取り、管理者は同じローカルカタログを手動で更新することもできます。ローカルカタログの読み込み、解析、または完全性検証に失敗した場合、TokenHub は最後に有効だったスナップショットを引き続き使用します。
+
+## Claude Code 帰属ブロックの処理
+
+Claude Code は、Anthropic Messages リクエストの `system` 配列の先頭に帰属テキストブロックを挿入する場合があります。このブロックにはリクエストごとに変化し得るクライアントメタデータが含まれ、サードパーティー上流で本来安定しているプロンプト接頭辞を再利用できなくなることがあります。
+
+各 Provider には `claude_code_attribution_policy` を設定できます。新規の Anthropic 公式 Provider は `preserve`、明確な非公式 Provider はサードパーティー上流のプロンプト接頭辞キャッシュを再利用しやすくするため `strip` がデフォルトです。提供元が不明なカスタム Anthropic エンドポイントは `preserve` がデフォルトです。既存 Provider でこの設定がない場合も、引き続き帰属ブロックを保持します。`strip` は、最初のトップレベル `system` 要素の `type` が `"text"` で、テキストが `x-anthropic-billing-header:` から厳密に始まる場合に限り、その要素を削除します。文字列形式の `system` プロンプト、後続要素、先頭に空白があるテキスト、その他の要素型は削除しません。
+
+Provider Resource は既定で Provider ポリシーを継承し、`options.claude_code_attribution_policy` を `preserve` または `strip` に設定して上書きできます。この Resource オプションを省略すると継承に戻ります。TokenHub はルート試行ごとに有効なポリシーを適用するため、フェイルオーバー先の Resource は元のリクエストを受け取り、独自の設定を適用します。監査ペイロードにも元のリクエストを保持します。`POST /v1/messages/count_tokens` は具体的な Provider Resource を選択しないため、引き続き元のリクエストをカウントします。
 
 ## Codex 使用量リセットクレジット
 

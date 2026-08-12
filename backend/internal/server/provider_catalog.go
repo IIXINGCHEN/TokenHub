@@ -525,9 +525,10 @@ func CustomProviderCatalogFromUpstream(ctx context.Context, client *http.Client,
 	if err != nil || endpoint.Scheme == "" || endpoint.Host == "" {
 		return ProviderCatalogEntry{}, NewHTTPError(http.StatusBadRequest, "provider_base_url_invalid", "Base URL is invalid")
 	}
-	if client == nil {
-		client = http.DefaultClient
+	if err := validateProviderUpstreamBaseURL(endpoint, allowedProviderUpstreamCIDRs(), providerUpstreamLoopbackAllowed()); err != nil {
+		return ProviderCatalogEntry{}, err
 	}
+	client = ssrfGuardedProviderClient(client)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
 		return ProviderCatalogEntry{}, NewHTTPError(http.StatusBadGateway, "provider_models_request_failed", "Failed to create upstream models request")
@@ -542,7 +543,11 @@ func CustomProviderCatalogFromUpstream(ctx context.Context, client *http.Client,
 		}
 	} else if providerType == ProviderAnthropic {
 		if apiKey != "" {
-			httpReq.Header.Set("x-api-key", apiKey)
+			provider := Provider{Type: providerType, APIKey: apiKey, Options: req.Options}
+			if err := configureAnthropicProviderAuth(&provider, req.AnthropicAuthType); err != nil {
+				return ProviderCatalogEntry{}, err
+			}
+			applyAnthropicProviderAuth(httpReq, provider)
 		}
 		version := strings.TrimSpace(req.Options["anthropic_version"])
 		if version == "" {

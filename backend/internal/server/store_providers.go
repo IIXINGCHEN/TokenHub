@@ -257,6 +257,9 @@ func (s *GormStore) AddProviderResource(resource ProviderResource) (ProviderReso
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := validateClaudeCodeAttributionOptions(resource.Options); err != nil {
+		return ProviderResource{}, err
+	}
 	var provider Provider
 	if err := s.db.First(&provider, "id = ?", resource.ProviderID).Error; err != nil {
 		return ProviderResource{}, notFound(err, "provider_not_found", "Provider not found")
@@ -265,6 +268,12 @@ func (s *GormStore) AddProviderResource(resource ProviderResource) (ProviderReso
 		return ProviderResource{}, err
 	}
 	resource.Name = strings.TrimSpace(resource.Name)
+	// routeSelection lets a non-empty resource BaseURL override the provider's
+	// validated one, so resource-level URLs must pass the same SSRF guard at
+	// persistence time (operator allowlist and explicit loopback opt-in included).
+	if err := ValidateProviderUpstreamBaseURL(resource.BaseURL); err != nil {
+		return ProviderResource{}, err
+	}
 	now := time.Now().UTC()
 	if resource.ID == "" {
 		resource.ID = NewID("rsrc")
@@ -362,6 +371,9 @@ func (s *GormStore) UpdateProviderResource(id string, patch ProviderResource) (P
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := validateClaudeCodeAttributionOptions(patch.Options); err != nil {
+		return ProviderResource{}, err
+	}
 	var resource ProviderResource
 	if err := s.db.First(&resource, "id = ?", id).Error; err != nil {
 		return ProviderResource{}, notFound(err, "provider_resource_not_found", "Provider resource not found")
@@ -386,6 +398,12 @@ func (s *GormStore) UpdateProviderResource(id string, patch ProviderResource) (P
 		resource.ResourceType = patch.ResourceType
 	}
 	resource.BaseURL = patch.BaseURL
+	// Same SSRF persistence guard as AddProviderResource: an empty value
+	// clears the override (the provider URL applies again), a non-empty one
+	// must be a routable upstream.
+	if err := ValidateProviderUpstreamBaseURL(resource.BaseURL); err != nil {
+		return ProviderResource{}, err
+	}
 	shouldEncryptAPIKey := false
 	if patch.APIKey != "" {
 		resource.APIKey = patch.APIKey
@@ -656,6 +674,13 @@ func (s *GormStore) ImportProviderResources(resources []ProviderResource) (Provi
 			continue
 		}
 		if err := validateProviderHeaderSupport(provider.Type, resource.Headers); err != nil {
+			result.Failed++
+			result.Errors = append(result.Errors, "row "+row+": "+err.Error())
+			continue
+		}
+		// Same SSRF persistence guard as AddProviderResource: a rejected row
+		// fails the row, not the whole import, matching the per-row contract.
+		if err := ValidateProviderUpstreamBaseURL(resource.BaseURL); err != nil {
 			result.Failed++
 			result.Errors = append(result.Errors, "row "+row+": "+err.Error())
 			continue

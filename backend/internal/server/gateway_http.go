@@ -164,6 +164,10 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, NewHTTPError(400, "missing_model", "model is required"))
 		return
 	}
+	if req.Background {
+		s.submitResponseJob(w, r, project, key, req)
+		return
+	}
 	admittedAt := time.Now().UTC()
 	call, err := s.admitRoutedCall(w, r, project, key, req.Model, req.Stream, requestTokenReservation(req))
 	if err != nil {
@@ -374,29 +378,33 @@ func (s *Server) admitRoutedCall(w http.ResponseWriter, r *http.Request, project
 }
 
 func (s *Server) prepareAdmittedRoutedCallWithAudit(w http.ResponseWriter, r *http.Request, call CallContext, model string, auditPayload any) (RoutedCall, bool) {
-	routes, err := s.store.SelectRouteCandidates(model)
+	routed, err := s.prepareAdmittedRoutedCall(r.Context(), call, model)
 	if err != nil {
-		err = s.annotateRoutingPolicyForCandidateError(&call, err)
-		s.finishFailedRoutedCall(r, RoutedCall{Call: call}, nil, Usage{}, err, auditPayload)
+		s.finishFailedRoutedCall(r, RoutedCall{Call: routed.Call}, nil, Usage{}, err, auditPayload)
 		writeError(w, r, err)
 		return RoutedCall{}, false
 	}
-	routes, err = s.filterCodexRoutesByModel(r.Context(), model, routes)
+	return routed, true
+}
+
+func (s *Server) prepareAdmittedRoutedCall(ctx context.Context, call CallContext, model string) (RoutedCall, error) {
+	routes, err := s.store.SelectRouteCandidates(model)
 	if err != nil {
 		err = s.annotateRoutingPolicyForCandidateError(&call, err)
-		s.finishFailedRoutedCall(r, RoutedCall{Call: call}, nil, Usage{}, err, auditPayload)
-		writeError(w, r, err)
-		return RoutedCall{}, false
+		return RoutedCall{Call: call}, err
+	}
+	routes, err = s.filterCodexRoutesByModel(ctx, model, routes)
+	if err != nil {
+		err = s.annotateRoutingPolicyForCandidateError(&call, err)
+		return RoutedCall{Call: call}, err
 	}
 	var resolution RoutingPolicyResolution
 	routes, resolution, err = s.resolveScopedRoutingPolicy(call, routes)
 	applyRoutingPolicyResolution(&call, resolution)
 	if err != nil {
-		s.finishFailedRoutedCall(r, RoutedCall{Call: call}, nil, Usage{}, err, auditPayload)
-		writeError(w, r, err)
-		return RoutedCall{}, false
+		return RoutedCall{Call: call}, err
 	}
-	return RoutedCall{Call: call, Routes: s.planRouteOrder(call, routes)}, true
+	return RoutedCall{Call: call, Routes: s.planRouteOrder(call, routes)}, nil
 }
 
 func (s *Server) executeRoutedPlaygroundChat(r *http.Request, routed RoutedCall, req ChatCompletionRequest) (any, RouteSelection, Usage, []RouteAttempt, error) {
@@ -431,22 +439,7 @@ func (s *Server) executeRoutedPlaygroundChat(r *http.Request, routed RoutedCall,
 }
 
 func (s *Server) executeRoutedResponses(r *http.Request, routed RoutedCall, req ResponsesRequest) (any, RouteSelection, Usage, []RouteAttempt, error) {
-	allowEffortFallback := normalizedReasoningEffort(responsesReasoningEffort(req)) != nil
-	return executeRoutedWithStore(r.Context(), s.store, routed, allowEffortFallback, func(ctx context.Context, route RouteSelection, omitReasoningEffort bool, _ int) (any, Usage, error) {
-		route, err := s.prepareRouteForUpstream(ctx, route)
-		if err != nil {
-			return nil, Usage{}, err
-		}
-		upstreamReq := req
-		if omitReasoningEffort {
-			upstreamReq = withoutResponsesReasoningEffort(upstreamReq)
-		}
-		resp, usage, err := s.invokeResponsesAdapter(ctx, route, upstreamReq, r.Header)
-		if isCodexModelUnsupportedError(err) {
-			s.removeCodexResourceModel(routeResourceID(route), route.ProviderModel)
-		}
-		return resp, usage, err
-	})
+	return s.executeRoutedResponsesContext(r.Context(), r.Header, routed, req)
 }
 
 func (s *Server) invokeResponsesAdapter(ctx context.Context, route RouteSelection, req ResponsesRequest, incoming http.Header) (any, Usage, error) {
@@ -536,10 +529,6 @@ func (s *Server) executeRoutedEmbeddings(r *http.Request, routed RoutedCall, req
 func (s *Server) handleAdminPlaygroundChat(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAdmin(w, r, "playground", r.Method)
 	if !ok {
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
 		return
 	}
 	var playgroundReq playgroundChatRequest

@@ -58,10 +58,6 @@ func (s *Server) handleAdminProviderMonitoring(w http.ResponseWriter, r *http.Re
 	if _, ok := s.requireAdmin(w, r, "provider", r.Method); !ok {
 		return
 	}
-	if r.Method != http.MethodGet {
-		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": s.providerMonitoringSnapshots(r.Context(), "")})
 }
 
@@ -157,9 +153,7 @@ func (s *Server) handleAdminProviderCatalogItem(w http.ResponseWriter, r *http.R
 				} else {
 					req.Headers = retainStoredSensitiveProviderHeaders(req.Headers, req.SensitiveHeaders, provider.Headers, provider.SensitiveHeaders)
 				}
-				if req.Options == nil {
-					req.Options = provider.Options
-				}
+				req.Options = mergedStringMap(provider.Options, req.Options)
 				catalogRequests = nil
 				for _, listedResource := range s.store.ListProviderResources() {
 					if listedResource.ProviderID != providerID || listedResource.Status != StatusActive {
@@ -269,8 +263,20 @@ func (s *Server) providerFromCreateRequest(ctx context.Context, req ProviderCrea
 		provider.Priority = 10
 	}
 	provider.BaseURL = normalizeProviderBaseURL(provider.ID, provider.BaseURL)
+	// SSRF guard at the admin persistence boundary: admin create and update both
+	// flow through here, so those untrusted entry points cannot save a base URL
+	// with a literal IP in loopback, private, link-local or curated high-risk/
+	// non-provider ranges. The operator
+	// allowlist (TOKENHUB_PROVIDER_UPSTREAM_ALLOWED_CIDRS) and the explicit
+	// loopback opt-in apply exactly as they do for upstream model discovery.
+	if err := ValidateProviderUpstreamBaseURL(provider.BaseURL); err != nil {
+		return Provider{}, ProviderCatalogEntry{}, catalogSource, err
+	}
 	if provider.Options == nil {
 		provider.Options = map[string]string{}
+	}
+	if err := configureAnthropicProviderAuth(&provider, req.AnthropicAuthType); err != nil {
+		return Provider{}, ProviderCatalogEntry{}, catalogSource, err
 	}
 	if catalog.ID != "" {
 		provider.Options["catalog_id"] = catalog.ID
@@ -282,6 +288,14 @@ func (s *Server) providerFromCreateRequest(ctx context.Context, req ProviderCrea
 	if strings.TrimSpace(req.ModelCategory) != "" {
 		provider.Options["model_category"] = strings.TrimSpace(req.ModelCategory)
 	}
+	options, err := applyClaudeCodeAttributionPolicy(provider.Options, req.ClaudeCodeAttributionPolicy)
+	if err != nil {
+		return Provider{}, ProviderCatalogEntry{}, catalogSource, err
+	}
+	if err := validateClaudeCodeAttributionOptions(options); err != nil {
+		return Provider{}, ProviderCatalogEntry{}, catalogSource, err
+	}
+	provider.Options = options
 	return provider, catalog, catalogSource, nil
 }
 
@@ -917,10 +931,6 @@ func (s *Server) handleAdminModels(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAdminModelsRestoreDefaults(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAdmin(w, r, "model", r.Method)
 	if !ok {
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
 		return
 	}
 	catalogFile := strings.TrimSpace(s.config.ModelCatalogFile)

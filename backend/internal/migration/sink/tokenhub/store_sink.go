@@ -529,6 +529,12 @@ func (s *StoreSink) applyProvider(item bundle.ProviderRef) (Change, error) {
 	if err := server.ValidateProviderHeaderConfigForWrite(&spec); err != nil {
 		return Change{}, fmt.Errorf("validate provider headers %s: %w", item.ExternalRef.ID, err)
 	}
+	// The sink writes straight to the store, bypassing the admin HTTP layer
+	// where base URLs are normally validated; apply the same SSRF guard here
+	// so a bundle cannot persist a provider that dials the internal network.
+	if err := server.ValidateProviderUpstreamBaseURL(spec.BaseURL); err != nil {
+		return Change{}, fmt.Errorf("provider %s: %w", item.ExternalRef.ID, err)
+	}
 
 	for _, existing := range s.store.ListProviders() {
 		if existing.Name == spec.Name && existing.Type == spec.Type {
@@ -857,7 +863,7 @@ func sameProvider(existing server.Provider, desired server.Provider) bool {
 	}
 	return reflect.DeepEqual(normalizeHeaderMap(existing.Headers, existing.SensitiveHeaders), normalizeHeaderMap(desired.Headers, desired.SensitiveHeaders)) &&
 		reflect.DeepEqual(normalizeHeaderNames(existing.SensitiveHeaders), normalizeHeaderNames(desired.SensitiveHeaders)) &&
-		reflect.DeepEqual(normalizeStringMap(existing.Options), normalizeStringMap(desired.Options))
+		reflect.DeepEqual(migrationProviderOptions(existing.Options), migrationProviderOptions(desired.Options))
 }
 
 func providerUpdateSpec(existing server.Provider, desired server.Provider) server.Provider {

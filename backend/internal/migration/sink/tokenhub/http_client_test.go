@@ -64,6 +64,19 @@ func TestProviderRequestsCarryAPIKey(t *testing.T) {
 		if sensitive, ok := payload["sensitive_headers"].([]any); !ok || len(sensitive) != 1 || sensitive[0] != "X-Tenant" {
 			t.Fatalf("request %d missing sensitive_headers, payload=%v", i, payload)
 		}
+		options, _ := payload["options"].(map[string]any)
+		if got, _ := options["claude_code_attribution_policy"].(string); got != "preserve" {
+			t.Fatalf("request %d must preserve legacy attribution behavior, payload=%v", i, payload)
+		}
+	}
+}
+
+func TestProviderRequestsKeepExplicitAttributionPolicy(t *testing.T) {
+	req := providerWriteRequestFrom(server.Provider{Options: map[string]string{
+		"claude_code_attribution_policy": "strip",
+	}})
+	if got := req.Options["claude_code_attribution_policy"]; got != "strip" {
+		t.Fatalf("expected explicit attribution policy to win, got %q", got)
 	}
 }
 

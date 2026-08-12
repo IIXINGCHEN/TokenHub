@@ -126,15 +126,15 @@ TokenHub grows through product feedback, gateway integrations, documentation, te
       </a>
     </td>
     <td align="center" valign="top" width="12.5%">
-      <a href="https://github.com/cngump">
-        <img src="https://avatars.githubusercontent.com/u/108251?v=4" width="80px" alt="cngump" />
-        <br /><sub><b>cngump</b></sub>
-      </a>
-    </td>
-    <td align="center" valign="top" width="12.5%">
       <a href="https://github.com/deepjerry-ai">
         <img src="https://avatars.githubusercontent.com/u/262369278?v=4" width="80px" alt="deepjerry-ai" />
         <br /><sub><b>deepjerry-ai</b></sub>
+      </a>
+    </td>
+    <td align="center" valign="top" width="12.5%">
+      <a href="https://github.com/cngump">
+        <img src="https://avatars.githubusercontent.com/u/108251?v=4" width="80px" alt="cngump" />
+        <br /><sub><b>cngump</b></sub>
       </a>
     </td>
     <td align="center" valign="top" width="12.5%">
@@ -164,15 +164,21 @@ TokenHub grows through product feedback, gateway integrations, documentation, te
   </tr>
   <tr>
     <td align="center" valign="top" width="12.5%">
-      <a href="https://github.com/exgliuzhi">
-        <img src="https://avatars.githubusercontent.com/u/6261701?v=4" width="80px" alt="exgliuzhi" />
-        <br /><sub><b>exgliuzhi</b></sub>
-      </a>
-    </td>
-    <td align="center" valign="top" width="12.5%">
       <a href="https://github.com/bailu-ZZ">
         <img src="https://avatars.githubusercontent.com/u/311096537?v=4" width="80px" alt="bailu-ZZ" />
         <br /><sub><b>bailu-ZZ</b></sub>
+      </a>
+    </td>
+    <td align="center" valign="top" width="12.5%">
+      <a href="https://github.com/myssl">
+        <img src="https://avatars.githubusercontent.com/u/27838738?v=4" width="80px" alt="myssl" />
+        <br /><sub><b>myssl</b></sub>
+      </a>
+    </td>
+    <td align="center" valign="top" width="12.5%">
+      <a href="https://github.com/exgliuzhi">
+        <img src="https://avatars.githubusercontent.com/u/6261701?v=4" width="80px" alt="exgliuzhi" />
+        <br /><sub><b>exgliuzhi</b></sub>
       </a>
     </td>
     <td align="center" valign="top" width="12.5%">

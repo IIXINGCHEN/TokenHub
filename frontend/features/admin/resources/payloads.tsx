@@ -5,6 +5,8 @@ import { inferModelCategoryText, normalizeNotificationChannelType, notificationC
 import { firstActiveModel, firstActiveProject, firstActiveProvider, firstActiveTeam, firstActiveUser, firstCostCenterCode, firstIssueableProject, projectMemberProjectSelectOptions, stringifyValue } from "../domain/entities";
 import { compactNumber } from "../domain/formatting";
 import { enumValueLabel, numberFromUnknown, numberOr, parseLooseValue, splitList } from "../domain/labels";
+import { defaultProviderClaudeCodeAttributionPolicy } from "../domain/provider-attribution";
+import { providerAnthropicAuthType } from "../domain/provider-custom-upstream";
 import { initialModelRoutes } from "../domain/provider-model-selection";
 import { providerReasoningFormValues, providerReasoningOptions, providerReasoningOverrideFormValues } from "../domain/provider-reasoning";
 import { providerHeadersFormValue, providerHeadersPayload } from "../domain/provider-headers";
@@ -23,6 +25,8 @@ export function providerPayload(values: Record<string, string>) {
     healthy: values.healthy !== "false",
     priority: numberOr(values.priority, 10),
     ...providerHeadersPayload(values.custom_headers),
+    anthropic_auth_type: providerAnthropicAuthType(values),
+    claude_code_attribution_policy: values.claude_code_attribution_policy || defaultProviderClaudeCodeAttributionPolicy(values.type, values.catalog_id),
     catalog_id: values.catalog_id,
     model_category: values.model_category,
     options: providerReasoningOptions(values),
@@ -110,7 +114,13 @@ export function providerResourceOptions(values: Record<string, string>) {
     token_expires_at: values.expires_at,
     scopes: values.scopes,
   } : {};
-  return providerReasoningOptions(values, accountOptions);
+  const options = providerReasoningOptions(values, accountOptions);
+  if (values.claude_code_attribution_policy === "preserve" || values.claude_code_attribution_policy === "strip") {
+    options.claude_code_attribution_policy = values.claude_code_attribution_policy;
+  } else {
+    delete options.claude_code_attribution_policy;
+  }
+  return options;
 }
 
 export function providerResourceToForm(item: ProviderResource, providerOptions?: Record<string, string>) {
@@ -138,12 +148,36 @@ export function providerResourceToForm(item: ProviderResource, providerOptions?:
     rate_limit_rpm: String(item.rate_limit_rpm ?? ""),
     token_limit_tpm: String(item.token_limit_tpm ?? ""),
     max_concurrency: String(item.max_concurrency ?? ""),
+    claude_code_attribution_policy: item.options?.claude_code_attribution_policy ?? "inherit",
     region: item.region ?? "",
     environment: item.environment ?? "",
     status: item.status,
     healthy: String(item.healthy),
     custom_headers: providerHeadersFormValue(item.headers, item.sensitive_headers),
     ...providerReasoningOverrideFormValues(item.options, providerOptions),
+  };
+}
+
+export function providerResourceAttributionPolicyPayload(resource: ProviderResource, policy: string) {
+  const options = { ...(resource.options ?? {}) };
+  if (policy === "inherit") delete options.claude_code_attribution_policy;
+  else options.claude_code_attribution_policy = policy;
+  return {
+    provider_id: resource.provider_id,
+    name: resource.name,
+    resource_type: resource.resource_type,
+    base_url: resource.base_url ?? "",
+    group: resource.group ?? "",
+    region: resource.region ?? "",
+    environment: resource.environment ?? "",
+    status: resource.status,
+    healthy: resource.healthy,
+    priority: resource.priority,
+    weight: resource.weight,
+    rate_limit_rpm: resource.rate_limit_rpm ?? 0,
+    token_limit_tpm: resource.token_limit_tpm ?? 0,
+    max_concurrency: resource.max_concurrency ?? 0,
+    options,
   };
 }
 
