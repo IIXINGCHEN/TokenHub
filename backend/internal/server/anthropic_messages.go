@@ -214,7 +214,7 @@ func (s *Server) executeRoutedAnthropicMessages(
 		if err != nil {
 			return nil, Usage{}, err
 		}
-		return s.executeAnthropicMessagesRoute(ctx, route, req, r.Header)
+		return s.executeAnthropicMessagesRoute(ctx, route, anthropicRequestForRoute(req, route), r.Header)
 	})
 }
 
@@ -870,6 +870,7 @@ func (s *Server) handleAnthropicMessagesStream(
 			if prepareErr != nil {
 				return struct{}{}, Usage{}, prepareErr
 			}
+			attemptReq := anthropicRequestForRoute(req, prepared)
 			// Defer the response headers until the first byte is written, at which
 			// point prepared is the route that actually served the request.
 			tracker.onFirstWrite = func() {
@@ -883,11 +884,11 @@ func (s *Server) handleAnthropicMessagesStream(
 			var streamErr error
 			switch {
 			case prepared.Provider.Type == ProviderAnthropic:
-				streamUsage, streamErr = s.streamNativeAnthropicMessages(ctx, prepared, req, r.Header, tracker)
+				streamUsage, streamErr = s.streamNativeAnthropicMessages(ctx, prepared, attemptReq, r.Header, tracker)
 			case prepared.Provider.Type == ProviderOpenAICodex:
-				streamUsage, streamErr = s.streamCodexAsAnthropic(ctx, prepared, req, r.Header, tracker)
+				streamUsage, streamErr = s.streamCodexAsAnthropic(ctx, prepared, attemptReq, r.Header, tracker)
 			case openAIMessageProvider(prepared.Provider.Type):
-				streamUsage, streamErr = s.streamOpenAIAsAnthropic(ctx, prepared, req, tracker)
+				streamUsage, streamErr = s.streamOpenAIAsAnthropic(ctx, prepared, attemptReq, tracker)
 			default:
 				streamErr = NewHTTPError(
 					http.StatusNotImplemented,
