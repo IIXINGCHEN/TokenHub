@@ -17,10 +17,6 @@ import (
 )
 
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	project, key, err := s.authenticate(r)
 	if err != nil {
 		writeError(w, r, err)
@@ -146,10 +142,6 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	project, key, err := s.authenticate(r)
 	if err != nil {
 		writeError(w, r, err)
@@ -256,10 +248,6 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleResponsesCompact(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	project, key, err := s.authenticate(r)
 	if err != nil {
 		writeError(w, r, err)
@@ -311,10 +299,6 @@ func (s *Server) handleResponsesCompact(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	project, key, err := s.authenticate(r)
 	if err != nil {
 		writeError(w, r, err)
