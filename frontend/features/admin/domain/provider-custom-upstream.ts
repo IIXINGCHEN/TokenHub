@@ -3,7 +3,7 @@ export function providerAnthropicAuthType(values: Record<string, string>) {
   return values.anthropic_auth_type || "x-api-key";
 }
 
-const providerConnectionTestFields = new Set(["base_url", "api_key", "type", "anthropic_auth_type"]);
+const providerConnectionTestFields = new Set(["base_url", "api_key", "type", "anthropic_auth_type", "custom_headers"]);
 
 export function providerConnectionTestRunAfterUpdate(currentRun: number, key: string) {
   return providerConnectionTestFields.has(key) ? currentRun + 1 : currentRun;
@@ -13,6 +13,7 @@ export function customUpstreamDiscoveryPayload(
   values: Record<string, string>,
   providerID: string,
   modelCategory: string,
+  headers: Record<string, unknown> = {},
 ) {
   return {
     provider_id: providerID,
@@ -20,6 +21,7 @@ export function customUpstreamDiscoveryPayload(
     type: values.type || "openai_compatible",
     base_url: values.base_url,
     api_key: values.api_key,
+    ...headers,
     anthropic_auth_type: providerAnthropicAuthType(values),
     model_category: modelCategory,
   };
@@ -35,6 +37,7 @@ export function customUpstreamConnectionKey(values: Record<string, string>) {
     values.api_key,
     values.type || "openai_compatible",
     providerAnthropicAuthType(values),
+    values.custom_headers,
   ]);
 }
 

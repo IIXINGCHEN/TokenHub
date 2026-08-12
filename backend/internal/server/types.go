@@ -278,6 +278,7 @@ type ProviderCreateRequest struct {
 	Healthy                     *bool             `json:"healthy"`
 	Priority                    int               `json:"priority"`
 	Headers                     map[string]string `json:"headers"`
+	SensitiveHeaders            []string          `json:"sensitive_headers"`
 	Options                     map[string]string `json:"options"`
 	CatalogID                   string            `json:"catalog_id"`
 	ModelCategory               string            `json:"model_category"`
@@ -297,48 +298,52 @@ type ProviderCreateResult struct {
 }
 
 type Provider struct {
-	ID        string            `json:"id" gorm:"primaryKey"`
-	Name      string            `json:"name"`
-	Type      string            `json:"type"`
-	BaseURL   string            `json:"base_url,omitempty"`
-	APIKey    string            `json:"-"`
-	Status    string            `json:"status"`
-	Healthy   bool              `json:"healthy"`
-	Priority  int               `json:"priority"`
-	Headers   map[string]string `json:"headers,omitempty" gorm:"serializer:json"`
-	Options   map[string]string `json:"options,omitempty" gorm:"serializer:json"`
-	CreatedAt time.Time         `json:"created_at"`
+	ID                     string            `json:"id" gorm:"primaryKey"`
+	Name                   string            `json:"name"`
+	Type                   string            `json:"type"`
+	BaseURL                string            `json:"base_url,omitempty"`
+	APIKey                 string            `json:"-"`
+	Status                 string            `json:"status"`
+	Healthy                bool              `json:"healthy"`
+	Priority               int               `json:"priority"`
+	Headers                map[string]string `json:"headers,omitempty" gorm:"serializer:json"`
+	SensitiveHeaders       []string          `json:"sensitive_headers,omitempty" gorm:"serializer:json"`
+	HeaderValidationErrors []string          `json:"header_validation_errors,omitempty" gorm:"-"`
+	Options                map[string]string `json:"options,omitempty" gorm:"serializer:json"`
+	CreatedAt              time.Time         `json:"created_at"`
 }
 
 type ProviderResource struct {
-	ID                string                       `json:"id" gorm:"primaryKey"`
-	ProviderID        string                       `json:"provider_id" gorm:"index"`
-	Name              string                       `json:"name"`
-	Group             string                       `json:"group,omitempty" gorm:"index"`
-	ResourceType      string                       `json:"resource_type"`
-	BaseURL           string                       `json:"base_url,omitempty"`
-	APIKey            string                       `json:"api_key,omitempty"`
-	Region            string                       `json:"region,omitempty"`
-	Environment       string                       `json:"environment,omitempty"`
-	Status            string                       `json:"status"`
-	Healthy           bool                         `json:"healthy"`
-	Priority          int                          `json:"priority"`
-	Weight            int                          `json:"weight"`
-	RateLimitRPM      int64                        `json:"rate_limit_rpm"`
-	TokenLimitTPM     int64                        `json:"token_limit_tpm"`
-	MaxConcurrency    int64                        `json:"max_concurrency"`
-	Headers           map[string]string            `json:"headers,omitempty" gorm:"serializer:json"`
-	Options           map[string]string            `json:"options,omitempty" gorm:"serializer:json"`
-	Credentials       *ProviderResourceCredentials `json:"credentials,omitempty" gorm:"-"`
-	CredentialBlob    string                       `json:"-" gorm:"column:credential_blob"`
-	CredentialSummary map[string]string            `json:"credential_summary,omitempty" gorm:"-"`
-	Observation       *ProviderResourceObservation `json:"observation,omitempty" gorm:"-"`
-	FailureCount      int                          `json:"failure_count"`
-	CooldownUntil     *time.Time                   `json:"cooldown_until,omitempty"`
-	LastUsedAt        *time.Time                   `json:"last_used_at,omitempty"`
-	LastCheckedAt     *time.Time                   `json:"last_checked_at,omitempty"`
-	CreatedAt         time.Time                    `json:"created_at"`
-	UpdatedAt         time.Time                    `json:"updated_at"`
+	ID                     string                       `json:"id" gorm:"primaryKey"`
+	ProviderID             string                       `json:"provider_id" gorm:"index"`
+	Name                   string                       `json:"name"`
+	Group                  string                       `json:"group,omitempty" gorm:"index"`
+	ResourceType           string                       `json:"resource_type"`
+	BaseURL                string                       `json:"base_url,omitempty"`
+	APIKey                 string                       `json:"api_key,omitempty"`
+	Region                 string                       `json:"region,omitempty"`
+	Environment            string                       `json:"environment,omitempty"`
+	Status                 string                       `json:"status"`
+	Healthy                bool                         `json:"healthy"`
+	Priority               int                          `json:"priority"`
+	Weight                 int                          `json:"weight"`
+	RateLimitRPM           int64                        `json:"rate_limit_rpm"`
+	TokenLimitTPM          int64                        `json:"token_limit_tpm"`
+	MaxConcurrency         int64                        `json:"max_concurrency"`
+	Headers                map[string]string            `json:"headers,omitempty" gorm:"serializer:json"`
+	SensitiveHeaders       []string                     `json:"sensitive_headers,omitempty" gorm:"serializer:json"`
+	HeaderValidationErrors []string                     `json:"header_validation_errors,omitempty" gorm:"-"`
+	Options                map[string]string            `json:"options,omitempty" gorm:"serializer:json"`
+	Credentials            *ProviderResourceCredentials `json:"credentials,omitempty" gorm:"-"`
+	CredentialBlob         string                       `json:"-" gorm:"column:credential_blob"`
+	CredentialSummary      map[string]string            `json:"credential_summary,omitempty" gorm:"-"`
+	Observation            *ProviderResourceObservation `json:"observation,omitempty" gorm:"-"`
+	FailureCount           int                          `json:"failure_count"`
+	CooldownUntil          *time.Time                   `json:"cooldown_until,omitempty"`
+	LastUsedAt             *time.Time                   `json:"last_used_at,omitempty"`
+	LastCheckedAt          *time.Time                   `json:"last_checked_at,omitempty"`
+	CreatedAt              time.Time                    `json:"created_at"`
+	UpdatedAt              time.Time                    `json:"updated_at"`
 }
 
 type ProviderResourceCredentials struct {

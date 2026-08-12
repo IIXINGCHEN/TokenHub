@@ -45,6 +45,24 @@ test("edit discovery sends the provider ID and selected Anthropic auth mode", ()
   });
 });
 
+test("discovery includes custom header payloads", () => {
+  const headers = {
+    headers: { "X-Tenant": "tenant-one" },
+    sensitive_headers: ["X-Tenant"],
+  };
+
+  assert.deepEqual(customUpstreamDiscoveryPayload(bearerAnthropicValues, "", "chat", headers), {
+    provider_id: "",
+    name: "Bearer Anthropic",
+    type: "anthropic",
+    base_url: "https://anthropic.example.test/v1",
+    api_key: "test-api-key",
+    ...headers,
+    anthropic_auth_type: "bearer",
+    model_category: "chat",
+  });
+});
+
 test("Anthropic discovery defaults to x-api-key while other provider types omit the mode", () => {
   assert.equal(providerAnthropicAuthType({ type: "anthropic" }), "x-api-key");
   assert.equal(providerAnthropicAuthType({ type: "openai_compatible", anthropic_auth_type: "bearer" }), "");
@@ -71,10 +89,23 @@ test("changing the provider type invalidates the custom model cache key", () => 
   assert.notEqual(openAIConnection, anthropicConnection);
 });
 
+test("changing custom headers invalidates the custom model cache key", () => {
+  const firstConnection = customUpstreamConnectionKey({
+    ...bearerAnthropicValues,
+    custom_headers: `[{"name":"X-Tenant","value":"one"}]`,
+  });
+  const secondConnection = customUpstreamConnectionKey({
+    ...bearerAnthropicValues,
+    custom_headers: `[{"name":"X-Tenant","value":"two"}]`,
+  });
+
+  assert.notEqual(firstConnection, secondConnection);
+});
+
 test("connection inputs invalidate completed and in-flight connection tests", () => {
   const testedRun = 7;
 
-  for (const key of ["base_url", "api_key", "type", "anthropic_auth_type"]) {
+  for (const key of ["base_url", "api_key", "type", "anthropic_auth_type", "custom_headers"]) {
     assert.equal(providerConnectionTestRunAfterUpdate(testedRun, key), testedRun + 1, key);
   }
   for (const key of ["name", "priority"]) {

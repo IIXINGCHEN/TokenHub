@@ -823,9 +823,7 @@ func (s *Server) doNativeAnthropicRequest(
 	if betas := strings.TrimSpace(downstreamHeaders.Get("anthropic-beta")); betas != "" {
 		req.Header.Set("anthropic-beta", betas)
 	}
-	for key, value := range provider.Headers {
-		req.Header.Set(key, value)
-	}
+	applyProviderHeaders(req.Header, provider.Headers)
 	applyAnthropicProviderAuth(req, provider)
 	// The native path builds its own request but must follow the same streaming
 	// policy as the adapter: a total deadline would truncate a live stream.
@@ -837,7 +835,7 @@ func (s *Server) doNativeAnthropicRequest(
 	if err != nil {
 		return nil, err
 	}
-	if err := checkProviderResponse(resp); err != nil {
+	if err := checkProviderResponseForProvider(resp, provider); err != nil {
 		return nil, err
 	}
 	return resp, nil

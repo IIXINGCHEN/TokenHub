@@ -509,6 +509,9 @@ func customProviderCatalogEntry() ProviderCatalogEntry {
 }
 
 func CustomProviderCatalogFromUpstream(ctx context.Context, client *http.Client, req ProviderCreateRequest) (ProviderCatalogEntry, error) {
+	if err := validateProviderHeaderSupport(req.Type, req.Headers); err != nil {
+		return ProviderCatalogEntry{}, err
+	}
 	baseURL := strings.TrimSpace(req.BaseURL)
 	if baseURL == "" {
 		return ProviderCatalogEntry{}, NewHTTPError(http.StatusBadRequest, "provider_base_url_required", "Base URL is required to load upstream models")
@@ -531,7 +534,14 @@ func CustomProviderCatalogFromUpstream(ctx context.Context, client *http.Client,
 		return ProviderCatalogEntry{}, NewHTTPError(http.StatusBadGateway, "provider_models_request_failed", "Failed to create upstream models request")
 	}
 	apiKey := strings.TrimSpace(req.APIKey)
-	if providerType == ProviderAnthropic {
+	if providerType == ProviderGemini {
+		if apiKey != "" {
+			query := endpoint.Query()
+			query.Set("key", apiKey)
+			endpoint.RawQuery = query.Encode()
+			httpReq.URL = endpoint
+		}
+	} else if providerType == ProviderAnthropic {
 		if apiKey != "" {
 			provider := Provider{Type: providerType, APIKey: apiKey, Options: req.Options}
 			if err := configureAnthropicProviderAuth(&provider, req.AnthropicAuthType); err != nil {
@@ -547,6 +557,11 @@ func CustomProviderCatalogFromUpstream(ctx context.Context, client *http.Client,
 	} else if apiKey != "" {
 		httpReq.Header.Set("authorization", "Bearer "+apiKey)
 	}
+	headers, err := normalizeProviderHeaders(req.Headers)
+	if err != nil {
+		return ProviderCatalogEntry{}, err
+	}
+	applyProviderHeaders(httpReq.Header, headers)
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		return ProviderCatalogEntry{}, NewHTTPError(http.StatusBadGateway, "provider_models_request_failed", "Failed to request upstream models")

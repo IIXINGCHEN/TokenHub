@@ -340,6 +340,9 @@ func TestAnthropicMessagesPreservesNativeProtocolAndHeaders(t *testing.T) {
 		if r.Header.Get("anthropic-beta") != "interleaved-thinking-2025-05-14" {
 			t.Errorf("unexpected beta %q", r.Header.Get("anthropic-beta"))
 		}
+		if r.Header.Get("User-Agent") != "TokenHub-Anthropic/1.0" {
+			t.Errorf("unexpected custom User-Agent %q", r.Header.Get("User-Agent"))
+		}
 		decoder := json.NewDecoder(r.Body)
 		decoder.UseNumber()
 		if err := decoder.Decode(&upstreamPayload); err != nil {
@@ -359,7 +362,12 @@ func TestAnthropicMessagesPreservesNativeProtocolAndHeaders(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	handler, _, secret := newAnthropicGateway(t, upstream.URL+"/v1", ProviderAnthropic)
+	handler, store, secret := newAnthropicGateway(t, upstream.URL+"/v1", ProviderAnthropic)
+	provider, _ := store.GetProvider("prv_claude_code")
+	provider.Headers = map[string]string{"User-Agent": "TokenHub-Anthropic/1.0"}
+	if _, err := store.UpdateProvider(provider.ID, provider); err != nil {
+		t.Fatal(err)
+	}
 	resp := doAnthropicRequest(t, handler, "/v1/messages", map[string]any{
 		"model":      "claude-tokenhub-test",
 		"max_tokens": 1024,

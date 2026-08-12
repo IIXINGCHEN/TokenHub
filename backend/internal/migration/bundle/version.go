@@ -9,7 +9,7 @@ import (
 // SchemaVersion is the current version of the CanonicalMigrationBundle
 // schema shipped by this package. Follow semver: bump the major on any
 // breaking change to the on-disk JSON layout.
-const SchemaVersion = "1.1.0"
+const SchemaVersion = "2.0.0"
 
 // SemVer describes a parsed schema version.
 type SemVer struct {

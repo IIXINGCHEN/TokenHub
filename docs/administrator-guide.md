@@ -104,6 +104,16 @@ When Provider Channels, Model Directory, or Routing Policies has no configured d
 
 Publication and runtime health are different states. Membership in `GET /v1/models` requires an active external `Model`, at least one active `ModelRoute`, and API-key access when a model allowlist is configured. It does not change when a Provider or Provider Resource is temporarily unhealthy. Health affects whether a request can be served and is shown separately in the directory and routing diagnostics. Disabling the external model removes it from `GET /v1/models` while retaining its mappings for later re-publication.
 
+## Custom Upstream Request Headers
+
+In **Provider Channels**, add fixed custom request headers under a Provider's connection settings or under a Provider Resource's advanced settings. Provider headers are defaults; a Resource header with the same case-insensitive name overrides the Provider value for that actual routing attempt. This makes per-account failover safe: TokenHub recomputes the effective headers for every selected Resource. For example, set `User-Agent: TokenHub-Custom-Client/1.0` at Provider scope and override `X-Tenant` on individual Resources.
+
+The effective headers are applied consistently to connection tests, custom model discovery, OpenAI-compatible Chat Completions, Responses, Embeddings and Images (including streaming and image edits), native Anthropic Messages, and Gemini requests. Azure OpenAI and OpenAI Codex adapters do not support custom headers because they manage their own protocol identity.
+
+Mark credentials or tenant tokens as sensitive. TokenHub encrypts sensitive values at rest, masks them in management responses and previews, and excludes header values from audit snapshots. When editing a saved sensitive row, leave its masked value unchanged or blank to retain the secret; delete the row to clear it. Non-sensitive values remain visible to administrators.
+
+TokenHub rejects authentication headers, API-key and cookie credentials, forwarding identity headers, protocol-owned headers such as `Content-Type`, `Content-Length`, `Host`, `Anthropic-Version`, `Anthropic-Beta`, `OpenAI-Organization`, and `OpenAI-Project`, plus hop-by-hop and transport headers. Header names must be valid and unique ignoring case; values must be non-empty and contain no control characters rejected by the HTTP transport. The final merged configuration may contain at most 32 headers, with names up to 128 bytes, each value up to 4 KiB, and 16 KiB total. Legacy data that violates these rules is reported with `header_validation_errors` and is not applied to upstream requests until corrected.
+
 ## Model Routing Policies
 
 The admin console configures one routing strategy for the whole external model. Open the model card and select a strategy tab; the active tab explains its best use case, actual selection behaviour, parameter meaning, and a concrete example. Adjust the Provider parameters shown for that strategy, then choose **Apply Strategy**. The policy and every Provider parameter are saved atomically, so a model never runs with a partially updated configuration.

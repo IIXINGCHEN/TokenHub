@@ -9,6 +9,7 @@ import { defaultProviderClaudeCodeAttributionPolicy } from "../domain/provider-a
 import { providerAnthropicAuthType } from "../domain/provider-custom-upstream";
 import { initialModelRoutes } from "../domain/provider-model-selection";
 import { providerReasoningFormValues, providerReasoningOptions, providerReasoningOverrideFormValues } from "../domain/provider-reasoning";
+import { providerHeadersFormValue, providerHeadersPayload } from "../domain/provider-headers";
 import { activeLanguage, tx } from "../i18n/runtime";
 import { handleApprovalOrJSON } from "./governance-config";
 import { projectQuotaFields, type ProjectQuotaValues } from "../views/crud-projects";
@@ -23,6 +24,7 @@ export function providerPayload(values: Record<string, string>) {
     status: values.status || "active",
     healthy: values.healthy !== "false",
     priority: numberOr(values.priority, 10),
+    ...providerHeadersPayload(values.custom_headers),
     anthropic_auth_type: providerAnthropicAuthType(values),
     claude_code_attribution_policy: values.claude_code_attribution_policy || defaultProviderClaudeCodeAttributionPolicy(values.type, values.catalog_id),
     catalog_id: values.catalog_id,
@@ -84,6 +86,7 @@ export function providerResourcePayload(values: Record<string, string>) {
     rate_limit_rpm: numberOr(values.rate_limit_rpm, 0),
     token_limit_tpm: numberOr(values.token_limit_tpm, 0),
     max_concurrency: numberOr(values.max_concurrency, 0),
+    ...providerHeadersPayload(values.custom_headers),
     credentials,
     options: providerResourceOptions(values),
   };
@@ -150,6 +153,7 @@ export function providerResourceToForm(item: ProviderResource, providerOptions?:
     environment: item.environment ?? "",
     status: item.status,
     healthy: String(item.healthy),
+    custom_headers: providerHeadersFormValue(item.headers, item.sensitive_headers),
     ...providerReasoningOverrideFormValues(item.options, providerOptions),
   };
 }

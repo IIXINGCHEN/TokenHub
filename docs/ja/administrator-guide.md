@@ -104,6 +104,16 @@ Provider Channels、Model Directory、Routing Policies に設定データがな�
 
 「公開状態」と「実行時ヘルス」は独立しています。`GET /v1/models` に含まれるには、外部 `Model` が有効、1 つ以上の `ModelRoute` が有効、さらに API Key にモデル許可リストがある場合は対象モデルが許可済みである必要があります。Provider または Provider Resource の一時的な不健全は一覧の所属を変更せず、現在のリクエストを処理できるかどうかだけに影響し、ディレクトリとルーティング診断に別状態として表示されます。外部モデルを非公開にすると `GET /v1/models` から削除されますが、後で再公開できるようマッピングは保持されます。
 
+## カスタム上流リクエストヘッダー
+
+「Provider Channels」で、Provider の接続設定または Provider Resource の詳細設定に固定カスタムリクエストヘッダーを追加できます。Provider ヘッダーが既定値となり、Resource に同名（大文字小文字を区別しない）のヘッダーがある場合、その実際のルーティング試行では Resource の値が上書きします。アカウントリソースをフェイルオーバーするたびに、TokenHub は選択した Resource ごとの有効ヘッダーを再計算します。たとえば Provider に `User-Agent: TokenHub-Custom-Client/1.0` を設定し、各 Resource で `X-Tenant` を上書きできます。
+
+有効ヘッダーは、接続テスト、カスタムモデル検出、OpenAI 互換の Chat Completions、Responses、Embeddings、Images（ストリーミングと画像編集を含む）、ネイティブ Anthropic Messages、Gemini の各リクエストへ一貫して適用されます。Azure OpenAI と OpenAI Codex のアダプターはプロトコル ID を自身で管理するため、カスタムヘッダーには対応しません。
+
+認証情報やテナント Token は機密値として指定してください。TokenHub は機密値を暗号化して保存し、管理レスポンスとプレビューではマスクし、監査スナップショットからすべてのヘッダー値を除外します。保存済みの機密行を編集するときは、マスク値を変更しないか空欄にすると秘密値を保持し、行を削除した場合だけ消去します。非機密値は引き続き管理者に表示されます。
+
+TokenHub は、認証ヘッダー、API Key と Cookie の認証情報ヘッダー、転送元 ID ヘッダー、`Content-Type`、`Content-Length`、`Host`、`Anthropic-Version`、`Anthropic-Beta`、`OpenAI-Organization`、`OpenAI-Project` などプロトコル管理のヘッダー、および hop-by-hop・転送ヘッダーを拒否します。ヘッダー名は有効で、大文字小文字を区別せず一意である必要があります。値は空にできず、HTTP transport が拒否する制御文字を含められません。最終的にマージされた設定は最大 32 ヘッダー、名前は 128 バイトまで、値は 1 件 4 KiB まで、合計 16 KiB までです。規則に違反する旧データは `header_validation_errors` で通知され、修正するまで上流リクエストへ適用されません。
+
 ## モデルルーティングポリシー
 
 管理コンソールでは、外部モデル全体に対してルーティング戦略を 1 つ設定します。モデルカードで戦略タブを選択すると、現在のタブに適したケース、実際の選択動作、パラメータの意味、具体例が表示されます。その戦略で表示される各 Provider のパラメータを調整して、**戦略を適用** を選択します。戦略とすべての Provider パラメータはアトミックに保存されるため、モデルが部分更新された設定で動作することはありません。

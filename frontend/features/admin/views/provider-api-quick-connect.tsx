@@ -2,11 +2,13 @@ import { Check, CircleAlert, CircleCheck, Eye, EyeOff, KeyRound, LoaderCircle, P
 import { useRef, useState } from "react";
 import { type ApiContext, type ProviderCatalogEntry, type ProviderCatalogModel } from "../core/types";
 import { providerTypeLabel } from "../domain/labels";
+import { providerHeaderFormError, providerHeadersPayload } from "../domain/provider-headers";
 import { formatModelPrice } from "../domain/formatting";
 import { providerAnthropicAuthType, providerConnectionTestRunAfterUpdate } from "../domain/provider-custom-upstream";
 import { clearCustomValidity, countWithUnit, handleRequiredFieldInvalid, tx } from "../i18n/runtime";
 import { adminFetch, isAuthExpiredError, readAdminError } from "../resources/payloads";
 import { providerTypeOptions } from "../shared/ui";
+import { ProviderCustomHeaders } from "./provider-custom-headers";
 import { AnthropicAuthTypeField } from "./provider-editor-sections";
 
 type ProviderConnectionTestState = {
@@ -123,6 +125,8 @@ export function ProviderAPIQuickConnect({
   }
 
   async function testConnection() {
+    const headerError = providerHeaderFormError(values.custom_headers);
+    if (headerError) { setConnectionTest({ status: "error", message: tx(headerError) }); return; }
     if (!connectionReady) {
       setConnectionTest({ status: "error", message: tx("请填写 Base URL 和 API Key 后测试。") });
       return;
@@ -140,6 +144,7 @@ export function ProviderAPIQuickConnect({
           type: values.type,
           base_url: values.base_url,
           api_key: values.api_key,
+          ...providerHeadersPayload(values.custom_headers),
           anthropic_auth_type: providerAnthropicAuthType(values),
         }),
       });
@@ -330,6 +335,11 @@ export function ProviderAPIQuickConnect({
               <small>{tx("Anthropic 官方默认保留；明确非官方 Provider 默认移除。自定义且来源不明的 Anthropic 端点默认保留。")}</small>
             </label>
           </div>
+          <ProviderCustomHeaders
+            disabled={values.type === "azure_openai" || values.type === "openai_codex"}
+            onChange={(value) => onUpdate("custom_headers", value)}
+            value={values.custom_headers ?? "[]"}
+          />
         </div>
       ) : null}
     </section>
