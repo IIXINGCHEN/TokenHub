@@ -93,9 +93,19 @@ func NewWithConfig(store Store, config Config) *Server {
 	imageContext, imageCancel := context.WithCancel(context.Background())
 	responseContext, responseCancel := context.WithCancel(context.Background())
 	client, streamClient, streamIdleTimeout := newUpstreamClients(config)
+	allowedProviderUpstreams := allowedProviderUpstreamCIDRs()
 	openai := OpenAICompatibleAdapter{Client: client, StreamClient: streamClient, StreamIdleTimeout: streamIdleTimeout}
 	codexSubscription := &CodexSubscriptionAdapter{
-		Client:             &http.Client{},
+		Client: &http.Client{
+			// The same SSRF guard the other provider adapters get: a custom
+			// Codex endpoint is validated at save time, but DNS answers can
+			// change afterwards and redirects must not bounce
+			// credential-bearing responses/compact/probe/image calls into
+			// the internal network. No Client.Timeout: streaming stays
+			// bounded by StreamIdleTimeout, exactly as before.
+			Transport:     guardProviderUpstreamRequests(ssrfGuardedProviderTransport(allowedProviderUpstreams), allowedProviderUpstreams),
+			CheckRedirect: strictProviderUpstreamRedirect,
+		},
 		StreamIdleTimeout:  streamIdleTimeout,
 		RefreshCredentials: store.RefreshProviderResourceCredentials,
 	}
