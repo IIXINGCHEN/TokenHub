@@ -341,6 +341,9 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_MANAGED_UPDATES` | `false` | 允许容器部署执行在线更新与回退；原生部署始终允许 |
 | `TOKENHUB_INSTALL_ROOT` | `/opt/tokenhub` | 托管 Release 在线更新与回退使用的安装根目录 |
 | `TOKENHUB_TRUSTED_PROXY_CIDRS` | 空 | 允许提供 `X-Forwarded-For` 的代理 IP 或 CIDR，逗号分隔 |
+| `TOKENHUB_PROVIDER_UPSTREAM_ALLOWED_CIDRS` | 空 | 逗号分隔的私网 CIDR（仅 RFC1918/ULA），网段内的字面量 IP 可用作自定义 provider base URL（用于内网模型服务）。这些显式放行的私网字面量可使用 HTTP；公网 provider URL 必须使用 HTTPS。解析到私网地址的域名与重定向目标仍被拒绝 |
+| `TOKENHUB_PROVIDER_UPSTREAM_NAT64_PREFIX` | 空 | 可选的 RFC 6052 DNS64/NAT64 前缀，用于识别其中嵌入的 IPv4 目标。支持 32、40、48、56、64、96 位前缀；使用 `64:ff9b:1::/48` 等网络专用前缀时需要配置，标准 `64:ff9b::/96` 前缀无需配置 |
+| `TOKENHUB_PROVIDER_UPSTREAM_ALLOW_LOOPBACK` | `false` | 显式允许 provider base URL（包括 HTTP URL）使用 `localhost`、`127.0.0.1` 或 `::1`，用于本地 Ollama/LM Studio 开发；公网 provider URL 必须使用 HTTPS；生产环境应保持关闭 |
 | `TOKENHUB_CORS_ALLOWED_ORIGINS` | 公网地址 | 允许调用后端的浏览器 Origin，逗号分隔 |
 | `TOKENHUB_ADMIN_TOKEN` | `change-me-tokenhub-admin-token` | Admin API 启动访问 Token |
 | `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD` | `change-me-tokenhub-admin-password` | 初始 `admin` 用户密码；生产启动前必须修改 |
@@ -371,6 +374,9 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_TRACING_QUEUE_SIZE` | `2048` | 等待转换成 span 的完成事件数；队列满时丢弃链路而不是拖慢请求 |
 | `TOKENHUB_UPSTREAM_NON_STREAM_TIMEOUT_SECONDS` | `120` | 单个非流式上游请求的整体超时 |
 | `TOKENHUB_UPSTREAM_STREAM_IDLE_TIMEOUT_SECONDS` | `300` | 流式请求没有整体超时；该值限制等待响应头的时长，以及流开始后允许的静默时长。每收到一个字节即重新计时 |
+| `TOKENHUB_MAX_JSON_REQUEST_BYTES` | `8388608`（8 MiB） | `/v1` 接口的 JSON 请求体上限。可填原始字节数或二进制单位（`8m`、`8mib`、`512k`）。超过 512 MiB 会被截断到上限 |
+| `TOKENHUB_MAX_MULTIMODAL_REQUEST_BYTES` | `33554432`（32 MiB） | 多模态对话接口（`/v1/chat/completions`、`/v1/responses`、`/v1/messages`、playground）的更高请求体上限。请将反向代理的 `client_max_body_size` 至少设置为该值 |
+| `TOKENHUB_NGINX_CLIENT_MAX_BODY_SIZE` | `32m` | 仅内置的多实例 nginx 负载均衡器读取该值。它使用 nginx 尺寸语法（`32m`、`512k`），不是后端的字节格式，且应不小于 `TOKENHUB_MAX_MULTIMODAL_REQUEST_BYTES` |
 | `TOKENHUB_IN_FLIGHT_LEASE_TTL_SECONDS` | `300` | 集群并发租约的过期时间及续租周期基准 |
 | `TOKENHUB_CLUSTER_LOCK_TTL_SECONDS` | `180` | 集群协调锁的过期时间及续租周期基准 |
 | `TOKENHUB_GRACEFUL_SHUTDOWN_SECONDS` | `150` | 停机时等待在途请求完成的最长秒数 |
@@ -378,11 +384,21 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_CACHE_AFFINITY_ENABLED` | `false` | 对 Chat Completions、Anthropic Messages 和 Responses，将同一会话固定到同一个上游账号，使上游 prompt cache 持续命中。默认关闭，因为它会改变路由行为 |
 | `TOKENHUB_CACHE_AFFINITY_MODELS` | 空 | 逗号分隔的模型灰度名单；留空表示对全部模型生效 |
 | `TOKENHUB_CACHE_AFFINITY_ALLOW_USER_SCOPE` | `false` | 是否接受 Chat/Responses 的 `user` 和 Anthropic 的 `metadata.user_id` 作为亲和键。默认关闭，因为同一用户的并发会话会共享取值、全部落到同一个账号 |
+| `TOKENHUB_GUARDRAIL_MODEL_URL` | 空 | 专用 Qwen3Guard 服务的完整 OpenAI-compatible chat-completions URL。每次调用前，本地 `mask` 规则命中的值会替换为 `[REDACTED]`，未命中的待检测文本仍会发送到该服务；留空时不调用模型，并按各策略配置的不可用行为处理 |
+| `TOKENHUB_GUARDRAIL_MODEL_API_KEY` | 空 | 专用安全模型服务的可选 Bearer 凭据 |
+| `TOKENHUB_GUARDRAIL_MODEL_NAME` | `Qwen/Qwen3Guard-Gen-0.6B` | 发送给安全模型服务的模型标识 |
+| `TOKENHUB_GUARDRAIL_MODEL_TIMEOUT_SECONDS` | `10` | 单次安全模型分类的超时时间 |
 | `TOKENHUB_IMAGE_STORAGE_DIR` | `data/images` | 生成图片资产的存放目录 |
 | `TOKENHUB_IMAGE_WORKER_CONCURRENCY` | `2` | 消费图片生成队列的工作协程数量 |
 | `TOKENHUB_IMAGE_QUEUE_CAPACITY` | `64` | 队列中允许排队的图片任务上限 |
 | `TOKENHUB_IMAGE_JOB_TIMEOUT_SECONDS` | `300` | 单个图片生成任务的超时时间，超时判定为失败 |
 | `TOKENHUB_IMAGE_CAPABILITY_RETRY_SECONDS` | `86400` | 被标记为不支持图片生成的供应商资源，隔多久重新探测一次 |
+| `TOKENHUB_RESPONSE_WORKER_CONCURRENCY` | `2` | 领取持久化后台 Responses 任务的 Worker 数量 |
+| `TOKENHUB_RESPONSE_POLL_INTERVAL_MILLIS` | `250` | 后台 Responses 任务与取消状态的数据库轮询间隔 |
+| `TOKENHUB_RESPONSE_JOB_TIMEOUT_SECONDS` | `300` | 单个后台 Responses 任务的执行超时 |
+| `TOKENHUB_RESPONSE_LEASE_TTL_SECONDS` | `30` | 多实例间隔离后台 Responses Worker 的租约时长 |
+| `TOKENHUB_RESPONSE_RESULT_TTL_SECONDS` | `3600` | 任务完成后加密请求与结果载荷的保留时长 |
+| `TOKENHUB_RESPONSE_MAX_QUEUED_JOBS` | `1000` | 单个部署接受的排队中与运行中后台 Responses 任务总上限 |
 | `TOKENHUB_API` | 空 | `tokenhub-migrate` CLI 的目标 Admin API 地址。仅由该 CLI 读取，后端服务不会读取；可被 `--to` 覆盖 |
 
 ## 前端环境变量

@@ -76,8 +76,8 @@ func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var request imageGenerationRequest
-	if err := decodeJSON(r, &request); err != nil {
-		writeError(w, r, NewHTTPError(http.StatusBadRequest, "invalid_request", err.Error()))
+	if err := s.decodeJSON(w, r, &request); err != nil {
+		writeError(w, r, err)
 		return
 	}
 	originator := strings.ToLower(strings.TrimSpace(r.Header.Get("originator")))
@@ -95,14 +95,15 @@ func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	job, err := s.store.CreateImageJob(ImageJob{
-		ProjectID: project.ID,
-		APIKeyID:  key.ID,
-		RequestID: call.RequestID,
-		Status:    imageJobStatusQueued,
-		Model:     request.Model,
-		Action:    "generate",
-		Quality:   request.Quality,
-		Size:      request.Size,
+		ProjectID:        project.ID,
+		APIKeyID:         key.ID,
+		AttributedUserID: usageAttributionUserID(key, project),
+		RequestID:        call.RequestID,
+		Status:           imageJobStatusQueued,
+		Model:            request.Model,
+		Action:           "generate",
+		Quality:          request.Quality,
+		Size:             request.Size,
 	}, request.Prompt)
 	if err != nil {
 		s.store.FinishCall(call, RouteSelection{}, Usage{}, http.StatusInternalServerError, "image_job_create_failed", s.clientIP(r), r.UserAgent())
@@ -244,14 +245,15 @@ func (s *Server) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	job, err := s.store.CreateImageJob(ImageJob{
-		ProjectID: project.ID,
-		APIKeyID:  key.ID,
-		RequestID: call.RequestID,
-		Status:    imageJobStatusQueued,
-		Model:     request.Model,
-		Action:    "edit",
-		Quality:   request.Quality,
-		Size:      request.Size,
+		ProjectID:        project.ID,
+		APIKeyID:         key.ID,
+		AttributedUserID: usageAttributionUserID(key, project),
+		RequestID:        call.RequestID,
+		Status:           imageJobStatusQueued,
+		Model:            request.Model,
+		Action:           "edit",
+		Quality:          request.Quality,
+		Size:             request.Size,
 	}, request.Prompt)
 	if err != nil {
 		s.store.FinishCall(call, RouteSelection{}, Usage{}, http.StatusInternalServerError, "image_job_create_failed", s.clientIP(r), r.UserAgent())
@@ -340,10 +342,6 @@ func (s *Server) handleImageJob(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAdminImageJobs(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAdmin(w, r, "audit", r.Method); !ok {
-		return
-	}
-	if r.Method != http.MethodGet {
-		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
 		return
 	}
 	limit := 200
@@ -468,8 +466,26 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// drain the image queue is bad, failing to drain it and silently discarding
 	// every buffered trace is worse.
 	defer s.shutdownTracing()
+	s.responseWorkerStop.Do(func() {
+		s.responseCancel()
+	})
+	responseWorkersDone := make(chan struct{})
+	go func() {
+		s.responseWorkerGroup.Wait()
+		close(responseWorkersDone)
+	}()
+	select {
+	case <-responseWorkersDone:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	if s.billing != nil {
 		if err := s.billing.Shutdown(ctx); err != nil {
+			return err
+		}
+	}
+	if s.reconciliation != nil {
+		if err := s.reconciliation.Shutdown(ctx); err != nil {
 			return err
 		}
 	}
@@ -572,6 +588,11 @@ func (s *Server) processImageJob(work imageJobWork) {
 		return imageRunResult{data: imageBytes, revisedPrompt: revisedPrompt}, responseUsage, nil
 	})
 	s.store.RecordRouteAttempts(work.call.RequestID, attempts)
+	// Thread the attempt outcomes into the call context so the shared observation
+	// point reports per-candidate counts and upstream latency for image jobs the
+	// same way it does for chat and embedding calls. Both completion paths below
+	// reach observeGatewayCall through call, which carries these attempts.
+	work.call.RouteAttempts = attempts
 	if invokeErr != nil {
 		if errors.Is(invokeErr, context.DeadlineExceeded) {
 			message := fmt.Sprintf("Image generation exceeded the configured %d second timeout", s.config.ImageJobTimeoutSeconds)

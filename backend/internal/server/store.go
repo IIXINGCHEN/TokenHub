@@ -5,6 +5,8 @@ import (
 	"sync"
 	"time"
 
+	"tokenhub/backend/internal/guardrails"
+
 	"gorm.io/gorm"
 )
 
@@ -105,12 +107,18 @@ type ProviderObservation struct {
 
 type Store interface {
 	BillingStore
+	ReconciliationStore
 	CreateProject(project Project) Project
 	CreateProjectChecked(project Project) (Project, error)
 	ListProjects() []Project
 	UpdateProject(id string, patch Project) (Project, error)
 	DeleteProject(id string) error
 	GetProject(id string) (Project, bool)
+	CreateGuardrailPolicy(policy guardrails.Policy) (guardrails.Policy, error)
+	ListGuardrailPolicies() ([]guardrails.Policy, error)
+	GetGuardrailPolicy(id string) (guardrails.Policy, error)
+	UpdateGuardrailPolicy(id string, policy guardrails.Policy) (guardrails.Policy, guardrails.Policy, error)
+	DeleteGuardrailPolicy(id string) (guardrails.Policy, error)
 	ListProjectTeams(projectID string, offset int, limit int) ([]ProjectTeam, int64, error)
 	AddProjectTeam(link ProjectTeam) (ProjectTeam, error)
 	UpdateProjectTeam(projectID string, teamID string, role string) (ProjectTeam, error)
@@ -170,12 +178,34 @@ type Store interface {
 	FailUnfinishedImageJobs(code string, message string) ([]ImageJob, error)
 	UpdateImageJob(job ImageJob, revisedPrompt string) error
 	CompleteImageJob(call CallContext, job ImageJob, revisedPrompt string, asset ImageAsset, route RouteSelection, usage Usage, clientIP string, userAgent string) error
+	CreateResponseJob(job ResponseJob, requestJSON []byte) (ResponseJob, error)
+	GetResponseJob(id string) (ResponseJob, bool, error)
+	LoadResponseJobPayload(id string) ([]byte, []byte, error)
+	CountQueuedResponseJobs() (int64, error)
+	CountOutstandingResponseJobs() (int64, error)
+	CountRetainedResponseJobs() (int64, error)
+	ClaimResponseJob(owner string, leaseTTL time.Duration, resultTTL time.Duration) (ResponseJob, bool, error)
+	RenewResponseJobLease(id string, owner string, epoch int64, leaseTTL time.Duration) (time.Duration, bool, error)
+	AdmitResponseJob(ctx context.Context, id string, owner string, epoch int64, key APIKey, modelName string, tokenReservation int64) (CallContext, bool, error)
+	ReleaseResponseJobAdmission(requestID string)
+	ShutdownResponseJob(id string, owner string, epoch int64, resultTTL time.Duration) (string, bool, error)
+	MarkResponseJobPhase(id string, owner string, epoch int64, phase string, requestID string) (bool, error)
+	CancelResponseJob(id string, actor string, resultTTL time.Duration) (ResponseJob, bool, error)
+	FinalizeResponseJob(call CallContext, id string, owner string, epoch int64, status string, resultJSON []byte, route RouteSelection, usage Usage, statusCode int, errorCode string, errorMessage string, clientIP string, userAgent string, resultTTL time.Duration) (ResponseJob, bool, error)
+	RecoverResponseJobs(resultTTL time.Duration) (int64, int64, int64, error)
+	ExpireResponseJobs() (int64, error)
 	CreateImageAsset(asset ImageAsset) (ImageAsset, error)
 	ListImageAssets(jobID string) []ImageAsset
 	GetImageAsset(id string) (ImageAsset, bool)
 	ListUsageRecords() []UsageRecord
+	CreateAnalyticsCredential(credential AnalyticsCredential, rawSecret string) (AnalyticsCredential, string, error)
+	ListAnalyticsCredentials() []AnalyticsCredential
+	RevokeAnalyticsCredential(id string) (AnalyticsCredential, error)
+	ValidateAnalyticsCredential(rawSecret string) (AnalyticsCredential, error)
+	QueryTokenCostPage(ctx context.Context, query TokenCostQuery) (TokenCostPage, error)
 	GenerateBillingPeriod(period string) (map[string]any, error)
 	ListRequestLogs() []RequestLog
+	QueryRequestLogs(query RequestLogQuery) (RequestLogPage, error)
 	ListProviderObservations(since time.Time) []ProviderObservation
 	RecordProviderObservation(observation ProviderObservation)
 	GetProviderResourceObservation(resourceID string) (ProviderResourceObservation, bool)
@@ -236,6 +266,7 @@ var _ Store = (*GormStore)(nil)
 
 type GormStore struct {
 	db                   *gorm.DB
+	analyticsDB          *gorm.DB
 	mu                   *sync.Mutex
 	leaseHeartbeats      *sync.Map
 	secretKey            string

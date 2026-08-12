@@ -3,6 +3,7 @@ import { modelCategory, modelCategoryFormOptions, modelCategoryLabel } from "../
 import { codexImageCapableResources, findProvider, isCodexSubscriptionImageModel, modelCapabilitySummary, modelPriceSummary, modelRouteDefaults, modelRoutesFor, modelSelectOptions, projectMemberProjectSelectOptions, providerAccountResourceSummary, providerDisplayBaseURL, providerDisplayName, providerDisplayType, providerModelSelectOptions, providerRouteSummary, providerSelectOptions, routeProjectScopeSummary, routeScoreSummary, stringifyForm } from "../domain/entities";
 import { formatTime, modelToForm, routeStrategyLabel } from "../domain/formatting";
 import { providerTypeLabel, resourceTypeLabel } from "../domain/labels";
+import { providerReasoningFieldConfigs, providerReasoningFormValues, providerSupportsAnthropicReasoning } from "../domain/provider-reasoning";
 import { availableProviderModelSelectOptions } from "../domain/provider-model-selection";
 import { tx } from "../i18n/runtime";
 import { adminDelete, adminMutate, createModelRoutes, modelPayload, providerPayload, providerResourcePayload, providerResourceToForm, providerResourceUpdatePayload, providerUpdatePayload, routePayload, testProviderAvailability } from "./payloads";
@@ -32,8 +33,10 @@ export function providerConfig(): ResourceConfig<Provider> {
       { key: "base_url", label: "Base URL" },
       { key: "api_key", label: "API Key", type: "password", help: "编辑时留空表示不修改现有 Key；只有填写新值才会覆盖。" },
       { key: "priority", label: "优先级", type: "number", placeholder: "留空自动追加", help: "数字越小越先调用；新增时留空会自动排在该统一模型已有 Provider 后面。" },
+      { key: "claude_code_attribution_policy", label: "Claude Code 归因块", type: "select", options: ["preserve", "strip"], help: "Anthropic 官方默认保留；明确非官方 Provider 默认移除。自定义且来源不明的 Anthropic 端点默认保留。" },
       { key: "status", label: "状态", type: "select", options: ["active", "disabled"], required: true },
       { key: "healthy", label: "健康", type: "boolean" },
+      ...providerReasoningFieldConfigs((values) => providerSupportsAnthropicReasoning(values.type)),
     ],
     list: (ctx) => ctx.providers,
     create: (ctx, values) => adminMutate(ctx, "/api/admin/providers", "POST", providerPayload(values)),
@@ -57,8 +60,10 @@ export function providerConfig(): ResourceConfig<Provider> {
       type: item.type,
       base_url: item.base_url ?? "",
       priority: String(item.priority ?? 10),
+      claude_code_attribution_policy: item.options?.claude_code_attribution_policy ?? "preserve",
       status: item.status,
       healthy: String(item.healthy),
+      ...providerReasoningFormValues(item.options),
     }),
   };
 }
@@ -86,6 +91,7 @@ export function providerResourceFieldConfigs(provider?: Provider): FieldConfig[]
     { key: "rate_limit_rpm", label: "RPM 限制", type: "number" },
     { key: "token_limit_tpm", label: "TPM 限制", type: "number" },
     { key: "max_concurrency", label: "最大并发", type: "number" },
+    { key: "claude_code_attribution_policy", label: "Claude Code 归因块", type: "select", options: ["inherit", "preserve", "strip"], help: "继承 Provider 策略，或只为当前 Resource 覆盖保留或移除行为。" },
     { key: "status", label: "状态", type: "select", options: ["active", "disabled"], required: true },
     { key: "healthy", label: "健康", type: "boolean" },
   ];
@@ -122,7 +128,7 @@ export function providerResourceConfig(provider?: Provider): ResourceConfig<Prov
         doneMessage: (item) => `${item.name} ${tx("Token 已刷新")}`,
       },
     ],
-    toForm: providerResourceToForm,
+    toForm: (item) => providerResourceToForm(item, provider?.options),
   };
 }
 
@@ -138,7 +144,7 @@ export function providerCreateAccountResourceFields() {
 }
 
 export function providerCreateAccountRuntimeFields() {
-  const keys = new Set(["base_url", "group", "priority", "weight", "rate_limit_rpm", "token_limit_tpm", "max_concurrency", "status"]);
+  const keys = new Set(["base_url", "group", "priority", "weight", "rate_limit_rpm", "token_limit_tpm", "max_concurrency", "claude_code_attribution_policy", "status"]);
   return providerResourceFieldConfigs()
     .filter((field) => keys.has(field.key))
     .map((field) => field.key === "base_url" ? { ...field, required: true } : field);
@@ -176,11 +182,13 @@ export function providerResourceDraftDefaults(provider: { provider_id?: string; 
     rate_limit_rpm: "",
     token_limit_tpm: "",
     max_concurrency: "3",
+    claude_code_attribution_policy: "inherit",
     token_type: "",
     expires_at: "",
     scopes: "",
     status: "active",
     healthy: "true",
+    ...providerReasoningFormValues(),
   };
 }
 

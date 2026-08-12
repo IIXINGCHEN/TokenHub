@@ -36,11 +36,27 @@ assistant ターンを再実行すると、そのターンに新しい候補を�
 
 Playground の利用を許可されたすべてのユーザーは、性能、利用量、Request ID、自分のレスポンス詳細を確認できます。Provider、resource、上流 Request ID、ルート試行の詳細は routing-read 権限を持つロールだけに表示されます。コストは上流請求書ではなく外部モデルの設定価格を使うため、「推定」と明記されます。
 
+## コンテンツセキュリティポリシー
+
+**セキュリティポリシー > コンテンツセキュリティ**では、すべての Project または選択した Project を対象とするポリシーを作成できます。1 つのポリシーに、キーワードまたは正規表現、機密データ検出、任意の Qwen3Guard モデル検出を組み合わせられます。検出項目はまとめて評価され、最も厳しいアクションが適用されます。優先順位は `block`、`mask`、`audit` の順です。変更は保存後すぐに反映されます。
+
+決定論的な検出器は TokenHub 内で実行されます。設定済みの Qwen3Guard 検出器を呼び出す前に、TokenHub は検出専用のテキストコピーで、ローカルの `mask` ルールがすでに検出した機密値を `[REDACTED]` に置き換えます。これらの生の値はモデルサービスへ送信されません。ローカルのマスクルールに一致しなかったテキストは、引き続き `TOKENHUB_GUARDRAIL_MODEL_URL` で設定したサービスへ送信されます。そのサービスは承認済みのデータ境界内にデプロイし、転送、ログ、保持の管理を確認してください。リモートサービスが保持するコピーは TokenHub では管理できません。URL が空の場合はモデルを呼び出さず、各モデル検出項目に設定された利用不可時の動作を適用します。
+
+機密データ検出は、ラベル付きまたは構造検証済みの中国身分証番号、中国本土の携帯電話番号、メールアドレス、銀行カード番号、Credential と秘密鍵、氏名、住所、生年月日などを対象とします。日付の妥当性、身分証のチェックサム、Luhn 検証などにより、一般的な数値の誤検知を抑えます。広く有効化する前に、**ポリシーをテスト**で代表的な陽性例と陰性例を確認してください。
+
+現在のリクエスト側検査は `/v1/chat/completions`、`/v1/responses`、`/v1/messages` を対象とし、Model Playground からのリクエストも含みます。TokenHub は Provider へルーティングする前に、通常のユーザー表示テキストを検査します。このバージョンでは、構造化された tool 引数、JSON payload 内の値、コード固有の解析、Provider レスポンスは検査しません。セキュリティ検査自体には独立したテキストサイズ上限を設けず、設定済みのリクエスト本文サイズ上限は引き続き適用されます。決定論的な検出にはルール複雑度で重み付けした集約作業予算と検出件数予算も適用し、長文、高コストな式、または密集したマスキング一致の病的な組み合わせが CPU やメモリを長時間占有することを防ぎます。上限超過時は HTTP 503 `guardrail_evaluation_budget_exceeded` を返し、通常の長いコンテキストと適度なルール数は引き続き処理できます。
+
+ポリシーがリクエストをブロックすると、互換 API は HTTP 403 と `guardrail_blocked` を返します。エラー詳細には `categories`、`reason_codes`、`policy_matches` が含まれ、各ポリシー一致からポリシー、検出項目、検出器タイプ、カテゴリ、理由コードを確認できます。監査記録との対応付けにはレスポンスの `request_id` を使用します。一致した原文はエラー詳細に含まれません。Model Playground にも同じポリシーと理由が表示されるため、「Request blocked by a content security policy」だけでなく、再現可能な情報を管理者へ報告できます。
+
 ## API Key の帰属と利用量配賦
 
 API Key を発行するときは、**帰属ユーザー**で実際の利用者を選択します。発行者は監査メタデータに残りますが、Key の利用量は帰属ユーザーに計上されます。プラットフォーム管理者は任意の有効ユーザー、チームリーダーは自チームの有効ユーザーを選択でき、一般ユーザーは自分だけを指定できます。
 
 新しい利用量レコードにはその時点の帰属ユーザーが固定保存されるため、後から帰属を変更したり Key を削除したりしても、記録済みの履歴は書き換わりません。このフィールド導入前のレコードは、Key の現在の帰属ユーザー、従来の発行者、プロジェクト責任者、最後に `unknown` の順でフォールバックします。個人ランキングには、利用実績に現れた Key 数と、現在帰属している失効前の Key 数が別々に表示されます。
+
+## ローカル Agent の読み取り専用コストアクセス
+
+利用量収集だけを目的に、自動化 Agent へ管理者セッションやモデル呼び出し用 API Key を渡さないでください。専用の `tha_` 分析 Credential を作成し、可能な限り 1 つの Project に限定して、個別に失効できるようにします。[Agent Token コスト API ガイド](agent-token-cost-api.md)では、Credential のライフサイクル、フィルター、集計、JSON/CSV Schema、スナップショットページング、差分 watermark、監査動作、クエリ上限を説明します。
 
 ## Key 単位の RPM・TPM 制限
 
@@ -53,6 +69,14 @@ RPM は Provider 呼び出し前に消費されます。TPM も同じ時点で�
 ## Provider カタログの可用性
 
 TokenHub は、最後に正常に読み込んだ Provider カタログをデータベースに保存します。バックエンドの起動時には毎回、設定済みのローカル `provider-catalog.json` を検証して読み込み、データベースのスナップショットをアトミックに置き換えます。通常の **Provider Channels** リクエストはデータベースのスナップショットだけを読み取り、管理者は同じローカルカタログを手動で更新することもできます。ローカルカタログの読み込み、解析、または完全性検証に失敗した場合、TokenHub は最後に有効だったスナップショットを引き続き使用します。
+
+## Claude Code 帰属ブロックの処理
+
+Claude Code は、Anthropic Messages リクエストの `system` 配列の先頭に帰属テキストブロックを挿入する場合があります。このブロックにはリクエストごとに変化し得るクライアントメタデータが含まれ、サードパーティー上流で本来安定しているプロンプト接頭辞を再利用できなくなることがあります。
+
+各 Provider には `claude_code_attribution_policy` を設定できます。新規の Anthropic 公式 Provider は `preserve`、明確な非公式 Provider はサードパーティー上流のプロンプト接頭辞キャッシュを再利用しやすくするため `strip` がデフォルトです。提供元が不明なカスタム Anthropic エンドポイントは `preserve` がデフォルトです。既存 Provider でこの設定がない場合も、引き続き帰属ブロックを保持します。`strip` は、最初のトップレベル `system` 要素の `type` が `"text"` で、テキストが `x-anthropic-billing-header:` から厳密に始まる場合に限り、その要素を削除します。文字列形式の `system` プロンプト、後続要素、先頭に空白があるテキスト、その他の要素型は削除しません。
+
+Provider Resource は既定で Provider ポリシーを継承し、`options.claude_code_attribution_policy` を `preserve` または `strip` に設定して上書きできます。この Resource オプションを省略すると継承に戻ります。TokenHub はルート試行ごとに有効なポリシーを適用するため、フェイルオーバー先の Resource は元のリクエストを受け取り、独自の設定を適用します。監査ペイロードにも元のリクエストを保持します。`POST /v1/messages/count_tokens` は具体的な Provider Resource を選択しないため、引き続き元のリクエストをカウントします。
 
 ## Codex 使用量リセットクレジット
 
@@ -159,6 +183,10 @@ TokenHub は `GET /metrics` で Prometheus メトリクスを公開できます�
 | --- | --- | --- |
 | `tokenhub_gateway_requests_total` | counter | 論理的なモデル API リクエスト数。複数候補へのフェイルオーバーが発生しても 1 回として数えます。 |
 | `tokenhub_gateway_request_duration_seconds` | histogram | フェイルオーバーを含むエンドツーエンドのレイテンシ。バケットは 300 秒まで。 |
+| `tokenhub_gateway_route_attempts_total` | counter | 物理的な候補試行数。`rate(route_attempts_total) / rate(routed_requests_total)` が平均フェイルオーバー深度です。`routed_requests_total` は試行を 1 回以上行ったリクエストのみを数えるため、Provider に到達しなかった拒否トラフィックで比率が希釈されることはありません。`invoked` ラベルで容量不足によりスキップされた候補を区別できます。`status_code` はゲートウェイがマッピングしたステータスです（上流の 401 は 502 として報告されます）。元の上流ステータスは `RouteAttemptLog` にあります。 |
+| `tokenhub_gateway_attempt_duration_seconds` | histogram | 呼び出された（invoked）1 試行の全所要時間。試行全体を囲む測定で、上流トランスポート・ストリーム変換・クライアントへの書き込みを含みます。ストリーミング呼び出しでは遅いクライアントの背圧を含むため、ゲートウェイのオーバーヘッドは `overhead_seconds` に別途報告されます。容量スキップ候補は含みません。 |
+| `tokenhub_gateway_routed_requests_total` | counter | 候補を 1 回以上試行した論理リクエスト数。フェイルオーバー深度比率の試行分母です。`provider_type` ラベルは最後に試行した候補です。Provider をまたぐフェイルオーバーでは、深度比率は `provider_type` ではなく `model` で集約してください。 |
+| `tokenhub_gateway_overhead_seconds` | histogram | ゲートウェイ自身のオーバーヘッドの近似値：エンドツーエンド所要時間から invoked な試行の所要時間合計を差し引き、負値は 0 にクリップします。ルーティングに受理されたものの試行前に失敗したリクエストは、その全所要時間をオーバーヘッドとして計上します。画像ジョブの所要時間にはキューの待機が含まれるため、画像のオーバーヘッドは上限値です。 |
 | `tokenhub_gateway_requests_in_flight` | gauge | 処理中のモデル API リクエスト数。管理トラフィックとスクレイプは含みません。 |
 | `tokenhub_gateway_tokens_total` | counter | 種別ごとの Token：`prompt`、`completion`、`cached`、`cache_write`、`reasoning`。 |
 | `tokenhub_gateway_cost_usd_total` | counter | Model Directory 価格による統一外部請求見積もり。Provider 実コストは権限付きリクエスト監査にのみ保持され、このメトリクスには含まれません。 |
@@ -170,9 +198,27 @@ TokenHub は `GET /metrics` で Prometheus メトリクスを公開できます�
 
 **Token の種別は排他的な分割ではないため、合計してはいけません。** `prompt` はすでに `cached` と `cache_write` を含み、`reasoning` は `completion` の一部です。合計すると二重計上になります。
 
-ルーティング前に拒否されたリクエスト（無効な API Key、クォータ超過、未知のモデル）はリクエスト数のみを増やします。Provider に到達していないため、Token・コスト・所要時間は記録しません。カタログに存在しないモデル名はそのまま記録せず `unknown` として扱うため、任意のモデル名を大量に送っても系列数を増やすことはできません。
+ルーティング前に拒否されたリクエスト（無効な API Key、クォータ超過、未知のモデル）はリクエスト数のみを増やします。Provider に到達していないため、Token・コスト・所要時間は記録しません。試行分母の `routed_requests_total` は候補に 1 回以上到達したリクエストのみを数えるため、拒否トラフィックの急増でフェイルオーバー深度の比率が希釈されることはありません。カタログに存在しないモデル名はそのまま記録せず `unknown` として扱うため、任意のモデル名を大量に送っても系列数を増やすことはできません。
 
 ラベルは `model`、`provider_type`、`provider_id`、`resource_id`、`status_code`、`error_code`、`stream` です。上流の失敗は `status_code="502"` と `provider_error` の 1 組にまとめて報告されなくなり、「上流エラーの分類」に記載のステータスとエラーコードを持ちます。旧来の値で一致させているダッシュボードやアラートは更新が必要です。`TOKENHUB_METRICS_PROJECT_LABEL=true` を設定すると `project_id` が追加され、各ゲートウェイメトリクスの系列数がアクティブなプロジェクト数だけ増加します。プロジェクト単位のダッシュボードが必要な場合を除き無効のままにし、Key 単位の集計には使用量レポートを利用してください。
+
+よく使う PromQL 例：
+
+```promql
+# モデルごとの平均フェイルオーバー深度。
+sum by (model) (rate(tokenhub_gateway_route_attempts_total[5m]))
+/
+sum by (model) (rate(tokenhub_gateway_routed_requests_total[5m]))
+
+# ゲートウェイオーバーヘッドの P99。histogram_quantile を呼ぶ前に bucket で
+# 集約する必要があります。集約後のパーセンタイル同士を引くのは数学的に無効です。
+histogram_quantile(
+  0.99,
+  sum by (le, stream) (rate(tokenhub_gateway_overhead_seconds_bucket[5m]))
+)
+```
+
+複数インスタンス構成では、各 bucket がカウンタなので全インスタンスの `sum(rate(..._bucket)) by (le)` からヒストグラムのパーセンタイルを計算できます。`tokenhub_gateway_requests_in_flight` は gauge なので、インスタンスごとの同時実行数が必要な場合は `instance` ラベルを保持して集約してください。インスタンスをまたいで合計すると総同時リクエスト数になります。
 
 メトリクスをスクレイプではなく push したい場合は、OpenTelemetry Collector の `prometheus` receiver でこのエンドポイントを収集して転送してください。トレースは別のシグナルで、ゲートウェイが直接送信します。次節を参照してください。
 
@@ -214,13 +260,23 @@ TOKENHUB_TRACING_HEADERS="Authorization=Basic $(printf '%s' 'pk-lf-...:sk-lf-...
 
 ## 外部請求コネクター
 
-プラットフォーム管理者は「コスト請求」で外部請求ソースを管理できます。TokenHub は Aliyun `QueryInstanceBill`、NewAPI の Quota データ、OneAPI 互換ログソースをサポートします。コネクターは接続テスト、即時同期、分単位の定期同期、履歴を保持したままの無効化、再有効化が可能です。
+プラットフォーム管理者は「コスト請求」で外部請求ソースを管理できます。TokenHub は Aliyun `QueryInstanceBill`、NewAPI の Quota データ、OneAPI 互換ログソースをサポートします。コネクターは接続テスト、即時同期、分単位の定期同期、履歴を保持したままの無効化、再有効化が可能です。対応する TokenHub Provider ID を設定し、請求が 1 つのアカウントに対応する場合は TokenHub リソースアカウント ID も任意で設定します。照合ではこの永続化されたスコープを使用し、別の Provider やアカウントの使用量が混入するのを防ぎます。
 
 Aliyun では請求 RPC Base URL、AccessKey ID、AccessKey Secret、ソースタイムゾーン、任意の Product Code を設定します。TokenHub は各 RPC リクエストを HMAC-SHA1 で署名し、請求期間を月単位で進めます。NewAPI では Base URL、アクセストークン、`New-Api-User` ユーザー ID、通貨、1 通貨単位に相当する Quota を設定します。TokenHub は公式仕様の認証ヘッダーで `GET /api/data/self` を呼び出し、同期範囲を最大 30 日のウィンドウに自動分割します。OneAPI 互換ソースでは Base URL、API Token、ログパス、通貨、Quota 換算値を設定します。すべてのコネクターで 1 秒あたりのリクエスト上限を設定でき、一時的なネットワークエラー、`429`、`5xx` は上限付き指数バックオフで再試行します。
 
 手動同期では RFC 3339 の `from` と `to` を指定できます。範囲を省略すると、最後に成功した終了時刻から続行します。各ページの Cursor を保存するため、再試行は同じ範囲のチェックポイントから再開します。正規化レコードは `(connector_id, external_id)` を冪等キーとし、通貨、ソースタイムゾーン、税、割引、返金、請求期間、利用開始・終了時刻を保持します。最近の同期にはページ数、リクエスト試行数、追加・更新件数、サニタイズ済みの失敗コードが表示されます。
 
 コネクター認証情報と生の請求スナップショットは `TOKENHUB_SECRET_KEY` から派生した AES-GCM で暗号化され、管理 API や監査 Payload には出力されません。再起動や複数レプリカ間でこのキーを安定して保持してください。関連エンドポイントは `GET/POST /api/admin/billing/connectors`、`PATCH /api/admin/billing/connectors/{id}`、`POST /api/admin/billing/connectors/{id}/test`、`POST /api/admin/billing/connectors/{id}/sync`、`GET /api/admin/billing/records`、`GET /api/admin/billing/sync-runs` です。
+
+## コスト照合
+
+プラットフォーム管理者は「コスト請求 → コスト照合ルール」で、同期済みの Provider 請求と TokenHub の使用量を比較できます。ルールでは、1 つの請求コネクター、明細/時間/日/月の粒度、照合ディメンション、IANA タイムゾーン、1 つの ISO 通貨、金額と比率の許容差、明細時間ウィンドウ、請求遅延ウィンドウ、任意のスケジュールを指定します。通貨は常に照合ディメンションであるため、通貨ごとに別のルールが必要です。TokenHub の使用量コストは USD で保存されるため、各ルールに固定の「1 USD = 対象通貨」レートを記録し、USD ルールでは `1` が必須です。任意の Provider 側マッピングで、外部の Provider、リソースアカウント、モデル、プロジェクト値を TokenHub 識別子に正規化できます。明細ルールには `request_id` が必須で、集計ルールは Provider、リソースアカウント、モデル、プロジェクト、通貨でグループ化できます。NewAPI の請求データにはリクエスト単位の識別子がないため、NewAPI コネクターは時間、日、月のルールのみをサポートし、明細ルールはサポートしません。手動入力した請求期間の時刻は、API に送信する前にルールの IANA タイムゾーンとして解釈されます。
+
+選択した請求期間でルールを実行すると、一致、Provider のみ、TokenHub のみ、金額不一致の 4 種類の件数、両側の合計、差異、考えられる原因、ドリルダウン可能なソースレコード ID が生成されます。金額はサブマイクロ精度で累積し、結果を保存または表示するときだけ最大 6 桁の小数に丸めます。明細照合では、設定ウィンドウ内の 1 対 1 の組み合わせ数を最初に最大化し、その後に合計時間距離を最小化します。期間境界の外側にある TokenHub レコードも、期間内の Provider 請求と一致する場合は結果に含まれます。Provider レコードは取り込み時刻ではなく利用時刻で期間に配賦されるため、遅れて到着した請求も元の期間に含まれます。定期実行では、設定した請求遅延を待ってから直近の完了済み時間、日、または月を照合します。
+
+各結果には、完全なルールスナップショット、ルールのバージョンとハッシュ、入力ハッシュ、実行者、時刻、監査イベントが保存されます。再計算では保存済みのルールスナップショットを使用します。再計算に失敗した場合は直前の成功結果と明細を保持し、失敗した試行を監査に記録します。ソース行が変わらなければ入力ハッシュと分類金額を再現できます。成功した結果をロックすると、以後の再計算を禁止できます。明細 API はサーバー側の `limit`/`offset` ページングを使用します。CSV はデフォルトで全差異行とソース参照を有界バッチでストリーミングし、暗黙の行数制限はありません。Provider 認証情報や生スナップショットは含まれず、リソースアカウント識別子は管理 API と CSV の両方でマスクされ、リソースアカウントのマッピングも監査スナップショットから除外されます。
+
+関連エンドポイントは `GET/POST /api/admin/billing/reconciliation-rules`、`GET/PATCH /api/admin/billing/reconciliation-rules/{id}`、`POST /api/admin/billing/reconciliation-rules/{id}/run`、`GET /api/admin/billing/reconciliations`、`GET /api/admin/billing/reconciliations/{id}`、および `{id}/lock`、`{id}/recalculate`、`{id}/export` アクションです。これらはプラットフォーム管理者だけが利用できます。
 
 ## セキュリティチェックリスト
 

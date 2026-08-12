@@ -175,6 +175,8 @@ curl --request POST \
 
 原生 Anthropic 路由保留 Anthropic 内容块与 beta Header。OpenAI 兼容路由转换文本、图片、客户端工具、工具结果、并行工具调用和流式事件。Anthropic 服务端工具无法转换到 OpenAI 兼容 Provider 时，接口返回 `400 unsupported_tool`。
 
+OpenAI 兼容路由可通过 Provider 和 Provider Resource 的 `options` 适配 Claude 推理参数。`reasoning_effort_map` 是类似 `{"minimal":"low","xhigh":"max"}` 的 JSON 对象；`reasoning_effort_values` 是逗号分隔的允许值；`reasoning_effort_unsupported` 可设为 `omit`（默认）、`reject`，或显式启用的 `passthrough`；`reasoning_budget_map` 按最大 Token 数及可选的 `*` 兜底值映射推理等级，例如 `{"2048":"low","8192":"medium","*":"max"}`。Provider Resource 配置覆盖 Provider 配置。TokenHub 将 `thinking.type=disabled` 转为 `none`；`adaptive` 在没有显式 effort 时使用上游默认值；`enabled` 根据 `budget_tokens` 映射。显式 `output_config.effort` 的优先级高于顶层 `effort` 和预算推导值。仅当上游支持在后续 assistant 消息中接收自身的 `reasoning_content` 时，才设置 `preserve_reasoning_content=true`。OpenAI 兼容上游返回的 `reasoning_content` 会按合法顺序转换为 Claude 的 `thinking` / `thinking_delta` 块，并附带 TokenHub 回放签名。
+
 路由到 OpenAI Codex Subscription 账号的模型也使用同一个 Messages 接口：TokenHub 将 Messages 直接转换为 Responses 协议，再把结果转换回 Anthropic 事件。因此 Claude Code 可以直接连接 TokenHub，不需要 CC-Switch 或其他本地协议代理。Codex 签发的推理签名会跨工具调用轮次传递，同一个 Claude Code 会话会保持绑定到同一个健康订阅账号。
 
 在 Codex 路由的 Messages 请求中，由于订阅上游不支持对应请求字段，`max_tokens`、`temperature`、`top_p`、`stop_sequences` 和 Anthropic 结构化输出格式无法被强制执行。
@@ -192,6 +194,27 @@ claude
 ```
 
 `ANTHROPIC_AUTH_TOKEN` 通过 `Authorization: Bearer` 发送 TokenHub Key。没有 Authorization Header 时，也可通过 `ANTHROPIC_API_KEY` 使用 `x-api-key`。Token 估算会检查 Key 和模型权限，但不生成计费推理记录。
+
+## 持久化后台 Responses
+
+在 `POST /v1/responses` 中设置 `background: true`，即可持久化 Responses 请求并立即获得由网关生成的稳定 Response ID：
+
+```bash
+curl http://localhost:8080/v1/responses \
+  -H "Authorization: Bearer $TOKENHUB_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-5.4","input":"Summarize the report","background":true}'
+```
+
+通过 `GET /v1/responses/{id}` 查询状态或最终结果，通过 `POST /v1/responses/{id}/cancel` 请求取消。查询与取消必须使用原始任务对应的项目、API Key、归属用户，并且该 Key 当前仍有模型访问权限；任一条件不匹配均返回 `404`。暂不支持可恢复的后台 SSE，因此同时设置 `background: true` 与 `stream: true` 会被拒绝。
+
+对外状态包括 `queued`、`in_progress`、`completed`、`failed` 和 `cancelled`。Worker 会在上游调用前后应用配额、预算、并发限制、路由、Guardrail、缓存亲和、成本核算、请求日志和链路追踪。取消与完成竞态只有一个持久化结果；如果上游已经产生用量，仍会且只会结算一次。
+
+排队中的任务可跨服务重启继续执行。租约在准入前丢失的任务会安全地重新排队；准入后丢失 Worker 的任务不会盲目重放，而是以 `response_execution_lost` 明确失败，因为上游可能已经收到请求。PostgreSQL 多实例通过带隔离代次的租约和行锁协调领取。SQLite 支持重启恢复，但仍限定为单后端部署，不得让多个后端实例共享同一个 SQLite 文件。
+
+请求信封与结果使用 `TOKENHUB_SECRET_KEY` 静态加密；认证 Header 不会落库，只保留有长度限制的协议 Header 白名单。后台请求与响应正文不会复制到明文请求载荷审计记录或链路追踪导出中，路由尝试记录也会移除上游错误文本。加解密失败时流程会关闭并返回错误，不会回退到明文。终态载荷保留 `TOKENHUB_RESPONSE_RESULT_TTL_SECONDS`，到期后会擦除请求与结果密文，后续查询返回 `404`。返回的 ID 是 TokenHub 查询 ID，不会转换为上游 `previous_response_id`。
+
+启用指标后，Prometheus 会提供 `tokenhub_gateway_response_jobs_queued`、`tokenhub_gateway_response_job_queue_wait_seconds`、`tokenhub_gateway_response_job_execution_seconds`、`tokenhub_gateway_response_jobs_total` 和 `tokenhub_gateway_response_job_recoveries_total`。Worker 并发数、轮询间隔、超时、租约、保留时间与队列上限见[部署文档](deployment.md#后端环境变量)。
 
 ## Gemini CLI 使用 Codex 订阅 GPT
 

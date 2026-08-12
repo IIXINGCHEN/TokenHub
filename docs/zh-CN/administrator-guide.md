@@ -36,11 +36,27 @@ TokenHub 会向演练场输出统一的 SSE 事件格式。所选上游支持流
 
 所有获准使用演练场的用户都能查看性能、用量、Request ID 以及自己的响应详情。Provider、资源、上游 Request ID 和逐次路由尝试仅对拥有路由读取权限的角色展示。成本会明确标为「估算」，因为它采用对外模型配置价格，而不是上游账单。
 
+## 内容安全策略
+
+在「安全策略 > 内容安全」中，可以创建适用于全部项目或指定项目的策略。一条策略可以组合关键词或正则表达式匹配、敏感数据检测，以及可选的 Qwen3Guard 模型检测器。所有检测项会共同判定，并采用命中动作中最严格的一项：`block` 高于 `mask`，`mask` 高于 `audit`。保存后立即生效。
+
+确定性检测器在 TokenHub 内部运行。调用已配置的 Qwen3Guard 检测器前，TokenHub 会在仅供检测的文本副本中，把本地 `mask` 规则已经命中的敏感值替换为 `[REDACTED]`，避免把这些原始值发送给模型服务。未被本地脱敏规则命中的文本仍会发送到 `TOKENHUB_GUARDRAIL_MODEL_URL` 配置的服务。该服务应部署在获准的数据边界内，并评估其传输、日志和保留策略；远端服务保留的副本不受 TokenHub 管理。URL 留空时不会发起模型调用，并按各模型检测项配置的不可用行为处理。
+
+敏感数据检测覆盖带标签或经过结构校验的中国大陆身份证号、手机号、电子邮箱、银行卡号、凭证与私钥、姓名、地址和出生日期等样例。日期合法性、身份证校验位和 Luhn 校验等规则用于降低常见数字误报。策略广泛启用前，应使用「测试策略」同时验证有代表性的正例和反例。
+
+当前请求侧拦截覆盖 `/v1/chat/completions`、`/v1/responses` 和 `/v1/messages`，也包括模型演练场发出的请求。TokenHub 会在路由到 Provider 前检查普通的用户可见文本。本版本暂不检查结构化工具参数、JSON 载荷中的值、需要代码语义解析的内容，也不检查 Provider 响应。安全检查本身不再设置独立的文本大小上限，请求仍受已配置的请求体大小限制。确定性检测还会应用按规则复杂度加权的累计工作预算和命中数量预算，避免超长文本、高开销表达式或密集脱敏命中的病态组合长期占用 CPU 或内存；超限时返回 HTTP 503 `guardrail_evaluation_budget_exceeded`，普通长上下文配合适量规则仍可正常处理。
+
+策略阻断请求时，兼容 API 返回 HTTP 403 和 `guardrail_blocked`。错误详情包含 `categories`、`reason_codes` 和 `policy_matches`；每条策略命中会标明策略、检测项、检测器类型、分类和原因码。响应还包含用于关联审计记录的 `request_id`，但不会返回命中的原始文本。模型演练场展示相同的策略与原因信息，方便管理员反馈可复现的问题，而不只是看到“请求已被内容安全策略阻断”。
+
 ## API Key 归属与用量归因
 
 发放 API Key 时，应在「归属用户」中选择实际使用人。发放人仍保留在审计元数据中，但 Key 的用量会统计到归属用户。平台管理员可以选择任一启用用户；团队负责人只能选择本团队的启用用户；普通用户只能把 Key 归属给自己。
 
 每条新用量记录都会固化当时的归属用户，因此以后转移归属或删除 Key 不会改写已记录的历史。对该字段上线前的旧记录，系统依次回退到 Key 当前归属用户、旧的发放人、项目负责人，最后显示为「未知」。个人排行会分别展示用量中实际出现过的 Key 数，以及当前归属且未吊销的 Key 数。
+
+## 本地 Agent 只读成本访问
+
+不要为了采集用量而把管理员会话或模型调用 API Key 交给自动化 Agent。应创建独立的 `tha_` 分析凭证，尽可能限制到单个项目，并可单独吊销。[Agent Token 成本 API 指南](agent-token-cost-api.md)说明凭证生命周期、过滤、聚合、JSON/CSV Schema、快照分页、增量 watermark、审计行为和查询限制。
 
 ## 单 Key RPM 与 TPM 限制
 
@@ -53,6 +69,14 @@ RPM 在调用 Provider 前扣减。TPM 同时按请求的预估输入量和最�
 ## Provider 目录可用性
 
 TokenHub 会把最后一次成功加载的 Provider 目录保存在数据库中。每次后端启动时，系统都会校验并加载配置的本地 `provider-catalog.json`，然后原子替换数据库快照。普通「Provider 渠道」请求只读取数据库快照，管理员也可以手动刷新同一份本地目录。若本地目录读取、解析或完整性校验失败，TokenHub 会继续使用最后一次有效快照。
+
+## Claude Code 归因块处理
+
+Claude Code 可能在 Anthropic Messages 请求的 `system` 数组开头插入归因文本块。该块包含可能随请求变化的客户端元数据，可能导致第三方上游无法复用原本稳定的提示词前缀。
+
+每个 Provider 都可以设置 `claude_code_attribution_policy`。新建 Anthropic 官方 Provider 时默认使用 `preserve`；明确非官方的 Provider 默认使用 `strip`，以提高第三方上游的提示词前缀缓存复用率；来源不明的自定义 Anthropic 端点默认使用 `preserve`。已有 Provider 未配置该字段时也继续保留归因块。`strip` 只在第一个顶层 `system` 元素的 `type` 为 `"text"`，且文本严格以 `x-anthropic-billing-header:` 开头时移除该元素。字符串形式的 `system` 提示词、后续元素、带前导空格的文本及其他元素类型均不会被移除。
+
+Provider Resource 默认继承 Provider 策略，也可以通过 `options.claude_code_attribution_policy` 将策略覆盖为 `preserve` 或 `strip`；省略该 Resource 选项即可恢复继承。TokenHub 会为每次路由尝试单独应用实际生效的策略，因此故障切换后的 Resource 会收到原始请求，再执行自身策略。审计载荷同样保留原始请求。`POST /v1/messages/count_tokens` 不会选择具体的 Provider Resource，因此仍按原始请求计数。
 
 ## Codex 用量重置资格
 
@@ -159,6 +183,10 @@ TokenHub 可以在 `GET /metrics` 暴露 Prometheus 指标。该功能默认关�
 | --- | --- | --- |
 | `tokenhub_gateway_requests_total` | counter | 逻辑模型 API 请求数。一次请求即使经过多个候选失败转移也只计一次。 |
 | `tokenhub_gateway_request_duration_seconds` | histogram | 端到端耗时，包含失败转移。分桶上限为 300 秒。 |
+| `tokenhub_gateway_route_attempts_total` | counter | 物理候选尝试数。`rate(route_attempts_total) / rate(routed_requests_total)` 即为平均失败转移深度；`routed_requests_total` 只统计真正发起过尝试的请求，因此从未到达任何 Provider 的拒绝流量不会稀释该比率。`invoked` 标签可单独区分因容量不足被跳过的候选。`status_code` 为网关映射后的状态（上游 401 会报告为 502）；原始上游状态见 `RouteAttemptLog`。 |
+| `tokenhub_gateway_attempt_duration_seconds` | histogram | 单个被调用（invoked）尝试的完整耗时，围绕整个尝试测量：上游传输、流式翻译与写入客户端。流式调用因此包含慢客户端背压时间；网关自身开销单独见 `overhead_seconds`。不包含因容量被跳过的候选。 |
+| `tokenhub_gateway_routed_requests_total` | counter | 至少发起过一次候选尝试的逻辑请求数——失败转移深度比率的尝试承载分母。其 `provider_type` 标签为最后一个尝试的候选；跨 Provider 失败转移时，请按 `model` 而非 `provider_type` 聚合深度比率。 |
+| `tokenhub_gateway_overhead_seconds` | histogram | 网关自身开销的近似值：端到端耗时减去被调用尝试耗时之和，负值截断为 0。已在路由阶段被接纳、但在任何尝试前失败的请求，其开销计为完整端到端耗时。图像作业的端到端耗时包含队列等待，因此其开销为上限估计。 |
 | `tokenhub_gateway_requests_in_flight` | gauge | 正在处理的模型 API 请求数，不含管理后台流量和抓取请求。 |
 | `tokenhub_gateway_tokens_total` | counter | 按类型统计的 Token：`prompt`、`completion`、`cached`、`cache_write`、`reasoning`。 |
 | `tokenhub_gateway_cost_usd_total` | counter | 使用模型目录价格计算的统一对外计费估算；Provider 真实成本只保留在有权限的请求审计中，不进入该指标。 |
@@ -170,9 +198,27 @@ TokenHub 可以在 `GET /metrics` 暴露 Prometheus 指标。该功能默认关�
 
 **Token 各类型之间不是互斥划分，不能相加。** `prompt` 已经包含 `cached` 和 `cache_write`，`reasoning` 是 `completion` 的子集，相加会重复计算。
 
-在路由之前就被拒绝的请求（API Key 无效、额度耗尽、模型不存在）只增加请求计数。它们没有到达任何 Provider，因此不产生 Token、成本和耗时。目录中不存在的模型名会被记为 `unknown` 而不是原样上报，避免客户端用随机模型名刷高时间序列数量。
+在路由之前就被拒绝的请求（API Key 无效、额度耗尽、模型不存在）只增加请求计数。它们没有到达任何 Provider，因此不产生 Token、成本和耗时。对应的尝试承载计数 `routed_requests_total` 只统计到达过至少一个候选的请求，因此拒绝流量突发不会稀释失败转移深度比率。目录中不存在的模型名会被记为 `unknown` 而不是原样上报，避免客户端用随机模型名刷高时间序列数量。
 
 标签为 `model`、`provider_type`、`provider_id`、`resource_id`、`status_code`、`error_code` 和 `stream`。上游失败不再统一上报为 `status_code="502"` 加 `provider_error`，而是使用「上游错误分类」一节列出的状态码与错误码，按旧取值匹配的看板和告警需要相应更新。设置 `TOKENHUB_METRICS_PROJECT_LABEL=true` 会追加 `project_id`，使每个网关指标的时间序列数量按活跃项目数成倍增长；除非确实需要按项目看板，否则建议保持关闭，按 Key 的归因请改用用量报表。
+
+常用 PromQL 示例：
+
+```promql
+# 每个模型的平均失败转移深度。
+sum by (model) (rate(tokenhub_gateway_route_attempts_total[5m]))
+/
+sum by (model) (rate(tokenhub_gateway_routed_requests_total[5m]))
+
+# 网关开销的 P99。必须先按 bucket 聚合再调用 histogram_quantile；
+# 两个聚合后的分位数相减在数学上是无效的。
+histogram_quantile(
+  0.99,
+  sum by (le, stream) (rate(tokenhub_gateway_overhead_seconds_bucket[5m]))
+)
+```
+
+多实例部署时，直方图分位数可基于所有实例的 `sum(rate(..._bucket)) by (le)` 计算，因为每个 bucket 都是计数器。`tokenhub_gateway_requests_in_flight` 是 gauge，若需要按实例并发则聚合时需保留 `instance` 标签；跨实例求和得到的是总并发请求数。
 
 如果指标需要 push 而不是被抓取，可以让 OpenTelemetry Collector 的 `prometheus` receiver 抓取该端点再转发。链路追踪是另一路信号，由网关直接推送，见下节。
 
@@ -214,13 +260,23 @@ Token 用量与成本只挂在 generation span 上，绝不挂在根 span 上。
 
 ## 外部账单连接器
 
-平台管理员可在「成本账单」中管理外部账单源。TokenHub 支持阿里云 `QueryInstanceBill`、NewAPI 额度数据和 OneAPI 兼容日志源。连接器可以测试连接、立即同步、按分钟设置定时同步、停用并保留历史记录，也可以随后重新启用。
+平台管理员可在「成本账单」中管理外部账单源。TokenHub 支持阿里云 `QueryInstanceBill`、NewAPI 额度数据和 OneAPI 兼容日志源。连接器可以测试连接、立即同步、按分钟设置定时同步、停用并保留历史记录，也可以随后重新启用。连接器需配置对应的 TokenHub Provider ID；若账单只对应一个账号，还可配置 TokenHub 资源账号 ID。对账会使用这一持久化范围，避免其他 Provider 或账号的用量混入结果。
 
 阿里云连接器需要账单 RPC Base URL、AccessKey ID、AccessKey Secret、源时区，可选填写 Product Code。TokenHub 使用 HMAC-SHA1 为每个 RPC 请求签名，并按账期逐月推进。NewAPI 连接器需要 Base URL、访问令牌、`New-Api-User` 用户 ID、币种，以及一个币种单位对应的 Quota 数量；TokenHub 会按照官方文档携带鉴权请求头调用 `GET /api/data/self`，并自动把同步范围切分为最长 30 天的窗口。OneAPI 兼容连接器需要 Base URL、API Token、日志路径、币种和 Quota 换算值。所有连接器都可以设置每秒请求上限；临时网络错误、`429` 和 `5xx` 会使用有上限的指数退避重试。
 
 手动同步可以传入 RFC 3339 格式的 `from` 和 `to`。未指定时间范围时，从上一次成功同步的结束时间继续。每页保存一次上游 Cursor，因此失败重试会从断点继续当前区间，而不是重新开始。规范化账单以 `(connector_id, external_id)` 作为幂等键，并保留币种、源时区、税费、折扣、退款、账期和用量起止时间。最近同步会展示页数、请求尝试数、新增/更新记录数和经过清理的失败代码。
 
 连接器凭证和原始账单快照都使用 `TOKENHUB_SECRET_KEY` 派生的 AES-GCM 密钥加密，不会由管理 API 返回，也不会写入审计 Payload。重启和多副本部署时必须保持该密钥稳定。相关端点包括 `GET/POST /api/admin/billing/connectors`、`PATCH /api/admin/billing/connectors/{id}`、`POST /api/admin/billing/connectors/{id}/test`、`POST /api/admin/billing/connectors/{id}/sync`、`GET /api/admin/billing/records` 和 `GET /api/admin/billing/sync-runs`。
+
+## 成本对账
+
+平台管理员可以在「成本账单 → 成本对账规则」中，将已同步的 Provider 账单与 TokenHub 用量进行比较。规则可选择一个账单连接器、明细/小时/天/月粒度、匹配维度、IANA 时区、一个 ISO 币种、金额与比例容差、明细时间窗口、账单延迟窗口和可选定时周期。币种始终是匹配维度，因此不同币种需要分别建立规则。TokenHub 用量成本以 USD 保存，每条规则记录固定的“1 USD = 目标币种”汇率；USD 规则的汇率必须为 `1`。可选的 Provider 侧映射可将外部 Provider、资源账号、模型和项目值规范化为 TokenHub 标识。明细规则必须包含 `request_id`；聚合规则可按 Provider、资源账号、模型、项目和币种分组。NewAPI 账单没有请求级标识，因此 NewAPI 连接器只支持小时、天和月粒度，不支持明细粒度。手工输入的账期时间会先按规则的 IANA 时区解释，再发送给 API。
+
+选择账期执行规则后，结果会给出已匹配、仅 Provider 存在、仅 TokenHub 存在和金额不一致四类数量，以及两侧总额、差异、可能原因和可下钻的源记录 ID。金额先按亚微美元精度累加，只在保存或展示结果时舍入到最多六位小数。明细匹配会先在时间窗口内最大化一对一匹配数量，再最小化总时间距离；账期边界外的 TokenHub 记录若与账期内 Provider 账单匹配，也会纳入结果。Provider 记录按实际用量时间而非入库时间归属账期，因此迟到的账单仍会归入原始账期。定时任务会在配置的账单延迟后，对最近一个完整的小时、天或月执行对账。
+
+每次结果都保存完整规则快照、规则版本与哈希、输入哈希、执行人、时间和审计事件。重新计算使用该次执行保存的规则快照；若重新计算失败，上一次成功结果及其明细仍会保留，失败尝试会写入审计。源记录不变时，输入哈希和分类金额可复现。成功结果可锁定，锁定后不能再重新计算。明细接口使用服务端 `limit`/`offset` 分页；CSV 默认按有界批次流式导出全部差异行和源记录引用，不做静默行数截断。其中不包含 Provider 凭证或原始快照，资源账号在管理 API 和 CSV 中都会脱敏，资源账号映射也不会写入审计快照。
+
+相关端点包括 `GET/POST /api/admin/billing/reconciliation-rules`、`GET/PATCH /api/admin/billing/reconciliation-rules/{id}`、`POST /api/admin/billing/reconciliation-rules/{id}/run`、`GET /api/admin/billing/reconciliations`、`GET /api/admin/billing/reconciliations/{id}`，以及 `{id}/lock`、`{id}/recalculate` 和 `{id}/export` 操作。这些端点仅允许平台管理员访问。
 
 ## 安全检查清单
 

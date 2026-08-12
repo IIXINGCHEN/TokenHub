@@ -5,8 +5,9 @@ import { useEffect, useMemo, useState } from "react";
 import { type LoadedData, loadPlanForView, mergeLoadedData } from "../core/data-loading";
 import { allNavGroupTitles, canAccessView, defaultViewForRole, rememberRecentView, standaloneViewMeta } from "../core/navigation";
 import { clearOAuthLoginResult, clearPendingOAuthBaseURL, clearProviderAccountOAuthResultFromLocation, clearSavedSession, forwardOAuthAuthorizationResponse, hasPendingProviderAccountOAuthResult, isOAuthAuthorizationResponse, readOAuthLoginResult, readPendingOAuthBaseURL, readProviderAccountOAuthResultFromLocation, readSavedSession, savePendingProviderAccountOAuthResult, saveSession } from "../core/session";
-import { type AdminResource, type AdminUser, type AlertDelivery, type AlertEvent, type APIKey, type AppData, type ApprovalRequest, type AuditEvent, authExpiredEventName, type BillingConnector, type BillingRecord, type BillingSyncRun, type ConfirmState, languageStorageKey, type LoginIdentityProvider, type ModalState, type Model, type ModelRoute, type ModelRoutePolicy, notificationChannelTypes, type Project, type Provider, type ProviderCatalogEntry, type ProviderModel, type ProviderMonitoringSnapshot, type ProviderResource, type ReportExportHistoryItem, type RequestLog, type ResourceAction, type ResourceConfig, type SettingsTabKey, type SQLiteBackup, type ToolbarAction, type UsageBreakdown, type UsagePoint, type ViewKey, viewRoutes } from "../core/types";
+import { type AdminResource, type AdminUser, type AlertDelivery, type AlertEvent, type APIKey, type AppData, type ApprovalRequest, type AuditEvent, authExpiredEventName, type BillingConnector, type BillingRecord, type BillingSyncRun, type ConfirmState, languageStorageKey, type LoginIdentityProvider, type ModalState, type Model, type ModelRoute, type ModelRoutePolicy, notificationChannelTypes, type Project, type Provider, type ProviderCatalogEntry, type ProviderModel, type ProviderMonitoringSnapshot, type ProviderResource, type ReconciliationRule, type ReconciliationRun, type ReportExportHistoryItem, type RequestLog, type ResourceAction, type ResourceConfig, type SettingsTabKey, type SQLiteBackup, type ToolbarAction, type UsageBreakdown, type UsagePoint, type ViewKey, viewRoutes } from "../core/types";
 import { emptyData, emptySummary, filterByModelCategory, filterRows } from "../domain/catalog";
+import { auditRequestPagePath } from "../domain/audit-request-page";
 import { modelRouteDefaults, rowTitle } from "../domain/entities";
 import { uniqueUIID, viewFromPath } from "../domain/formatting";
 import { reportDatasetLabel } from "../domain/labels";
@@ -34,6 +35,7 @@ import { PlaygroundPage } from "../views/playground";
 import { ProviderUpsertModal } from "../views/provider-editor";
 import { ProjectWorkspace, type ProjectWorkspaceDraft, type ProjectWorkspaceMode, ProjectWorkspaceSaveError, saveProjectWorkspaceDraft } from "../views/project-workspace";
 import { RoutingPolicySimulator } from "../views/routing-policy-simulator";
+import { ContentSecurityPolicies, SecurityPolicyTabs } from "../views/security-policies";
 import { EditModal, SettingsView, usePagination } from "../views/settings-table";
 import { BillingView, UsageView } from "../views/usage-billing";
 
@@ -62,6 +64,7 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
   const [modelCategoryFilter, setModelCategoryFilter] = useState("all");
   const [routeModelQuery, setRouteModelQuery] = useState("");
   const [settingsTab, setSettingsTab] = useState<SettingsTabKey>("settings");
+  const [securityPolicyTab, setSecurityPolicyTab] = useState<"access" | "content">("access");
   const [modal, setModal] = useState<ModalState<any> | null>(null);
   const [projectWorkspace, setProjectWorkspace] = useState<{ mode: ProjectWorkspaceMode; projectID?: string } | null>(null);
   const [providerCreateOpen, setProviderCreateOpen] = useState(false);
@@ -313,7 +316,7 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
       queue(plan.providerModels, "provider-models", "/api/admin/provider-models");
       queue(plan.keys, "api-keys", "/api/admin/api-keys");
       queue(plan.routes, "routes", "/api/admin/routing-rules");
-      queue(plan.logs, "audit", "/api/admin/audit/requests");
+      queue(plan.logs, "audit", auditRequestPagePath({ page: 1, pageSize: 20, status: "all", query: "" }));
       queue(plan.auditEvents, "audit-events", "/api/admin/audit/events");
       queue(plan.alerts, "alerts", "/api/admin/alerts");
       queue(plan.alertDeliveries, "alert-deliveries", "/api/admin/alert-deliveries");
@@ -327,6 +330,8 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
 			queue(plan.billingConnectors, "billing-connectors", "/api/admin/billing/connectors");
 			queue(plan.billingRecords, "billing-records", "/api/admin/billing/records");
 			queue(plan.billingSyncRuns, "billing-sync-runs", "/api/admin/billing/sync-runs");
+			queue(plan.reconciliationRules, "reconciliation-rules", "/api/admin/billing/reconciliation-rules");
+			queue(plan.reconciliationRuns, "reconciliation-runs", "/api/admin/billing/reconciliations");
       for (const kind of plan.resources) {
         requests.push({ name: `resource:${kind}`, request: adminFetch(api, `/api/admin/resources/${kind}`), optional: true });
       }
@@ -413,6 +418,12 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
 				} else if (name === "billing-sync-runs") {
 					const payload = (await resp.json()) as { data: BillingSyncRun[] };
 					loaded.billingSyncRuns = payload.data ?? [];
+				} else if (name === "reconciliation-rules") {
+					const payload = (await resp.json()) as { data: ReconciliationRule[] };
+					loaded.reconciliationRules = payload.data ?? [];
+				} else if (name === "reconciliation-runs") {
+					const payload = (await resp.json()) as { data: ReconciliationRun[] };
+					loaded.reconciliationRuns = payload.data ?? [];
         } else if (name.startsWith("resource:")) {
           const kind = name.slice("resource:".length);
           const payload = (await resp.json()) as { data: AdminResource[] };
@@ -731,7 +742,9 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
       <ResetPasswordView
         loading={loading}
         error={error}
+        language={language}
         theme={theme}
+        onLanguageChange={changeLanguage}
         onThemeToggle={toggleTheme}
         token={resetToken}
         onReset={(token, password) => void resetPassword(token, password)}
@@ -747,7 +760,9 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
         baseURL={baseURL}
         identityProviders={loginIdentityProviders}
         oauthReturnURL={oauthReturnURL}
+        language={language}
         theme={theme}
+        onLanguageChange={changeLanguage}
         onThemeToggle={toggleTheme}
         onLogin={(identity, password) => void login(identity, password)}
       />
@@ -775,7 +790,9 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
           activeView={activeView}
           data={data}
           user={currentUser}
+          language={language}
           theme={theme}
+          onLanguageChange={changeLanguage}
           onSelectView={selectView}
           onThemeToggle={toggleTheme}
         />
@@ -831,6 +848,35 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
               onAction={(action, item) => void runResourceAction(action, item, data)}
               onToolbarAction={(action, items) => void runToolbarAction(action, items)}
             />
+          ) : activeView === "security-policies" && activeConfig ? (
+            <div className="security-policies-view">
+              <SecurityPolicyTabs active={securityPolicyTab} onChange={setSecurityPolicyTab} />
+              {securityPolicyTab === "content" ? (
+                <ContentSecurityPolicies api={api} data={data} />
+              ) : (
+                <CrudView
+                  config={activeConfig}
+                  data={data}
+                  api={api}
+                  user={currentUser}
+                  items={pagedItems}
+                  monitorItems={filteredItems}
+                  totalItems={filteredItems.length}
+                  loading={loading}
+                  query={query}
+                  currentUser={currentUser}
+                  pagination={crudPagination}
+                  categoryFilter={modelCategoryFilter}
+                  onCategoryFilter={setModelCategoryFilter}
+                  onQuery={setQuery}
+                  onCreate={openCreateForCurrentView}
+                  onEdit={(item) => setModal({ config: activeConfig, item })}
+                  onDelete={(item) => setConfirmDelete({ config: activeConfig, item })}
+                  onAction={(action, item) => void runResourceAction(action, item, data)}
+                  onToolbarAction={(action) => void runToolbarAction(action, filteredItems)}
+                />
+              )}
+            </div>
           ) : activeView === "routes" && activeConfig ? (
             <RouteStrategyView
               config={activeConfig as ResourceConfig<ModelRoute>}

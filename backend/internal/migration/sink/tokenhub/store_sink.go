@@ -520,6 +520,12 @@ func (s *StoreSink) applyProvider(item bundle.ProviderRef) (Change, error) {
 		}
 		spec.APIKey = secret
 	}
+	// The sink writes straight to the store, bypassing the admin HTTP layer
+	// where base URLs are normally validated; apply the same SSRF guard here
+	// so a bundle cannot persist a provider that dials the internal network.
+	if err := server.ValidateProviderUpstreamBaseURL(spec.BaseURL); err != nil {
+		return Change{}, fmt.Errorf("provider %s: %w", item.ExternalRef.ID, err)
+	}
 
 	for _, existing := range s.store.ListProviders() {
 		if existing.Name == spec.Name && existing.Type == spec.Type {
@@ -830,7 +836,7 @@ func sameProvider(existing server.Provider, desired server.Provider) bool {
 		return false
 	}
 	return reflect.DeepEqual(normalizeStringMap(existing.Headers), normalizeStringMap(desired.Headers)) &&
-		reflect.DeepEqual(normalizeStringMap(existing.Options), normalizeStringMap(desired.Options))
+		reflect.DeepEqual(migrationProviderOptions(existing.Options), migrationProviderOptions(desired.Options))
 }
 
 // sameProviderResource follows sameProvider: only the fields the bundle owns

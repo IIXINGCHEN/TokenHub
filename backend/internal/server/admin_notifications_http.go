@@ -25,10 +25,6 @@ func (s *Server) handleAdminAlerts(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAdmin(w, r, "alert", r.Method); !ok {
 		return
 	}
-	if r.Method != http.MethodGet {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": s.store.ListAlerts()})
 }
 
@@ -50,8 +46,8 @@ func (s *Server) handleAdminAlertItem(w http.ResponseWriter, r *http.Request) {
 		ChannelID string `json:"channel_id"`
 	}
 	if r.Body != nil && r.ContentLength != 0 {
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, r, NewHTTPError(400, "invalid_request", err.Error()))
+		if err := s.decodeJSON(w, r, &req); err != nil {
+			writeError(w, r, err)
 			return
 		}
 	}
@@ -68,20 +64,12 @@ func (s *Server) handleAdminAlertDeliveries(w http.ResponseWriter, r *http.Reque
 	if _, ok := s.requireAdmin(w, r, "alert", r.Method); !ok {
 		return
 	}
-	if r.Method != http.MethodGet {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": s.store.ListAlertDeliveries()})
 }
 
 func (s *Server) handleAdminApprovals(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAdmin(w, r, "approval", r.Method)
 	if !ok {
-		return
-	}
-	if r.Method != http.MethodGet {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": s.filterApprovalRequestsForUser(user, s.store.ListApprovalRequests())})
@@ -105,8 +93,8 @@ func (s *Server) handleAdminApprovalItem(w http.ResponseWriter, r *http.Request)
 		Reason string `json:"reason"`
 	}
 	if r.Body != nil && r.ContentLength != 0 {
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, r, NewHTTPError(400, "invalid_request", err.Error()))
+		if err := s.decodeJSON(w, r, &req); err != nil {
+			writeError(w, r, err)
 			return
 		}
 	}

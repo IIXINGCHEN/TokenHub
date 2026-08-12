@@ -341,6 +341,9 @@ Options: `--rebuild`, `--reset` to drop the local database, `--backend-port N`, 
 | `TOKENHUB_MANAGED_UPDATES` | `false` | Allows a container deployment to perform online update and rollback. A native deployment always allows it |
 | `TOKENHUB_INSTALL_ROOT` | `/opt/tokenhub` | Managed Release installation root used for online update and rollback |
 | `TOKENHUB_TRUSTED_PROXY_CIDRS` | empty | Comma-separated proxy IPs or CIDRs allowed to supply `X-Forwarded-For` |
+| `TOKENHUB_PROVIDER_UPSTREAM_ALLOWED_CIDRS` | empty | Comma-separated private CIDRs (RFC1918/ULA only) whose literal IPs may be used as custom provider base URLs, for in-house model servers. These explicitly allowed private literals may use HTTP; public provider URLs must use HTTPS. Hostnames resolving to private addresses and redirect targets stay rejected |
+| `TOKENHUB_PROVIDER_UPSTREAM_NAT64_PREFIX` | empty | Optional RFC 6052 DNS64/NAT64 prefix used to classify its embedded IPv4 targets. Supported prefix lengths: 32, 40, 48, 56, 64, and 96. Configure this when using a network-specific prefix such as `64:ff9b:1::/48`; the well-known `64:ff9b::/96` prefix works automatically |
+| `TOKENHUB_PROVIDER_UPSTREAM_ALLOW_LOOPBACK` | `false` | Explicitly allow provider base URLs, including HTTP URLs, on `localhost`, `127.0.0.1`, or `::1` for local Ollama/LM Studio development. Public provider URLs must use HTTPS. Keep disabled in production |
 | `TOKENHUB_CORS_ALLOWED_ORIGINS` | public URL | Comma-separated browser origins allowed to call the backend |
 | `TOKENHUB_ADMIN_TOKEN` | `change-me-tokenhub-admin-token` | Bootstrap admin token for Admin API access |
 | `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD` | `change-me-tokenhub-admin-password` | Password for the initial `admin` user; must be changed before production startup |
@@ -371,6 +374,9 @@ Options: `--rebuild`, `--reset` to drop the local database, `--backend-port N`, 
 | `TOKENHUB_TRACING_QUEUE_SIZE` | `2048` | Completions waiting to become spans; a full queue drops traces instead of slowing requests |
 | `TOKENHUB_UPSTREAM_NON_STREAM_TIMEOUT_SECONDS` | `120` | Total time limit for one non-streaming upstream request |
 | `TOKENHUB_UPSTREAM_STREAM_IDLE_TIMEOUT_SECONDS` | `300` | Streaming calls have no total limit; this bounds waiting for response headers and how long the stream may then stay silent. The budget restarts on every byte received |
+| `TOKENHUB_MAX_JSON_REQUEST_BYTES` | `8388608` (8 MiB) | Maximum JSON request body for `/v1` endpoints. Accepts a raw byte count or a binary suffix (`8m`, `8mib`, `512k`). Values above 512 MiB are clamped |
+| `TOKENHUB_MAX_MULTIMODAL_REQUEST_BYTES` | `33554432` (32 MiB) | Higher body limit for multimodal chat endpoints (`/v1/chat/completions`, `/v1/responses`, `/v1/messages`, playground). Set your reverse proxy's `client_max_body_size` at least this large |
+| `TOKENHUB_NGINX_CLIENT_MAX_BODY_SIZE` | `32m` | Only the bundled multi-instance nginx load balancer reads this. It is nginx size syntax (`32m`, `512k`), not the backend byte format, and must be at least as large as `TOKENHUB_MAX_MULTIMODAL_REQUEST_BYTES` |
 | `TOKENHUB_IN_FLIGHT_LEASE_TTL_SECONDS` | `300` | Expiry and renewal basis for cluster-wide concurrency leases |
 | `TOKENHUB_CLUSTER_LOCK_TTL_SECONDS` | `180` | Expiry and renewal basis for cluster coordination locks |
 | `TOKENHUB_GRACEFUL_SHUTDOWN_SECONDS` | `150` | Maximum time to drain in-flight requests during shutdown |
@@ -378,11 +384,21 @@ Options: `--rebuild`, `--reset` to drop the local database, `--backend-port N`, 
 | `TOKENHUB_CACHE_AFFINITY_ENABLED` | `false` | For Chat Completions, Anthropic Messages, and Responses, pin a session to one upstream account so the provider's prompt cache keeps hitting. Off by default because it changes routing behaviour |
 | `TOKENHUB_CACHE_AFFINITY_MODELS` | empty | Comma-separated model allowlist for staged rollout; empty means every model |
 | `TOKENHUB_CACHE_AFFINITY_ALLOW_USER_SCOPE` | `false` | Also accept Chat/Responses `user` and Anthropic `metadata.user_id` as affinity keys; off by default because one user's concurrent sessions would share a single account |
+| `TOKENHUB_GUARDRAIL_MODEL_URL` | empty | Complete OpenAI-compatible chat-completions URL for a dedicated Qwen3Guard service. Before each call, values matched by local `mask` rules are replaced with `[REDACTED]`; unmatched inspected text is sent to that service. Empty disables model calls and applies each policy's unavailable behavior |
+| `TOKENHUB_GUARDRAIL_MODEL_API_KEY` | empty | Optional bearer credential for the dedicated guardrail model service |
+| `TOKENHUB_GUARDRAIL_MODEL_NAME` | `Qwen/Qwen3Guard-Gen-0.6B` | Model identifier sent to the guardrail service |
+| `TOKENHUB_GUARDRAIL_MODEL_TIMEOUT_SECONDS` | `10` | Time limit for one guardrail model classification |
 | `TOKENHUB_IMAGE_STORAGE_DIR` | `data/images` | Directory holding generated image assets |
 | `TOKENHUB_IMAGE_WORKER_CONCURRENCY` | `2` | Number of workers draining the image generation queue |
 | `TOKENHUB_IMAGE_QUEUE_CAPACITY` | `64` | Maximum image jobs that may wait in the queue |
 | `TOKENHUB_IMAGE_JOB_TIMEOUT_SECONDS` | `300` | Time limit for a single image generation job before it is failed |
 | `TOKENHUB_IMAGE_CAPABILITY_RETRY_SECONDS` | `86400` | How long a provider resource marked as lacking image support is skipped before it is probed again |
+| `TOKENHUB_RESPONSE_WORKER_CONCURRENCY` | `2` | Number of workers claiming persistent background Responses jobs |
+| `TOKENHUB_RESPONSE_POLL_INTERVAL_MILLIS` | `250` | Database poll interval for background Responses jobs and cancellation checks |
+| `TOKENHUB_RESPONSE_JOB_TIMEOUT_SECONDS` | `300` | Execution time limit for one background Responses job |
+| `TOKENHUB_RESPONSE_LEASE_TTL_SECONDS` | `30` | Lease duration used to fence background Responses workers across replicas |
+| `TOKENHUB_RESPONSE_RESULT_TTL_SECONDS` | `3600` | Retention time for encrypted background request and result payloads after completion |
+| `TOKENHUB_RESPONSE_MAX_QUEUED_JOBS` | `1000` | Maximum queued and running background Responses jobs accepted by one deployment |
 | `TOKENHUB_DB_MAX_OPEN_CONNS` | `25` | Maximum open database connections (PostgreSQL only) |
 | `TOKENHUB_DB_MAX_IDLE_CONNS` | `5` | Maximum idle database connections (PostgreSQL only) |
 | `TOKENHUB_DB_CONN_MAX_LIFETIME_MINUTES` | `30` | Maximum connection lifetime in minutes (PostgreSQL only) |

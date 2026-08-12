@@ -175,6 +175,8 @@ curl --request POST \
 
 Native Anthropic routes preserve Anthropic content blocks and beta headers. OpenAI-compatible routes translate text, images, client tools, tool results, parallel tool calls, and streaming events. Anthropic server tools that cannot be represented by an OpenAI-compatible provider return `400 unsupported_tool`.
 
+For OpenAI-compatible routes, Provider and Provider Resource `options` can adapt Claude reasoning controls to the upstream vocabulary. `reasoning_effort_map` is a JSON object such as `{"minimal":"low","xhigh":"max"}`; `reasoning_effort_values` is a comma-separated allowlist; `reasoning_effort_unsupported` is `omit` (default), `reject`, or the explicitly opted-in `passthrough`; and `reasoning_budget_map` maps maximum token counts plus optional `*` fallback to effort values, for example `{"2048":"low","8192":"medium","*":"max"}`. Resource options override Provider options. TokenHub translates `thinking.type=disabled` to `none`, leaves `adaptive` at the upstream default unless an explicit effort exists, and maps `enabled` with `budget_tokens`. An explicit `output_config.effort` overrides top-level `effort` and the budget-derived value. Set `preserve_reasoning_content=true` only when the upstream accepts its own `reasoning_content` on later assistant messages. OpenAI-compatible `reasoning_content` is returned to Claude clients as ordered `thinking` / `thinking_delta` blocks with a TokenHub replay signature.
+
 Models routed to an OpenAI Codex Subscription account work through the same Messages endpoint: TokenHub translates Messages directly to the Responses protocol and converts the result back to Anthropic events. Claude Code therefore connects to TokenHub directly; CC-Switch or another local protocol proxy is not required. Codex-issued reasoning signatures are carried across tool turns, and a Claude Code session remains affined to one healthy subscription account.
 
 On Codex-backed Messages routes, `max_tokens`, `temperature`, `top_p`, `stop_sequences`, and Anthropic structured-output formatting cannot be enforced because the subscription upstream does not support their equivalent request fields.
@@ -192,6 +194,27 @@ claude
 ```
 
 `ANTHROPIC_AUTH_TOKEN` sends the TokenHub key in `Authorization: Bearer`. `ANTHROPIC_API_KEY` also works through `x-api-key` when no Authorization header is present. Token counting verifies key and model access but does not create a billed inference record.
+
+## Persistent background Responses
+
+Set `background: true` on `POST /v1/responses` to persist a Responses request and return a stable gateway-owned response ID immediately:
+
+```bash
+curl http://localhost:8080/v1/responses \
+  -H "Authorization: Bearer $TOKENHUB_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-5.4","input":"Summarize the report","background":true}'
+```
+
+Read the status or final response with `GET /v1/responses/{id}`. Request cancellation with `POST /v1/responses/{id}/cancel`. Reads and cancellation require the same project, API key, attributed owner, and current model access as the original submission; a mismatch returns `404`. `background: true` with `stream: true` is rejected because resumable background SSE is not implemented.
+
+The public status values are `queued`, `in_progress`, `completed`, `failed`, and `cancelled`. Quota, budget, concurrency, routing, guardrails, cache affinity, cost accounting, request logs, and traces are applied by the worker before and during the upstream call. A cancellation/completion race has one durable winner, while any upstream usage already incurred is still settled exactly once.
+
+Queued work survives a server restart. Work whose lease expires before admission is safely returned to the queue. Work that loses its worker after admission is marked `failed` with `response_execution_lost` instead of being replayed, because the provider may already have received it. PostgreSQL replicas coordinate claims with fenced leases and row locking. SQLite supports restart recovery but remains a single-backend deployment; do not share one SQLite file between backend replicas.
+
+Request envelopes and results are encrypted at rest with `TOKENHUB_SECRET_KEY`; authentication headers are never stored, and only a bounded protocol-header allowlist is retained. Background request and response bodies are not copied to plaintext request-payload audit records or tracing exports, and upstream route error text is removed from their route-attempt records. Encryption or decryption failure is fail-closed. Terminal payloads are retained for `TOKENHUB_RESPONSE_RESULT_TTL_SECONDS`, then both request and result ciphertext are scrubbed and later reads return `404`. The returned ID is a TokenHub retrieval ID and is not translated into an upstream `previous_response_id`.
+
+Prometheus exposes `tokenhub_gateway_response_jobs_queued`, `tokenhub_gateway_response_job_queue_wait_seconds`, `tokenhub_gateway_response_job_execution_seconds`, `tokenhub_gateway_response_jobs_total`, and `tokenhub_gateway_response_job_recoveries_total` when metrics are enabled. Worker concurrency, polling, timeout, lease, retention, and queue limits are listed in [Deployment](deployment.md#backend-environment-variables).
 
 ## Gemini CLI with Codex subscription GPT
 
