@@ -14,8 +14,11 @@ import (
 	"tokenhub/backend/internal/server"
 )
 
+const maxAdminAPIResponseBytes = 8 << 20 // 8 MiB
+
 type AdminAPIClient struct {
 	baseURL    string
+	parsedBase *url.URL
 	token      string
 	httpClient *http.Client
 }
@@ -32,19 +35,34 @@ func (e *ApprovalRequiredError) Error() string {
 	return fmt.Sprintf("admin api %s %s requires approval", e.Method, e.Endpoint)
 }
 
-func NewAdminAPIClient(baseURL string, token string, httpClient *http.Client) *AdminAPIClient {
+// NewAdminAPIClient validates the base URL eagerly so a malformed value — for
+// example a user-supplied --to flag — surfaces as a controlled error at
+// construction time instead of panicking on first request. A nil httpClient
+// receives a client with an explicit total timeout; callers that pass a
+// client must configure their own timeout.
+func NewAdminAPIClient(baseURL string, token string, httpClient *http.Client) (*AdminAPIClient, error) {
+	baseURL = strings.TrimRight(baseURL, "/")
+	base, err := url.Parse(baseURL)
+	if err != nil || base == nil || base.Scheme == "" || base.Host == "" {
+		if err == nil {
+			err = fmt.Errorf("base url %q must include a scheme and host", baseURL)
+		}
+		return nil, fmt.Errorf("invalid admin api base url %q: %w", baseURL, err)
+	}
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient = &http.Client{Timeout: 30 * time.Second}
 	}
 	return &AdminAPIClient{
-		baseURL:    strings.TrimRight(baseURL, "/"),
+		baseURL:    baseURL,
+		parsedBase: base,
 		token:      token,
 		httpClient: httpClient,
-	}
+	}, nil
 }
 
 func (c *AdminAPIClient) endpoint(parts ...string) string {
-	base, _ := url.Parse(c.baseURL)
+	base := new(url.URL)
+	*base = *c.parsedBase
 	encoded := make([]string, 0, len(parts)+8)
 	for _, segment := range strings.Split(strings.Trim(base.Path, "/"), "/") {
 		if strings.TrimSpace(segment) != "" {
@@ -95,9 +113,12 @@ func (c *AdminAPIClient) doJSON(ctx context.Context, method string, endpoint str
 		return err
 	}
 	defer response.Body.Close()
-	responseBody, err := io.ReadAll(response.Body)
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxAdminAPIResponseBytes+1))
 	if err != nil {
 		return err
+	}
+	if int64(len(responseBody)) > maxAdminAPIResponseBytes {
+		return fmt.Errorf("admin api %s %s response body exceeds %d bytes", method, endpoint, maxAdminAPIResponseBytes)
 	}
 	if response.StatusCode >= 400 {
 		return fmt.Errorf("admin api %s %s failed: status=%d body=%s", method, endpoint, response.StatusCode, strings.TrimSpace(string(responseBody)))

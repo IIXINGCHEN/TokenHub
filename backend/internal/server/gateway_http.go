@@ -409,13 +409,16 @@ func (s *Server) prepareAdmittedRoutedCall(ctx context.Context, call CallContext
 
 func (s *Server) executeRoutedPlaygroundChat(r *http.Request, routed RoutedCall, req ChatCompletionRequest) (any, RouteSelection, Usage, []RouteAttempt, error) {
 	allowEffortFallback := normalizedReasoningEffort(req.ReasoningEffort) != nil
-	responsesReq := playgroundChatResponsesRequest(req)
 	return executeRoutedWithStore(r.Context(), s.store, routed, allowEffortFallback, func(ctx context.Context, route RouteSelection, omitReasoningEffort bool, _ int) (any, Usage, error) {
-		route, err := s.prepareRouteForUpstream(ctx, route)
+		responsesReq, useResponses, err := playgroundResponsesRequestForRoute(route, req)
 		if err != nil {
 			return nil, Usage{}, err
 		}
-		if route.Provider.Type == ProviderOpenAICodex {
+		route, err = s.prepareRouteForUpstream(ctx, route)
+		if err != nil {
+			return nil, Usage{}, err
+		}
+		if useResponses {
 			upstreamReq := responsesReq
 			if omitReasoningEffort {
 				upstreamReq = withoutResponsesReasoningEffort(upstreamReq)
@@ -454,40 +457,6 @@ func (s *Server) invokeResponsesAdapter(ctx context.Context, route RouteSelectio
 		return responsesAdapter.Responses(ctx, route.Provider, route.ProviderModel, req)
 	}
 	return nil, Usage{}, NewHTTPError(http.StatusBadRequest, "adapter_capability_unsupported", "Provider adapter does not support Responses")
-}
-
-func playgroundChatResponsesRequest(req ChatCompletionRequest) ResponsesRequest {
-	instructions := make([]string, 0, len(req.Messages))
-	input := make([]map[string]any, 0, len(req.Messages))
-	for _, message := range req.Messages {
-		role := strings.ToLower(strings.TrimSpace(message.Role))
-		text := contentToText(message.Content)
-		switch role {
-		case "system", "developer":
-			if strings.TrimSpace(text) != "" {
-				instructions = append(instructions, text)
-			}
-		case "assistant":
-			input = append(input, map[string]any{
-				"role":    "assistant",
-				"content": []map[string]any{{"type": "output_text", "text": text}},
-			})
-		default:
-			input = append(input, map[string]any{
-				"role":    role,
-				"content": []map[string]any{{"type": "input_text", "text": text}},
-			})
-		}
-	}
-	responsesReq := ResponsesRequest{
-		Model:        req.Model,
-		Input:        input,
-		Instructions: strings.Join(instructions, "\n\n"),
-	}
-	if effort := normalizedReasoningEffort(req.ReasoningEffort); effort != nil {
-		responsesReq.Reasoning = &ResponsesReasoning{Effort: effort}
-	}
-	return responsesReq
 }
 
 func (s *Server) executeRoutedCompact(r *http.Request, routed RoutedCall, request map[string]json.RawMessage) (any, RouteSelection, Usage, []RouteAttempt, error) {
@@ -537,22 +506,12 @@ func (s *Server) handleAdminPlaygroundChat(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	req := playgroundReq.ChatCompletionRequest
-	req.Model = strings.TrimSpace(req.Model)
+	if err := validatePlaygroundRequest(&req); err != nil {
+		writeError(w, r, err)
+		return
+	}
 	req.Stream = false
-	if req.Model == "" {
-		writeError(w, r, NewHTTPError(400, "missing_model", "model is required"))
-		return
-	}
-	if len(req.Messages) == 0 {
-		writeError(w, r, NewHTTPError(400, "missing_messages", "messages are required"))
-		return
-	}
-	for _, message := range req.Messages {
-		if strings.TrimSpace(message.Role) == "" {
-			writeError(w, r, NewHTTPError(400, "invalid_message", "message role is required"))
-			return
-		}
-	}
+	req.StreamOptions = nil
 	guardrailProjectID, err := s.resolvePlaygroundGuardrailProjectID(user, playgroundReq.ProjectID)
 	if err != nil {
 		writeError(w, r, err)
@@ -564,7 +523,7 @@ func (s *Server) handleAdminPlaygroundChat(w http.ResponseWriter, r *http.Reques
 	requestID := call.RequestID
 	w.Header().Set("x-request-id", requestID)
 	decision, guardrailErr := s.evaluateOutboundGuardrails(r.Context(), guardrailProjectID, chatGuardrailTargets(&req))
-	requestAuditPayload := guardrailRequestAuditPayload(req.Model, decision, req)
+	requestAuditPayload := guardrailRequestAuditPayload(req.Model, decision, playgroundAuditRequest(req))
 	if guardrailErr != nil {
 		httpErr := AsHTTPError(guardrailErr)
 		s.finishRoutedCall(r, GatewayCallCompletion{

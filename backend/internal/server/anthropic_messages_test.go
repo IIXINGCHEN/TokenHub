@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -1011,4 +1012,25 @@ func findTestBeta(payload any) string {
 		return "interleaved-thinking-2025-05-14"
 	}
 	return ""
+}
+
+// TestDoNativeAnthropicRequestRejectsMissingAdapter guards the native
+// Anthropic path against a registry that does not know the Anthropic adapter:
+// it must fail with a controlled 503 instead of dereferencing an
+// unconfigured zero-value client.
+func TestDoNativeAnthropicRequestRejectsMissingAdapter(t *testing.T) {
+	store := NewMemoryStore()
+	srv := NewWithConfig(store, Config{AdminToken: "dev_admin_token"})
+	// Drop every registered adapter so the Anthropic adapter is unavailable.
+	srv.adapterRegistry = NewAdapterRegistry()
+	_, err := srv.doNativeAnthropicRequest(context.Background(), Provider{
+		ID:      "prv_no_adapter",
+		Type:    ProviderAnthropic,
+		BaseURL: "http://127.0.0.1:1",
+		APIKey:  "secret",
+	}, "/v1/messages", map[string]any{"model": "claude-x", "max_tokens": 1}, http.Header{}, false)
+	httpErr := AsHTTPError(err)
+	if httpErr.Status != http.StatusServiceUnavailable || httpErr.Code != "provider_adapter_missing" {
+		t.Fatalf("expected 503 provider_adapter_missing, got %v", err)
+	}
 }

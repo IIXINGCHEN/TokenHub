@@ -172,11 +172,13 @@ export function enumValueLabel(value: string | undefined) {
     inherit: "继承 Provider 策略",
     preserve: "保留归因块",
     strip: "移除归因块",
+    text: "文本",
     chat: "文本对话",
     embedding: "向量嵌入",
     image: "图像",
     video: "视频",
     audio: "音频",
+    pdf: "PDF",
     ocr: "OCR",
     rerank: "重排序",
   };

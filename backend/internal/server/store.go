@@ -157,6 +157,7 @@ type Store interface {
 	UpdateModel(name string, patch Model) (Model, error)
 	DeleteModel(name string) error
 	AddRoute(route ModelRoute) ModelRoute
+	CreateRoute(route ModelRoute) (ModelRoute, error)
 	ListRoutes() []ModelRoute
 	UpdateRoute(id string, patch ModelRoute) (ModelRoute, error)
 	UpdateModelRoutePolicy(modelName string, policy ModelRoutePolicy) ([]ModelRoute, error)

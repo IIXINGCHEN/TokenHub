@@ -918,7 +918,7 @@ export type TopSearchItem = {
   keywords: string;
 };
 
-export type FieldType = "text" | "number" | "password" | "textarea" | "select" | "multi-select" | "tags" | "boolean";
+export type FieldType = "text" | "number" | "password" | "textarea" | "select" | "multi-select" | "tag-select" | "tags" | "boolean";
 
 export type FieldConfig = {
   key: string;
