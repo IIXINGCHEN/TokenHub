@@ -530,10 +530,6 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if r.Method != http.MethodGet {
-		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	token := strings.TrimSpace(s.config.MetricsToken)
 	if token == "" {
 		token = strings.TrimSpace(s.config.AdminToken)
@@ -547,6 +543,17 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.metrics.Handler().ServeHTTP(w, r)
+}
+
+func (s *Server) metricsMethodNotAllowed(allowedMethod string) http.HandlerFunc {
+	reject := jsonMethodNotAllowed(allowedMethod)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.metrics == nil {
+			http.NotFound(w, r)
+			return
+		}
+		reject(w, r)
+	}
 }
 
 // metricsTokenMatches accepts the token only from an Authorization: Bearer header.

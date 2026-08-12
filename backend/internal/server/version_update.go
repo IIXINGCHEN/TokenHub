@@ -663,10 +663,6 @@ func (s *Server) recordSystemVersionAudit(
 }
 
 func (s *Server) handleAdminSystemUpdate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	actor, ok := s.requireAdmin(w, r, "system", r.Method)
 	if !ok {
 		return
@@ -690,10 +686,6 @@ func (s *Server) handleAdminSystemUpdate(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleAdminSystemRollback(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	actor, ok := s.requireAdmin(w, r, "system", r.Method)
 	if !ok {
 		return
@@ -729,10 +721,6 @@ func (s *Server) handleAdminSystemRollback(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleAdminSystemRestart(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	actor, ok := s.requireAdmin(w, r, "system", r.Method)
 	if !ok {
 		return
