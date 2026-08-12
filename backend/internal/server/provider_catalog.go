@@ -431,7 +431,7 @@ func deepSeekBuiltinCatalogEntry() ProviderCatalogEntry {
 			model.Metadata = map[string]string{
 				"source":                   "builtin",
 				"upstream_source":          "deepseek-api",
-				"endpoints":                "chat/completions,anthropic",
+				"endpoints":                "responses,chat/completions,anthropic",
 				"reasoning_effort_options": "low,high,max",
 				"reasoning_default":        "true",
 				"tool_call":                "true",

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -76,8 +75,8 @@ func TestBuiltinDeepSeekCatalogDescribesNativeV4Capabilities(t *testing.T) {
 	if !ok {
 		t.Fatal("expected native deepseek-v4-pro model")
 	}
-	if strings.Contains(pro.Metadata["endpoints"], "responses") {
-		t.Fatalf("V4 Pro must not advertise Responses before upstream support exists: %+v", pro.Metadata)
+	if pro.Metadata["endpoints"] != "responses,chat/completions,anthropic" {
+		t.Fatalf("unexpected V4 Pro protocol metadata: %+v", pro.Metadata)
 	}
 }
 
@@ -85,13 +84,18 @@ func TestDeepSeekResponsesCapabilityIsModelScoped(t *testing.T) {
 	server := New(NewMemoryStore())
 	flash := RouteSelection{Provider: Provider{Type: "deepseek"}, ProviderModel: "deepseek-v4-flash"}
 	pro := RouteSelection{Provider: Provider{Type: "deepseek"}, ProviderModel: "deepseek-v4-pro"}
+	legacy := RouteSelection{Provider: Provider{Type: "deepseek"}, ProviderModel: "deepseek-chat"}
 	if !server.routeSupportsAdapterCapability(flash, AdapterCapabilityResponses) ||
 		!server.routeSupportsAdapterCapability(flash, AdapterCapabilityResponseStream) {
 		t.Fatal("V4 Flash must support Responses and streaming Responses")
 	}
-	if server.routeSupportsAdapterCapability(pro, AdapterCapabilityResponses) ||
-		server.routeSupportsAdapterCapability(pro, AdapterCapabilityResponseStream) {
-		t.Fatal("V4 Pro must not support Responses before DeepSeek enables it upstream")
+	if !server.routeSupportsAdapterCapability(pro, AdapterCapabilityResponses) ||
+		!server.routeSupportsAdapterCapability(pro, AdapterCapabilityResponseStream) {
+		t.Fatal("V4 Pro must support Responses and streaming Responses")
+	}
+	if server.routeSupportsAdapterCapability(legacy, AdapterCapabilityResponses) ||
+		server.routeSupportsAdapterCapability(legacy, AdapterCapabilityResponseStream) {
+		t.Fatal("unadvertised DeepSeek models must not inherit provider-level Responses support")
 	}
 	if !server.routeSupportsAdapterCapability(pro, AdapterCapabilityChat) {
 		t.Fatal("V4 Pro must retain Chat Completions support")

@@ -1,7 +1,10 @@
 package server
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -28,16 +31,31 @@ func TestStandardCatalogIncludesNativeDeepSeekV4Models(t *testing.T) {
 	if !ok {
 		t.Fatal("expected native DeepSeek V4 Pro in standard catalog")
 	}
-	if strings.Contains(pro.Metadata["endpoints"], "responses") {
-		t.Fatalf("native DeepSeek V4 Pro must not advertise Responses yet: %+v", pro.Metadata)
+	if pro.Metadata["endpoints"] != "responses,chat/completions,anthropic" {
+		t.Fatalf("unexpected native DeepSeek V4 Pro protocol metadata: %+v", pro.Metadata)
 	}
 }
 
-func TestGatewayRejectsDeepSeekV4ProResponsesRoute(t *testing.T) {
+func TestGatewayForwardsDeepSeekV4ProResponsesRoute(t *testing.T) {
+	var upstreamRequest map[string]any
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/responses" {
+			t.Errorf("unexpected upstream request: %s %s", r.Method, r.URL.Path)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&upstreamRequest); err != nil {
+			t.Errorf("decode upstream request: %v", err)
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"resp_deepseek_pro","object":"response","status":"completed","model":"deepseek-v4-pro","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`)
+	}))
+	t.Cleanup(upstream.Close)
+
 	store := NewMemoryStore()
 	store.AddModel(Model{Name: "deepseek-pro-public", Modality: "chat", Status: StatusActive})
 	provider := store.AddProvider(Provider{
-		Name: "DeepSeek", Type: "deepseek", BaseURL: "https://api.deepseek.invalid",
+		Name: "DeepSeek", Type: "deepseek", BaseURL: upstream.URL, APIKey: "deepseek-test-key",
 		Status: StatusActive, Healthy: true,
 	})
 	store.AddRoute(ModelRoute{
@@ -53,7 +71,10 @@ func TestGatewayRejectsDeepSeekV4ProResponsesRoute(t *testing.T) {
 		"model": "deepseek-pro-public",
 		"input": "hello",
 	}, "thk_deepseek_responses")
-	if response.Code != http.StatusNotImplemented || !strings.Contains(response.Body, "provider_capability_not_supported") {
-		t.Fatalf("expected model-scoped Responses rejection, got %d: %s", response.Code, response.Body)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body, "resp_deepseek_pro") {
+		t.Fatalf("expected successful Responses forwarding, got %d: %s", response.Code, response.Body)
+	}
+	if upstreamRequest["model"] != "deepseek-v4-pro" || upstreamRequest["input"] != "hello" {
+		t.Fatalf("unexpected upstream request body: %#v", upstreamRequest)
 	}
 }
