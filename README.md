@@ -126,15 +126,15 @@ TokenHub grows through product feedback, gateway integrations, documentation, te
       </a>
     </td>
     <td align="center" valign="top" width="12.5%">
-      <a href="https://github.com/cngump">
-        <img src="https://avatars.githubusercontent.com/u/108251?v=4" width="80px" alt="cngump" />
-        <br /><sub><b>cngump</b></sub>
-      </a>
-    </td>
-    <td align="center" valign="top" width="12.5%">
       <a href="https://github.com/deepjerry-ai">
         <img src="https://avatars.githubusercontent.com/u/262369278?v=4" width="80px" alt="deepjerry-ai" />
         <br /><sub><b>deepjerry-ai</b></sub>
+      </a>
+    </td>
+    <td align="center" valign="top" width="12.5%">
+      <a href="https://github.com/cngump">
+        <img src="https://avatars.githubusercontent.com/u/108251?v=4" width="80px" alt="cngump" />
+        <br /><sub><b>cngump</b></sub>
       </a>
     </td>
     <td align="center" valign="top" width="12.5%">
