@@ -98,7 +98,7 @@ The responsibilities remain separate: add a Provider and import inventory first;
 
 Provider-model prices represent actual upstream cost and are used for internal audit. Model Directory prices represent the unified external charge used for client billing estimates, quota accounting, metrics, and usage reports. A route selects the upstream implementation but does not change the external price.
 
-When Provider Channels, Model Directory, or Routing Policies has no configured data, the console shows the same three-step setup guide: import Provider inventory, create an external model from the built-in 165-model catalog, then configure routing. The primary action always points to the earliest incomplete prerequisite, so administrators are not sent into a form that cannot yet be completed.
+When Provider Channels, Model Directory, or Routing Policies has no configured data, the console shows the same three-step setup guide: import Provider inventory, create an external model from the built-in 178-model catalog, then configure routing. The primary action always points to the earliest incomplete prerequisite, so administrators are not sent into a form that cannot yet be completed.
 
 Publication and runtime health are different states. Membership in `GET /v1/models` requires an active external `Model`, at least one active `ModelRoute`, and API-key access when a model allowlist is configured. It does not change when a Provider or Provider Resource is temporarily unhealthy. Health affects whether a request can be served and is shown separately in the directory and routing diagnostics. Disabling the external model removes it from `GET /v1/models` while retaining its mappings for later re-publication.
 
