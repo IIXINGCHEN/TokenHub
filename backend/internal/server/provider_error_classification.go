@@ -126,7 +126,29 @@ func checkProviderResponseForProvider(resp *http.Response, provider Provider) er
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, providerErrorBodyPrefix))
 	data = redactProviderErrorSecrets(data, provider)
+	if provider.Type == ProviderKronk {
+		data = normalizeKronkErrorBody(data)
+	}
 	return newProviderHTTPError(resp.StatusCode, resp.Header, data)
+}
+
+func normalizeKronkErrorBody(data []byte) []byte {
+	var payload map[string]any
+	if json.Unmarshal(data, &payload) != nil {
+		return data
+	}
+	message, _ := payload["message"].(string)
+	code, _ := payload["code"].(string)
+	if strings.TrimSpace(message) == "" && strings.TrimSpace(code) == "" {
+		return data
+	}
+	wrapped, err := json.Marshal(map[string]any{"error": map[string]any{
+		"code": strings.TrimSpace(code), "message": strings.TrimSpace(message),
+	}})
+	if err != nil {
+		return data
+	}
+	return wrapped
 }
 
 func redactProviderErrorSecrets(data []byte, provider Provider) []byte {
