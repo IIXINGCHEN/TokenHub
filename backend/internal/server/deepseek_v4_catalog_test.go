@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -33,6 +34,14 @@ func TestStandardCatalogIncludesNativeDeepSeekV4Models(t *testing.T) {
 	}
 	if pro.Metadata["endpoints"] != "responses,chat/completions,anthropic" {
 		t.Fatalf("unexpected native DeepSeek V4 Pro protocol metadata: %+v", pro.Metadata)
+	}
+	for _, model := range []Model{flash, pro} {
+		if !slices.Contains(model.SupportedParameters, "top_logprobs") ||
+			model.Metadata["features"] != "function-calling,structured-outputs,reasoning,apply-patch,web-search" ||
+			model.Metadata["top_logprobs_range"] != "0,20" || model.Metadata["responses_stateful"] != "false" ||
+			model.Metadata["prompt_cache_mode"] != "automatic" || model.Metadata["custom_tool_names"] != "apply_patch" {
+			t.Fatalf("incomplete native DeepSeek Responses metadata for %s: %+v", model.Name, model)
+		}
 	}
 }
 

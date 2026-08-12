@@ -416,6 +416,11 @@ func deepSeekBuiltinCatalogEntry() ProviderCatalogEntry {
 				"source":                   "builtin",
 				"upstream_source":          "deepseek-api",
 				"endpoints":                "responses,chat/completions,anthropic",
+				"features":                 "function-calling,structured-outputs,reasoning,apply-patch,web-search",
+				"top_logprobs_range":       "0,20",
+				"responses_stateful":       "false",
+				"prompt_cache_mode":        "automatic",
+				"custom_tool_names":        "apply_patch",
 				"reasoning_effort_options": "low,high,max",
 				"reasoning_default":        "true",
 				"tool_call":                "true",
@@ -432,6 +437,11 @@ func deepSeekBuiltinCatalogEntry() ProviderCatalogEntry {
 				"source":                   "builtin",
 				"upstream_source":          "deepseek-api",
 				"endpoints":                "responses,chat/completions,anthropic",
+				"features":                 "function-calling,structured-outputs,reasoning,apply-patch,web-search",
+				"top_logprobs_range":       "0,20",
+				"responses_stateful":       "false",
+				"prompt_cache_mode":        "automatic",
+				"custom_tool_names":        "apply_patch",
 				"reasoning_effort_options": "low,high,max",
 				"reasoning_default":        "true",
 				"tool_call":                "true",
@@ -443,7 +453,7 @@ func deepSeekBuiltinCatalogEntry() ProviderCatalogEntry {
 		model.InputModalities = []string{"text"}
 		model.OutputModalities = []string{"text"}
 		model.Capabilities = []string{"chat", "reasoning", "tools", "structured_outputs"}
-		model.SupportedParameters = []string{"temperature", "top_p", "tools", "tool_choice", "response_format", "reasoning"}
+		model.SupportedParameters = []string{"temperature", "top_p", "top_logprobs", "tools", "tool_choice", "response_format", "reasoning"}
 	}
 	return entry
 }
