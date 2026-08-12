@@ -580,6 +580,8 @@ func TestCodexSessionAffinityPersistsRebindsAndPreservesProtocol(t *testing.T) {
 		Healthy: true,
 	})
 	for _, account := range []string{"account_session_a", "account_session_b"} {
+		options := codexCapabilityOptionsForTest("gpt-session")
+		options[codexFingerprintModeOption] = string(codexFingerprintOff)
 		if _, err := store.AddProviderResource(ProviderResource{
 			ID:           "rsrc_" + account,
 			ProviderID:   provider.ID,
@@ -588,7 +590,7 @@ func TestCodexSessionAffinityPersistsRebindsAndPreservesProtocol(t *testing.T) {
 			Status:       StatusActive,
 			Healthy:      true,
 			Weight:       100,
-			Options:      codexCapabilityOptionsForTest("gpt-session"),
+			Options:      options,
 			Credentials: &ProviderResourceCredentials{
 				AccessToken: "access_" + account,
 				AccountID:   account,

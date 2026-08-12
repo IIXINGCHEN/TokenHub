@@ -80,6 +80,12 @@ Claude Code は、Anthropic Messages リクエストの `system` 配列の先頭
 
 Provider Resource は既定で Provider ポリシーを継承し、`options.claude_code_attribution_policy` を `preserve` または `strip` に設定して上書きできます。この Resource オプションを省略すると継承に戻ります。TokenHub はルート試行ごとに有効なポリシーを適用するため、フェイルオーバー先の Resource は元のリクエストを受け取り、独自の設定を適用します。監査ペイロードにも元のリクエストを保持します。`POST /v1/messages/count_tokens` は具体的な Provider Resource を選択しないため、引き続き元のリクエストをカウントします。
 
+## Codex フィンガープリント集約
+
+OpenAI Codex Subscription Resource では、Responses リクエストを上流へ送る前にクライアントのデバイス ID とセッション ID を集約できます。アカウント Resource の **Codex フィンガープリント集約** を設定してください。既定の `session` モードはアカウント単位で安定した installation ID と session ID を生成し、元のクライアントセッションから安定した thread ID を生成します。`device` は installation ID だけを書き換え、`full` はすべてのクライアントを同じ thread にも集約し、`off` はクライアント ID を変更せずに送信します。
+
+このポリシーは、事前計算した同じ ID セットを使って Codex プロトコルヘッダー、`client_metadata`、および埋め込みの `x-codex-turn-metadata` を書き換え、再試行中も 1 回のリクエストの内部整合性を維持します。安定値は Provider Resource ID から生成され、保存済み OAuth Credential を公開しません。設定は `options.codex_fingerprint_mode` に保存され、既定の `session` はオプション省略で表します。変更前の透過送信へ戻すには `off` を設定してください。
+
 ## Codex 使用量リセットクレジット
 
 有効な OpenAI Codex Subscription アカウントでは、**Provider Channels** から Provider を編集し、**Advanced > Subscription quota** を開きます。アカウントカードには OpenAI が返した権威ある残りリセット回数と最も近い有効期限が表示されます。**使用量ウィンドウをリセット** は、復元できないクレジットを 1 回消費する前に再確認を表示し、対象となる Codex 使用量ウィンドウをリセットしますが、ChatGPT の課金プランは変更しません。完了時または冪等な再実行が成功した場合、クォータとリセットクレジットの詳細を再取得します。
