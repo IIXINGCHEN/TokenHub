@@ -764,6 +764,7 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 		RequestID:             call.RequestID,
 		ProjectID:             call.Project.ID,
 		APIKeyID:              call.Key.ID,
+		AttributedUserID:      usageAttributionUserID(call.Key, call.Project),
 		ModelName:             call.Model.Name,
 		ProviderID:            route.Provider.ID,
 		ProviderResourceID:    routeResourceID(route),
@@ -864,6 +865,7 @@ func (s *GormStore) RecordPlaygroundRequest(call CallContext, route RouteSelecti
 		RequestID:             call.RequestID,
 		ProjectID:             call.Project.ID,
 		APIKeyID:              call.Key.ID,
+		AttributedUserID:      usageAttributionUserID(call.Key, call.Project),
 		ModelName:             call.Model.Name,
 		ProviderID:            route.Provider.ID,
 		ProviderResourceID:    routeResourceID(route),
@@ -895,16 +897,17 @@ func (s *GormStore) RecordRouteAttempts(requestID string, attempts []RouteAttemp
 func (s *GormStore) RecordRejectedRequest(project Project, key APIKey, modelName string, stream bool, statusCode int, errorCode string, clientIP string, userAgent string) string {
 	requestID := NewID("req")
 	_ = s.db.Create(&RequestLog{
-		ID:         NewID("log"),
-		RequestID:  requestID,
-		ProjectID:  project.ID,
-		APIKeyID:   key.ID,
-		ModelName:  modelName,
-		StatusCode: statusCode,
-		ErrorCode:  errorCode,
-		ClientIP:   clientIP,
-		UserAgent:  userAgent,
-		CreatedAt:  time.Now().UTC(),
+		ID:               NewID("log"),
+		RequestID:        requestID,
+		ProjectID:        project.ID,
+		APIKeyID:         key.ID,
+		AttributedUserID: usageAttributionUserID(key, project),
+		ModelName:        modelName,
+		StatusCode:       statusCode,
+		ErrorCode:        errorCode,
+		ClientIP:         clientIP,
+		UserAgent:        userAgent,
+		CreatedAt:        time.Now().UTC(),
 	}).Error
 	// A rejected request never reached a provider, so it contributes to the request
 	// counter only: no duration, no tokens, no cost. Emitting zeroes for those would
@@ -941,8 +944,37 @@ func (s *GormStore) observeGatewayCall(call CallContext, route RouteSelection, u
 		Stream:       call.Stream,
 		Usage:        usage,
 		Duration:     elapsed,
+		Attempts:     gatewayAttemptSamples(call.RouteAttempts),
 	}
 	s.metrics.ObserveGatewayCall(sample)
+}
+
+// gatewayAttemptSamples maps the per-candidate routing outcomes into the slim
+// sample shape the metrics layer accepts. LatencyMS is the authoritative local
+// measurement covering the whole routed attempt — upstream transport, stream
+// translation and writing to the client — so streaming calls include slow-client
+// backpressure; StartedAt/EndedAt are UTC wall-clock readings and are not used
+// for duration here.
+func gatewayAttemptSamples(attempts []RouteAttempt) []GatewayAttemptSample {
+	if len(attempts) == 0 {
+		return nil
+	}
+	out := make([]GatewayAttemptSample, 0, len(attempts))
+	for _, attempt := range attempts {
+		sample := GatewayAttemptSample{
+			ProviderType: attempt.Selection.Provider.Type,
+			ProviderID:   attempt.Selection.Provider.ID,
+			ResourceID:   routeResourceID(attempt.Selection),
+			StatusCode:   attempt.Status,
+			ErrorCode:    attempt.ErrorCode,
+			Invoked:      attempt.Invoked,
+		}
+		if attempt.Invoked {
+			sample.Duration = time.Duration(attempt.LatencyMS) * time.Millisecond
+		}
+		out = append(out, sample)
+	}
+	return out
 }
 
 // knownModelLabel keeps a model name as a label only when the catalog knows it,
@@ -1071,15 +1103,16 @@ func (s *GormStore) FailUnfinishedImageJobs(code string, message string) ([]Imag
 			}
 			if count == 0 {
 				if err := tx.Create(&RequestLog{
-					ID:         NewID("log"),
-					RequestID:  job.RequestID,
-					ProjectID:  job.ProjectID,
-					APIKeyID:   job.APIKeyID,
-					ModelName:  job.Model,
-					StatusCode: http.StatusServiceUnavailable,
-					ErrorCode:  code,
-					LatencyMS:  latencyMillis(now.Sub(job.CreatedAt)),
-					CreatedAt:  now,
+					ID:               NewID("log"),
+					RequestID:        job.RequestID,
+					ProjectID:        job.ProjectID,
+					APIKeyID:         job.APIKeyID,
+					AttributedUserID: job.AttributedUserID,
+					ModelName:        job.Model,
+					StatusCode:       http.StatusServiceUnavailable,
+					ErrorCode:        code,
+					LatencyMS:        latencyMillis(now.Sub(job.CreatedAt)),
+					CreatedAt:        now,
 				}).Error; err != nil {
 					return err
 				}
