@@ -9,7 +9,7 @@ func (s *Server) routes() {
 	s.registerSingleMethodRoute(http.MethodGet, "/livez", s.handleLive, jsonMethodNotAllowed(http.MethodGet))
 	s.registerSingleMethodRoute(http.MethodGet, "/readyz", s.handleHealth, jsonMethodNotAllowed(http.MethodGet))
 	s.registerSingleMethodRoute(http.MethodGet, "/healthz", s.handleHealth, jsonMethodNotAllowed(http.MethodGet))
-	s.mux.HandleFunc("/metrics", s.handleMetrics)
+	s.registerSingleMethodRoute(http.MethodGet, "/metrics", s.handleMetrics, s.metricsMethodNotAllowed(http.MethodGet))
 	s.registerModelRoutes()
 	// The in-flight gauge covers exactly the endpoints that route to an upstream, so
 	// it stays comparable with requests_total. Catalog lookups and count_tokens are
@@ -90,10 +90,10 @@ func (s *Server) routes() {
 	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/alert-deliveries", s.handleAdminAlertDeliveries, s.adminMethodNotAllowed("alert", http.MethodGet))
 	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/approvals", s.handleAdminApprovals, s.adminMethodNotAllowed("approval", http.MethodGet))
 	s.mux.HandleFunc("/api/admin/approvals/", s.handleAdminApprovalItem)
-	s.mux.HandleFunc("/api/admin/system/db-status", s.handleAdminSystemDBStatus)
-	s.mux.HandleFunc("/api/admin/system/version", s.handleAdminSystemVersion)
-	s.mux.HandleFunc("/api/admin/system/update", s.handleAdminSystemUpdate)
-	s.mux.HandleFunc("/api/admin/system/rollback", s.handleAdminSystemRollback)
-	s.mux.HandleFunc("/api/admin/system/restart", s.handleAdminSystemRestart)
-	s.mux.HandleFunc("/api/admin/system/rollback-versions", s.handleAdminRollbackVersions)
+	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/system/db-status", s.handleAdminSystemDBStatus, plainTextMethodNotAllowed(http.MethodGet))
+	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/system/version", s.handleAdminSystemVersion, jsonMethodNotAllowed(http.MethodGet))
+	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/system/update", s.handleAdminSystemUpdate, jsonMethodNotAllowed(http.MethodPost))
+	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/system/rollback", s.handleAdminSystemRollback, jsonMethodNotAllowed(http.MethodPost))
+	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/system/restart", s.handleAdminSystemRestart, jsonMethodNotAllowed(http.MethodPost))
+	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/system/rollback-versions", s.handleAdminRollbackVersions, jsonMethodNotAllowed(http.MethodGet))
 }
