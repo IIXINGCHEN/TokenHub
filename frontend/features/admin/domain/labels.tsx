@@ -199,6 +199,14 @@ export function fieldValueLabel(fieldKey: string, value: unknown): string {
   if (normalizedKey === "status" || normalizedKey.includes("status")) return enumValueLabel(text);
   if (normalizedKey === "strategy") return routeStrategyLabel(text);
   if (normalizedKey === "claude_code_attribution_policy") return enumValueLabel(text);
+  if (normalizedKey === "codex_fingerprint_mode") {
+    return tx({
+      off: "关闭（透传）",
+      device: "仅收敛设备",
+      session: "收敛设备与会话（推荐）",
+      full: "完全收敛",
+    }[text.toLowerCase()] ?? text);
+  }
   if (normalizedKey === "trigger") return approvalTriggerLabel(text);
   if (normalizedKey === "dataset") return reportDatasetLabel(text);
   if (normalizedKey === "reasoning_effort_unsupported") {

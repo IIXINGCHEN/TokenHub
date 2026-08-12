@@ -80,6 +80,12 @@ Each Provider has a `claude_code_attribution_policy` setting. New official Anthr
 
 Provider Resources inherit the Provider policy by default and can override it with `options.claude_code_attribution_policy` set to `preserve` or `strip`. Omitting that Resource option restores inheritance. TokenHub applies the effective policy separately for every route attempt, so a failover Resource receives the original request and applies its own setting. Audit payloads also retain the original request. `POST /v1/messages/count_tokens` continues to count the original request because it does not select a concrete Provider Resource.
 
+## Codex Fingerprint Convergence
+
+OpenAI Codex Subscription resources can converge client device and session identifiers before a Responses or Compact request is sent upstream. Configure **Codex fingerprint convergence** on the account resource. The default `session` mode derives stable account-level installation and session IDs, while deriving a stable thread ID from the original client session. `device` changes only the installation ID, `full` also converges all clients onto one thread, and `off` passes client identifiers through unchanged.
+
+The policy rewrites matching fields in the Codex protocol headers and `client_metadata`, including embedded `x-codex-turn-metadata`, from one precomputed ID set so a request stays internally consistent across retries. In `session` and `full` modes, original parent, fork, and parent-turn lineage identifiers are removed because they belong to the pre-rewrite thread namespace. Stable values are derived from the Provider Resource ID and do not expose saved OAuth credentials. The setting is stored as `options.codex_fingerprint_mode`; the default `session` value is represented by an absent option. Set the mode to `off` to roll back to passthrough behavior.
+
 ## Codex Usage Reset Credits
 
 For an active OpenAI Codex Subscription account, open **Provider Channels**, edit the Provider, and expand **Advanced > Subscription quota**. The account card shows the authoritative number of available reset credits and the nearest expiry reported by OpenAI. **Reset usage window** opens a second confirmation before it consumes one non-recoverable credit; it resets eligible Codex usage windows but does not change the ChatGPT billing plan. A completed or idempotently repeated operation refreshes both quota and reset-credit details.
