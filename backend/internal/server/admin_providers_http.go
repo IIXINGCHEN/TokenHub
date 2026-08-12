@@ -227,6 +227,15 @@ func (s *Server) providerFromCreateRequest(ctx context.Context, req ProviderCrea
 		provider.Priority = 10
 	}
 	provider.BaseURL = normalizeProviderBaseURL(provider.ID, provider.BaseURL)
+	// SSRF guard at the admin persistence boundary: admin create and update both
+	// flow through here, so those untrusted entry points cannot save a base URL
+	// with a literal IP in loopback, private, link-local or curated high-risk/
+	// non-provider ranges. The operator
+	// allowlist (TOKENHUB_PROVIDER_UPSTREAM_ALLOWED_CIDRS) and the explicit
+	// loopback opt-in apply exactly as they do for upstream model discovery.
+	if err := ValidateProviderUpstreamBaseURL(provider.BaseURL); err != nil {
+		return Provider{}, ProviderCatalogEntry{}, catalogSource, err
+	}
 	if provider.Options == nil {
 		provider.Options = map[string]string{}
 	}
@@ -243,6 +252,14 @@ func (s *Server) providerFromCreateRequest(ctx context.Context, req ProviderCrea
 	if strings.TrimSpace(req.ModelCategory) != "" {
 		provider.Options["model_category"] = strings.TrimSpace(req.ModelCategory)
 	}
+	options, err := applyClaudeCodeAttributionPolicy(provider.Options, req.ClaudeCodeAttributionPolicy)
+	if err != nil {
+		return Provider{}, ProviderCatalogEntry{}, catalogSource, err
+	}
+	if err := validateClaudeCodeAttributionOptions(options); err != nil {
+		return Provider{}, ProviderCatalogEntry{}, catalogSource, err
+	}
+	provider.Options = options
 	return provider, catalog, catalogSource, nil
 }
 

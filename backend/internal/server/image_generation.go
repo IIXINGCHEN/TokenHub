@@ -344,10 +344,6 @@ func (s *Server) handleAdminImageJobs(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAdmin(w, r, "audit", r.Method); !ok {
 		return
 	}
-	if r.Method != http.MethodGet {
-		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	limit := 200
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
 		parsed, err := strconv.Atoi(raw)
@@ -470,6 +466,19 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// drain the image queue is bad, failing to drain it and silently discarding
 	// every buffered trace is worse.
 	defer s.shutdownTracing()
+	s.responseWorkerStop.Do(func() {
+		s.responseCancel()
+	})
+	responseWorkersDone := make(chan struct{})
+	go func() {
+		s.responseWorkerGroup.Wait()
+		close(responseWorkersDone)
+	}()
+	select {
+	case <-responseWorkersDone:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	if s.billing != nil {
 		if err := s.billing.Shutdown(ctx); err != nil {
 			return err

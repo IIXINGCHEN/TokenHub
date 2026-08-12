@@ -522,9 +522,10 @@ func CustomProviderCatalogFromUpstream(ctx context.Context, client *http.Client,
 	if err != nil || endpoint.Scheme == "" || endpoint.Host == "" {
 		return ProviderCatalogEntry{}, NewHTTPError(http.StatusBadRequest, "provider_base_url_invalid", "Base URL is invalid")
 	}
-	if client == nil {
-		client = http.DefaultClient
+	if err := validateProviderUpstreamBaseURL(endpoint, allowedProviderUpstreamCIDRs(), providerUpstreamLoopbackAllowed()); err != nil {
+		return ProviderCatalogEntry{}, err
 	}
+	client = ssrfGuardedProviderClient(client)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
 		return ProviderCatalogEntry{}, NewHTTPError(http.StatusBadGateway, "provider_models_request_failed", "Failed to create upstream models request")

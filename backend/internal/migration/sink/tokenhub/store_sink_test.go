@@ -546,4 +546,44 @@ func TestSameProviderIgnoresTargetDefaults(t *testing.T) {
 	if sameProvider(existing, drifted) {
 		t.Fatal("expected a drifted base URL to be reported")
 	}
+
+	preserved := existing
+	preserved.Options = map[string]string{"claude_code_attribution_policy": "preserve"}
+	if !sameProvider(preserved, desired) {
+		t.Fatal("expected an explicit preserve policy to equal the legacy missing option")
+	}
+	stripped := existing
+	stripped.Options = map[string]string{"claude_code_attribution_policy": "strip"}
+	if sameProvider(stripped, desired) {
+		t.Fatal("expected an explicit strip policy to differ from the legacy missing option")
+	}
+}
+
+func TestStoreSinkApplyRejectsSSRFProviderBaseURL(t *testing.T) {
+	store := server.NewMemoryStore()
+	sink := NewStoreSink(store, bundle.StaticResolver{})
+
+	migrationBundle := &bundle.CanonicalMigrationBundle{
+		SchemaVersion: bundle.SchemaVersion,
+		Source: bundle.Source{
+			Adapter:        "litellm",
+			AdapterVersion: "1.60.0",
+		},
+		GeneratedAt: time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC),
+		Providers: []bundle.ProviderRef{{
+			ExternalRef: bundle.ExternalRef{System: "litellm", ID: "provider/evil"},
+			Spec: server.Provider{
+				ID: "prv_litellm_evil", Name: "Evil", Type: server.ProviderOpenAICompatible,
+				Status: server.StatusActive, Healthy: true,
+				BaseURL: "http://169.254.169.254/latest/meta-data",
+			},
+		}},
+	}
+
+	if _, err := sink.Apply(migrationBundle); err == nil {
+		t.Fatal("expected the sink to reject a link-local provider base URL")
+	}
+	if providers := store.ListProviders(); len(providers) != 0 {
+		t.Fatalf("expected no provider to be persisted, got %d", len(providers))
+	}
 }
