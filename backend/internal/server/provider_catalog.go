@@ -533,7 +533,11 @@ func CustomProviderCatalogFromUpstream(ctx context.Context, client *http.Client,
 	apiKey := strings.TrimSpace(req.APIKey)
 	if providerType == ProviderAnthropic {
 		if apiKey != "" {
-			httpReq.Header.Set("x-api-key", apiKey)
+			provider := Provider{Type: providerType, APIKey: apiKey, Options: req.Options}
+			if err := configureAnthropicProviderAuth(&provider, req.AnthropicAuthType); err != nil {
+				return ProviderCatalogEntry{}, err
+			}
+			applyAnthropicProviderAuth(httpReq, provider)
 		}
 		version := strings.TrimSpace(req.Options["anthropic_version"])
 		if version == "" {

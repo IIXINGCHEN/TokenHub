@@ -3,9 +3,11 @@ import { useRef, useState } from "react";
 import { type ApiContext, type ProviderCatalogEntry, type ProviderCatalogModel } from "../core/types";
 import { providerTypeLabel } from "../domain/labels";
 import { formatModelPrice } from "../domain/formatting";
+import { providerAnthropicAuthType, providerConnectionTestRunAfterUpdate } from "../domain/provider-custom-upstream";
 import { clearCustomValidity, countWithUnit, handleRequiredFieldInvalid, tx } from "../i18n/runtime";
 import { adminFetch, isAuthExpiredError, readAdminError } from "../resources/payloads";
 import { providerTypeOptions } from "../shared/ui";
+import { AnthropicAuthTypeField } from "./provider-editor-sections";
 
 type ProviderConnectionTestState = {
   status: "idle" | "testing" | "success" | "error";
@@ -112,8 +114,9 @@ export function ProviderAPIQuickConnect({
   const connectionReady = Boolean(values.base_url?.trim() && values.api_key?.trim());
 
   function updateConnectionValue(key: string, value: string) {
-    if (key === "base_url" || key === "api_key") {
-      connectionTestRun.current += 1;
+    const nextRun = providerConnectionTestRunAfterUpdate(connectionTestRun.current, key);
+    if (nextRun !== connectionTestRun.current) {
+      connectionTestRun.current = nextRun;
       setConnectionTest({ status: "idle" });
     }
     onUpdate(key, value);
@@ -137,6 +140,7 @@ export function ProviderAPIQuickConnect({
           type: values.type,
           base_url: values.base_url,
           api_key: values.api_key,
+          anthropic_auth_type: providerAnthropicAuthType(values),
         }),
       });
       if (!resp.ok) throw new Error(await readAdminError(resp, tx("测试 Provider 连接")));
@@ -308,10 +312,11 @@ export function ProviderAPIQuickConnect({
             ) : null}
             <label className="field">
               <span>{tx("渠道商类型")}</span>
-              <select value={values.type ?? ""} onChange={(event) => onUpdate("type", event.target.value)} required>
+              <select value={values.type ?? ""} onChange={(event) => updateConnectionValue("type", event.target.value)} required>
                 {providerTypeOptions.map((option) => <option key={option} value={option}>{providerTypeLabel(option)}</option>)}
               </select>
             </label>
+            <AnthropicAuthTypeField values={values} onUpdate={updateConnectionValue} />
             <label className="field">
               <span>{tx("优先级")}</span>
               <input value={values.priority ?? "10"} type="number" onChange={(event) => onUpdate("priority", event.target.value)} />

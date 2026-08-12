@@ -189,6 +189,138 @@ func TestAdminTestsUnsavedProviderConnection(t *testing.T) {
 	}
 }
 
+func TestAdminTestsUnsavedAnthropicProviderAuthentication(t *testing.T) {
+	for _, testCase := range []struct {
+		name              string
+		authType          string
+		wantAuthorization string
+		wantAPIKey        string
+	}{
+		{name: "default x-api-key", wantAPIKey: "test-secret"},
+		{name: "bearer", authType: anthropicAuthTypeBearer, wantAuthorization: "Bearer test-secret"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if got := r.Header.Get("authorization"); got != testCase.wantAuthorization {
+					t.Errorf("authorization = %q, want %q", got, testCase.wantAuthorization)
+				}
+				if got := r.Header.Get("x-api-key"); got != testCase.wantAPIKey {
+					t.Errorf("x-api-key = %q, want %q", got, testCase.wantAPIKey)
+				}
+				writeJSON(w, http.StatusOK, map[string]any{
+					"data": []map[string]any{{"id": "claude-test"}},
+				})
+			}))
+			defer upstream.Close()
+
+			app := newTestServer()
+			resp := doJSON(t, app, http.MethodPost, "/api/admin/providers/test-connection", map[string]any{
+				"name":                "Anthropic",
+				"type":                ProviderAnthropic,
+				"base_url":            upstream.URL + "/v1",
+				"api_key":             "test-secret",
+				"anthropic_auth_type": testCase.authType,
+			}, "")
+			if resp.Code != http.StatusOK {
+				t.Fatalf("expected connection test 200, got %d: %s", resp.Code, resp.Body)
+			}
+		})
+	}
+}
+
+func TestAdminSavedAnthropicProviderCatalogAuthentication(t *testing.T) {
+	seenHeaders := make(chan http.Header, 2)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenHeaders <- r.Header.Clone()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"data": []map[string]any{{"id": "claude-test"}},
+		})
+	}))
+	defer upstream.Close()
+
+	app := newTestServer()
+	created := doJSON(t, app, http.MethodPost, "/api/admin/providers", map[string]any{
+		"id":                  "prv_anthropic_bearer",
+		"name":                "Anthropic Bearer",
+		"type":                ProviderAnthropic,
+		"base_url":            upstream.URL + "/v1",
+		"api_key":             "saved-secret",
+		"anthropic_auth_type": anthropicAuthTypeBearer,
+	}, "")
+	if created.Code != http.StatusCreated {
+		t.Fatalf("expected provider creation 201, got %d: %s", created.Code, created.Body)
+	}
+
+	for _, testCase := range []struct {
+		name              string
+		authType          string
+		wantAuthorization string
+		wantAPIKey        string
+	}{
+		{name: "inherit saved bearer", wantAuthorization: "Bearer saved-secret"},
+		{name: "explicit x-api-key override", authType: anthropicAuthTypeAPIKey, wantAPIKey: "saved-secret"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			body := map[string]any{"provider_id": "prv_anthropic_bearer"}
+			if testCase.authType != "" {
+				body["anthropic_auth_type"] = testCase.authType
+			}
+			resp := doJSON(t, app, http.MethodPost, "/api/admin/provider-catalog/custom", body, "")
+			if resp.Code != http.StatusOK {
+				t.Fatalf("expected saved provider catalog 200, got %d: %s", resp.Code, resp.Body)
+			}
+			headers := <-seenHeaders
+			if got := headers.Get("authorization"); got != testCase.wantAuthorization {
+				t.Errorf("authorization = %q, want %q", got, testCase.wantAuthorization)
+			}
+			if got := headers.Get("x-api-key"); got != testCase.wantAPIKey {
+				t.Errorf("x-api-key = %q, want %q", got, testCase.wantAPIKey)
+			}
+		})
+	}
+}
+
+func TestAdminValidatesAnthropicProviderAuthentication(t *testing.T) {
+	app := newTestServer()
+	valid := doJSON(t, app, http.MethodPost, "/api/admin/providers", map[string]any{
+		"id":                  "prv_anthropic_bearer",
+		"name":                "Anthropic Bearer",
+		"type":                ProviderAnthropic,
+		"base_url":            "https://example.invalid",
+		"anthropic_auth_type": anthropicAuthTypeBearer,
+	}, "")
+	if valid.Code != http.StatusCreated {
+		t.Fatalf("expected provider creation 201, got %d: %s", valid.Code, valid.Body)
+	}
+	var result ProviderCreateResult
+	if err := json.Unmarshal([]byte(valid.Body), &result); err != nil {
+		t.Fatal(err)
+	}
+	if got := result.Provider.Options[anthropicAuthTypeOption]; got != anthropicAuthTypeBearer {
+		t.Fatalf("stored authentication type = %q, want %q", got, anthropicAuthTypeBearer)
+	}
+
+	for _, body := range []map[string]any{
+		{
+			"name":                "Invalid Anthropic",
+			"type":                ProviderAnthropic,
+			"base_url":            "https://example.invalid",
+			"anthropic_auth_type": "basic",
+		},
+		{
+			"name":     "Invalid Anthropic Option",
+			"type":     ProviderAnthropic,
+			"base_url": "https://example.invalid",
+			"options":  map[string]string{anthropicAuthTypeOption: "basic"},
+		},
+	} {
+		resp := doJSON(t, app, http.MethodPost, "/api/admin/providers", body, "")
+		if resp.Code != http.StatusBadRequest || !strings.Contains(resp.Body, `"code":"provider_anthropic_auth_type_invalid"`) {
+			t.Fatalf("expected invalid authentication type, got %d: %s", resp.Code, resp.Body)
+		}
+	}
+}
+
 func TestAdminProviderConnectionTestRequiresCredentials(t *testing.T) {
 	app := newTestServer()
 	for _, testCase := range []struct {

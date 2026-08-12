@@ -37,6 +37,20 @@ export function ProviderConnectionFields({ values, onUpdate }: ProviderEditSecti
   );
 }
 
+export function AnthropicAuthTypeField({ values, onUpdate }: ProviderEditSectionProps) {
+  if (values.type !== "anthropic") return null;
+  return (
+    <label className="field">
+      <span>{tx("Anthropic 认证方式")}</span>
+      <select value={values.anthropic_auth_type || "x-api-key"} onChange={(event) => onUpdate("anthropic_auth_type", event.target.value)}>
+        <option value="x-api-key">{tx("x-api-key（Anthropic 官方）")}</option>
+        <option value="bearer">{tx("Authorization Bearer（兼容服务）")}</option>
+      </select>
+      <small>{tx("认证密钥始终使用上面的加密 API Key，不需要写入自定义 Headers。")}</small>
+    </label>
+  );
+}
+
 export function ProviderAdvancedFields({
   values,
   onUpdate,
@@ -73,6 +87,7 @@ export function ProviderAdvancedFields({
             <input value={values.base_url ?? ""} onChange={(event) => onUpdate("base_url", event.target.value)} />
           </label>
         ) : null}
+        <AnthropicAuthTypeField values={values} onUpdate={onUpdate} />
         <label className="field">
           <span>{tx("优先级")}</span>
           <input value={values.priority ?? "10"} type="number" onChange={(event) => onUpdate("priority", event.target.value)} />

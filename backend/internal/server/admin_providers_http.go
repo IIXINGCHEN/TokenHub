@@ -142,6 +142,7 @@ func (s *Server) handleAdminProviderCatalogItem(w http.ResponseWriter, r *http.R
 				if req.APIKey == "" {
 					req.APIKey = provider.APIKey
 				}
+				req.Options = mergedStringMap(provider.Options, req.Options)
 			}
 		}
 		entry, err := CustomProviderCatalogFromUpstream(r.Context(), http.DefaultClient, req)
@@ -237,6 +238,9 @@ func (s *Server) providerFromCreateRequest(ctx context.Context, req ProviderCrea
 	}
 	if provider.Options == nil {
 		provider.Options = map[string]string{}
+	}
+	if err := configureAnthropicProviderAuth(&provider, req.AnthropicAuthType); err != nil {
+		return Provider{}, ProviderCatalogEntry{}, catalogSource, err
 	}
 	if catalog.ID != "" {
 		provider.Options["catalog_id"] = catalog.ID

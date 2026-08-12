@@ -6,6 +6,7 @@ import { firstActiveModel, firstActiveProject, firstActiveProvider, firstActiveT
 import { compactNumber } from "../domain/formatting";
 import { enumValueLabel, numberFromUnknown, numberOr, parseLooseValue, splitList } from "../domain/labels";
 import { defaultProviderClaudeCodeAttributionPolicy } from "../domain/provider-attribution";
+import { providerAnthropicAuthType } from "../domain/provider-custom-upstream";
 import { initialModelRoutes } from "../domain/provider-model-selection";
 import { providerReasoningFormValues, providerReasoningOptions, providerReasoningOverrideFormValues } from "../domain/provider-reasoning";
 import { activeLanguage, tx } from "../i18n/runtime";
@@ -22,6 +23,7 @@ export function providerPayload(values: Record<string, string>) {
     status: values.status || "active",
     healthy: values.healthy !== "false",
     priority: numberOr(values.priority, 10),
+    anthropic_auth_type: providerAnthropicAuthType(values),
     claude_code_attribution_policy: values.claude_code_attribution_policy || defaultProviderClaudeCodeAttributionPolicy(values.type, values.catalog_id),
     catalog_id: values.catalog_id,
     model_category: values.model_category,
