@@ -22,10 +22,6 @@ type anthropicMessagesRequest struct {
 const anthropicMidConversationSystemBeta = "mid-conversation-system-2026-04-07"
 
 func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeAnthropicError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	project, key, err := s.authenticate(r)
 	if err != nil {
 		writeAnthropicError(w, r, err)
@@ -74,10 +70,6 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleAnthropicCountTokens(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeAnthropicError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	_, key, err := s.authenticate(r)
 	if err != nil {
 		writeAnthropicError(w, r, err)

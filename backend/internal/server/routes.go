@@ -15,18 +15,18 @@ func (s *Server) routes() {
 	// it stays comparable with requests_total. Catalog lookups and count_tokens are
 	// local and never produce a request count, and admin traffic and scrapes are not
 	// gateway load at all.
-	s.mux.HandleFunc("/v1/chat/completions", s.gatewayInFlight(s.handleChatCompletions))
-	s.mux.HandleFunc("/v1/messages", s.gatewayInFlight(s.handleAnthropicMessages))
-	s.mux.HandleFunc("/v1/messages/count_tokens", s.handleAnthropicCountTokens)
-	s.mux.HandleFunc("/v1/responses", s.gatewayInFlight(s.handleResponses))
+	s.registerSingleMethodRoute(http.MethodPost, "/v1/chat/completions", s.gatewayInFlight(s.handleChatCompletions), jsonMethodNotAllowed(http.MethodPost))
+	s.registerSingleMethodRoute(http.MethodPost, "/v1/messages", s.gatewayInFlight(s.handleAnthropicMessages), anthropicMethodNotAllowed(http.MethodPost))
+	s.registerSingleMethodRoute(http.MethodPost, "/v1/messages/count_tokens", s.handleAnthropicCountTokens, anthropicMethodNotAllowed(http.MethodPost))
+	s.registerSingleMethodRoute(http.MethodPost, "/v1/responses", s.gatewayInFlight(s.handleResponses), jsonMethodNotAllowed(http.MethodPost))
 	s.mux.HandleFunc("/v1/responses/", s.handleResponseJob)
-	s.mux.HandleFunc("/v1/responses/compact", s.gatewayInFlight(s.handleResponsesCompact))
-	s.mux.HandleFunc("/v1/embeddings", s.gatewayInFlight(s.handleEmbeddings))
-	s.mux.HandleFunc("/v1/images/generations", s.handleImageGenerations)
-	s.mux.HandleFunc("/v1/images/edits", s.handleImageEdits)
+	s.registerSingleMethodRoute(http.MethodPost, "/v1/responses/compact", s.gatewayInFlight(s.handleResponsesCompact), jsonMethodNotAllowed(http.MethodPost))
+	s.registerSingleMethodRoute(http.MethodPost, "/v1/embeddings", s.gatewayInFlight(s.handleEmbeddings), jsonMethodNotAllowed(http.MethodPost))
+	s.registerSingleMethodRoute(http.MethodPost, "/v1/images/generations", s.handleImageGenerations, jsonMethodNotAllowed(http.MethodPost))
+	s.registerSingleMethodRoute(http.MethodPost, "/v1/images/edits", s.handleImageEdits, jsonMethodNotAllowed(http.MethodPost))
 	s.mux.HandleFunc("/v1/image-jobs/", s.handleImageJob)
 	s.mux.HandleFunc("/v1/image-assets/", s.handleImageAsset)
-	s.mux.HandleFunc("/api/v1/analytics/token-costs", s.handleTokenCostAnalytics)
+	s.registerSingleMethodRoute(http.MethodGet, "/api/v1/analytics/token-costs", s.handleTokenCostAnalytics, jsonMethodNotAllowed(http.MethodGet))
 
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/auth/login", s.handleAdminLogin, jsonMethodNotAllowed(http.MethodPost))
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/auth/logout", s.handleAdminLogout, jsonMethodNotAllowed(http.MethodPost))

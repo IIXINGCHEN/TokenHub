@@ -66,10 +66,6 @@ func defaultImageStorageDir() string {
 }
 
 func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	project, key, err := s.authenticate(r)
 	if err != nil {
 		writeError(w, r, err)
@@ -151,10 +147,6 @@ func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleImageEdits(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	project, key, err := s.authenticate(r)
 	if err != nil {
 		writeError(w, r, err)
