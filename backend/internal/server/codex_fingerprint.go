@@ -112,6 +112,9 @@ func applyCodexFingerprintHeaders(headers http.Header, ids *codexFingerprintIDs)
 	headers.Set("session-id", ids.sessionID)
 	headers.Set("session_id", ids.sessionID)
 	headers.Set("thread-id", ids.threadID)
+	// The original parent belongs to the client's pre-rewrite thread namespace.
+	// Forwarding it would leak that identity and create an invalid mixed lineage.
+	headers.Del("x-codex-parent-thread-id")
 	rewriteCodexTurnMetadataHeader(headers, codexFingerprintTurnMetadata(ids))
 }
 

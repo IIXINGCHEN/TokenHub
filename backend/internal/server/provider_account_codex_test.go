@@ -766,6 +766,12 @@ func TestCodexSessionIdentifierPriority(t *testing.T) {
 		t.Fatalf("expected header Session priority, got %q %v", identifier, ok)
 	}
 	headers.Del("session-id")
+	headers.Set("session_id", "underscore-session")
+	identifier, ok = codexSessionIdentifier(headers, request)
+	if !ok || identifier != "underscore-session" {
+		t.Fatalf("expected underscore header Session priority, got %q %v", identifier, ok)
+	}
+	headers.Del("session_id")
 	identifier, ok = codexSessionIdentifier(headers, request)
 	if !ok || identifier != "metadata-session" {
 		t.Fatalf("expected client_metadata Session priority, got %q %v", identifier, ok)
@@ -844,7 +850,7 @@ func TestCodexSessionBindingCommitsAfterClientCancellation(t *testing.T) {
 	}
 }
 
-func TestCodexCompactPreservesSessionAndUpstreamMetadata(t *testing.T) {
+func TestCodexCompactConvergesFingerprintAcrossRetriesAndPreservesUpstreamMetadata(t *testing.T) {
 	store := NewMemoryStore()
 	project := store.CreateProject(Project{Name: "Compact Project", Status: StatusActive})
 	_, secret, err := store.CreateAPIKey(project.ID, APIKey{
@@ -887,19 +893,38 @@ func TestCodexCompactPreservesSessionAndUpstreamMetadata(t *testing.T) {
 	})
 
 	server := NewWithConfig(store, Config{AdminToken: "dev_admin_token", SecretKey: "compact-secret"})
+	server.codexSubscription.MaxRequestRetries = 1
+	var fingerprintHeaders []http.Header
 	server.codexSubscription.Client = &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		if req.URL.Path != "/backend-api/codex/responses/compact" {
 			t.Fatalf("unexpected compact path: %s", req.URL.Path)
 		}
-		if req.Header.Get("session-id") != "session-compact" || req.Header.Get("Authorization") != "Bearer access_compact" {
+		if req.Header.Get("Authorization") != "Bearer access_compact" {
 			t.Fatalf("compact protocol headers missing: %#v", req.Header)
 		}
+		if req.Header.Get("session-id") == "" || req.Header.Get("session-id") == "session-compact" ||
+			req.Header.Get("session_id") != req.Header.Get("session-id") || req.Header.Get("thread-id") == "" ||
+			req.Header.Get("x-codex-installation-id") == "client-installation" || req.Header.Get("x-codex-parent-thread-id") != "" {
+			t.Fatalf("compact fingerprint was not converged: %#v", req.Header)
+		}
+		fingerprintHeaders = append(fingerprintHeaders, req.Header.Clone())
 		var payload map[string]any
 		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
 			t.Fatal(err)
 		}
 		if payload["model"] != "gpt-compact-upstream" || payload["instructions"] != "preserve this" {
 			t.Fatalf("compact request was rewritten incorrectly: %#v", payload)
+		}
+		if _, ok := payload["client_metadata"]; ok {
+			t.Fatalf("compact request forwarded unsupported client_metadata: %#v", payload)
+		}
+		if len(fingerprintHeaders) == 1 {
+			return &http.Response{
+				StatusCode: http.StatusBadGateway,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"error":"retry compact"}`)),
+				Request:    req,
+			}, nil
 		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -918,7 +943,9 @@ func TestCodexCompactPreservesSessionAndUpstreamMetadata(t *testing.T) {
 	))
 	req.Header.Set("Authorization", "Bearer "+secret)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("session-id", "session-compact")
+	req.Header.Set("x-codex-installation-id", "client-installation")
+	req.Header.Set("x-codex-parent-thread-id", "client-parent-thread")
+	req.Header.Set("x-codex-turn-metadata", `{"installation_id":"client-installation","session_id":"session-compact","thread_id":"client-thread"}`)
 	rr := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
@@ -927,6 +954,17 @@ func TestCodexCompactPreservesSessionAndUpstreamMetadata(t *testing.T) {
 	if rr.Header().Get("X-Codex-Turn-State") != "compact-turn-state" ||
 		rr.Header().Get("X-Tokenhub-Upstream-Request-Id") != "upstream-compact-request" {
 		t.Fatalf("compact response metadata missing: %#v", rr.Header())
+	}
+	if len(fingerprintHeaders) != 2 {
+		t.Fatalf("expected one compact retry, got %d attempts", len(fingerprintHeaders))
+	}
+	for _, key := range []string{
+		"session-id", "session_id", "thread-id", "x-client-request-id",
+		"x-codex-installation-id", "x-codex-window-id", "x-codex-turn-metadata",
+	} {
+		if fingerprintHeaders[0].Get(key) != fingerprintHeaders[1].Get(key) {
+			t.Fatalf("compact retry changed fingerprint header %s: first=%q second=%q", key, fingerprintHeaders[0].Get(key), fingerprintHeaders[1].Get(key))
+		}
 	}
 	var bindings []AdapterSessionBinding
 	if err := store.db.Find(&bindings).Error; err != nil {

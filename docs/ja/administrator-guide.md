@@ -82,7 +82,7 @@ Provider Resource は既定で Provider ポリシーを継承し、`options.clau
 
 ## Codex フィンガープリント集約
 
-OpenAI Codex Subscription Resource では、Responses リクエストを上流へ送る前にクライアントのデバイス ID とセッション ID を集約できます。アカウント Resource の **Codex フィンガープリント集約** を設定してください。既定の `session` モードはアカウント単位で安定した installation ID と session ID を生成し、元のクライアントセッションから安定した thread ID を生成します。`device` は installation ID だけを書き換え、`full` はすべてのクライアントを同じ thread にも集約し、`off` はクライアント ID を変更せずに送信します。
+OpenAI Codex Subscription Resource では、Responses または Compact リクエストを上流へ送る前にクライアントのデバイス ID とセッション ID を集約できます。アカウント Resource の **Codex フィンガープリント集約** を設定してください。既定の `session` モードはアカウント単位で安定した installation ID と session ID を生成し、元のクライアントセッションから安定した thread ID を生成します。`device` は installation ID だけを書き換え、`full` はすべてのクライアントを同じ thread にも集約し、`off` はクライアント ID を変更せずに送信します。
 
 このポリシーは、事前計算した同じ ID セットを使って Codex プロトコルヘッダー、`client_metadata`、および埋め込みの `x-codex-turn-metadata` を書き換え、再試行中も 1 回のリクエストの内部整合性を維持します。安定値は Provider Resource ID から生成され、保存済み OAuth Credential を公開しません。設定は `options.codex_fingerprint_mode` に保存され、既定の `session` はオプション省略で表します。変更前の透過送信へ戻すには `off` を設定してください。
 

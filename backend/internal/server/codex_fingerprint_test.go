@@ -116,6 +116,7 @@ func TestCodexFingerprintRewritesHeadersAndBodyWithSharedIDs(t *testing.T) {
 	incoming := make(http.Header)
 	incoming.Set("session-id", "client-session")
 	incoming.Set("thread-id", "client-thread")
+	incoming.Set("x-codex-parent-thread-id", "client-parent-thread")
 	incoming.Set("x-codex-turn-metadata", `{"preserved":"header-value","session_id":"original"}`)
 	originalPayload, err := json.Marshal(request)
 	if err != nil {
@@ -152,6 +153,9 @@ func TestCodexFingerprintRewritesHeadersAndBodyWithSharedIDs(t *testing.T) {
 		clientMetadata["x-codex-window-id"] != observedHeader.Get("x-codex-window-id") {
 		t.Fatalf("header/body installation or window IDs differ: headers=%#v metadata=%#v", observedHeader, clientMetadata)
 	}
+	if observedHeader.Get("x-codex-parent-thread-id") != "" {
+		t.Fatalf("session mode leaked the original parent thread: %#v", observedHeader)
+	}
 	var headerTurnMetadata map[string]any
 	if err := json.Unmarshal([]byte(observedHeader.Get("x-codex-turn-metadata")), &headerTurnMetadata); err != nil {
 		t.Fatalf("decode header turn metadata: %v", err)
@@ -167,6 +171,21 @@ func TestCodexFingerprintRewritesHeadersAndBodyWithSharedIDs(t *testing.T) {
 		if headerTurnMetadata[key] != bodyTurnMetadata[key] {
 			t.Fatalf("turn metadata %s differs: header=%#v body=%#v", key, headerTurnMetadata, bodyTurnMetadata)
 		}
+	}
+}
+
+func TestCodexFingerprintUsesUnderscoreSessionHeaderForThreadScope(t *testing.T) {
+	provider := Provider{Options: map[string]string{"resource_id": "rsrc_underscore"}}
+	request := ResponsesRequest{Input: []any{}}
+	firstHeaders := make(http.Header)
+	firstHeaders.Set("session_id", "underscore-session-one")
+	secondHeaders := make(http.Header)
+	secondHeaders.Set("session_id", "underscore-session-two")
+
+	first := prepareCodexFingerprintRequest(provider, firstHeaders, &request)
+	second := prepareCodexFingerprintRequest(provider, secondHeaders, &request)
+	if first == nil || second == nil || first.threadID == second.threadID {
+		t.Fatalf("underscore session headers collapsed onto one thread: first=%+v second=%+v", first, second)
 	}
 }
 
@@ -233,6 +252,7 @@ func TestCodexFingerprintDeviceModeOnlyRewritesInstallation(t *testing.T) {
 	headers := make(http.Header)
 	headers.Set("session-id", "client-session")
 	headers.Set("thread-id", "client-thread")
+	headers.Set("x-codex-parent-thread-id", "client-parent-thread")
 	headers.Set("x-codex-turn-metadata", `{"installation_id":"client-installation","session_id":"client-session"}`)
 	applyCodexFingerprintHeaders(headers, ids)
 
@@ -241,6 +261,9 @@ func TestCodexFingerprintDeviceModeOnlyRewritesInstallation(t *testing.T) {
 	}
 	if headers.Get("session-id") != "client-session" || headers.Get("thread-id") != "client-thread" {
 		t.Fatalf("device mode changed session identifiers: %#v", headers)
+	}
+	if headers.Get("x-codex-parent-thread-id") != "client-parent-thread" {
+		t.Fatalf("device mode changed the parent thread: %#v", headers)
 	}
 	var turnMetadata map[string]any
 	if err := json.Unmarshal([]byte(headers.Get("x-codex-turn-metadata")), &turnMetadata); err != nil {
