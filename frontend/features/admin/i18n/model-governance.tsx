@@ -130,6 +130,8 @@ const en: Record<string, string> = {
   "当前还没有模型目录。请先维护模型目录，再配置路由策略。": "No model catalog exists yet. Maintain the model catalog first, then configure routing policy.",
   "当前筛选下没有可见模型。可用性由模型目录、路由策略、项目成员和 Key 白名单共同决定。": "No visible models match the current filters. Availability is determined by the model catalog, routing policy, project membership, and Key allowlist.",
   "当前没有可演练模型。请先在路由策略里启用至少一条模型线路。": "No playground-ready models are available. Enable at least one model route first.",
+  "文本": "Text",
+  "选择模型实际支持的输入类型。": "Select the input types the model actually supports.",
 };
 
 const ja: Record<string, string> = {
@@ -261,6 +263,8 @@ const ja: Record<string, string> = {
   "当前还没有模型目录。请先维护模型目录，再配置路由策略。": "モデルカタログがまだありません。先にモデルカタログを整備してから、ルーティングポリシーを設定してください。",
   "当前筛选下没有可见模型。可用性由模型目录、路由策略、项目成员和 Key 白名单共同决定。": "現在の絞り込み条件に一致するモデルがありません。利用可否はモデルカタログ、ルーティングポリシー、プロジェクトメンバー、Key 許可リストによって決まります。",
   "当前没有可演练模型。请先在路由策略里启用至少一条模型线路。": "プレイグラウンドで利用できるモデルがありません。先にルーティングポリシーでモデルルートを 1 件以上有効化してください。",
+  "文本": "テキスト",
+  "选择模型实际支持的输入类型。": "モデルが実際に対応する入力タイプを選択します。",
 };
 
 export const modelGovernanceTranslations = { en, ja } satisfies Record<"en" | "ja", Record<string, string>>;
