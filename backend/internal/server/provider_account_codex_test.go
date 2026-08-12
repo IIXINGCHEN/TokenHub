@@ -945,7 +945,7 @@ func TestCodexCompactConvergesFingerprintAcrossRetriesAndPreservesUpstreamMetada
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-codex-installation-id", "client-installation")
 	req.Header.Set("x-codex-parent-thread-id", "client-parent-thread")
-	req.Header.Set("x-codex-turn-metadata", `{"installation_id":"client-installation","session_id":"session-compact","thread_id":"client-thread"}`)
+	req.Header.Set("x-codex-turn-metadata", `{"installation_id":"client-installation","session_id":"session-compact","thread_id":"client-thread","unrelated":9007199254740993,"parent_thread_id":"compact-parent-thread","forked_from_thread_id":"compact-fork-thread","parent_turn_id":"compact-parent-turn"}`)
 	rr := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
@@ -966,6 +966,14 @@ func TestCodexCompactConvergesFingerprintAcrossRetriesAndPreservesUpstreamMetada
 			t.Fatalf("compact retry changed fingerprint header %s: first=%q second=%q", key, fingerprintHeaders[0].Get(key), fingerprintHeaders[1].Get(key))
 		}
 	}
+	var compactTurnMetadata map[string]any
+	if err := decodeCodexMetadataJSON([]byte(fingerprintHeaders[0].Get("x-codex-turn-metadata")), &compactTurnMetadata); err != nil {
+		t.Fatalf("decode compact turn metadata: %v", err)
+	}
+	if number, ok := compactTurnMetadata["unrelated"].(json.Number); !ok || number.String() != "9007199254740993" {
+		t.Fatalf("compact turn metadata large integer changed: %#v", compactTurnMetadata["unrelated"])
+	}
+	assertCodexLineageFieldsAbsent(t, compactTurnMetadata, "compact turn metadata")
 	var bindings []AdapterSessionBinding
 	if err := store.db.Find(&bindings).Error; err != nil {
 		t.Fatal(err)

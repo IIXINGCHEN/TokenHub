@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -104,7 +106,7 @@ func applyCodexFingerprintHeaders(headers http.Header, ids *codexFingerprintIDs)
 	if ids.mode == codexFingerprintDevice {
 		rewriteCodexTurnMetadataHeader(headers, map[string]any{
 			"installation_id": ids.installationID,
-		})
+		}, false)
 		return
 	}
 	headers.Set("x-codex-window-id", ids.windowID)
@@ -115,17 +117,20 @@ func applyCodexFingerprintHeaders(headers http.Header, ids *codexFingerprintIDs)
 	// The original parent belongs to the client's pre-rewrite thread namespace.
 	// Forwarding it would leak that identity and create an invalid mixed lineage.
 	headers.Del("x-codex-parent-thread-id")
-	rewriteCodexTurnMetadataHeader(headers, codexFingerprintTurnMetadata(ids))
+	rewriteCodexTurnMetadataHeader(headers, codexFingerprintTurnMetadata(ids), true)
 }
 
-func rewriteCodexTurnMetadataHeader(headers http.Header, fields map[string]any) {
+func rewriteCodexTurnMetadataHeader(headers http.Header, fields map[string]any, stripLineage bool) {
 	raw := strings.TrimSpace(headers.Get("x-codex-turn-metadata"))
 	if raw == "" {
 		return
 	}
 	var metadata map[string]any
-	if json.Unmarshal([]byte(raw), &metadata) != nil || metadata == nil {
+	if decodeCodexMetadataJSON([]byte(raw), &metadata) != nil || metadata == nil {
 		return
+	}
+	if stripLineage {
+		stripCodexLineageFields(metadata)
 	}
 	mergeCodexFingerprintFields(metadata, fields)
 	if rebuilt, err := json.Marshal(metadata); err == nil {
@@ -142,7 +147,7 @@ func applyCodexFingerprintClientMetadata(request *ResponsesRequest, ids *codexFi
 	}
 	metadata := map[string]any{}
 	if raw, ok := request.raw["client_metadata"]; ok {
-		_ = json.Unmarshal(raw, &metadata)
+		_ = decodeCodexMetadataJSON(raw, &metadata)
 	}
 	if metadata == nil {
 		metadata = map[string]any{}
@@ -151,27 +156,31 @@ func applyCodexFingerprintClientMetadata(request *ResponsesRequest, ids *codexFi
 	if ids.mode == codexFingerprintDevice {
 		rewriteEmbeddedCodexTurnMetadata(metadata, map[string]any{
 			"installation_id": ids.installationID,
-		})
+		}, false)
 	} else {
+		stripCodexLineageFields(metadata)
 		metadata["session_id"] = ids.sessionID
 		metadata["thread_id"] = ids.threadID
 		metadata["turn_id"] = ids.turnID
 		metadata["x-codex-window-id"] = ids.windowID
-		rewriteEmbeddedCodexTurnMetadata(metadata, codexFingerprintTurnMetadata(ids))
+		rewriteEmbeddedCodexTurnMetadata(metadata, codexFingerprintTurnMetadata(ids), true)
 	}
 	if rebuilt, err := json.Marshal(metadata); err == nil {
 		request.raw["client_metadata"] = rebuilt
 	}
 }
 
-func rewriteEmbeddedCodexTurnMetadata(metadata map[string]any, fields map[string]any) {
+func rewriteEmbeddedCodexTurnMetadata(metadata map[string]any, fields map[string]any, stripLineage bool) {
 	raw, ok := metadata["x-codex-turn-metadata"].(string)
 	if !ok || strings.TrimSpace(raw) == "" {
 		return
 	}
 	var embedded map[string]any
-	if json.Unmarshal([]byte(raw), &embedded) != nil || embedded == nil {
+	if decodeCodexMetadataJSON([]byte(raw), &embedded) != nil || embedded == nil {
 		return
+	}
+	if stripLineage {
+		stripCodexLineageFields(embedded)
 	}
 	mergeCodexFingerprintFields(embedded, fields)
 	if rebuilt, err := json.Marshal(embedded); err == nil {
@@ -193,5 +202,32 @@ func codexFingerprintTurnMetadata(ids *codexFingerprintIDs) map[string]any {
 func mergeCodexFingerprintFields(target map[string]any, fields map[string]any) {
 	for key, value := range fields {
 		target[key] = value
+	}
+}
+
+func decodeCodexMetadataJSON(raw []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("metadata contains multiple JSON values")
+		}
+		return err
+	}
+	return nil
+}
+
+func stripCodexLineageFields(metadata map[string]any) {
+	for _, key := range []string{
+		"x-codex-parent-thread-id",
+		"parent_thread_id",
+		"forked_from_thread_id",
+		"parent_turn_id",
+	} {
+		delete(metadata, key)
 	}
 }

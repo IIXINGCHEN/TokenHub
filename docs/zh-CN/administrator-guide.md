@@ -84,7 +84,7 @@ Provider Resource 默认继承 Provider 策略，也可以通过 `options.claude
 
 OpenAI Codex Subscription 资源可以在 Responses 或 Compact 请求发往上游前收敛客户端设备与会话标识。在账号资源中配置「Codex 指纹收敛」。默认的 `session` 模式会派生账号级稳定的 installation ID 和 session ID，并根据客户端原始会话派生稳定的 thread ID；`device` 只改写 installation ID，`full` 还会把所有客户端收敛到同一个 thread，`off` 则原样透传客户端标识。
 
-该策略使用同一组预计算 ID 改写 Codex 协议请求头、`client_metadata` 及其内嵌的 `x-codex-turn-metadata`，确保一次请求在重试期间保持内部一致。稳定值由 Provider Resource ID 派生，不会暴露保存的 OAuth 凭据。配置保存在 `options.codex_fingerprint_mode`；默认的 `session` 以省略该选项表示。需要回滚到透传行为时，将模式设为 `off`。
+该策略使用同一组预计算 ID 改写 Codex 协议请求头、`client_metadata` 及其内嵌的 `x-codex-turn-metadata`，确保一次请求在重试期间保持内部一致。在 `session` 和 `full` 模式下，原始 parent、fork 和 parent-turn 关系标识属于改写前的线程命名空间，因此会被移除。稳定值由 Provider Resource ID 派生，不会暴露保存的 OAuth 凭据。配置保存在 `options.codex_fingerprint_mode`；默认的 `session` 以省略该选项表示。需要回滚到透传行为时，将模式设为 `off`。
 
 ## Codex 用量重置资格
 

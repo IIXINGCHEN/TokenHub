@@ -83,7 +83,9 @@ func TestCodexFingerprintRewritesHeadersAndBodyWithSharedIDs(t *testing.T) {
 	adapter := CodexSubscriptionAdapter{
 		Client: &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
 			observedHeader = request.Header.Clone()
-			if err := json.NewDecoder(request.Body).Decode(&observedBody); err != nil {
+			decoder := json.NewDecoder(request.Body)
+			decoder.UseNumber()
+			if err := decoder.Decode(&observedBody); err != nil {
 				t.Fatalf("decode upstream request: %v", err)
 			}
 			return &http.Response{
@@ -108,7 +110,12 @@ func TestCodexFingerprintRewritesHeadersAndBodyWithSharedIDs(t *testing.T) {
 		"input":[],
 		"client_metadata":{
 			"preserved":"body-value",
-			"x-codex-turn-metadata":"{\"preserved\":\"embedded-value\",\"session_id\":\"original\"}"
+			"unrelated":9007199254740993,
+			"x-codex-parent-thread-id":"body-parent-thread",
+			"parent_thread_id":"body-parent-thread",
+			"forked_from_thread_id":"body-fork-thread",
+			"parent_turn_id":"body-parent-turn",
+			"x-codex-turn-metadata":"{\"preserved\":\"embedded-value\",\"unrelated\":9007199254740993,\"session_id\":\"original\",\"parent_thread_id\":\"embedded-parent-thread\",\"forked_from_thread_id\":\"embedded-fork-thread\",\"parent_turn_id\":\"embedded-parent-turn\"}"
 		}
 	}`), &request); err != nil {
 		t.Fatal(err)
@@ -117,7 +124,7 @@ func TestCodexFingerprintRewritesHeadersAndBodyWithSharedIDs(t *testing.T) {
 	incoming.Set("session-id", "client-session")
 	incoming.Set("thread-id", "client-thread")
 	incoming.Set("x-codex-parent-thread-id", "client-parent-thread")
-	incoming.Set("x-codex-turn-metadata", `{"preserved":"header-value","session_id":"original"}`)
+	incoming.Set("x-codex-turn-metadata", `{"preserved":"header-value","unrelated":9007199254740993,"session_id":"original","parent_thread_id":"header-parent-thread","forked_from_thread_id":"header-fork-thread","parent_turn_id":"header-parent-turn"}`)
 	originalPayload, err := json.Marshal(request)
 	if err != nil {
 		t.Fatal(err)
@@ -140,6 +147,10 @@ func TestCodexFingerprintRewritesHeadersAndBodyWithSharedIDs(t *testing.T) {
 	if clientMetadata["preserved"] != "body-value" {
 		t.Fatalf("client metadata field was not preserved: %#v", clientMetadata)
 	}
+	if number, ok := clientMetadata["unrelated"].(json.Number); !ok || number.String() != "9007199254740993" {
+		t.Fatalf("client metadata large integer changed: %#v", clientMetadata["unrelated"])
+	}
+	assertCodexLineageFieldsAbsent(t, clientMetadata, "client metadata")
 	sessionID := observedHeader.Get("session-id")
 	threadID := observedHeader.Get("thread-id")
 	turnID, _ := clientMetadata["turn_id"].(string)
@@ -157,19 +168,37 @@ func TestCodexFingerprintRewritesHeadersAndBodyWithSharedIDs(t *testing.T) {
 		t.Fatalf("session mode leaked the original parent thread: %#v", observedHeader)
 	}
 	var headerTurnMetadata map[string]any
-	if err := json.Unmarshal([]byte(observedHeader.Get("x-codex-turn-metadata")), &headerTurnMetadata); err != nil {
+	if err := decodeCodexMetadataJSON([]byte(observedHeader.Get("x-codex-turn-metadata")), &headerTurnMetadata); err != nil {
 		t.Fatalf("decode header turn metadata: %v", err)
 	}
 	var bodyTurnMetadata map[string]any
-	if err := json.Unmarshal([]byte(clientMetadata["x-codex-turn-metadata"].(string)), &bodyTurnMetadata); err != nil {
+	if err := decodeCodexMetadataJSON([]byte(clientMetadata["x-codex-turn-metadata"].(string)), &bodyTurnMetadata); err != nil {
 		t.Fatalf("decode body turn metadata: %v", err)
 	}
 	if headerTurnMetadata["preserved"] != "header-value" || bodyTurnMetadata["preserved"] != "embedded-value" {
 		t.Fatalf("turn metadata fields were not preserved: header=%#v body=%#v", headerTurnMetadata, bodyTurnMetadata)
 	}
+	for label, metadata := range map[string]map[string]any{
+		"header turn metadata": headerTurnMetadata,
+		"body turn metadata":   bodyTurnMetadata,
+	} {
+		if number, ok := metadata["unrelated"].(json.Number); !ok || number.String() != "9007199254740993" {
+			t.Fatalf("%s large integer changed: %#v", label, metadata["unrelated"])
+		}
+		assertCodexLineageFieldsAbsent(t, metadata, label)
+	}
 	for _, key := range []string{"installation_id", "session_id", "thread_id", "turn_id", "window_id", "turn_started_at_unix_ms"} {
 		if headerTurnMetadata[key] != bodyTurnMetadata[key] {
 			t.Fatalf("turn metadata %s differs: header=%#v body=%#v", key, headerTurnMetadata, bodyTurnMetadata)
+		}
+	}
+}
+
+func assertCodexLineageFieldsAbsent(t *testing.T, metadata map[string]any, label string) {
+	t.Helper()
+	for _, key := range []string{"x-codex-parent-thread-id", "parent_thread_id", "forked_from_thread_id", "parent_turn_id"} {
+		if _, ok := metadata[key]; ok {
+			t.Fatalf("%s retained lineage field %s: %#v", label, key, metadata)
 		}
 	}
 }
@@ -253,7 +282,7 @@ func TestCodexFingerprintDeviceModeOnlyRewritesInstallation(t *testing.T) {
 	headers.Set("session-id", "client-session")
 	headers.Set("thread-id", "client-thread")
 	headers.Set("x-codex-parent-thread-id", "client-parent-thread")
-	headers.Set("x-codex-turn-metadata", `{"installation_id":"client-installation","session_id":"client-session"}`)
+	headers.Set("x-codex-turn-metadata", `{"installation_id":"client-installation","session_id":"client-session","unrelated":9007199254740993,"parent_thread_id":"client-parent-thread","forked_from_thread_id":"client-fork-thread","parent_turn_id":"client-parent-turn"}`)
 	applyCodexFingerprintHeaders(headers, ids)
 
 	if headers.Get("x-codex-installation-id") != ids.installationID {
@@ -266,10 +295,22 @@ func TestCodexFingerprintDeviceModeOnlyRewritesInstallation(t *testing.T) {
 		t.Fatalf("device mode changed the parent thread: %#v", headers)
 	}
 	var turnMetadata map[string]any
-	if err := json.Unmarshal([]byte(headers.Get("x-codex-turn-metadata")), &turnMetadata); err != nil {
+	if err := decodeCodexMetadataJSON([]byte(headers.Get("x-codex-turn-metadata")), &turnMetadata); err != nil {
 		t.Fatal(err)
 	}
 	if turnMetadata["installation_id"] != ids.installationID || turnMetadata["session_id"] != "client-session" {
 		t.Fatalf("device mode rewrote the wrong turn metadata: %#v", turnMetadata)
+	}
+	if number, ok := turnMetadata["unrelated"].(json.Number); !ok || number.String() != "9007199254740993" {
+		t.Fatalf("device mode changed a large integer: %#v", turnMetadata["unrelated"])
+	}
+	for key, want := range map[string]string{
+		"parent_thread_id":      "client-parent-thread",
+		"forked_from_thread_id": "client-fork-thread",
+		"parent_turn_id":        "client-parent-turn",
+	} {
+		if turnMetadata[key] != want {
+			t.Fatalf("device mode changed lineage field %s: %#v", key, turnMetadata)
+		}
 	}
 }
