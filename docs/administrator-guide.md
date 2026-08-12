@@ -26,6 +26,8 @@ This guide is for platform administrators, security operators, and infrastructur
 7. Validate the flow with Model Playground and request logs.
 8. Review usage attribution before issuing keys broadly.
 
+Anthropic Providers use `x-api-key` authentication by default. If an Anthropic-compatible upstream requires `Authorization: Bearer`, open the Provider's **Advanced** tab, keep **Provider Type** set to **Claude / Anthropic**, and select **Authorization Bearer** under **Anthropic Authentication**. TokenHub derives either header from the encrypted Provider API Key and sends only the selected authentication header; do not duplicate the credential in custom headers.
+
 ## Model Playground Diagnostics
 
 Open **Model Playground** from the console to validate a model through the same routing and Provider adapters used by gateway traffic. Every assistant turn keeps its own compact diagnostic summary: delivery mode, gateway-measured time to first token (TTFT), output throughput, total duration, full-context input tokens, output tokens, estimated cost, local completion time, and request ID. Expand **Diagnostics** to inspect millisecond timestamps plus the actual response details. Sessions remain in the current browser page unless explicitly exported.
@@ -40,7 +42,7 @@ All permitted Playground users can see performance, usage, request ID, and their
 
 Open **Security Policies > Content Security** to create policies for all Projects or selected Projects. A policy can combine keyword or regular-expression matching, sensitive-data detection, and the optional Qwen3Guard model detector. Detection items are evaluated together, and the strictest matching action wins: `block` over `mask` over `audit`. Changes take effect when saved.
 
-Deterministic detectors run inside TokenHub. Enabling the Qwen3Guard detector sends the inspected user-visible request text to the service configured by `TOKENHUB_GUARDRAIL_MODEL_URL`. Deploy that service only within an approved data boundary and review its transport, logging, and retention controls; TokenHub cannot govern copies retained by a remote service. Leaving the URL empty prevents model calls and applies each model detection item's configured unavailable behavior.
+Deterministic detectors run inside TokenHub. Before calling a configured Qwen3Guard detector, TokenHub replaces sensitive values already matched by local `mask` rules with `[REDACTED]` in a detector-only copy, so those raw values are not sent to the model service. Text not matched by a local mask rule is still sent to the service configured by `TOKENHUB_GUARDRAIL_MODEL_URL`. Deploy that service only within an approved data boundary and review its transport, logging, and retention controls; TokenHub cannot govern copies retained by a remote service. Leaving the URL empty prevents model calls and applies each model detection item's configured unavailable behavior.
 
 Sensitive-data detection includes labelled or structurally validated examples such as Chinese identity-card numbers, mainland mobile numbers, email addresses, bank-card numbers, credentials and private keys, person names, addresses, and birth dates. Validators such as date checks, identity-card checksums, and Luhn checks reduce common numeric false positives. Use **Test Policy** with representative positive and negative samples before enabling a policy broadly.
 
@@ -73,6 +75,19 @@ TokenHub stores the last known-good provider catalog in the database. On every b
 ## Codex OAuth Token Renewal
 
 For active OpenAI Codex Subscription accounts that have a saved refresh token, TokenHub checks credentials when the backend starts and then every minute. It renews an access token only when it expires within five minutes. The database-backed credential lease ensures that a clustered deployment performs only one renewal for the account. In **Provider Channels > Advanced > Subscription quota**, **Renew Token** lets an administrator renew one account on demand. Use it for recovery rather than repeated clicks: a refresh response can rotate the refresh token, and TokenHub saves the returned replacement automatically. If OpenAI reports an invalidated refresh token, TokenHub marks the account as requiring reauthorization, stops scheduled renewal attempts, and shows the administrator a reauthorization prompt.
+## Claude Code Attribution Handling
+
+Claude Code can place an attribution text block at the start of an Anthropic Messages `system` array. The block contains client metadata that can vary between requests and prevent a third-party upstream from reusing an otherwise stable prompt prefix.
+
+Each Provider has a `claude_code_attribution_policy` setting. New official Anthropic Providers default to `preserve`, while Providers that are known to be non-official default to `strip` for better third-party prefix-cache reuse. Custom Anthropic endpoints whose origin is unknown default to `preserve`. Existing Providers without this setting also continue to preserve the block. `strip` removes a block only when the first top-level `system` item has `type: "text"` and its text begins exactly with `x-anthropic-billing-header:`. String-valued `system` prompts, later blocks, leading whitespace, and other block types are never removed.
+
+Provider Resources inherit the Provider policy by default and can override it with `options.claude_code_attribution_policy` set to `preserve` or `strip`. Omitting that Resource option restores inheritance. TokenHub applies the effective policy separately for every route attempt, so a failover Resource receives the original request and applies its own setting. Audit payloads also retain the original request. `POST /v1/messages/count_tokens` continues to count the original request because it does not select a concrete Provider Resource.
+
+## Codex Fingerprint Convergence
+
+OpenAI Codex Subscription resources can converge client device and session identifiers before a Responses or Compact request is sent upstream. Configure **Codex fingerprint convergence** on the account resource. The default `session` mode derives stable account-level installation and session IDs, while deriving a stable thread ID from the original client session. `device` changes only the installation ID, `full` also converges all clients onto one thread, and `off` passes client identifiers through unchanged.
+
+The policy rewrites matching fields in the Codex protocol headers and `client_metadata`, including embedded `x-codex-turn-metadata`, from one precomputed ID set so a request stays internally consistent across retries. In `session` and `full` modes, original parent, fork, and parent-turn lineage identifiers are removed because they belong to the pre-rewrite thread namespace. Stable values are derived from the Provider Resource ID and do not expose saved OAuth credentials. The setting is stored as `options.codex_fingerprint_mode`; the default `session` value is represented by an absent option. Set the mode to `off` to roll back to passthrough behavior.
 
 ## Codex Usage Reset Credits
 
@@ -94,9 +109,19 @@ The responsibilities remain separate: add a Provider and import inventory first;
 
 Provider-model prices represent actual upstream cost and are used for internal audit. Model Directory prices represent the unified external charge used for client billing estimates, quota accounting, metrics, and usage reports. A route selects the upstream implementation but does not change the external price.
 
-When Provider Channels, Model Directory, or Routing Policies has no configured data, the console shows the same three-step setup guide: import Provider inventory, create an external model from the built-in 165-model catalog, then configure routing. The primary action always points to the earliest incomplete prerequisite, so administrators are not sent into a form that cannot yet be completed.
+When Provider Channels, Model Directory, or Routing Policies has no configured data, the console shows the same three-step setup guide: import Provider inventory, create an external model from the built-in 178-model catalog, then configure routing. The primary action always points to the earliest incomplete prerequisite, so administrators are not sent into a form that cannot yet be completed.
 
 Publication and runtime health are different states. Membership in `GET /v1/models` requires an active external `Model`, at least one active `ModelRoute`, and API-key access when a model allowlist is configured. It does not change when a Provider or Provider Resource is temporarily unhealthy. Health affects whether a request can be served and is shown separately in the directory and routing diagnostics. Disabling the external model removes it from `GET /v1/models` while retaining its mappings for later re-publication.
+
+## Custom Upstream Request Headers
+
+In **Provider Channels**, add fixed custom request headers under a Provider's connection settings or under a Provider Resource's advanced settings. Provider headers are defaults; a Resource header with the same case-insensitive name overrides the Provider value for that actual routing attempt. This makes per-account failover safe: TokenHub recomputes the effective headers for every selected Resource. For example, set `User-Agent: TokenHub-Custom-Client/1.0` at Provider scope and override `X-Tenant` on individual Resources.
+
+The effective headers are applied consistently to connection tests, custom model discovery, OpenAI-compatible Chat Completions, Responses, Embeddings and Images (including streaming and image edits), native Anthropic Messages, and Gemini requests. Azure OpenAI and OpenAI Codex adapters do not support custom headers because they manage their own protocol identity.
+
+Mark credentials or tenant tokens as sensitive. TokenHub encrypts sensitive values at rest, masks them in management responses and previews, and excludes header values from audit snapshots. When editing a saved sensitive row, leave its masked value unchanged or blank to retain the secret; delete the row to clear it. Non-sensitive values remain visible to administrators.
+
+TokenHub rejects authentication headers, API-key and cookie credentials, forwarding identity headers, protocol-owned headers such as `Content-Type`, `Content-Length`, `Host`, `Anthropic-Version`, `Anthropic-Beta`, `OpenAI-Organization`, and `OpenAI-Project`, plus hop-by-hop and transport headers. Header names must be valid and unique ignoring case; values must be non-empty and contain no control characters rejected by the HTTP transport. The final merged configuration may contain at most 32 headers, with names up to 128 bytes, each value up to 4 KiB, and 16 KiB total. Legacy data that violates these rules is reported with `header_validation_errors` and is not applied to upstream requests until corrected.
 
 ## Model Routing Policies
 

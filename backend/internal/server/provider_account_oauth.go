@@ -191,10 +191,6 @@ func (s *Server) handleAdminOpenAIAccountOAuthGenerateAuthURL(w http.ResponseWri
 	if !ok {
 		return
 	}
-	if r.Method != http.MethodPost {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
-		return
-	}
 	var req providerAccountOAuthGenerateRequest
 	if err := s.decodeJSONOptional(w, r, &req); err != nil {
 		writeError(w, r, err)
@@ -294,10 +290,6 @@ func (s *Server) handleOpenAIAccountOAuthCallback(w http.ResponseWriter, r *http
 func (s *Server) handleAdminOpenAIAccountOAuthExchangeCode(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAdmin(w, r, "provider", r.Method)
 	if !ok {
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
 		return
 	}
 	var req providerAccountOAuthExchangeRequest
