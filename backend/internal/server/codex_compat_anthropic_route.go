@@ -49,7 +49,7 @@ func (s *Server) executeAnthropicMessagesRoute(
 
 func openAIMessageProvider(providerType string) bool {
 	switch providerType {
-	case ProviderMock, ProviderOpenAI, ProviderOpenAICompatible, ProviderAzureOpenAI, ProviderKronk, "deepseek", "qwen", "local":
+	case ProviderMock, ProviderOpenAI, ProviderOpenAICompatible, ProviderAzureOpenAI, "deepseek", "qwen", "local":
 		return true
 	default:
 		return false

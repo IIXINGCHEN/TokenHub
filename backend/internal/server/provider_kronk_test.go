@@ -111,6 +111,39 @@ func TestKronkConnectionTestChecksServiceAndModelsWithoutToken(t *testing.T) {
 	}
 }
 
+func TestKronkConnectionTestDistinguishesHealthyServiceWithoutModels(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/liveness", "/v1/readiness":
+			writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+		case "/v1/models":
+			writeJSON(w, http.StatusOK, map[string]any{"data": []any{}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	response := doJSON(t, newTestServer(), http.MethodPost, "/api/admin/providers/test-connection", map[string]any{
+		"name": "Kronk", "type": ProviderKronk, "base_url": upstream.URL + "/v1",
+	}, "")
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("connection test = %d: %s", response.Code, response.Body)
+	}
+	var result struct {
+		Error struct {
+			Code    string            `json:"code"`
+			Details KronkHealthResult `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(response.Body), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Error.Code != "kronk_models_unavailable" || !result.Error.Details.Live || !result.Error.Details.Ready || result.Error.Details.ModelReady || result.Error.Details.ModelsCount != 0 {
+		t.Fatalf("unexpected structured health failure: %+v", result)
+	}
+}
+
 func TestKronkAdapterForwardsInferenceAndUsage(t *testing.T) {
 	const token = "kronk-application-token"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -199,7 +232,7 @@ func TestKronkTopLevelErrorIsNormalizedAndSecretIsRedacted(t *testing.T) {
 		t.Fatal("expected Kronk error")
 	}
 	httpErr := AsHTTPError(err)
-	if httpErr.Status != http.StatusServiceUnavailable || httpErr.Code != "provider_upstream_unavailable" {
+	if httpErr.Status != http.StatusServiceUnavailable || httpErr.Code != "provider_resource_exhausted" {
 		t.Fatalf("unexpected normalized error: %+v", httpErr)
 	}
 	if strings.Contains(httpErr.Message, token) || !strings.Contains(httpErr.Message, "resource_exhausted") {
@@ -207,6 +240,61 @@ func TestKronkTopLevelErrorIsNormalizedAndSecretIsRedacted(t *testing.T) {
 	}
 	if providerErrorDisposition(err) != ProviderErrorTransientSame {
 		t.Fatalf("unexpected retry classification: %s", providerErrorDisposition(err))
+	}
+}
+
+func TestKronkNonStreamingTimeoutIsClassifiedAndStopsUpstream(t *testing.T) {
+	upstreamCanceled := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+		close(upstreamCanceled)
+	}))
+	defer upstream.Close()
+
+	client := upstream.Client()
+	client.Timeout = 50 * time.Millisecond
+	adapter := KronkAdapter{OpenAICompatibleAdapter: OpenAICompatibleAdapter{Client: client}}
+	_, _, err := adapter.Chat(context.Background(), Provider{BaseURL: upstream.URL}, "model", simpleChatRequest())
+	if err == nil {
+		t.Fatal("expected Kronk inference timeout")
+	}
+	httpErr := AsHTTPError(err)
+	if httpErr.Status != http.StatusGatewayTimeout || httpErr.Code != "provider_upstream_timeout" {
+		t.Fatalf("timeout = %+v, want 504 provider_upstream_timeout", httpErr)
+	}
+	if providerErrorDisposition(err) != ProviderErrorTransientSame {
+		t.Fatalf("timeout retry classification = %q", providerErrorDisposition(err))
+	}
+	select {
+	case <-upstreamCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("timed-out Kronk request kept running upstream")
+	}
+}
+
+func TestKronkUpstreamStreamInterruptionIsReported(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		w.Header().Set("content-length", "4096")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n")
+		w.(http.Flusher).Flush()
+	}))
+	defer upstream.Close()
+
+	adapter := KronkAdapter{OpenAICompatibleAdapter: OpenAICompatibleAdapter{
+		Client: upstream.Client(), StreamClient: upstream.Client(), StreamIdleTimeout: time.Second,
+	}}
+	var output bytes.Buffer
+	_, err := adapter.ChatStream(context.Background(), Provider{BaseURL: upstream.URL}, "model", simpleChatRequest(), &output)
+	if err == nil {
+		t.Fatal("expected interrupted Kronk stream")
+	}
+	httpErr := AsHTTPError(err)
+	if httpErr.Status != http.StatusBadGateway || httpErr.Code != "provider_stream_interrupted" {
+		t.Fatalf("interrupted stream = %+v, want 502 provider_stream_interrupted", httpErr)
+	}
+	if !strings.Contains(output.String(), "partial") {
+		t.Fatalf("partial upstream data was discarded: %q", output.String())
 	}
 }
 

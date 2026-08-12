@@ -127,9 +127,41 @@ func checkProviderResponseForProvider(resp *http.Response, provider Provider) er
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, providerErrorBodyPrefix))
 	data = redactProviderErrorSecrets(data, provider)
 	if provider.Type == ProviderKronk {
-		data = normalizeKronkErrorBody(data)
+		return newKronkProviderHTTPError(resp.StatusCode, resp.Header, data)
 	}
 	return newProviderHTTPError(resp.StatusCode, resp.Header, data)
+}
+
+func newKronkProviderHTTPError(upstreamStatus int, headers http.Header, data []byte) error {
+	kronkCode := kronkErrorCode(data)
+	normalized := normalizeKronkErrorBody(data)
+	class := classifyProviderStatus(upstreamStatus)
+	switch kronkCode {
+	case "resource_exhausted", "insufficient_resources", "out_of_memory":
+		class = providerErrorClass{http.StatusServiceUnavailable, "provider_resource_exhausted", ProviderErrorTransientSame}
+	case "model_not_found":
+		class = providerErrorClass{http.StatusBadGateway, "provider_model_not_found", ProviderErrorModelUnsupported}
+	case "deadline_exceeded", "timeout":
+		class = providerErrorClass{http.StatusGatewayTimeout, "provider_upstream_timeout", ProviderErrorTransientSame}
+	case "unauthenticated", "permission_denied":
+		class = providerErrorClass{http.StatusBadGateway, "provider_auth_error", ProviderErrorAuthBroken}
+	}
+	httpErr := NewHTTPError(class.status, class.code, providerErrorMessage(class, normalized))
+	httpErr.UpstreamStatus = upstreamStatus
+	return &ProviderInvocationError{
+		Err:         httpErr,
+		Disposition: class.disposition,
+		RetryAfter:  parseRetryAfter(headers.Get("retry-after")),
+	}
+}
+
+func kronkErrorCode(data []byte) string {
+	var payload map[string]any
+	if json.Unmarshal(data, &payload) != nil {
+		return ""
+	}
+	code, _ := payload["code"].(string)
+	return strings.ToLower(strings.TrimSpace(code))
 }
 
 func normalizeKronkErrorBody(data []byte) []byte {

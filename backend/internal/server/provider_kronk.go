@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 )
@@ -17,6 +19,67 @@ const (
 // only provider-specific operations.
 type KronkAdapter struct {
 	OpenAICompatibleAdapter
+}
+
+func (a KronkAdapter) Chat(ctx context.Context, provider Provider, providerModel string, req ChatCompletionRequest) (any, Usage, error) {
+	provider.Type = ProviderKronk
+	response, usage, err := a.OpenAICompatibleAdapter.Chat(ctx, provider, providerModel, req)
+	return response, usage, normalizeKronkTransportError(err)
+}
+
+func (a KronkAdapter) ChatStream(ctx context.Context, provider Provider, providerModel string, req ChatCompletionRequest, writer io.Writer) (Usage, error) {
+	provider.Type = ProviderKronk
+	usage, err := a.OpenAICompatibleAdapter.ChatStream(ctx, provider, providerModel, req, writer)
+	return usage, normalizeKronkTransportError(err)
+}
+
+func (a KronkAdapter) Responses(ctx context.Context, provider Provider, providerModel string, req ResponsesRequest) (any, Usage, error) {
+	provider.Type = ProviderKronk
+	response, usage, err := a.OpenAICompatibleAdapter.Responses(ctx, provider, providerModel, req)
+	return response, usage, normalizeKronkTransportError(err)
+}
+
+func (a KronkAdapter) OpenResponses(ctx context.Context, provider Provider, providerModel string, req ResponsesRequest, incoming http.Header) (*http.Response, error) {
+	provider.Type = ProviderKronk
+	response, err := a.OpenAICompatibleAdapter.OpenResponses(ctx, provider, providerModel, req, incoming)
+	return response, normalizeKronkTransportError(err)
+}
+
+func (a KronkAdapter) Embeddings(ctx context.Context, provider Provider, providerModel string, req EmbeddingsRequest) (any, Usage, error) {
+	provider.Type = ProviderKronk
+	response, usage, err := a.OpenAICompatibleAdapter.Embeddings(ctx, provider, providerModel, req)
+	return response, usage, normalizeKronkTransportError(err)
+}
+
+func normalizeKronkTransportError(err error) error {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return err
+	}
+	var httpErr *HTTPError
+	if errors.As(err, &httpErr) {
+		return err
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return kronkTransportInvocationError(http.StatusGatewayTimeout, "provider_upstream_timeout", "Kronk inference timed out")
+	}
+	var networkErr net.Error
+	if errors.As(err, &networkErr) && networkErr.Timeout() {
+		return kronkTransportInvocationError(http.StatusGatewayTimeout, "provider_upstream_timeout", "Kronk inference timed out")
+	}
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return kronkTransportInvocationError(http.StatusBadGateway, "provider_stream_interrupted", "Kronk closed the response stream unexpectedly")
+	}
+	if errors.As(err, &networkErr) {
+		return kronkTransportInvocationError(http.StatusBadGateway, "provider_upstream_unreachable", "Kronk service is unreachable")
+	}
+	return err
+}
+
+func kronkTransportInvocationError(status int, code string, message string) error {
+	return &ProviderInvocationError{
+		Err:         NewHTTPError(status, code, message),
+		Disposition: ProviderErrorTransientSame,
+	}
 }
 
 type KronkHealthResult struct {
@@ -47,7 +110,9 @@ func (a KronkAdapter) Health(ctx context.Context, provider Provider) (KronkHealt
 	result.ModelsCount = catalog.ModelsCount
 	result.ModelReady = catalog.ModelsCount > 0
 	if !result.ModelReady {
-		return result, NewHTTPError(http.StatusServiceUnavailable, "kronk_models_unavailable", "Kronk is ready but has no available local models")
+		err := NewHTTPError(http.StatusServiceUnavailable, "kronk_models_unavailable", "Kronk is ready but has no available local models")
+		err.Details = result
+		return result, err
 	}
 	return result, nil
 }
@@ -93,7 +158,12 @@ func KronkProviderCatalogFromUpstream(ctx context.Context, client *http.Client, 
 	}
 	entry, err := CustomProviderCatalogFromUpstream(ctx, client, req)
 	if err != nil {
-		return ProviderCatalogEntry{}, err
+		if httpErr := AsHTTPError(err); httpErr.Code != "provider_models_empty" {
+			return ProviderCatalogEntry{}, err
+		}
+		entry = kronkCatalogEntry()
+		entry.BaseURL = strings.TrimRight(req.BaseURL, "/")
+		entry.Source = "kronk-upstream"
 	}
 	entry.ID = ProviderKronk
 	entry.Name = "Kronk"
