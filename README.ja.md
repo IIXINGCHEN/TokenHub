@@ -212,14 +212,6 @@ TokenHub は、実際のエンタープライズ利用からのフィードバ�
       </a>
     </td>
   </tr>
-  <tr>
-    <td align="center" valign="top" width="12.5%">
-      <a href="https://github.com/susunola">
-        <img src="https://avatars.githubusercontent.com/u/38539169?v=4" width="80px" alt="susunola" />
-        <br /><sub><b>susunola</b></sub>
-      </a>
-    </td>
-  </tr>
 </table>
 
 <!-- readme: contributors -end -->
