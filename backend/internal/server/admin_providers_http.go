@@ -78,8 +78,16 @@ func (s *Server) handleAdminProviderCatalogItem(w http.ResponseWriter, r *http.R
 	if _, ok := s.requireAdmin(w, r, "provider", r.Method); !ok {
 		return
 	}
-	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/admin/provider-catalog/"), "/")
-	if id == "" || strings.Contains(id, "/") {
+	rawID := strings.Trim(strings.TrimPrefix(r.URL.EscapedPath(), "/api/admin/provider-catalog/"), "/")
+	if rawID == "" || strings.Contains(rawID, "/") {
+		writeError(w, r, NewHTTPError(404, "not_found", "Not found"))
+		return
+	}
+	// The escaped path preserves %2F inside a single segment; decode it so a
+	// catalog ID containing "/" is looked up under its real value. Malformed
+	// escapes are rejected rather than looked up under the raw text.
+	id, err := url.PathUnescape(rawID)
+	if err != nil || id == "" {
 		writeError(w, r, NewHTTPError(404, "not_found", "Not found"))
 		return
 	}
@@ -402,7 +410,7 @@ func (s *Server) handleAdminProviderNested(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/admin/providers/"), "/")
+	parts := splitEscapedAdminPath(r.URL.EscapedPath(), "/api/admin/providers/")
 	if len(parts) == 1 && parts[0] == "test-connection" {
 		if r.Method != http.MethodPost {
 			writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
@@ -1017,11 +1025,22 @@ func (s *Server) handleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 			writeError(w, r, NewHTTPError(http.StatusConflict, "model_route_conflict", "This external model is already mapped to the selected provider model"))
 			return
 		}
-		if err := s.markExternalModel(req.ModelName); err != nil {
+		route, err := s.store.CreateRoute(req)
+		if err != nil {
+			// The route was not persisted, so the catalog must not be marked
+			// as if it had been.
 			writeError(w, r, err)
 			return
 		}
-		route := s.store.AddRoute(req)
+		if err := s.markExternalModel(req.ModelName); err != nil {
+			// The route was created but the model directory could not be marked as
+			// external. The next call to backfillExternalModelRolesFromRoutes will
+			// reconcile the catalog, but surface the error so the caller knows the
+			// operation was only partially successful.
+			s.recordAdminAudit(r, user, "create", "routing_rule", route.ID, "", route)
+			writeError(w, r, err)
+			return
+		}
 		s.recordAdminAudit(r, user, "create", "routing_rule", route.ID, "", route)
 		writeJSON(w, http.StatusCreated, route)
 	default:
@@ -1108,12 +1127,17 @@ func (s *Server) handleAdminRouteItem(w http.ResponseWriter, r *http.Request) {
 			writeError(w, r, NewHTTPError(http.StatusConflict, "model_route_conflict", "This external model is already mapped to the selected provider model"))
 			return
 		}
-		if err := s.markExternalModel(candidate.ModelName); err != nil {
+		route, err := s.store.UpdateRoute(routeID, req)
+		if err != nil {
 			writeError(w, r, err)
 			return
 		}
-		route, err := s.store.UpdateRoute(routeID, req)
-		if err != nil {
+		if err := s.markExternalModel(candidate.ModelName); err != nil {
+			// The route was updated but the model directory could not be marked as
+			// external. backfillExternalModelRolesFromRoutes reconciles the catalog
+			// on startup, but surface the error so the caller knows the operation
+			// was only partially successful.
+			s.recordAdminAudit(r, user, "update", "routing_rule", routeID, "", route)
 			writeError(w, r, err)
 			return
 		}
