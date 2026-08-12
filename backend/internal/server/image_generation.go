@@ -466,6 +466,19 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// drain the image queue is bad, failing to drain it and silently discarding
 	// every buffered trace is worse.
 	defer s.shutdownTracing()
+	s.responseWorkerStop.Do(func() {
+		s.responseCancel()
+	})
+	responseWorkersDone := make(chan struct{})
+	go func() {
+		s.responseWorkerGroup.Wait()
+		close(responseWorkersDone)
+	}()
+	select {
+	case <-responseWorkersDone:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	if s.billing != nil {
 		if err := s.billing.Shutdown(ctx); err != nil {
 			return err

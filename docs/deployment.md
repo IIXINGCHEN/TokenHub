@@ -390,6 +390,12 @@ Options: `--rebuild`, `--reset` to drop the local database, `--backend-port N`, 
 | `TOKENHUB_IMAGE_QUEUE_CAPACITY` | `64` | Maximum image jobs that may wait in the queue |
 | `TOKENHUB_IMAGE_JOB_TIMEOUT_SECONDS` | `300` | Time limit for a single image generation job before it is failed |
 | `TOKENHUB_IMAGE_CAPABILITY_RETRY_SECONDS` | `86400` | How long a provider resource marked as lacking image support is skipped before it is probed again |
+| `TOKENHUB_RESPONSE_WORKER_CONCURRENCY` | `2` | Number of workers claiming persistent background Responses jobs |
+| `TOKENHUB_RESPONSE_POLL_INTERVAL_MILLIS` | `250` | Database poll interval for background Responses jobs and cancellation checks |
+| `TOKENHUB_RESPONSE_JOB_TIMEOUT_SECONDS` | `300` | Execution time limit for one background Responses job |
+| `TOKENHUB_RESPONSE_LEASE_TTL_SECONDS` | `30` | Lease duration used to fence background Responses workers across replicas |
+| `TOKENHUB_RESPONSE_RESULT_TTL_SECONDS` | `3600` | Retention time for encrypted background request and result payloads after completion |
+| `TOKENHUB_RESPONSE_MAX_QUEUED_JOBS` | `1000` | Maximum queued and running background Responses jobs accepted by one deployment |
 | `TOKENHUB_DB_MAX_OPEN_CONNS` | `25` | Maximum open database connections (PostgreSQL only) |
 | `TOKENHUB_DB_MAX_IDLE_CONNS` | `5` | Maximum idle database connections (PostgreSQL only) |
 | `TOKENHUB_DB_CONN_MAX_LIFETIME_MINUTES` | `30` | Maximum connection lifetime in minutes (PostgreSQL only) |

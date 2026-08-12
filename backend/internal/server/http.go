@@ -16,29 +16,35 @@ import (
 )
 
 type Server struct {
-	store             Store
-	adapterRegistry   *AdapterRegistry
-	integrations      *IntegrationService
-	codexSubscription *CodexSubscriptionAdapter
-	providerCatalog   *providerCatalogService
-	billing           *BillingService
-	reconciliation    *ReconciliationService
-	mux               *http.ServeMux
-	config            Config
-	metrics           *GatewayMetrics
-	traceEmitter      TraceEmitter
-	imageStorageDir   string
-	imageRunner       func(context.Context, RouteSelection, ImageJob) ([]byte, string, Usage, error)
-	imageContext      context.Context
-	imageCancel       context.CancelFunc
-	imageQueue        chan imageJobWork
-	imageWorkerStart  sync.Once
-	imageWorkerStop   sync.Once
-	imageWorkerGroup  sync.WaitGroup
-	imageAccountMu    sync.Mutex
-	imageAccountSlots map[string]chan struct{}
-	versions          *versionService
-	guardrailEngine   *guardrails.Engine
+	store               Store
+	adapterRegistry     *AdapterRegistry
+	integrations        *IntegrationService
+	codexSubscription   *CodexSubscriptionAdapter
+	providerCatalog     *providerCatalogService
+	billing             *BillingService
+	reconciliation      *ReconciliationService
+	mux                 *http.ServeMux
+	config              Config
+	metrics             *GatewayMetrics
+	traceEmitter        TraceEmitter
+	imageStorageDir     string
+	imageRunner         func(context.Context, RouteSelection, ImageJob) ([]byte, string, Usage, error)
+	imageContext        context.Context
+	imageCancel         context.CancelFunc
+	imageQueue          chan imageJobWork
+	imageWorkerStart    sync.Once
+	imageWorkerStop     sync.Once
+	imageWorkerGroup    sync.WaitGroup
+	imageAccountMu      sync.Mutex
+	imageAccountSlots   map[string]chan struct{}
+	responseContext     context.Context
+	responseCancel      context.CancelFunc
+	responseWorkerStart sync.Once
+	responseWorkerStop  sync.Once
+	responseWorkerGroup sync.WaitGroup
+	responseInstanceID  string
+	versions            *versionService
+	guardrailEngine     *guardrails.Engine
 }
 
 func New(store Store) *Server {
@@ -60,6 +66,24 @@ func NewWithConfig(store Store, config Config) *Server {
 	if config.ImageCapabilityRetrySecs <= 0 {
 		config.ImageCapabilityRetrySecs = 86400
 	}
+	if config.ResponseWorkerConcurrency <= 0 {
+		config.ResponseWorkerConcurrency = 2
+	}
+	if config.ResponsePollIntervalMillis <= 0 {
+		config.ResponsePollIntervalMillis = 250
+	}
+	if config.ResponseJobTimeoutSeconds <= 0 {
+		config.ResponseJobTimeoutSeconds = 300
+	}
+	if config.ResponseLeaseTTLSeconds <= 0 {
+		config.ResponseLeaseTTLSeconds = 30
+	}
+	if config.ResponseResultTTLSeconds <= 0 {
+		config.ResponseResultTTLSeconds = 3600
+	}
+	if config.ResponseMaxQueuedJobs <= 0 {
+		config.ResponseMaxQueuedJobs = 1000
+	}
 	if config.MaxJSONRequestBytes <= 0 {
 		config.MaxJSONRequestBytes = defaultMaxJSONRequestBytes
 	}
@@ -67,6 +91,7 @@ func NewWithConfig(store Store, config Config) *Server {
 		config.MaxMultimodalRequestBytes = defaultMaxMultimodalRequestBytes
 	}
 	imageContext, imageCancel := context.WithCancel(context.Background())
+	responseContext, responseCancel := context.WithCancel(context.Background())
 	client, streamClient, streamIdleTimeout := newUpstreamClients(config)
 	openai := OpenAICompatibleAdapter{Client: client, StreamClient: streamClient, StreamIdleTimeout: streamIdleTimeout}
 	codexSubscription := &CodexSubscriptionAdapter{
@@ -97,21 +122,24 @@ func NewWithConfig(store Store, config Config) *Server {
 		registry.Register(adapterType, adapters[adapterType], AdapterCapabilityChat, AdapterCapabilityChatStream, AdapterCapabilityResponses, AdapterCapabilityResponseStream, AdapterCapabilityEmbeddings, AdapterCapabilityProbe)
 	}
 	s := &Server{
-		store:             store,
-		adapterRegistry:   registry,
-		integrations:      NewIntegrationService(store, registry),
-		codexSubscription: codexSubscription,
-		providerCatalog:   newProviderCatalogService(store, config.ProviderCatalogFile),
-		billing:           newBillingService(store),
-		reconciliation:    newReconciliationService(store),
-		mux:               http.NewServeMux(),
-		config:            config,
-		imageStorageDir:   config.ImageStorageDir,
-		imageContext:      imageContext,
-		imageCancel:       imageCancel,
-		imageQueue:        make(chan imageJobWork, config.ImageQueueCapacity),
-		imageAccountSlots: make(map[string]chan struct{}),
-		versions:          newVersionService(config),
+		store:              store,
+		adapterRegistry:    registry,
+		integrations:       NewIntegrationService(store, registry),
+		codexSubscription:  codexSubscription,
+		providerCatalog:    newProviderCatalogService(store, config.ProviderCatalogFile),
+		billing:            newBillingService(store),
+		reconciliation:     newReconciliationService(store),
+		mux:                http.NewServeMux(),
+		config:             config,
+		imageStorageDir:    config.ImageStorageDir,
+		imageContext:       imageContext,
+		imageCancel:        imageCancel,
+		imageQueue:         make(chan imageJobWork, config.ImageQueueCapacity),
+		imageAccountSlots:  make(map[string]chan struct{}),
+		responseContext:    responseContext,
+		responseCancel:     responseCancel,
+		responseInstanceID: NewID("response-worker"),
+		versions:           newVersionService(config),
 		guardrailEngine: guardrails.NewEngine(guardrails.NewQwenDetector(guardrails.QwenDetectorConfig{
 			URL:     config.GuardrailModelURL,
 			APIKey:  config.GuardrailModelAPIKey,
@@ -139,6 +167,10 @@ func NewWithConfig(store Store, config Config) *Server {
 	}
 	s.installTraceEmitter(config)
 	s.routes()
+	// Every replica must poll the durable queue even when it was empty at startup.
+	// Otherwise a replica that never handled a submission cannot take over after
+	// the submitting replica fails.
+	s.startResponseWorkers()
 	return s
 }
 func (s *Server) Handler() http.Handler {

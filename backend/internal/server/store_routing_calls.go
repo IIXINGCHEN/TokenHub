@@ -488,120 +488,16 @@ func (s *GormStore) StartCall(ctx context.Context, project Project, key APIKey, 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var call CallContext
-	requestID := NewID("req")
-	leaseAcquired := false
-	var leaseConfirmedFor time.Duration
+	var admission callAdmissionResult
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := s.lockScopeForUpdate(tx, "api_key", key.ID); err != nil {
-			return err
-		}
-		var privateKey APIKey
-		if err := tx.First(&privateKey, "id = ?", key.ID).Error; err != nil {
-			return ErrInvalidAPIKey
-		}
-		hydrateAPIKey(&privateKey)
-		var privateProject Project
-		if err := tx.First(&privateProject, "id = ?", privateKey.ProjectID).Error; err != nil {
-			return ErrInvalidAPIKey
-		}
-		hydrateProject(&privateProject)
-		var model Model
-		if err := tx.First(&model, "name = ? AND status = ?", modelName, StatusActive).Error; err != nil {
-			return ErrModelNotAllowed
-		}
-		if !modelAllowedByScopes(privateProject, privateKey, modelName) {
-			return ErrModelNotAllowed
-		}
-		keyLimits := privateKey.Limits
-		keyLimits.RateLimitRPM = 0
-		keyLimits.TokenLimitTPM = 0
-		if privateKey.RateLimitRPM != nil {
-			keyLimits.RateLimitRPM = *privateKey.RateLimitRPM
-		}
-		if privateKey.TokenLimitTPM != nil {
-			keyLimits.TokenLimitTPM = *privateKey.TokenLimitTPM
-		}
-		policyLimits, minuteLimitScopes, err := quotaPolicyLimits(tx, privateProject, privateKey)
-		if err != nil {
-			return err
-		}
-		if strictLimitChanged(policyLimits.RateLimitRPM, keyLimits.RateLimitRPM) {
-			minuteLimitScopes.RPM = "api_key"
-		}
-		if strictLimitChanged(policyLimits.TokenLimitTPM, keyLimits.TokenLimitTPM) {
-			minuteLimitScopes.TPM = "api_key"
-		}
-		effectiveLimits := mergeQuotaLimits(keyLimits, policyLimits)
-		now, err := s.databaseNow(tx)
-		if err != nil {
-			return err
-		}
-		// Taken next to the database reading so the two describe the same instant,
-		// and the local reference does not also absorb the admission work below.
-		measuredAt := time.Now()
-		if err := pruneAPIKeyMinuteBuckets(tx, privateKey.ID, now); err != nil {
-			return err
-		}
-		minuteCounter, err := s.consumeAPIKeyMinuteRequest(tx, privateKey.ID, effectiveLimits, minuteLimitScopes, tokenReservation, now)
-		if err != nil {
-			return err
-		}
-		dayCounter, err := s.quotaBucketForUpdate(tx, privateKey.ID, "day", dayBucket(now))
-		if err != nil {
-			return err
-		}
-		monthCounter, err := s.quotaBucketForUpdate(tx, privateKey.ID, "month", monthBucket(now))
-		if err != nil {
-			return err
-		}
-		if effectiveLimits.MaxConcurrency > 0 {
-			confirmedFor, err := s.acquireInFlightLease(tx, "api_key", privateKey.ID, effectiveLimits.MaxConcurrency, requestID)
-			if err != nil {
-				return err
-			}
-			leaseConfirmedFor = confirmedFor
-			leaseAcquired = true
-		}
-		if exceedsRequestQuota(effectiveLimits, &dayCounter.QuotaCounter, &monthCounter.QuotaCounter) ||
-			exceedsTokenQuota(effectiveLimits, &dayCounter.QuotaCounter, &monthCounter.QuotaCounter) ||
-			exceedsCostQuota(effectiveLimits, &dayCounter.QuotaCounter, &monthCounter.QuotaCounter) {
-			return ErrQuotaExceeded
-		}
-		if err := s.checkRuntimeBudget(tx, privateProject); err != nil {
-			return err
-		}
-		dayCounter.Requests++
-		monthCounter.Requests++
-		if err := tx.Save(&dayCounter).Error; err != nil {
-			return err
-		}
-		if err := tx.Save(&monthCounter).Error; err != nil {
-			return err
-		}
-		call = CallContext{
-			RequestID:        requestID,
-			Project:          privateProject,
-			Key:              publicKey(privateKey),
-			Model:            model,
-			StartedAt:        now,
-			measuredAt:       measuredAt,
-			RateLimitHeaders: apiKeyRateLimitHeaders(effectiveLimits, minuteCounter, now, false),
-			requestContext:   ctx,
-		}
-		if effectiveLimits.TokenLimitTPM > 0 {
-			call.TokenLimitBucket = minuteBucket(now)
-			call.ReservedTokens = maxInt64(tokenReservation, 0)
-		}
-		return nil
+		var err error
+		admission, err = s.admitCallTransaction(ctx, tx, key, modelName, tokenReservation, NewID("req"))
+		return err
 	})
 	if err != nil {
 		return CallContext{}, err
 	}
-	if leaseAcquired {
-		call.requestContext = s.startInFlightLeaseHeartbeat(ctx, requestID, leaseConfirmedFor)
-	}
-	return call, nil
+	return s.startAdmittedCallHeartbeat(ctx, admission), nil
 }
 
 func pruneAPIKeyMinuteBuckets(tx *gorm.DB, keyID string, now time.Time) error {

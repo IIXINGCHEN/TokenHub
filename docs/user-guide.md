@@ -195,6 +195,27 @@ claude
 
 `ANTHROPIC_AUTH_TOKEN` sends the TokenHub key in `Authorization: Bearer`. `ANTHROPIC_API_KEY` also works through `x-api-key` when no Authorization header is present. Token counting verifies key and model access but does not create a billed inference record.
 
+## Persistent background Responses
+
+Set `background: true` on `POST /v1/responses` to persist a Responses request and return a stable gateway-owned response ID immediately:
+
+```bash
+curl http://localhost:8080/v1/responses \
+  -H "Authorization: Bearer $TOKENHUB_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-5.4","input":"Summarize the report","background":true}'
+```
+
+Read the status or final response with `GET /v1/responses/{id}`. Request cancellation with `POST /v1/responses/{id}/cancel`. Reads and cancellation require the same project, API key, attributed owner, and current model access as the original submission; a mismatch returns `404`. `background: true` with `stream: true` is rejected because resumable background SSE is not implemented.
+
+The public status values are `queued`, `in_progress`, `completed`, `failed`, and `cancelled`. Quota, budget, concurrency, routing, guardrails, cache affinity, cost accounting, request logs, and traces are applied by the worker before and during the upstream call. A cancellation/completion race has one durable winner, while any upstream usage already incurred is still settled exactly once.
+
+Queued work survives a server restart. Work whose lease expires before admission is safely returned to the queue. Work that loses its worker after admission is marked `failed` with `response_execution_lost` instead of being replayed, because the provider may already have received it. PostgreSQL replicas coordinate claims with fenced leases and row locking. SQLite supports restart recovery but remains a single-backend deployment; do not share one SQLite file between backend replicas.
+
+Request envelopes and results are encrypted at rest with `TOKENHUB_SECRET_KEY`; authentication headers are never stored, and only a bounded protocol-header allowlist is retained. Background request and response bodies are not copied to plaintext request-payload audit records or tracing exports, and upstream route error text is removed from their route-attempt records. Encryption or decryption failure is fail-closed. Terminal payloads are retained for `TOKENHUB_RESPONSE_RESULT_TTL_SECONDS`, then both request and result ciphertext are scrubbed and later reads return `404`. The returned ID is a TokenHub retrieval ID and is not translated into an upstream `previous_response_id`.
+
+Prometheus exposes `tokenhub_gateway_response_jobs_queued`, `tokenhub_gateway_response_job_queue_wait_seconds`, `tokenhub_gateway_response_job_execution_seconds`, `tokenhub_gateway_response_jobs_total`, and `tokenhub_gateway_response_job_recoveries_total` when metrics are enabled. Worker concurrency, polling, timeout, lease, retention, and queue limits are listed in [Deployment](deployment.md#backend-environment-variables).
+
 ## Gemini CLI with Codex subscription GPT
 
 Gemini CLI can connect directly to TokenHub's native Gemini `v1beta` surface and use a GPT model routed to an OpenAI Codex Subscription account. Set `GEMINI_API_KEY` to a TokenHub project key, `GOOGLE_GEMINI_BASE_URL` to the TokenHub host without `/v1beta`, and select the routed GPT model. CCswitch is not required. See [Use Codex Subscription GPT from Gemini CLI](gemini-cli-codex-subscription.md) for isolated and project-local configuration, supported endpoints, verification, and limitations.

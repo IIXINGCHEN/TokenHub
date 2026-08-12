@@ -195,6 +195,27 @@ claude
 
 `ANTHROPIC_AUTH_TOKEN` は TokenHub Key を `Authorization: Bearer` で送信します。Authorization header がない場合は、`ANTHROPIC_API_KEY` の `x-api-key` も利用できます。Token 見積もりは Key とモデル権限を確認しますが、課金対象の推論レコードは作成しません。
 
+## 永続化バックグラウンド Responses
+
+`POST /v1/responses` に `background: true` を設定すると、Responses リクエストが永続化され、ゲートウェイが管理する安定した Response ID が直ちに返されます。
+
+```bash
+curl http://localhost:8080/v1/responses \
+  -H "Authorization: Bearer $TOKENHUB_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-5.4","input":"Summarize the report","background":true}'
+```
+
+`GET /v1/responses/{id}` で状態または最終結果を取得し、`POST /v1/responses/{id}/cancel` でキャンセルを要求します。取得とキャンセルには、送信時と同じ Project、API Key、帰属所有者、および現在のモデルアクセス権が必要です。いずれかが一致しない場合は `404` を返します。再開可能なバックグラウンド SSE は未実装のため、`background: true` と `stream: true` の併用は拒否されます。
+
+公開状態は `queued`、`in_progress`、`completed`、`failed`、`cancelled` です。Worker は上流呼び出しの前後で quota、budget、同時実行制限、routing、guardrail、cache affinity、cost accounting、request log、trace を適用します。キャンセルと完了が競合した場合、永続化される結果は一方だけです。上流で既に発生した使用量は 1 回だけ精算されます。
+
+待機中のジョブはサーバー再起動後も継続します。Admission 前に lease を失ったジョブは安全に再キューイングされます。Admission 後に Worker を失ったジョブは、Provider が既に受信した可能性があるため再送せず、`response_execution_lost` で明示的に失敗します。PostgreSQL の複数レプリカは fencing 付き lease と row lock で取得を調整します。SQLite は再起動復旧に対応しますが、単一バックエンド構成に限定されます。同じ SQLite ファイルを複数のバックエンドで共有しないでください。
+
+リクエスト envelope と結果は `TOKENHUB_SECRET_KEY` で保存時に暗号化されます。認証 header は保存されず、長さを制限した protocol header の allowlist だけが保持されます。バックグラウンドのリクエスト本文とレスポンス本文は、平文の request payload 監査レコードや trace export へ複製されず、route attempt レコードからも上流のエラーテキストが除去されます。暗号化または復号に失敗した場合、平文へフォールバックせず処理を拒否します。終端 payload は `TOKENHUB_RESPONSE_RESULT_TTL_SECONDS` の間保持され、期限後にリクエストと結果の暗号文が消去されます。その後の取得は `404` です。返される ID は TokenHub の取得用 ID であり、上流の `previous_response_id` には変換されません。
+
+metrics を有効にすると、Prometheus に `tokenhub_gateway_response_jobs_queued`、`tokenhub_gateway_response_job_queue_wait_seconds`、`tokenhub_gateway_response_job_execution_seconds`、`tokenhub_gateway_response_jobs_total`、`tokenhub_gateway_response_job_recoveries_total` が公開されます。Worker 数、polling、timeout、lease、retention、queue 上限は[デプロイ](deployment.md#バックエンド環境変数)を参照してください。
+
 ## Gemini CLI で Codex サブスクリプション GPT を使用する
 
 Gemini CLI は TokenHub の Gemini ネイティブ `v1beta` API に直接接続し、OpenAI Codex Subscription アカウントへルーティングされた GPT モデルを利用できます。`GEMINI_API_KEY` に TokenHub の Project Key、`GOOGLE_GEMINI_BASE_URL` に `/v1beta` を含まない TokenHub Host を設定し、対象 GPT モデルを選択します。CCswitch は不要です。分離起動、プロジェクト設定、対応エンドポイント、検証方法、制限については [Gemini CLI から Codex サブスクリプション GPT を使用する](gemini-cli-codex-subscription.md) を参照してください。

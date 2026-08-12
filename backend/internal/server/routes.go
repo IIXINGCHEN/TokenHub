@@ -19,6 +19,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/v1/messages", s.gatewayInFlight(s.handleAnthropicMessages))
 	s.mux.HandleFunc("/v1/messages/count_tokens", s.handleAnthropicCountTokens)
 	s.mux.HandleFunc("/v1/responses", s.gatewayInFlight(s.handleResponses))
+	s.mux.HandleFunc("/v1/responses/", s.handleResponseJob)
 	s.mux.HandleFunc("/v1/responses/compact", s.gatewayInFlight(s.handleResponsesCompact))
 	s.mux.HandleFunc("/v1/embeddings", s.gatewayInFlight(s.handleEmbeddings))
 	s.mux.HandleFunc("/v1/images/generations", s.handleImageGenerations)

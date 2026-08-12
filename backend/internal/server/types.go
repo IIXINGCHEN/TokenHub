@@ -530,6 +530,74 @@ type ImageJob struct {
 	CompletedAt             *time.Time `json:"completed_at,omitempty"`
 }
 
+const (
+	responseJobStatusQueued    = "queued"
+	responseJobStatusRunning   = "running"
+	responseJobStatusSucceeded = "succeeded"
+	responseJobStatusFailed    = "failed"
+	responseJobStatusCancelled = "cancelled"
+	responseJobStatusExpired   = "expired"
+
+	responseJobPhaseQueued     = "queued"
+	responseJobPhaseClaimed    = "claimed"
+	responseJobPhaseAdmitted   = "admitted"
+	responseJobPhaseDispatched = "dispatched"
+)
+
+// ResponseJob is a durable, gateway-owned execution record for an OpenAI
+// Responses request submitted with background=true. Request and result content is
+// stored only in the encrypted columns; the plaintext fields are transient values
+// populated after authenticated reads.
+type ResponseJob struct {
+	ID                 string     `json:"id" gorm:"primaryKey"`
+	ProjectID          string     `json:"project_id" gorm:"index"`
+	APIKeyID           string     `json:"api_key_id" gorm:"index"`
+	AttributedUserID   string     `json:"attributed_user_id,omitempty" gorm:"index"`
+	RequestID          string     `json:"request_id,omitempty" gorm:"index"`
+	TokenLimitBucket   string     `json:"-"`
+	MinuteRequestHeld  bool       `json:"-"`
+	ReservedTokens     int64      `json:"-"`
+	AdmittedAt         *time.Time `json:"-"`
+	Status             string     `json:"status" gorm:"index:idx_response_job_claim,priority:1;index:idx_response_job_lease,priority:1"`
+	Phase              string     `json:"phase" gorm:"index"`
+	Model              string     `json:"model" gorm:"index"`
+	RequestCiphertext  string     `json:"-" gorm:"type:text"`
+	ResultCiphertext   string     `json:"-" gorm:"type:text"`
+	RequestJSON        []byte     `json:"-" gorm:"-"`
+	ResultJSON         []byte     `json:"-" gorm:"-"`
+	ClientIP           string     `json:"-" gorm:"-"`
+	UserAgent          string     `json:"-" gorm:"-"`
+	LeaseOwner         string     `json:"-" gorm:"index"`
+	LeaseEpoch         int64      `json:"-"`
+	LeaseExpiresAt     *time.Time `json:"-" gorm:"index:idx_response_job_lease,priority:2"`
+	CancelRequestedAt  *time.Time `json:"-" gorm:"index"`
+	ProviderID         string     `json:"provider_id,omitempty" gorm:"index"`
+	ProviderResourceID string     `json:"provider_resource_id,omitempty" gorm:"index"`
+	ProviderModel      string     `json:"provider_model,omitempty"`
+	UpstreamRequestID  string     `json:"upstream_request_id,omitempty"`
+	UpstreamResponseID string     `json:"upstream_response_id,omitempty"`
+	ErrorCode          string     `json:"error_code,omitempty"`
+	ErrorMessage       string     `json:"error_message,omitempty"`
+	CreatedAt          time.Time  `json:"created_at" gorm:"index:idx_response_job_claim,priority:2"`
+	StartedAt          *time.Time `json:"started_at,omitempty"`
+	CompletedAt        *time.Time `json:"completed_at,omitempty"`
+	ExpiresAt          *time.Time `json:"expires_at,omitempty" gorm:"index"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+}
+
+// ResponseJobEvent is the append-only audit trail for every durable state
+// transition. Details are deliberately bounded operational codes, never request or
+// response content.
+type ResponseJobEvent struct {
+	ID         string    `json:"id" gorm:"primaryKey"`
+	JobID      string    `json:"job_id" gorm:"index"`
+	FromStatus string    `json:"from_status,omitempty"`
+	ToStatus   string    `json:"to_status"`
+	ReasonCode string    `json:"reason_code,omitempty"`
+	Actor      string    `json:"actor"`
+	CreatedAt  time.Time `json:"created_at" gorm:"index"`
+}
+
 type ImageAsset struct {
 	ID           string    `json:"id" gorm:"primaryKey"`
 	JobID        string    `json:"job_id" gorm:"index"`
@@ -941,6 +1009,7 @@ type ResponsesRequest struct {
 	Model        string              `json:"model"`
 	Input        any                 `json:"input"`
 	Stream       bool                `json:"stream,omitempty"`
+	Background   bool                `json:"background,omitempty"`
 	MaxTokens    int                 `json:"max_output_tokens,omitempty"`
 	Temperature  *float64            `json:"temperature,omitempty"`
 	Instructions string              `json:"instructions,omitempty"`
@@ -982,6 +1051,7 @@ func (r ResponsesRequest) MarshalJSON() ([]byte, error) {
 	setRawJSONField(raw, "model", r.Model, r.Model != "")
 	setRawJSONField(raw, "input", r.Input, r.Input != nil)
 	setRawJSONField(raw, "stream", r.Stream, true)
+	setRawJSONField(raw, "background", r.Background, true)
 	setRawJSONField(raw, "max_output_tokens", r.MaxTokens, r.MaxTokens != 0)
 	setRawJSONField(raw, "temperature", r.Temperature, r.Temperature != nil)
 	setRawJSONField(raw, "instructions", r.Instructions, r.Instructions != "")
@@ -1145,9 +1215,10 @@ type CallContext struct {
 	measuredAt time.Time
 	// RateLimitHeaders is calculated atomically with minute-bucket admission so
 	// every compatible HTTP surface reports the same effective limits.
-	RateLimitHeaders map[string]string
-	TokenLimitBucket string
-	ReservedTokens   int64
+	RateLimitHeaders  map[string]string
+	TokenLimitBucket  string
+	MinuteRequestHeld bool
+	ReservedTokens    int64
 	// StreamOutputCommitted keeps the reservation when a stream delivered data but
 	// ended before an authoritative usage event was received.
 	StreamOutputCommitted bool
