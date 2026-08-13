@@ -47,7 +47,33 @@ func (s *Server) routes() {
 	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/overview", s.handleAdminOverview, s.adminMethodNotAllowed("overview", http.MethodGet))
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/playground/chat", s.handleAdminPlaygroundChat, s.adminMethodNotAllowed("playground", http.MethodPost))
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/playground/chat/stream", s.handleAdminPlaygroundChatStream, s.adminMethodNotAllowed("playground", http.MethodPost))
-	s.mux.HandleFunc("/api/admin/projects", s.handleAdminProjects)
+	s.registerMethodRoutes("/api/admin/projects", func(allowedMethods string) http.HandlerFunc {
+		return s.adminMethodNotAllowed("project", allowedMethods)
+	},
+		methodRoute{Method: http.MethodGet, Handler: s.handleAdminProjectsGet},
+		methodRoute{Method: http.MethodPost, Handler: s.handleAdminProjectsPost},
+	)
+	s.registerMethodRoutes("/api/admin/projects/{project_id}", func(allowedMethods string) http.HandlerFunc {
+		return s.adminProjectMethodNotAllowed("project", allowedMethods)
+	},
+		methodRoute{Method: http.MethodPatch, Handler: s.handleAdminProjectPatch},
+		methodRoute{Method: http.MethodDelete, Handler: s.handleAdminProjectDelete},
+	)
+	s.registerMethodRoutes("/api/admin/projects/{project_id}/keys", func(allowedMethods string) http.HandlerFunc {
+		return s.adminProjectMethodNotAllowed("api_key", allowedMethods)
+	},
+		methodRoute{Method: http.MethodGet, Handler: s.handleAdminProjectKeysGet},
+		methodRoute{Method: http.MethodPost, Handler: s.handleAdminProjectKeysPost},
+	)
+	s.registerMethodRoutes("/api/admin/projects/{project_id}/teams", s.adminProjectTeamsMethodNotAllowed,
+		methodRoute{Method: http.MethodGet, Handler: s.handleAdminProjectTeamsGet},
+		methodRoute{Method: http.MethodPost, Handler: s.handleAdminProjectTeamsPost},
+	)
+	s.registerMethodRoutes("/api/admin/projects/{project_id}/teams/{team_id}", s.adminProjectTeamMethodNotAllowed,
+		methodRoute{Method: http.MethodPatch, Handler: s.handleAdminProjectTeamPatch},
+		methodRoute{Method: http.MethodDelete, Handler: s.handleAdminProjectTeamDelete},
+	)
+	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/projects/{project_id}/quota-increase", s.handleAdminProjectQuotaIncreasePost, s.adminProjectMethodNotAllowed("approval", http.MethodPost))
 	s.mux.HandleFunc("/api/admin/projects/", s.handleAdminProjectNested)
 	s.mux.HandleFunc("/api/admin/guardrail-policies", s.handleAdminGuardrailPolicies)
 	s.mux.HandleFunc("/api/admin/guardrail-policies/test", s.handleAdminGuardrailPolicyTest)

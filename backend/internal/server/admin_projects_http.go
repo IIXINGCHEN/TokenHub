@@ -69,43 +69,44 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleAdminProjects(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAdminProjectsGet(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAdmin(w, r, "project", r.Method)
 	if !ok {
 		return
 	}
-	switch r.Method {
-	case http.MethodGet:
-		writeJSON(w, http.StatusOK, map[string]any{"data": s.filterProjectsForUser(user, s.store.ListProjects())})
-	case http.MethodPost:
-		var req Project
-		if err := s.decodeJSON(w, r, &req); err != nil {
-			writeError(w, r, err)
-			return
-		}
-		if normalizeAdminRole(user.Role) == "team_leader" {
-			if strings.TrimSpace(user.TeamID) == "" {
-				writeError(w, r, NewHTTPError(403, "team_required", "Team leader must belong to a team"))
-				return
-			}
-			req.TeamID = user.TeamID
-			if strings.TrimSpace(req.OwnerUserID) == "" {
-				req.OwnerUserID = user.ID
-			}
-		}
-		project, err := s.store.CreateProjectChecked(req)
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		s.recordAdminAudit(r, user, "create", "project", project.ID, "", project)
-		if link, found := projectTeamByID(project.Teams, project.TeamID); found {
-			s.recordAdminAudit(r, user, "create", "project_team", projectTeamAuditID(project.ID, link.TeamID), nil, link)
-		}
-		writeJSON(w, http.StatusCreated, project)
-	default:
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+	writeJSON(w, http.StatusOK, map[string]any{"data": s.filterProjectsForUser(user, s.store.ListProjects())})
+}
+
+func (s *Server) handleAdminProjectsPost(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdmin(w, r, "project", r.Method)
+	if !ok {
+		return
 	}
+	var req Project
+	if err := s.decodeJSON(w, r, &req); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	if normalizeAdminRole(user.Role) == "team_leader" {
+		if strings.TrimSpace(user.TeamID) == "" {
+			writeError(w, r, NewHTTPError(403, "team_required", "Team leader must belong to a team"))
+			return
+		}
+		req.TeamID = user.TeamID
+		if strings.TrimSpace(req.OwnerUserID) == "" {
+			req.OwnerUserID = user.ID
+		}
+	}
+	project, err := s.store.CreateProjectChecked(req)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	s.recordAdminAudit(r, user, "create", "project", project.ID, "", project)
+	if link, found := projectTeamByID(project.Teams, project.TeamID); found {
+		s.recordAdminAudit(r, user, "create", "project_team", projectTeamAuditID(project.ID, link.TeamID), nil, link)
+	}
+	writeJSON(w, http.StatusCreated, project)
 }
 
 func (s *Server) handleAdminProjectNested(w http.ResponseWriter, r *http.Request) {
@@ -141,63 +142,9 @@ func (s *Server) handleAdminProjectNested(w http.ResponseWriter, r *http.Request
 	if len(parts) == 1 {
 		switch r.Method {
 		case http.MethodPatch:
-			beforeProject, _ := s.store.GetProject(projectID)
-			var req Project
-			if err := s.decodeJSON(w, r, &req); err != nil {
-				writeError(w, r, err)
-				return
-			}
-			if normalizeAdminRole(user.Role) == "team_leader" {
-				existing, err := s.findProject(projectID)
-				if err != nil {
-					writeError(w, r, err)
-					return
-				}
-				if !s.canManageProject(user, existing) {
-					writeError(w, r, NewHTTPError(403, "project_forbidden", "Project is not available for this user"))
-					return
-				}
-				req.TeamID = existing.TeamID
-				if strings.TrimSpace(req.OwnerUserID) == "" {
-					req.OwnerUserID = existing.OwnerUserID
-				}
-			}
-			project, err := s.store.UpdateProject(projectID, req)
-			if err != nil {
-				writeError(w, r, err)
-				return
-			}
-			s.recordAdminAudit(r, user, "update", "project", project.ID, beforeProject, project)
-			if project.TeamID != "" {
-				if _, existed := projectTeamByID(beforeProject.Teams, project.TeamID); !existed {
-					if link, found := projectTeamByID(project.Teams, project.TeamID); found {
-						s.recordAdminAudit(r, user, "create", "project_team", projectTeamAuditID(project.ID, link.TeamID), nil, link)
-					}
-				}
-			}
-			writeJSON(w, http.StatusOK, project)
+			s.serveAdminProjectPatch(w, r, user, projectID)
 		case http.MethodDelete:
-			beforeProject, _ := s.store.GetProject(projectID)
-			if normalizeAdminRole(user.Role) == "team_leader" {
-				existing, err := s.findProject(projectID)
-				if err != nil {
-					writeError(w, r, err)
-					return
-				}
-				if !s.canManageProject(user, existing) {
-					writeError(w, r, NewHTTPError(403, "project_forbidden", "Project is not available for this user"))
-					return
-				}
-			}
-			if err := s.store.DeleteProject(projectID); err != nil {
-				writeError(w, r, err)
-				return
-			}
-			s.recordAdminAudit(r, user, "delete", "project", projectID, "", nil)
-			for _, link := range beforeProject.Teams {
-				s.recordAdminAudit(r, user, "delete", "project_team", projectTeamAuditID(projectID, link.TeamID), link, nil)
-			}
-			w.WriteHeader(http.StatusNoContent)
+			s.serveAdminProjectDelete(w, r, user, projectID)
 		default:
 			writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
 		}
@@ -209,20 +156,327 @@ func (s *Server) handleAdminProjectNested(w http.ResponseWriter, r *http.Request
 	}
 	switch r.Method {
 	case http.MethodGet:
-		if !s.canUseProjectForAPIKey(user, projectID) {
-			writeError(w, r, NewHTTPError(403, "project_forbidden", "Project is not available for this user"))
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"data": s.filterAPIKeysForUser(user, s.store.ListProjectKeys(projectID))})
+		s.serveAdminProjectKeysGet(w, r, user, projectID)
 	case http.MethodPost:
-		if !s.canUseProjectForAPIKey(user, projectID) {
-			writeError(w, r, NewHTTPError(403, "project_forbidden", "Project is not available for this user"))
-			return
-		}
-		s.handleAdminAPIKeyCreate(w, r, user, projectID)
+		s.serveAdminProjectKeysPost(w, r, user, projectID)
 	default:
 		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
 	}
+}
+
+func (s *Server) handleAdminProjectPatch(w http.ResponseWriter, r *http.Request) {
+	s.handleAdminProjectItemRoute(w, r, "project", s.serveAdminProjectPatch)
+}
+
+func (s *Server) handleAdminProjectDelete(w http.ResponseWriter, r *http.Request) {
+	s.handleAdminProjectItemRoute(w, r, "project", s.serveAdminProjectDelete)
+}
+
+func (s *Server) handleAdminProjectKeysGet(w http.ResponseWriter, r *http.Request) {
+	s.handleAdminProjectItemRoute(w, r, "api_key", s.serveAdminProjectKeysGet)
+}
+
+func (s *Server) handleAdminProjectKeysPost(w http.ResponseWriter, r *http.Request) {
+	s.handleAdminProjectItemRoute(w, r, "api_key", s.serveAdminProjectKeysPost)
+}
+
+func (s *Server) handleAdminProjectItemRoute(w http.ResponseWriter, r *http.Request, permission string, handler func(http.ResponseWriter, *http.Request, AdminUser, string)) {
+	projectID := r.PathValue("project_id")
+	if projectID == "" || strings.Contains(projectID, "/") {
+		s.handleAdminProjectNested(w, r)
+		return
+	}
+	user, ok := s.requireAdmin(w, r, permission, r.Method)
+	if !ok {
+		return
+	}
+	handler(w, r, user, projectID)
+}
+
+func (s *Server) adminProjectMethodNotAllowed(permission string, allowedMethods string) http.HandlerFunc {
+	reject := jsonMethodNotAllowed(allowedMethods)
+	return func(w http.ResponseWriter, r *http.Request) {
+		projectID := r.PathValue("project_id")
+		if projectID == "" || strings.Contains(projectID, "/") {
+			s.handleAdminProjectNested(w, r)
+			return
+		}
+		if _, ok := s.requireAdmin(w, r, permission, r.Method); !ok {
+			return
+		}
+		reject(w, r)
+	}
+}
+
+func (s *Server) serveAdminProjectPatch(w http.ResponseWriter, r *http.Request, user AdminUser, projectID string) {
+	beforeProject, _ := s.store.GetProject(projectID)
+	var req Project
+	if err := s.decodeJSON(w, r, &req); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	if normalizeAdminRole(user.Role) == "team_leader" {
+		existing, err := s.findProject(projectID)
+		if err != nil {
+			writeError(w, r, err)
+			return
+		}
+		if !s.canManageProject(user, existing) {
+			writeError(w, r, NewHTTPError(403, "project_forbidden", "Project is not available for this user"))
+			return
+		}
+		req.TeamID = existing.TeamID
+		if strings.TrimSpace(req.OwnerUserID) == "" {
+			req.OwnerUserID = existing.OwnerUserID
+		}
+	}
+	project, err := s.store.UpdateProject(projectID, req)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	s.recordAdminAudit(r, user, "update", "project", project.ID, beforeProject, project)
+	if project.TeamID != "" {
+		if _, existed := projectTeamByID(beforeProject.Teams, project.TeamID); !existed {
+			if link, found := projectTeamByID(project.Teams, project.TeamID); found {
+				s.recordAdminAudit(r, user, "create", "project_team", projectTeamAuditID(project.ID, link.TeamID), nil, link)
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, project)
+}
+
+func (s *Server) serveAdminProjectDelete(w http.ResponseWriter, r *http.Request, user AdminUser, projectID string) {
+	beforeProject, _ := s.store.GetProject(projectID)
+	if normalizeAdminRole(user.Role) == "team_leader" {
+		existing, err := s.findProject(projectID)
+		if err != nil {
+			writeError(w, r, err)
+			return
+		}
+		if !s.canManageProject(user, existing) {
+			writeError(w, r, NewHTTPError(403, "project_forbidden", "Project is not available for this user"))
+			return
+		}
+	}
+	if err := s.store.DeleteProject(projectID); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	s.recordAdminAudit(r, user, "delete", "project", projectID, "", nil)
+	for _, link := range beforeProject.Teams {
+		s.recordAdminAudit(r, user, "delete", "project_team", projectTeamAuditID(projectID, link.TeamID), link, nil)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) serveAdminProjectKeysGet(w http.ResponseWriter, r *http.Request, user AdminUser, projectID string) {
+	if !s.canUseProjectForAPIKey(user, projectID) {
+		writeError(w, r, NewHTTPError(403, "project_forbidden", "Project is not available for this user"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": s.filterAPIKeysForUser(user, s.store.ListProjectKeys(projectID))})
+}
+
+func (s *Server) serveAdminProjectKeysPost(w http.ResponseWriter, r *http.Request, user AdminUser, projectID string) {
+	if !s.canUseProjectForAPIKey(user, projectID) {
+		writeError(w, r, NewHTTPError(403, "project_forbidden", "Project is not available for this user"))
+		return
+	}
+	s.handleAdminAPIKeyCreate(w, r, user, projectID)
+}
+
+func (s *Server) handleAdminProjectTeamsGet(w http.ResponseWriter, r *http.Request) {
+	s.handleAdminProjectTeamRoute(w, r, false, s.serveAdminProjectTeamsGet)
+}
+
+func (s *Server) handleAdminProjectTeamsPost(w http.ResponseWriter, r *http.Request) {
+	s.handleAdminProjectTeamRoute(w, r, true, s.serveAdminProjectTeamsPost)
+}
+
+func (s *Server) handleAdminProjectTeamPatch(w http.ResponseWriter, r *http.Request) {
+	s.handleAdminProjectTeamItemRoute(w, r, s.serveAdminProjectTeamPatch)
+}
+
+func (s *Server) handleAdminProjectTeamDelete(w http.ResponseWriter, r *http.Request) {
+	s.handleAdminProjectTeamItemRoute(w, r, s.serveAdminProjectTeamDelete)
+}
+
+func (s *Server) handleAdminProjectTeamRoute(w http.ResponseWriter, r *http.Request, manage bool, handler func(http.ResponseWriter, *http.Request, AdminUser, Project)) {
+	projectID := r.PathValue("project_id")
+	if projectID == "" || strings.Contains(projectID, "/") {
+		s.handleAdminProjectNested(w, r)
+		return
+	}
+	user, ok := s.requireAdmin(w, r, "project", r.Method)
+	if !ok {
+		return
+	}
+	project, ok := s.store.GetProject(projectID)
+	if !ok {
+		writeError(w, r, NewHTTPError(http.StatusNotFound, "project_not_found", "Project not found"))
+		return
+	}
+	if manage && !s.canManageProject(user, project) {
+		writeError(w, r, NewHTTPError(http.StatusForbidden, "project_forbidden", "Project management permission is required"))
+		return
+	}
+	if !manage && !s.canAccessProject(user, project) {
+		writeError(w, r, NewHTTPError(http.StatusForbidden, "project_forbidden", "Project is not available for this user"))
+		return
+	}
+	handler(w, r, user, project)
+}
+
+func (s *Server) handleAdminProjectTeamItemRoute(w http.ResponseWriter, r *http.Request, handler func(http.ResponseWriter, *http.Request, AdminUser, Project, string)) {
+	teamID := r.PathValue("team_id")
+	if teamID == "" || strings.Contains(teamID, "/") {
+		s.handleAdminProjectNested(w, r)
+		return
+	}
+	teamID = strings.TrimSpace(teamID)
+	s.handleAdminProjectTeamRoute(w, r, true, func(w http.ResponseWriter, r *http.Request, user AdminUser, project Project) {
+		handler(w, r, user, project, teamID)
+	})
+}
+
+func (s *Server) adminProjectTeamsMethodNotAllowed(allowedMethods string) http.HandlerFunc {
+	reject := jsonMethodNotAllowed(allowedMethods)
+	return func(w http.ResponseWriter, r *http.Request) {
+		projectID := r.PathValue("project_id")
+		if projectID == "" || strings.Contains(projectID, "/") {
+			s.handleAdminProjectNested(w, r)
+			return
+		}
+		user, ok := s.requireAdmin(w, r, "project", r.Method)
+		if !ok {
+			return
+		}
+		project, ok := s.store.GetProject(projectID)
+		if !ok {
+			writeError(w, r, NewHTTPError(http.StatusNotFound, "project_not_found", "Project not found"))
+			return
+		}
+		if !s.canManageProject(user, project) {
+			writeError(w, r, NewHTTPError(http.StatusForbidden, "project_forbidden", "Project management permission is required"))
+			return
+		}
+		reject(w, r)
+	}
+}
+
+func (s *Server) adminProjectTeamMethodNotAllowed(allowedMethods string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		projectID := r.PathValue("project_id")
+		teamID := r.PathValue("team_id")
+		if projectID == "" || teamID == "" || strings.Contains(projectID, "/") || strings.Contains(teamID, "/") {
+			s.handleAdminProjectNested(w, r)
+			return
+		}
+		user, ok := s.requireAdmin(w, r, "project", r.Method)
+		if !ok {
+			return
+		}
+		project, ok := s.store.GetProject(projectID)
+		if !ok {
+			writeError(w, r, NewHTTPError(http.StatusNotFound, "project_not_found", "Project not found"))
+			return
+		}
+		if r.Method == http.MethodGet {
+			writeError(w, r, NewHTTPError(http.StatusForbidden, "project_forbidden", "Project is not available for this user"))
+			return
+		}
+		if !s.canManageProject(user, project) {
+			writeError(w, r, NewHTTPError(http.StatusForbidden, "project_forbidden", "Project management permission is required"))
+			return
+		}
+		jsonMethodNotAllowed(allowedMethods)(w, r)
+	}
+}
+
+func (s *Server) serveAdminProjectTeamsGet(w http.ResponseWriter, r *http.Request, _ AdminUser, project Project) {
+	limit := projectTeamPageValue(r.URL.Query().Get("limit"), 50, 1, 200)
+	offset := projectTeamPageValue(r.URL.Query().Get("offset"), 0, 0, math.MaxInt)
+	links, total, err := s.store.ListProjectTeams(project.ID, offset, limit)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": links, "total": total, "limit": limit, "offset": offset})
+}
+
+func (s *Server) serveAdminProjectTeamsPost(w http.ResponseWriter, r *http.Request, user AdminUser, project Project) {
+	var req struct {
+		TeamID string `json:"team_id"`
+		Role   string `json:"role"`
+	}
+	if err := s.decodeJSON(w, r, &req); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	req.TeamID = strings.TrimSpace(req.TeamID)
+	req.Role = normalizeProjectAccessRole(req.Role)
+	if req.TeamID == "" || !validProjectTeamRole(req.Role) {
+		writeError(w, r, NewHTTPError(http.StatusBadRequest, "invalid_project_team", "team_id and a viewer, developer, or maintainer role are required"))
+		return
+	}
+	team, err := s.findResource("teams", req.TeamID)
+	if err != nil {
+		writeError(w, r, NewHTTPError(http.StatusNotFound, "team_not_found", "Team not found"))
+		return
+	}
+	if team.Status != "" && team.Status != StatusActive {
+		writeError(w, r, NewHTTPError(http.StatusBadRequest, "team_inactive", "Only an active team can be linked to a project"))
+		return
+	}
+	link, err := s.store.AddProjectTeam(ProjectTeam{ProjectID: project.ID, TeamID: req.TeamID, Role: req.Role})
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	s.recordAdminAudit(r, user, "create", "project_team", projectTeamAuditID(project.ID, req.TeamID), nil, link)
+	writeJSON(w, http.StatusCreated, link)
+}
+
+func (s *Server) serveAdminProjectTeamPatch(w http.ResponseWriter, r *http.Request, user AdminUser, project Project, teamID string) {
+	var req struct {
+		Role string `json:"role"`
+	}
+	if err := s.decodeJSON(w, r, &req); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	req.Role = normalizeProjectAccessRole(req.Role)
+	if teamID == "" || !validProjectTeamRole(req.Role) {
+		writeError(w, r, NewHTTPError(http.StatusBadRequest, "invalid_project_team", "A viewer, developer, or maintainer role is required"))
+		return
+	}
+	before, found := projectTeamByID(project.Teams, teamID)
+	if !found {
+		writeError(w, r, NewHTTPError(http.StatusNotFound, "project_team_not_found", "Project team link not found"))
+		return
+	}
+	link, err := s.store.UpdateProjectTeam(project.ID, teamID, req.Role)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	s.recordAdminAudit(r, user, "update", "project_team", projectTeamAuditID(project.ID, teamID), before, link)
+	writeJSON(w, http.StatusOK, link)
+}
+
+func (s *Server) serveAdminProjectTeamDelete(w http.ResponseWriter, r *http.Request, user AdminUser, project Project, teamID string) {
+	before, found := projectTeamByID(project.Teams, teamID)
+	if !found {
+		writeError(w, r, NewHTTPError(http.StatusNotFound, "project_team_not_found", "Project team link not found"))
+		return
+	}
+	if err := s.store.RemoveProjectTeam(project.ID, teamID); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	s.recordAdminAudit(r, user, "delete", "project_team", projectTeamAuditID(project.ID, teamID), before, nil)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleAdminProjectTeams(w http.ResponseWriter, r *http.Request, user AdminUser, projectID string, parts []string) {
@@ -236,14 +490,7 @@ func (s *Server) handleAdminProjectTeams(w http.ResponseWriter, r *http.Request,
 			writeError(w, r, NewHTTPError(http.StatusForbidden, "project_forbidden", "Project is not available for this user"))
 			return
 		}
-		limit := projectTeamPageValue(r.URL.Query().Get("limit"), 50, 1, 200)
-		offset := projectTeamPageValue(r.URL.Query().Get("offset"), 0, 0, math.MaxInt)
-		links, total, err := s.store.ListProjectTeams(projectID, offset, limit)
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"data": links, "total": total, "limit": limit, "offset": offset})
+		s.serveAdminProjectTeamsGet(w, r, user, project)
 		return
 	}
 	if !s.canManageProject(user, project) {
@@ -253,75 +500,11 @@ func (s *Server) handleAdminProjectTeams(w http.ResponseWriter, r *http.Request,
 
 	switch {
 	case len(parts) == 2 && r.Method == http.MethodPost:
-		var req struct {
-			TeamID string `json:"team_id"`
-			Role   string `json:"role"`
-		}
-		if err := s.decodeJSON(w, r, &req); err != nil {
-			writeError(w, r, err)
-			return
-		}
-		req.TeamID = strings.TrimSpace(req.TeamID)
-		req.Role = normalizeProjectAccessRole(req.Role)
-		if req.TeamID == "" || !validProjectTeamRole(req.Role) {
-			writeError(w, r, NewHTTPError(http.StatusBadRequest, "invalid_project_team", "team_id and a viewer, developer, or maintainer role are required"))
-			return
-		}
-		team, err := s.findResource("teams", req.TeamID)
-		if err != nil {
-			writeError(w, r, NewHTTPError(http.StatusNotFound, "team_not_found", "Team not found"))
-			return
-		}
-		if team.Status != "" && team.Status != StatusActive {
-			writeError(w, r, NewHTTPError(http.StatusBadRequest, "team_inactive", "Only an active team can be linked to a project"))
-			return
-		}
-		link, err := s.store.AddProjectTeam(ProjectTeam{ProjectID: projectID, TeamID: req.TeamID, Role: req.Role})
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		s.recordAdminAudit(r, user, "create", "project_team", projectTeamAuditID(projectID, req.TeamID), nil, link)
-		writeJSON(w, http.StatusCreated, link)
+		s.serveAdminProjectTeamsPost(w, r, user, project)
 	case len(parts) == 3 && r.Method == http.MethodPatch:
-		teamID := strings.TrimSpace(parts[2])
-		var req struct {
-			Role string `json:"role"`
-		}
-		if err := s.decodeJSON(w, r, &req); err != nil {
-			writeError(w, r, err)
-			return
-		}
-		req.Role = normalizeProjectAccessRole(req.Role)
-		if teamID == "" || !validProjectTeamRole(req.Role) {
-			writeError(w, r, NewHTTPError(http.StatusBadRequest, "invalid_project_team", "A viewer, developer, or maintainer role is required"))
-			return
-		}
-		before, found := projectTeamByID(project.Teams, teamID)
-		if !found {
-			writeError(w, r, NewHTTPError(http.StatusNotFound, "project_team_not_found", "Project team link not found"))
-			return
-		}
-		link, err := s.store.UpdateProjectTeam(projectID, teamID, req.Role)
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		s.recordAdminAudit(r, user, "update", "project_team", projectTeamAuditID(projectID, teamID), before, link)
-		writeJSON(w, http.StatusOK, link)
+		s.serveAdminProjectTeamPatch(w, r, user, project, strings.TrimSpace(parts[2]))
 	case len(parts) == 3 && r.Method == http.MethodDelete:
-		teamID := strings.TrimSpace(parts[2])
-		before, found := projectTeamByID(project.Teams, teamID)
-		if !found {
-			writeError(w, r, NewHTTPError(http.StatusNotFound, "project_team_not_found", "Project team link not found"))
-			return
-		}
-		if err := s.store.RemoveProjectTeam(projectID, teamID); err != nil {
-			writeError(w, r, err)
-			return
-		}
-		s.recordAdminAudit(r, user, "delete", "project_team", projectTeamAuditID(projectID, teamID), before, nil)
-		w.WriteHeader(http.StatusNoContent)
+		s.serveAdminProjectTeamDelete(w, r, user, project, strings.TrimSpace(parts[2]))
 	default:
 		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
 	}
