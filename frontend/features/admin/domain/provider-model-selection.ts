@@ -11,6 +11,10 @@ export type InitialModelRoute = {
   status: "active";
 };
 
+export function providerCatalogAcceptsUnlistedModels(catalogID: string, usesCodexCatalog: boolean) {
+  return usesCodexCatalog || catalogID === "custom" || catalogID === "kronk";
+}
+
 export function providerModelSelectionValue(providerID: string, upstreamModel: string) {
   return `${encodeURIComponent(providerID)}|${encodeURIComponent(upstreamModel)}`;
 }

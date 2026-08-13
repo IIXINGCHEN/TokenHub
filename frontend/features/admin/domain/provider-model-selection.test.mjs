@@ -5,8 +5,16 @@ import { importTypeScript } from "./typescript-test-loader.mjs";
 const {
   availableProviderModelSelectOptions,
   initialModelRoutes,
+  providerCatalogAcceptsUnlistedModels,
   providerModelSelectionValue,
 } = await importTypeScript(new URL("./provider-model-selection.ts", import.meta.url));
+
+test("Kronk discovery keeps arbitrary local model IDs selectable", () => {
+  assert.equal(providerCatalogAcceptsUnlistedModels("kronk", false), true);
+  assert.equal(providerCatalogAcceptsUnlistedModels("custom", false), true);
+  assert.equal(providerCatalogAcceptsUnlistedModels("openai", false), false);
+  assert.equal(providerCatalogAcceptsUnlistedModels("openai_codex", true), true);
+});
 
 test("available Provider model options only include active inventory on active Providers", () => {
   const data = {

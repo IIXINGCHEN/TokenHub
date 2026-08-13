@@ -193,12 +193,19 @@ func (s *Server) discoverKronkCatalog(ctx context.Context, req ProviderCreateReq
 		if provider.Type != ProviderKronk {
 			return ProviderCatalogEntry{}, NewHTTPError(http.StatusBadRequest, "provider_type_invalid", "Provider is not a Kronk provider")
 		}
+		storedBaseURL := normalizeProviderBaseURL(ProviderKronk, provider.BaseURL)
+		requestedBaseURL := normalizeProviderBaseURL(ProviderKronk, req.BaseURL)
+		if strings.TrimSpace(req.BaseURL) != "" && requestedBaseURL != storedBaseURL {
+			return ProviderCatalogEntry{}, NewHTTPError(
+				http.StatusBadRequest,
+				"provider_base_url_override_forbidden",
+				"Save the Kronk provider Base URL before discovering models from a different destination",
+			)
+		}
 		if req.Name == "" {
 			req.Name = provider.Name
 		}
-		if req.BaseURL == "" {
-			req.BaseURL = provider.BaseURL
-		}
+		req.BaseURL = storedBaseURL
 		if req.APIKey == "" {
 			req.APIKey = provider.APIKey
 		}

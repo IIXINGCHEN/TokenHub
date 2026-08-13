@@ -243,20 +243,28 @@ func TestKronkTopLevelErrorIsNormalizedAndSecretIsRedacted(t *testing.T) {
 	}
 }
 
-func TestKronkNonStreamingTimeoutIsClassifiedAndStopsUpstream(t *testing.T) {
-	upstreamCanceled := make(chan struct{})
+func TestKronkNonStreamingTimeoutIsClassified(t *testing.T) {
+	releaseUpstream := make(chan struct{})
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done()
-		close(upstreamCanceled)
+		<-releaseUpstream
 	}))
-	defer upstream.Close()
+	t.Cleanup(func() {
+		close(releaseUpstream)
+		upstream.CloseClientConnections()
+		upstream.Close()
+	})
 
 	client := upstream.Client()
 	client.Timeout = 50 * time.Millisecond
 	adapter := KronkAdapter{OpenAICompatibleAdapter: OpenAICompatibleAdapter{Client: client}}
+	startedAt := time.Now()
 	_, _, err := adapter.Chat(context.Background(), Provider{BaseURL: upstream.URL}, "model", simpleChatRequest())
+	elapsed := time.Since(startedAt)
 	if err == nil {
 		t.Fatal("expected Kronk inference timeout")
+	}
+	if elapsed >= time.Second {
+		t.Fatalf("Kronk timeout returned after %s, want less than 1s", elapsed)
 	}
 	httpErr := AsHTTPError(err)
 	if httpErr.Status != http.StatusGatewayTimeout || httpErr.Code != "provider_upstream_timeout" {
@@ -265,10 +273,40 @@ func TestKronkNonStreamingTimeoutIsClassifiedAndStopsUpstream(t *testing.T) {
 	if providerErrorDisposition(err) != ProviderErrorTransientSame {
 		t.Fatalf("timeout retry classification = %q", providerErrorDisposition(err))
 	}
-	select {
-	case <-upstreamCanceled:
-	case <-time.After(time.Second):
-		t.Fatal("timed-out Kronk request kept running upstream")
+}
+
+func TestKronkDiscoveryRejectsDestinationOverrideBeforeSendingStoredSecrets(t *testing.T) {
+	var storedCalls int
+	stored := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		storedCalls++
+		writeJSON(w, http.StatusOK, map[string]any{"data": []map[string]any{{"id": "local/model"}}})
+	}))
+	defer stored.Close()
+	var overriddenCalls int
+	overridden := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		overriddenCalls++
+		if r.Header.Get("authorization") != "" || r.Header.Get("x-kronk-secret") != "" {
+			t.Fatal("stored Kronk credentials were sent to an overridden destination")
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": []map[string]any{{"id": "attacker/model"}}})
+	}))
+	defer overridden.Close()
+
+	store := NewMemoryStore()
+	provider := store.AddProvider(Provider{
+		ID: "prv_kronk_saved", Name: "Kronk", Type: ProviderKronk, BaseURL: stored.URL + "/v1",
+		APIKey: "saved-kronk-token", Headers: map[string]string{"X-Kronk-Secret": "saved-header"},
+		SensitiveHeaders: []string{"X-Kronk-Secret"}, Status: StatusActive, Healthy: true,
+	})
+	response := doJSON(t, New(store).Handler(), http.MethodPost, "/api/admin/provider-catalog/kronk", map[string]any{
+		"provider_id": provider.ID,
+		"base_url":    overridden.URL + "/v1",
+	}, "")
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body, "provider_base_url_override_forbidden") {
+		t.Fatalf("destination override = %d: %s", response.Code, response.Body)
+	}
+	if storedCalls != 0 || overriddenCalls != 0 {
+		t.Fatalf("discovery contacted an upstream before rejecting override: stored=%d overridden=%d", storedCalls, overriddenCalls)
 	}
 }
 
