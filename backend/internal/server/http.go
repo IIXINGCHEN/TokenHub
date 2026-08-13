@@ -236,9 +236,14 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
 		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
 		return
 	}
+	s.handleModelGet(w, r)
+}
+
+func (s *Server) handleModelGet(w http.ResponseWriter, r *http.Request) {
 	_, key, err := s.authenticate(r)
 	if err != nil {
 		writeError(w, r, err)
