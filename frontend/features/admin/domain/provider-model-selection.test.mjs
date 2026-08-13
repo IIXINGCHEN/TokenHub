@@ -5,15 +5,33 @@ import { importTypeScript } from "./typescript-test-loader.mjs";
 const {
   availableProviderModelSelectOptions,
   initialModelRoutes,
-  providerCatalogAcceptsUnlistedModels,
+  providerCatalogModelIsSelectable,
   providerModelSelectionValue,
 } = await importTypeScript(new URL("./provider-model-selection.ts", import.meta.url));
 
-test("Kronk discovery keeps arbitrary local model IDs selectable", () => {
-  assert.equal(providerCatalogAcceptsUnlistedModels("kronk", false), true);
-  assert.equal(providerCatalogAcceptsUnlistedModels("custom", false), true);
-  assert.equal(providerCatalogAcceptsUnlistedModels("openai", false), false);
-  assert.equal(providerCatalogAcceptsUnlistedModels("openai_codex", true), true);
+test("Kronk discovery bypasses category and standard-catalog filters", () => {
+  const discovered = [
+    { id: "meta/llama-3:Q4_K_M.gguf", category: "llama" },
+    { id: "qwen/Qwen3-8B:Q5_K_M.gguf", category: "qwen" },
+  ];
+  const selectable = discovered.filter((model) => providerCatalogModelIsSelectable({
+    catalogID: "kronk",
+    usesCodexCatalog: false,
+    quickAPIFlow: false,
+    selectedCategory: "custom",
+    discoveredCategory: model.category,
+    matchesStandardModel: false,
+  }));
+
+  assert.deepEqual(selectable.map((model) => model.id), discovered.map((model) => model.id));
+  assert.equal(providerCatalogModelIsSelectable({
+    catalogID: "openai",
+    usesCodexCatalog: false,
+    quickAPIFlow: false,
+    selectedCategory: "custom",
+    discoveredCategory: "llama",
+    matchesStandardModel: true,
+  }), false);
 });
 
 test("available Provider model options only include active inventory on active Providers", () => {

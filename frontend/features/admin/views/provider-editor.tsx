@@ -8,7 +8,7 @@ import { compactNumber, formatModelPrice, modelCapabilities } from "../domain/fo
 import { providerTypeLabel } from "../domain/labels";
 import { defaultProviderClaudeCodeAttributionPolicy } from "../domain/provider-attribution";
 import { customUpstreamConnectionKey, customUpstreamDiscoveryPayload, customUpstreamModelsAreCurrent, customUpstreamModelsVisible } from "../domain/provider-custom-upstream";
-import { providerCatalogAcceptsUnlistedModels } from "../domain/provider-model-selection";
+import { providerCatalogModelIsSelectable } from "../domain/provider-model-selection";
 import { clearCustomValidity, countWithUnit, handleRequiredFieldInvalid, providerSaveMessage, tx } from "../i18n/runtime";
 import { adminFetch, isAuthExpiredError, providerPayload, providerResourcePayload, providerUpdatePayload, readAdminError } from "../resources/payloads";
 import { assertProviderAccountResourceReady, defaultProviderResourceName, providerAccountTokenSummary, providerCreateAccountManualTokenFields, providerCreateAccountRuntimeFields, providerResourceDraftDefaults } from "../resources/provider-model-config";
@@ -494,11 +494,15 @@ export function ProviderUpsertModal({
     : usesCodexCatalog ? codexCatalogError : modelError;
   const models = useMemo(
     () => (effectiveDetail?.models ?? []).filter((model) => {
-      if (quickAPIFlow) return true;
-      if (modelCategory !== "all" && modelCategoryForCatalog(model) !== modelCategory) return false;
-      if (providerCatalogAcceptsUnlistedModels(catalogID, usesCodexCatalog)) return true;
       const canonical = model.canonical_name || canonicalModelNameForUI(model.id, model.display_name);
-      return standardModels.some((standard) => canonicalModelNameForUI(standard.name, standard.name) === canonicalModelNameForUI(canonical, canonical));
+      return providerCatalogModelIsSelectable({
+        catalogID,
+        usesCodexCatalog,
+        quickAPIFlow,
+        selectedCategory: modelCategory,
+        discoveredCategory: modelCategoryForCatalog(model),
+        matchesStandardModel: standardModels.some((standard) => canonicalModelNameForUI(standard.name, standard.name) === canonicalModelNameForUI(canonical, canonical)),
+      });
     }),
     [catalogID, effectiveDetail, modelCategory, quickAPIFlow, standardModels, usesCodexCatalog],
   );
