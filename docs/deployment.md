@@ -392,7 +392,6 @@ Options: `--rebuild`, `--reset` to drop the local database, `--backend-port N`, 
 | `TOKENHUB_IMAGE_WORKER_CONCURRENCY` | `2` | Number of workers draining the image generation queue |
 | `TOKENHUB_IMAGE_QUEUE_CAPACITY` | `64` | Maximum image jobs that may wait in the queue |
 | `TOKENHUB_IMAGE_JOB_TIMEOUT_SECONDS` | `300` | Time limit for a single image generation job before it is failed |
-| `TOKENHUB_IMAGE_CAPABILITY_RETRY_SECONDS` | `86400` | How long a provider resource marked as lacking image support is skipped before it is probed again |
 | `TOKENHUB_RESPONSE_WORKER_CONCURRENCY` | `2` | Number of workers claiming persistent background Responses jobs |
 | `TOKENHUB_RESPONSE_POLL_INTERVAL_MILLIS` | `250` | Database poll interval for background Responses jobs and cancellation checks |
 | `TOKENHUB_RESPONSE_JOB_TIMEOUT_SECONDS` | `300` | Execution time limit for one background Responses job |

@@ -26,12 +26,16 @@ func newProviderCredentialRefreshService(store Store) *ProviderCredentialRefresh
 }
 
 func (s *ProviderCredentialRefreshService) RunDue(ctx context.Context) {
+	activeProviders := make(map[string]bool)
+	for _, provider := range s.store.ListProviders() {
+		activeProviders[provider.ID] = provider.Status == StatusActive
+	}
 	resources := make([]ProviderResource, 0)
 	for _, resource := range s.store.ListProviderResources() {
 		if ctx.Err() != nil {
 			return
 		}
-		if !isOpenAIAccountResource(resource.ResourceType) || resource.Status != StatusActive || resource.CredentialSummary["has_refresh_token"] != "true" || resource.CredentialSummary[openAIAccountReauthorizationRequiredOption] == "true" {
+		if !activeProviders[resource.ProviderID] || !isOpenAIAccountResource(resource.ResourceType) || resource.Status != StatusActive || resource.CredentialSummary["has_refresh_token"] != "true" || resource.CredentialSummary[openAIAccountReauthorizationRequiredOption] == "true" {
 			continue
 		}
 		resources = append(resources, resource)

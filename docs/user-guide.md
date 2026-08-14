@@ -230,9 +230,11 @@ Gemini CLI can connect directly to TokenHub's native Gemini `v1beta` surface and
 
 Image jobs have a five-minute default execution timeout controlled by `TOKENHUB_IMAGE_JOB_TIMEOUT_SECONDS`.
 
-TokenHub records image-generation capability from real account results. Accounts confirmed as supported are preferred, accounts returning `403` are temporarily skipped, and accounts that have not been checked remain eligible for first-use detection. After `TOKENHUB_IMAGE_CAPABILITY_RETRY_SECONDS` (24 hours by default), an unsupported account becomes discoverable and routable again so the next real request can retry it. TokenHub does not generate a background image merely to probe recovery.
+TokenHub records image-generation capability from the explicit real test in the Provider editor. Untested accounts and accounts whose test failed remain unavailable to user traffic. Only a successful real image response marks an account supported; rerun the same test to restore an unavailable account. TokenHub does not generate background images to probe recovery.
 
-Configure an active route from `codex-gpt-image-2` to an OpenAI Codex Provider with upstream model `gpt-image-2`. The route uses the same priority, weight, project scope, resource, and resource-group controls as other models. `codex-gpt-image-2` appears in `GET /v1/models` only when that route exists and a matching healthy Codex account is confirmed as supported or has reached its low-frequency retry window. Except for the Codex-client compatibility mapping above, the separate `gpt-image-2` catalog model uses an OpenAI API provider and does not consume Codex subscription quota.
+Configure an active route from `codex-gpt-image-2` to an OpenAI Codex Provider with upstream model `gpt-image-2`. The route uses the same priority, weight, project scope, resource, and resource-group controls as other models. `codex-gpt-image-2` appears in `GET /v1/models` only when that route exists and a matching healthy Codex account has passed the explicit image-generation test. Except for the Codex-client compatibility mapping above, the separate `gpt-image-2` catalog model uses an OpenAI API provider and does not consume Codex subscription quota.
+
+When upgrading an installation that already has Codex subscription accounts, TokenHub creates one compatible Provider-level image route once. Administrators can then edit or delete it normally; the startup migration does not recreate an intentionally deleted route.
 
 ## SDK Setup
 

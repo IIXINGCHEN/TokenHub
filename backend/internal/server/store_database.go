@@ -280,22 +280,22 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 		return nil, err
 	}
 
-	return &GormStore{
-		db:                   db,
-		analyticsDB:          analyticsDB,
-		mu:                   &sync.Mutex{},
-		leaseHeartbeats:      &sync.Map{},
-		secretKey:            config.SecretKey,
-		failureThreshold:     defaultInt(config.ResourceFailureThreshold, 3),
-		cooldownDuration:     cooldownSecondsToDuration(defaultInt(config.ResourceCooldownSeconds, 300)),
-		cooldownMax:          cooldownSecondsToDuration(defaultInt(config.ResourceCooldownMaxSeconds, 3600)),
-		sqliteDSN:            dsn,
-		backupDir:            defaultString(config.SQLiteBackupDir, "data/backups"),
-		dbDriver:             driver,
-		inFlightLeaseTTL:     time.Duration(defaultInt(config.InFlightLeaseTTLSeconds, 300)) * time.Second,
-		clusterLockTTL:       time.Duration(defaultInt(config.ClusterLockTTLSeconds, 180)) * time.Second,
-		imageCapabilityRetry: time.Duration(defaultInt(config.ImageCapabilityRetrySecs, 86400)) * time.Second,
-	}, nil
+	store := &GormStore{
+		db:               db,
+		analyticsDB:      analyticsDB,
+		mu:               &sync.Mutex{},
+		leaseHeartbeats:  &sync.Map{},
+		secretKey:        config.SecretKey,
+		failureThreshold: defaultInt(config.ResourceFailureThreshold, 3),
+		cooldownDuration: cooldownSecondsToDuration(defaultInt(config.ResourceCooldownSeconds, 300)),
+		cooldownMax:      cooldownSecondsToDuration(defaultInt(config.ResourceCooldownMaxSeconds, 3600)),
+		sqliteDSN:        dsn,
+		backupDir:        defaultString(config.SQLiteBackupDir, "data/backups"),
+		dbDriver:         driver,
+		inFlightLeaseTTL: time.Duration(defaultInt(config.InFlightLeaseTTLSeconds, 300)) * time.Second,
+		clusterLockTTL:   time.Duration(defaultInt(config.ClusterLockTTLSeconds, 180)) * time.Second,
+	}
+	return store, nil
 }
 
 func openAnalyticsDatabase(driver string, dsn string, config Config) (*gorm.DB, error) {

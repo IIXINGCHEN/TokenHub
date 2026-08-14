@@ -230,9 +230,11 @@ Gemini CLI 可以直接连接 TokenHub 的 Gemini 原生 `v1beta` 接口，并�
 
 生图任务默认最多执行 5 分钟，可通过 `TOKENHUB_IMAGE_JOB_TIMEOUT_SECONDS` 调整。
 
-TokenHub 根据账号的真实调用结果记录生图能力。已确认支持的账号会被优先选择；返回 `403` 的账号会被临时跳过；尚未检测的账号仍可在首次使用时完成检测。经过 `TOKENHUB_IMAGE_CAPABILITY_RETRY_SECONDS`（默认 24 小时）后，不支持的账号会重新进入模型发现和路由范围，由下一次真实请求低频复测。TokenHub 不会为了探测恢复而在后台自动生成图片。
+TokenHub 根据 Provider 编辑页中的显式真实测试记录生图能力。未测试账号和测试失败账号都不会进入用户流量。只有真实生图响应成功后才会标记为支持；若要恢复不可用账号，请重新执行同一个测试。TokenHub 不会为了探测恢复而在后台自动生成图片。
 
-需要先配置一条启用路由，把 `codex-gpt-image-2` 映射到 OpenAI Codex Provider，并将上游模型设为 `gpt-image-2`。这条路由和其他模型一样支持优先级、权重、项目范围、指定资源与资源分组。只有路由存在，而且匹配的健康 Codex 账号已确认支持生图或进入低频复测窗口时，`codex-gpt-image-2` 才会出现在 `GET /v1/models` 中。除上述 Codex 客户端兼容映射外，独立的 `gpt-image-2` 模型使用 OpenAI API Provider，不会消耗 Codex 订阅额度。
+需要先配置一条启用路由，把 `codex-gpt-image-2` 映射到 OpenAI Codex Provider，并将上游模型设为 `gpt-image-2`。这条路由和其他模型一样支持优先级、权重、项目范围、指定资源与资源分组。只有路由存在，而且匹配的健康 Codex 账号已经通过显式生图测试时，`codex-gpt-image-2` 才会出现在 `GET /v1/models` 中。除上述 Codex 客户端兼容映射外，独立的 `gpt-image-2` 模型使用 OpenAI API Provider，不会消耗 Codex 订阅额度。
+
+升级已有 Codex 订阅账号的部署时，TokenHub 会一次性为每个相关 Provider 补建兼容的 Provider 级生图路由。管理员之后可以正常编辑或删除该路由；启动迁移不会重新创建被主动删除的路由。
 
 完整的 curl、异步轮询、参考图、Node.js 和 Python 测试流程见 [Codex 生图 API 调用与测试指南](codex-image-generation-api.md)。
 

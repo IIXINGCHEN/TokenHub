@@ -64,9 +64,6 @@ func NewWithConfig(store Store, config Config) *Server {
 	if config.ImageJobTimeoutSeconds <= 0 {
 		config.ImageJobTimeoutSeconds = 300
 	}
-	if config.ImageCapabilityRetrySecs <= 0 {
-		config.ImageCapabilityRetrySecs = 86400
-	}
 	if config.ResponseWorkerConcurrency <= 0 {
 		config.ResponseWorkerConcurrency = 2
 	}
@@ -187,6 +184,72 @@ func NewWithConfig(store Store, config Config) *Server {
 	// the submitting replica fails.
 	s.startResponseWorkers()
 	return s
+}
+
+type clusterTaskRunner interface {
+	RunClusterTask(context.Context, string, int64, func(context.Context) error) error
+}
+
+func backfillCodexImageRoutes(ctx context.Context, store Store) error {
+	backfill := func(taskCtx context.Context) error {
+		workStore := store
+		if gormStore, ok := store.(*GormStore); ok {
+			workStore = gormStore.WithContext(taskCtx)
+		}
+		routedProviders := make(map[string]bool)
+		eligibleProviders := make(map[string]bool)
+		eligibleResources := make(map[string]ProviderResource)
+		eligibleGroups := make(map[string]bool)
+		for _, resource := range workStore.ListProviderResources() {
+			if isOpenAIAccountResource(resource.ResourceType) {
+				eligibleProviders[resource.ProviderID] = true
+				eligibleResources[resource.ID] = resource
+				if group := strings.TrimSpace(resource.Group); group != "" {
+					eligibleGroups[resource.ProviderID+"\x00"+group] = true
+				}
+			}
+		}
+		for _, route := range workStore.ListRoutes() {
+			providerID := strings.TrimSpace(route.ProviderID)
+			if strings.TrimSpace(route.ModelName) != codexImageModelName || strings.TrimSpace(route.ProviderModel) != codexImageUpstreamModel || route.Status != StatusActive || !eligibleProviders[providerID] {
+				continue
+			}
+			if resourceID := strings.TrimSpace(route.ProviderResourceID); resourceID != "" {
+				resource, ok := eligibleResources[resourceID]
+				if !ok || resource.ProviderID != providerID {
+					continue
+				}
+			} else if group := strings.TrimSpace(route.ResourceGroup); group != "" && !eligibleGroups[providerID+"\x00"+group] {
+				continue
+			}
+			routedProviders[providerID] = true
+		}
+		for _, provider := range workStore.ListProviders() {
+			if provider.Type != ProviderOpenAICodex || !eligibleProviders[provider.ID] || routedProviders[provider.ID] {
+				continue
+			}
+			priority := provider.Priority
+			if priority <= 0 {
+				priority = 10
+			}
+			if _, err := workStore.CreateRoute(ModelRoute{
+				ModelName:     codexImageModelName,
+				ProviderID:    provider.ID,
+				ProviderModel: codexImageUpstreamModel,
+				Priority:      priority,
+				Weight:        100,
+				Status:        StatusActive,
+				Strategy:      RouteStrategyPriorityWeighted,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if runner, ok := store.(clusterTaskRunner); ok {
+		return runner.RunClusterTask(ctx, "backfill-codex-image-routes", 1, backfill)
+	}
+	return backfill(ctx)
 }
 func (s *Server) Handler() http.Handler {
 	return s.cors(s.mux)

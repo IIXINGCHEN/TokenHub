@@ -110,7 +110,6 @@ type Config struct {
 	ImageWorkerConcurrency       int
 	ImageQueueCapacity           int
 	ImageJobTimeoutSeconds       int
-	ImageCapabilityRetrySecs     int
 	ResponseWorkerConcurrency    int
 	ResponsePollIntervalMillis   int
 	ResponseJobTimeoutSeconds    int
@@ -174,7 +173,6 @@ func ConfigFromEnv() Config {
 		ImageWorkerConcurrency:       getenvInt("TOKENHUB_IMAGE_WORKER_CONCURRENCY", 2),
 		ImageQueueCapacity:           getenvInt("TOKENHUB_IMAGE_QUEUE_CAPACITY", 64),
 		ImageJobTimeoutSeconds:       getenvInt("TOKENHUB_IMAGE_JOB_TIMEOUT_SECONDS", 300),
-		ImageCapabilityRetrySecs:     getenvInt("TOKENHUB_IMAGE_CAPABILITY_RETRY_SECONDS", 86400),
 		ResponseWorkerConcurrency:    getenvInt("TOKENHUB_RESPONSE_WORKER_CONCURRENCY", 2),
 		ResponsePollIntervalMillis:   getenvInt("TOKENHUB_RESPONSE_POLL_INTERVAL_MILLIS", 250),
 		ResponseJobTimeoutSeconds:    getenvInt("TOKENHUB_RESPONSE_JOB_TIMEOUT_SECONDS", 300),

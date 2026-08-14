@@ -429,7 +429,16 @@ func isOpenAIAccountOAuthReauthorizationRequired(err error) bool {
 	if httpErr == nil {
 		return false
 	}
-	return httpErr.Code == "oauth_refresh_token_invalidated" || (httpErr.Code == "oauth_token_failed" && strings.Contains(strings.ToLower(httpErr.Message), "refresh_token_invalidated"))
+	return httpErr.Code == "oauth_refresh_reauthorization_required" || httpErr.Code == "oauth_refresh_token_invalidated" || (httpErr.Code == "oauth_token_failed" && strings.Contains(strings.ToLower(httpErr.Message), "refresh_token_invalidated"))
+}
+
+func oauthRefreshRequiresReauthorization(code string) bool {
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case "refresh_token_invalidated", "invalid_grant", "invalid_token", "refresh_token_expired", "refresh_token_reused":
+		return true
+	default:
+		return false
+	}
 }
 
 func requestOpenAIAccountOAuthToken(ctx context.Context, form url.Values) (oauthTokenResponse, error) {
@@ -447,8 +456,8 @@ func requestOpenAIAccountOAuthToken(ctx context.Context, form url.Values) (oauth
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if oauthTokenEndpointErrorCode(body) == "refresh_token_invalidated" {
-			return oauthTokenResponse{}, NewHTTPError(502, "oauth_refresh_token_invalidated", fmt.Sprintf("OAuth token endpoint returned %d", resp.StatusCode))
+		if form.Get("grant_type") == "refresh_token" && oauthRefreshRequiresReauthorization(oauthTokenEndpointErrorCode(body)) {
+			return oauthTokenResponse{}, NewHTTPError(502, "oauth_refresh_reauthorization_required", fmt.Sprintf("OAuth token endpoint returned %d", resp.StatusCode))
 		}
 		detail := sanitizeOAuthErrorDetail(body)
 		if detail != "" {
@@ -473,6 +482,10 @@ func oauthTokenEndpointErrorCode(body []byte) string {
 	}
 	if code := strings.ToLower(strings.TrimSpace(response.Code)); code != "" {
 		return code
+	}
+	var errorCode string
+	if err := json.Unmarshal(response.Error, &errorCode); err == nil {
+		return strings.ToLower(strings.TrimSpace(errorCode))
 	}
 	var nested struct {
 		Code string `json:"code"`

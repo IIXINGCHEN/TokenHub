@@ -381,12 +381,12 @@ func (s *GormStore) codexImageAllowedByPolicyLocked(project Project, key APIKey,
 }
 
 func (s *GormStore) codexImageResourceAvailable(resource ProviderResource) bool {
+	if resource.Options[openAIAccountReauthorizationRequiredOption] == "true" {
+		return false
+	}
 	switch strings.TrimSpace(resource.Options[codexImageCapabilityOption]) {
 	case codexImageCapabilitySupported:
 		return true
-	case codexImageCapabilityUnsupported:
-		checkedAt, err := time.Parse(time.RFC3339Nano, resource.Options[codexImageCapabilityCheckedAtOption])
-		return err == nil && s.imageCapabilityRetry > 0 && !time.Now().Before(checkedAt.Add(s.imageCapabilityRetry))
 	default:
 		return false
 	}

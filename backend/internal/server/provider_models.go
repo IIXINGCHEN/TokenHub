@@ -242,6 +242,9 @@ func backfillProviderModelsFromRoutes(store Store) {
 	}
 	models := store.ListModels()
 	for _, route := range store.ListRoutes() {
+		if strings.TrimSpace(route.ModelName) == codexImageModelName {
+			continue
+		}
 		key := providerModelRouteKey(route.ProviderID, route.ProviderModel, "")
 		if existing[key] {
 			continue

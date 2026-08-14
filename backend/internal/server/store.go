@@ -147,6 +147,8 @@ type Store interface {
 	GetProviderResource(id string) (ProviderResource, bool)
 	UpdateProviderResource(id string, patch ProviderResource) (ProviderResource, error)
 	UpdateProviderResourceOptions(id string, options map[string]string) (ProviderResource, error)
+	ProviderResourceImageCapabilitySnapshot(id string) (Provider, ProviderResource, string, error)
+	UpdateProviderResourceImageCapability(id string, expectedIdentity string, capability string, checkedAt time.Time) (bool, error)
 	DeleteProviderResource(id string) error
 	SetProviderResourceHealth(resourceID string, healthy bool) (ProviderResource, error)
 	BulkOperateProviderResources(action string, ids []string) (ProviderResourceBulkResult, error)
@@ -266,21 +268,20 @@ type Store interface {
 var _ Store = (*GormStore)(nil)
 
 type GormStore struct {
-	db                   *gorm.DB
-	analyticsDB          *gorm.DB
-	mu                   *sync.Mutex
-	leaseHeartbeats      *sync.Map
-	secretKey            string
-	metrics              *GatewayMetrics
-	failureThreshold     int
-	cooldownDuration     time.Duration
-	cooldownMax          time.Duration
-	sqliteDSN            string
-	backupDir            string
-	dbDriver             string // "sqlite" or "postgres"
-	inFlightLeaseTTL     time.Duration
-	clusterLockTTL       time.Duration
-	imageCapabilityRetry time.Duration
+	db               *gorm.DB
+	analyticsDB      *gorm.DB
+	mu               *sync.Mutex
+	leaseHeartbeats  *sync.Map
+	secretKey        string
+	metrics          *GatewayMetrics
+	failureThreshold int
+	cooldownDuration time.Duration
+	cooldownMax      time.Duration
+	sqliteDSN        string
+	backupDir        string
+	dbDriver         string // "sqlite" or "postgres"
+	inFlightLeaseTTL time.Duration
+	clusterLockTTL   time.Duration
 }
 type leaseHeartbeat struct {
 	ctx    context.Context

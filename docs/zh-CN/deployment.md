@@ -392,7 +392,6 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_IMAGE_WORKER_CONCURRENCY` | `2` | 消费图片生成队列的工作协程数量 |
 | `TOKENHUB_IMAGE_QUEUE_CAPACITY` | `64` | 队列中允许排队的图片任务上限 |
 | `TOKENHUB_IMAGE_JOB_TIMEOUT_SECONDS` | `300` | 单个图片生成任务的超时时间，超时判定为失败 |
-| `TOKENHUB_IMAGE_CAPABILITY_RETRY_SECONDS` | `86400` | 被标记为不支持图片生成的供应商资源，隔多久重新探测一次 |
 | `TOKENHUB_RESPONSE_WORKER_CONCURRENCY` | `2` | 领取持久化后台 Responses 任务的 Worker 数量 |
 | `TOKENHUB_RESPONSE_POLL_INTERVAL_MILLIS` | `250` | 后台 Responses 任务与取消状态的数据库轮询间隔 |
 | `TOKENHUB_RESPONSE_JOB_TIMEOUT_SECONDS` | `300` | 单个后台 Responses 任务的执行超时 |

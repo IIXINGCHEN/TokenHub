@@ -1,5 +1,8 @@
 export const providerConnectionTranslations: Record<"en" | "ja", Record<string, string>> = {
   en: {
+	"生图测试": "Test image generation",
+	"生图测试中": "Testing image generation",
+	"生图测试失败": "Image generation test failed",
     "正在测试": "Testing",
     "测试 Provider 连接": "Test Provider connection",
     "请填写 Base URL 和 API Key 后测试。": "Enter the Base URL and API key before testing.",
@@ -62,6 +65,9 @@ export const providerConnectionTranslations: Record<"en" | "ja", Record<string, 
     "完全收敛": "Full convergence",
   },
   ja: {
+	"生图测试": "画像生成をテスト",
+	"生图测试中": "画像生成をテスト中",
+	"生图测试失败": "画像生成テストに失敗しました",
     "正在测试": "テスト中",
     "测试 Provider 连接": "Provider 接続をテスト",
     "请填写 Base URL 和 API Key 后测试。": "テストする前に Base URL と API Key を入力してください。",

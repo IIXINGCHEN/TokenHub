@@ -392,7 +392,6 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_IMAGE_WORKER_CONCURRENCY` | `2` | 画像生成キューを処理するワーカー数 |
 | `TOKENHUB_IMAGE_QUEUE_CAPACITY` | `64` | キューで待機できる画像ジョブの上限 |
 | `TOKENHUB_IMAGE_JOB_TIMEOUT_SECONDS` | `300` | 単一の画像生成ジョブのタイムアウト。超過すると失敗として扱われます |
-| `TOKENHUB_IMAGE_CAPABILITY_RETRY_SECONDS` | `86400` | 画像生成非対応と記録されたプロバイダーリソースを再検査するまでの待機時間 |
 | `TOKENHUB_RESPONSE_WORKER_CONCURRENCY` | `2` | 永続化されたバックグラウンド Responses ジョブを取得する Worker 数 |
 | `TOKENHUB_RESPONSE_POLL_INTERVAL_MILLIS` | `250` | バックグラウンド Responses ジョブとキャンセル状態を確認するデータベースのポーリング間隔 |
 | `TOKENHUB_RESPONSE_JOB_TIMEOUT_SECONDS` | `300` | 1 件のバックグラウンド Responses ジョブの実行タイムアウト |

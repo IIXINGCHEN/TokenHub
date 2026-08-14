@@ -493,7 +493,7 @@ running
 
 每个任务从 Worker 开始执行起最多运行 5 分钟，可通过 `TOKENHUB_IMAGE_JOB_TIMEOUT_SECONDS` 调整。超时任务会被标记为 `failed`，错误码为 `image_generation_timeout`。
 
-Codex Images 返回 403 时，账号会被标记为暂不支持生图并在默认 24 小时内跳过。`TOKENHUB_IMAGE_CAPABILITY_RETRY_SECONDS` 到期后，模型会重新进入可发现、可路由状态；下一次真实请求会低频复测该账号，成功后恢复为“支持生图”，再次返回 403 则重新进入冷却。该恢复机制不会为了探测能力自动生成图片或额外消耗订阅额度。
+Codex Images 返回 403 时，账号会被标记为不支持生图并持续跳过。管理员可以在 Provider 编辑页重新执行真实生图测试；测试成功后恢复为“支持生图”，再次返回 403 则继续保持不可用。TokenHub 不会为了探测能力自动生成图片或额外消耗订阅额度。
 
 ## 11. Node.js 调用
 

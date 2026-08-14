@@ -5,6 +5,7 @@ import { copyText } from "../domain/clipboard";
 import { tx } from "../i18n/runtime";
 
 export { ProviderAccountTokenRenewal } from "./provider-account-token-renewal";
+export { ProviderAccountImageTest } from "./provider-account-image-test";
 
 export type ProviderAccountOAuthAction = "copy" | "open";
 
@@ -21,6 +22,27 @@ export type OpenAIQuotaWindow = {
   limit_window_seconds: number;
   reset_after_seconds: number;
   reset_at: number;
+};
+
+export type OpenAIAccountQuota = {
+  account_id?: string;
+  email?: string;
+  plan_type?: string;
+  rate_limit?: { allowed: boolean; limit_reached: boolean; primary_window?: OpenAIQuotaWindow; secondary_window?: OpenAIQuotaWindow };
+  additional_rate_limits?: Array<{ limit_name: string; metered_feature: string; rate_limit?: { allowed: boolean; limit_reached: boolean; primary_window?: OpenAIQuotaWindow; secondary_window?: OpenAIQuotaWindow } }>;
+  rate_limit_reset_credits?: { available_count: number };
+  fetched_at: number;
+};
+
+export type CodexSubscriptionTestResult = {
+  resource_id: string;
+  model: string;
+  reasoning_effort: string;
+  speed: "standard" | "fast";
+  upstream_service_tier?: string;
+  output_text: string;
+  latency_ms: number;
+  usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
 };
 
 export function QuotaMetric({ label, value }: { label: string; value: string }) {
