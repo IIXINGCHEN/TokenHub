@@ -10,48 +10,48 @@ import (
 	"time"
 )
 
-func (s *Server) handleAdminProviders(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAdminProvidersGet(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAdmin(w, r, "provider", r.Method); !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": s.store.ListProviders()})
+}
+
+func (s *Server) handleAdminProvidersPost(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAdmin(w, r, "provider", r.Method)
 	if !ok {
 		return
 	}
-	switch r.Method {
-	case http.MethodGet:
-		writeJSON(w, http.StatusOK, map[string]any{"data": s.store.ListProviders()})
-	case http.MethodPost:
-		var req ProviderCreateRequest
-		if err := s.decodeJSON(w, r, &req); err != nil {
-			if costErr := providerModelCostDecodeError(err); costErr != nil {
-				writeError(w, r, costErr)
-				return
-			}
-			writeError(w, r, err)
+	var req ProviderCreateRequest
+	if err := s.decodeJSON(w, r, &req); err != nil {
+		if costErr := providerModelCostDecodeError(err); costErr != nil {
+			writeError(w, r, costErr)
 			return
 		}
-		provider, catalog, catalogSource, err := s.providerForCreate(r.Context(), req)
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		if provider.Name == "" || provider.Type == "" {
-			writeError(w, r, NewHTTPError(400, "invalid_provider", "name and type are required"))
-			return
-		}
-		if err := validateProviderHeaderConfig(&provider); err != nil {
-			writeError(w, r, err)
-			return
-		}
-		created := s.store.AddProvider(provider)
-		result := ProviderCreateResult{
-			Provider:      created,
-			CatalogSource: catalogSource,
-		}
-		result.ImportedModels = s.importSelectedProviderCatalogModels(created.ID, catalog, req.SelectedModels)
-		s.recordAdminAudit(r, user, "create", "provider", created.ID, "", auditProviderCreateResult(result))
-		writeJSON(w, http.StatusCreated, result)
-	default:
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+		writeError(w, r, err)
+		return
 	}
+	provider, catalog, catalogSource, err := s.providerForCreate(r.Context(), req)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	if provider.Name == "" || provider.Type == "" {
+		writeError(w, r, NewHTTPError(400, "invalid_provider", "name and type are required"))
+		return
+	}
+	if err := validateProviderHeaderConfig(&provider); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	created := s.store.AddProvider(provider)
+	result := ProviderCreateResult{
+		Provider:      created,
+		CatalogSource: catalogSource,
+	}
+	result.ImportedModels = s.importSelectedProviderCatalogModels(created.ID, catalog, req.SelectedModels)
+	s.recordAdminAudit(r, user, "create", "provider", created.ID, "", auditProviderCreateResult(result))
+	writeJSON(w, http.StatusCreated, result)
 }
 
 func (s *Server) handleAdminProviderMonitoring(w http.ResponseWriter, r *http.Request) {
@@ -61,12 +61,8 @@ func (s *Server) handleAdminProviderMonitoring(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, map[string]any{"data": s.providerMonitoringSnapshots(r.Context(), "")})
 }
 
-func (s *Server) handleAdminProviderCatalog(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAdminProviderCatalogGet(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAdmin(w, r, "provider", r.Method); !ok {
-		return
-	}
-	if r.Method != http.MethodGet {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
 		return
 	}
 	refresh := r.URL.Query().Get("refresh") == "true"
@@ -124,7 +120,7 @@ func (s *Server) handleAdminProviderCatalogItem(w http.ResponseWriter, r *http.R
 			}
 			entry, err = s.codexSubscription.ModelsWithCredentials(r.Context(), credentials)
 		default:
-			writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+			jsonMethodNotAllowed(http.MethodGet+", "+http.MethodPost)(w, r)
 			return
 		}
 		if err != nil {
@@ -211,7 +207,11 @@ func (s *Server) handleAdminProviderCatalogItem(w http.ResponseWriter, r *http.R
 		return
 	}
 	if r.Method != http.MethodGet {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+		allowedMethods := http.MethodGet
+		if id == "custom" || id == ProviderKronk {
+			allowedMethods += ", " + http.MethodPost
+		}
+		jsonMethodNotAllowed(allowedMethods)(w, r)
 		return
 	}
 	refresh := r.URL.Query().Get("refresh") == "true"
@@ -466,147 +466,209 @@ func normalizeModelLookupName(value string) string {
 	return canonicalModelName(value, value)
 }
 
+type adminProviderItemHandler func(http.ResponseWriter, *http.Request, AdminUser, string)
+
+func (s *Server) handleAdminProviderItemRoute(w http.ResponseWriter, r *http.Request, serve adminProviderItemHandler) {
+	user, ok := s.requireAdmin(w, r, "provider", r.Method)
+	if !ok {
+		return
+	}
+	providerID := r.PathValue("provider_id")
+	if providerID == "" {
+		writeError(w, r, NewHTTPError(http.StatusNotFound, "not_found", "Not found"))
+		return
+	}
+	serve(w, r, user, providerID)
+}
+
+func (s *Server) handleAdminProviderTestConnectionPost(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAdmin(w, r, "provider", r.Method); !ok {
+		return
+	}
+	s.serveAdminProviderTestConnection(w, r)
+}
+
+func (s *Server) handleAdminProviderPatch(w http.ResponseWriter, r *http.Request) {
+	s.handleAdminProviderItemRoute(w, r, s.serveAdminProviderPatch)
+}
+
+func (s *Server) handleAdminProviderDelete(w http.ResponseWriter, r *http.Request) {
+	s.handleAdminProviderItemRoute(w, r, s.serveAdminProviderDelete)
+}
+
+func (s *Server) handleAdminProviderHealthPost(w http.ResponseWriter, r *http.Request) {
+	s.handleAdminProviderItemRoute(w, r, s.serveAdminProviderHealth)
+}
+
+func (s *Server) handleAdminProviderTestPost(w http.ResponseWriter, r *http.Request) {
+	s.handleAdminProviderItemRoute(w, r, s.serveAdminProviderTest)
+}
+
 func (s *Server) handleAdminProviderNested(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAdmin(w, r, "provider", r.Method)
 	if !ok {
 		return
 	}
 	parts := splitEscapedAdminPath(r.URL.EscapedPath(), "/api/admin/providers/")
+	if len(parts) == 1 && parts[0] == "monitoring" && !strings.HasSuffix(r.URL.EscapedPath(), "/") {
+		jsonMethodNotAllowed(http.MethodGet)(w, r)
+		return
+	}
 	if len(parts) == 1 && parts[0] == "test-connection" {
 		if r.Method != http.MethodPost {
-			writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
+			jsonMethodNotAllowed(http.MethodPost)(w, r)
 			return
 		}
-		var req ProviderCreateRequest
-		if err := s.decodeJSON(w, r, &req); err != nil {
-			writeError(w, r, err)
-			return
-		}
-		if strings.TrimSpace(req.BaseURL) == "" {
-			writeError(w, r, NewHTTPError(http.StatusBadRequest, "provider_base_url_required", "Base URL is required to test the connection"))
-			return
-		}
-		if strings.TrimSpace(req.APIKey) == "" && strings.TrimSpace(req.Type) != ProviderKronk {
-			writeError(w, r, NewHTTPError(http.StatusBadRequest, "provider_api_key_required", "API key is required to test the connection"))
-			return
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-		defer cancel()
-		startedAt := time.Now()
-		var catalog ProviderCatalogEntry
-		var health *KronkHealthResult
-		var err error
-		if strings.TrimSpace(req.Type) == ProviderKronk {
-			adapter, ok := resolveTypedAdapter[KronkAdapter](s.adapterRegistry, ProviderKronk)
-			if !ok {
-				writeError(w, r, NewHTTPError(http.StatusInternalServerError, "provider_adapter_missing", "Kronk adapter is unavailable"))
-				return
-			}
-			provider := Provider{Name: req.Name, Type: ProviderKronk, BaseURL: req.BaseURL, APIKey: req.APIKey, Headers: req.Headers, SensitiveHeaders: req.SensitiveHeaders, Options: req.Options}
-			result, healthErr := adapter.Health(ctx, provider)
-			health, err = &result, healthErr
-			if err == nil {
-				catalog, err = KronkProviderCatalogFromUpstream(ctx, http.DefaultClient, req)
-			}
-		} else {
-			catalog, err = CustomProviderCatalogFromUpstream(ctx, http.DefaultClient, req)
-		}
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"healthy":      true,
-			"latency_ms":   time.Since(startedAt).Milliseconds(),
-			"models_count": catalog.ModelsCount,
-			"health":       health,
-		})
+		s.serveAdminProviderTestConnection(w, r)
 		return
 	}
 	if len(parts) == 1 {
 		switch r.Method {
 		case http.MethodPatch:
-			var req ProviderCreateRequest
-			if err := s.decodeJSON(w, r, &req); err != nil {
-				if costErr := providerModelCostDecodeError(err); costErr != nil {
-					writeError(w, r, costErr)
-					return
-				}
-				writeError(w, r, err)
-				return
-			}
-			if err := validateProviderRouteCreation(req); err != nil {
-				writeError(w, r, err)
-				return
-			}
-			current, ok := s.store.GetProvider(parts[0])
-			if !ok {
-				writeError(w, r, NewHTTPError(http.StatusNotFound, "provider_not_found", "Provider not found"))
-				return
-			}
-			mergeProviderPatchRequest(&req, current)
-			provider, catalog, catalogSource, err := s.providerFromCreateRequest(r.Context(), req)
-			if err != nil {
-				writeError(w, r, err)
-				return
-			}
-			if err := validateSelectedProviderModelCosts(catalog, req.SelectedModels); err != nil {
-				writeError(w, r, err)
-				return
-			}
-			provider.ID = parts[0]
-			if err := validateProviderHeaderSupport(provider.Type, provider.Headers); err != nil {
-				writeError(w, r, err)
-				return
-			}
-			updated, err := s.store.UpdateProvider(parts[0], provider)
-			if err != nil {
-				writeError(w, r, err)
-				return
-			}
-			result := ProviderCreateResult{
-				Provider:      updated,
-				CatalogSource: catalogSource,
-			}
-			result.ImportedModels = s.importSelectedProviderCatalogModels(updated.ID, catalog, req.SelectedModels)
-			s.recordAdminAudit(r, user, "update", "provider", parts[0], "", auditProviderCreateResult(result))
-			writeJSON(w, http.StatusOK, result)
+			s.serveAdminProviderPatch(w, r, user, parts[0])
 		case http.MethodDelete:
-			if err := s.store.DeleteProvider(parts[0]); err != nil {
-				writeError(w, r, err)
-				return
-			}
-			s.recordAdminAudit(r, user, "delete", "provider", parts[0], "", nil)
-			w.WriteHeader(http.StatusNoContent)
+			s.serveAdminProviderDelete(w, r, user, parts[0])
 		default:
-			writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+			jsonMethodNotAllowed(http.MethodPatch+", "+http.MethodDelete)(w, r)
 		}
 		return
 	}
 	if len(parts) != 2 || (parts[1] != "health" && parts[1] != "test" && parts[1] != "refresh-token") {
-		writeError(w, r, NewHTTPError(404, "not_found", "Not found"))
+		writeError(w, r, NewHTTPError(http.StatusNotFound, "not_found", "Not found"))
 		return
 	}
 	if r.Method != http.MethodPost {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+		jsonMethodNotAllowed(http.MethodPost)(w, r)
 		return
 	}
 	if parts[1] == "test" {
-		result, err := s.integrations.TestProvider(r.Context(), parts[0])
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		auditResult := result
-		if testedProvider, ok := result.(Provider); ok {
-			auditResult = auditProvider(testedProvider)
-		} else if testedResource, ok := result.(ProviderResource); ok {
-			auditResult = auditProviderResource(testedResource)
-		}
-		s.recordAdminAudit(r, user, "test", "provider", parts[0], "", auditResult)
-		writeJSON(w, http.StatusOK, result)
+		s.serveAdminProviderTest(w, r, user, parts[0])
 		return
 	}
+	// Provider-level refresh-token has historically shared the health update
+	// behavior. Keep it on the compatibility subtree until its API contract is
+	// clarified instead of presenting it as a newly migrated route.
+	s.serveAdminProviderHealth(w, r, user, parts[0])
+}
+
+func (s *Server) serveAdminProviderTestConnection(w http.ResponseWriter, r *http.Request) {
+	var req ProviderCreateRequest
+	if err := s.decodeJSON(w, r, &req); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	if strings.TrimSpace(req.BaseURL) == "" {
+		writeError(w, r, NewHTTPError(http.StatusBadRequest, "provider_base_url_required", "Base URL is required to test the connection"))
+		return
+	}
+	if strings.TrimSpace(req.APIKey) == "" && strings.TrimSpace(req.Type) != ProviderKronk {
+		writeError(w, r, NewHTTPError(http.StatusBadRequest, "provider_api_key_required", "API key is required to test the connection"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	startedAt := time.Now()
+	var catalog ProviderCatalogEntry
+	var health *KronkHealthResult
+	var err error
+	if strings.TrimSpace(req.Type) == ProviderKronk {
+		adapter, ok := resolveTypedAdapter[KronkAdapter](s.adapterRegistry, ProviderKronk)
+		if !ok {
+			writeError(w, r, NewHTTPError(http.StatusInternalServerError, "provider_adapter_missing", "Kronk adapter is unavailable"))
+			return
+		}
+		provider := Provider{Name: req.Name, Type: ProviderKronk, BaseURL: req.BaseURL, APIKey: req.APIKey, Headers: req.Headers, SensitiveHeaders: req.SensitiveHeaders, Options: req.Options}
+		result, healthErr := adapter.Health(ctx, provider)
+		health, err = &result, healthErr
+		if err == nil {
+			catalog, err = KronkProviderCatalogFromUpstream(ctx, http.DefaultClient, req)
+		}
+	} else {
+		catalog, err = CustomProviderCatalogFromUpstream(ctx, http.DefaultClient, req)
+	}
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"healthy":      true,
+		"latency_ms":   time.Since(startedAt).Milliseconds(),
+		"models_count": catalog.ModelsCount,
+		"health":       health,
+	})
+}
+
+func (s *Server) serveAdminProviderPatch(w http.ResponseWriter, r *http.Request, user AdminUser, providerID string) {
+	var req ProviderCreateRequest
+	if err := s.decodeJSON(w, r, &req); err != nil {
+		if costErr := providerModelCostDecodeError(err); costErr != nil {
+			writeError(w, r, costErr)
+			return
+		}
+		writeError(w, r, err)
+		return
+	}
+	if err := validateProviderRouteCreation(req); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	current, ok := s.store.GetProvider(providerID)
+	if !ok {
+		writeError(w, r, NewHTTPError(http.StatusNotFound, "provider_not_found", "Provider not found"))
+		return
+	}
+	mergeProviderPatchRequest(&req, current)
+	provider, catalog, catalogSource, err := s.providerFromCreateRequest(r.Context(), req)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	if err := validateSelectedProviderModelCosts(catalog, req.SelectedModels); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	provider.ID = providerID
+	if err := validateProviderHeaderSupport(provider.Type, provider.Headers); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	updated, err := s.store.UpdateProvider(providerID, provider)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	result := ProviderCreateResult{Provider: updated, CatalogSource: catalogSource}
+	result.ImportedModels = s.importSelectedProviderCatalogModels(updated.ID, catalog, req.SelectedModels)
+	s.recordAdminAudit(r, user, "update", "provider", providerID, "", auditProviderCreateResult(result))
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) serveAdminProviderDelete(w http.ResponseWriter, r *http.Request, user AdminUser, providerID string) {
+	if err := s.store.DeleteProvider(providerID); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	s.recordAdminAudit(r, user, "delete", "provider", providerID, "", nil)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) serveAdminProviderTest(w http.ResponseWriter, r *http.Request, user AdminUser, providerID string) {
+	result, err := s.integrations.TestProvider(r.Context(), providerID)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	auditResult := result
+	if testedProvider, ok := result.(Provider); ok {
+		auditResult = auditProvider(testedProvider)
+	} else if testedResource, ok := result.(ProviderResource); ok {
+		auditResult = auditProviderResource(testedResource)
+	}
+	s.recordAdminAudit(r, user, "test", "provider", providerID, "", auditResult)
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) serveAdminProviderHealth(w http.ResponseWriter, r *http.Request, user AdminUser, providerID string) {
 	var req struct {
 		Healthy bool `json:"healthy"`
 	}
@@ -614,12 +676,12 @@ func (s *Server) handleAdminProviderNested(w http.ResponseWriter, r *http.Reques
 		writeError(w, r, err)
 		return
 	}
-	provider, err := s.store.SetProviderHealth(parts[0], req.Healthy)
+	provider, err := s.store.SetProviderHealth(providerID, req.Healthy)
 	if err != nil {
 		writeError(w, r, err)
 		return
 	}
-	s.recordAdminAudit(r, user, "health", "provider", parts[0], "", auditProvider(provider))
+	s.recordAdminAudit(r, user, "health", "provider", providerID, "", auditProvider(provider))
 	writeJSON(w, http.StatusOK, provider)
 }
 

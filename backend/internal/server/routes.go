@@ -90,7 +90,18 @@ func (s *Server) routes() {
 	s.registerDynamicMethodRoute(http.MethodDelete, "/api/admin/users/{user_id}", s.handleAdminUserDelete)
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/users/{user_id}/reset-password-email", s.handleAdminUserResetPasswordEmailPost, s.adminUserMethodNotAllowed(http.MethodPost))
 	s.mux.HandleFunc("/api/admin/users/", s.handleAdminUserItem)
-	s.mux.HandleFunc("/api/admin/provider-catalog", s.handleAdminProviderCatalog)
+	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/provider-catalog", s.handleAdminProviderCatalogGet, s.adminMethodNotAllowed("provider", http.MethodGet))
+	// Catalog discovery has a few IDs with a second, credential-backed POST
+	// operation. Only their method patterns are explicit: the subtree handler
+	// remains the ID-aware fallback for other methods and legacy path shapes.
+	catalogMultiMethodNotAllowed := s.adminMethodNotAllowed("provider", http.MethodGet+", "+http.MethodPost)
+	for _, catalogID := range []string{codexProviderCatalogID, "custom", ProviderKronk} {
+		pattern := "/api/admin/provider-catalog/" + catalogID
+		s.mux.HandleFunc(http.MethodGet+" "+pattern, s.handleAdminProviderCatalogItem)
+		s.mux.HandleFunc(http.MethodPost+" "+pattern, s.handleAdminProviderCatalogItem)
+		s.mux.HandleFunc(http.MethodHead+" "+pattern, catalogMultiMethodNotAllowed)
+	}
+	s.registerDynamicGETRoute("/api/admin/provider-catalog/{catalog_id}", s.handleAdminProviderCatalogItem, s.adminMethodNotAllowed("provider", http.MethodGet))
 	s.mux.HandleFunc("/api/admin/provider-catalog/", s.handleAdminProviderCatalogItem)
 	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/provider-adapters", s.handleAdminProviderAdapters, s.adminMethodNotAllowed("providers", http.MethodGet))
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/provider-account-oauth/openai/generate-auth-url", s.handleAdminOpenAIAccountOAuthGenerateAuthURL, s.adminMethodNotAllowed("provider", http.MethodPost))
@@ -109,8 +120,29 @@ func (s *Server) routes() {
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/api-keys/{key_id}/rotate", s.handleAdminAPIKeyRotatePost, s.adminAPIKeyMethodNotAllowed(http.MethodPost))
 	s.mux.HandleFunc("/api/admin/api-keys/", s.handleAdminAPIKeyItem)
 	s.registerAdminAnalyticsCredentialRoutes()
-	s.mux.HandleFunc("/api/admin/providers", s.handleAdminProviders)
-	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/providers/monitoring", s.handleAdminProviderMonitoring, s.adminMethodNotAllowed("provider", http.MethodGet))
+	s.registerMethodRoutes("/api/admin/providers", func(allowedMethods string) http.HandlerFunc {
+		return s.adminMethodNotAllowed("provider", allowedMethods)
+	},
+		methodRoute{Method: http.MethodGet, Handler: s.handleAdminProvidersGet},
+		methodRoute{Method: http.MethodPost, Handler: s.handleAdminProvidersPost},
+	)
+	// These static paths intentionally avoid path-only fallbacks: such a
+	// fallback conflicts with the method-specific {provider_id} pattern. The
+	// subtree handler below remains the ID-aware fallback for other methods.
+	providerMonitoringMethodNotAllowed := s.adminMethodNotAllowed("provider", http.MethodGet)
+	s.mux.HandleFunc(http.MethodGet+" /api/admin/providers/monitoring", s.handleAdminProviderMonitoring)
+	s.mux.HandleFunc(http.MethodHead+" /api/admin/providers/monitoring", providerMonitoringMethodNotAllowed)
+	s.mux.HandleFunc(http.MethodPatch+" /api/admin/providers/monitoring", providerMonitoringMethodNotAllowed)
+	s.mux.HandleFunc(http.MethodDelete+" /api/admin/providers/monitoring", providerMonitoringMethodNotAllowed)
+	providerConnectionMethodNotAllowed := s.adminMethodNotAllowed("provider", http.MethodPost)
+	s.mux.HandleFunc(http.MethodPost+" /api/admin/providers/test-connection", s.handleAdminProviderTestConnectionPost)
+	s.mux.HandleFunc(http.MethodHead+" /api/admin/providers/test-connection", providerConnectionMethodNotAllowed)
+	s.mux.HandleFunc(http.MethodPatch+" /api/admin/providers/test-connection", providerConnectionMethodNotAllowed)
+	s.mux.HandleFunc(http.MethodDelete+" /api/admin/providers/test-connection", providerConnectionMethodNotAllowed)
+	s.registerDynamicMethodRoute(http.MethodPatch, "/api/admin/providers/{provider_id}", s.handleAdminProviderPatch)
+	s.registerDynamicMethodRoute(http.MethodDelete, "/api/admin/providers/{provider_id}", s.handleAdminProviderDelete)
+	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/providers/{provider_id}/health", s.handleAdminProviderHealthPost, s.adminMethodNotAllowed("provider", http.MethodPost))
+	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/providers/{provider_id}/test", s.handleAdminProviderTestPost, s.adminMethodNotAllowed("provider", http.MethodPost))
 	s.mux.HandleFunc("/api/admin/providers/", s.handleAdminProviderNested)
 	s.mux.HandleFunc("/api/admin/provider-resources", s.handleAdminProviderResources)
 	s.mux.HandleFunc("/api/admin/provider-resources/", s.handleAdminProviderResourceNested)
