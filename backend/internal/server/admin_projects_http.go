@@ -534,59 +534,60 @@ func projectTeamAuditID(projectID string, teamID string) string {
 	return strings.TrimSpace(projectID) + ":" + strings.TrimSpace(teamID)
 }
 
-func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAdminUsersGet(w http.ResponseWriter, r *http.Request) {
 	actor, ok := s.requireAdmin(w, r, "identity", r.Method)
 	if !ok {
 		return
 	}
-	switch r.Method {
-	case http.MethodGet:
-		writeJSON(w, http.StatusOK, map[string]any{"data": s.filterAdminUsersForUser(actor, s.store.ListAdminUsers())})
-	case http.MethodPost:
-		var req struct {
-			Username string   `json:"username"`
-			Name     string   `json:"name"`
-			Email    string   `json:"email"`
-			Role     string   `json:"role"`
-			TeamID   string   `json:"team_id"`
-			TeamIDs  []string `json:"team_ids"`
-			Status   string   `json:"status"`
-			Password string   `json:"password"`
-		}
-		if err := s.decodeJSON(w, r, &req); err != nil {
-			writeError(w, r, err)
-			return
-		}
-		if normalizeAdminRole(actor.Role) == "team_leader" {
-			if req.TeamID != "" && req.TeamID != actor.TeamID {
-				writeError(w, r, NewHTTPError(403, "team_forbidden", "Team leader can only manage own team"))
-				return
-			}
-			req.TeamID = actor.TeamID
-			req.TeamIDs = []string{actor.TeamID}
-			if normalizeAdminRole(req.Role) != "user" {
-				writeError(w, r, NewHTTPError(403, "role_forbidden", "Team leader can only create ordinary users"))
-				return
-			}
-		}
-		user, err := s.store.CreateAdminUser(AdminUser{
-			Username: req.Username,
-			Name:     req.Name,
-			Email:    req.Email,
-			Role:     req.Role,
-			TeamID:   req.TeamID,
-			TeamIDs:  req.TeamIDs,
-			Status:   req.Status,
-		}, req.Password)
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		s.recordAdminAudit(r, actor, "create", "admin_user", user.ID, "", user)
-		writeJSON(w, http.StatusCreated, user)
-	default:
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+	writeJSON(w, http.StatusOK, map[string]any{"data": s.filterAdminUsersForUser(actor, s.store.ListAdminUsers())})
+}
+
+func (s *Server) handleAdminUsersPost(w http.ResponseWriter, r *http.Request) {
+	actor, ok := s.requireAdmin(w, r, "identity", r.Method)
+	if !ok {
+		return
 	}
+	var req struct {
+		Username string   `json:"username"`
+		Name     string   `json:"name"`
+		Email    string   `json:"email"`
+		Role     string   `json:"role"`
+		TeamID   string   `json:"team_id"`
+		TeamIDs  []string `json:"team_ids"`
+		Status   string   `json:"status"`
+		Password string   `json:"password"`
+	}
+	if err := s.decodeJSON(w, r, &req); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	if normalizeAdminRole(actor.Role) == "team_leader" {
+		if req.TeamID != "" && req.TeamID != actor.TeamID {
+			writeError(w, r, NewHTTPError(403, "team_forbidden", "Team leader can only manage own team"))
+			return
+		}
+		req.TeamID = actor.TeamID
+		req.TeamIDs = []string{actor.TeamID}
+		if normalizeAdminRole(req.Role) != "user" {
+			writeError(w, r, NewHTTPError(403, "role_forbidden", "Team leader can only create ordinary users"))
+			return
+		}
+	}
+	user, err := s.store.CreateAdminUser(AdminUser{
+		Username: req.Username,
+		Name:     req.Name,
+		Email:    req.Email,
+		Role:     req.Role,
+		TeamID:   req.TeamID,
+		TeamIDs:  req.TeamIDs,
+		Status:   req.Status,
+	}, req.Password)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	s.recordAdminAudit(r, actor, "create", "admin_user", user.ID, "", user)
+	writeJSON(w, http.StatusCreated, user)
 }
 
 type adminUserImportItem struct {
@@ -598,13 +599,9 @@ type adminUserImportItem struct {
 	Status   string `json:"status"`
 }
 
-func (s *Server) handleAdminUsersImport(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAdminUsersImportPost(w http.ResponseWriter, r *http.Request) {
 	actor, ok := s.requireAdmin(w, r, "identity", r.Method)
 	if !ok {
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
 		return
 	}
 	var req struct {
@@ -880,10 +877,18 @@ func (s *Server) handleAdminUserItem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, NewHTTPError(404, "not_found", "Not found"))
 		return
 	}
+	if r.URL.Path == "/api/admin/users/import" {
+		jsonMethodNotAllowed(http.MethodPost)(w, r)
+		return
+	}
 	userID := parts[0]
 	if len(parts) == 2 {
-		if parts[1] != "reset-password-email" || r.Method != http.MethodPost {
+		if parts[1] != "reset-password-email" {
 			writeError(w, r, NewHTTPError(404, "not_found", "Not found"))
+			return
+		}
+		if r.Method != http.MethodPost {
+			jsonMethodNotAllowed(http.MethodPost)(w, r)
 			return
 		}
 		s.handleAdminUserResetPasswordEmail(w, r, actor, userID)
@@ -891,74 +896,131 @@ func (s *Server) handleAdminUserItem(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodPatch:
-		var req struct {
-			Username string   `json:"username"`
-			Name     string   `json:"name"`
-			Email    string   `json:"email"`
-			Role     string   `json:"role"`
-			TeamID   string   `json:"team_id"`
-			TeamIDs  []string `json:"team_ids"`
-			Status   string   `json:"status"`
-			Password string   `json:"password"`
-		}
-		if err := s.decodeJSON(w, r, &req); err != nil {
-			writeError(w, r, err)
-			return
-		}
-		if normalizeAdminRole(actor.Role) == "team_leader" {
-			target, ok := s.findAdminUser(userID)
-			if !ok || !userHasTeam(target, actor.TeamID) || normalizeAdminRole(target.Role) != "user" {
-				writeError(w, r, NewHTTPError(403, "team_forbidden", "Team leader can only manage ordinary users in own team"))
-				return
-			}
-			if req.TeamID != "" && req.TeamID != actor.TeamID {
-				writeError(w, r, NewHTTPError(403, "team_forbidden", "Team leader can only manage own team"))
-				return
-			}
-			req.TeamID = actor.TeamID
-			req.TeamIDs = []string{actor.TeamID}
-			if req.Role != "" && normalizeAdminRole(req.Role) != "user" {
-				writeError(w, r, NewHTTPError(403, "role_forbidden", "Team leader cannot elevate user role"))
-				return
-			}
-			req.Role = "user"
-		}
-		updatedUser, err := s.store.UpdateAdminUser(userID, AdminUser{
-			Username: req.Username,
-			Name:     req.Name,
-			Email:    req.Email,
-			Role:     req.Role,
-			TeamID:   req.TeamID,
-			TeamIDs:  req.TeamIDs,
-			Status:   req.Status,
-		}, req.Password)
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		s.recordAdminAudit(r, actor, "update", "admin_user", userID, "", updatedUser)
-		writeJSON(w, http.StatusOK, updatedUser)
+		s.serveAdminUserPatch(w, r, actor, userID)
 	case http.MethodDelete:
-		if actor.ID == userID {
-			writeError(w, r, NewHTTPError(400, "cannot_delete_self", "You cannot delete your own account"))
-			return
-		}
-		if normalizeAdminRole(actor.Role) == "team_leader" {
-			target, ok := s.findAdminUser(userID)
-			if !ok || !userHasTeam(target, actor.TeamID) || normalizeAdminRole(target.Role) != "user" {
-				writeError(w, r, NewHTTPError(403, "team_forbidden", "Team leader can only delete ordinary users in own team"))
-				return
-			}
-		}
-		if err := s.store.DeleteAdminUser(userID); err != nil {
-			writeError(w, r, err)
-			return
-		}
-		s.recordAdminAudit(r, actor, "delete", "admin_user", userID, "", nil)
-		w.WriteHeader(http.StatusNoContent)
+		s.serveAdminUserDelete(w, r, actor, userID)
 	default:
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+		jsonMethodNotAllowed("PATCH, DELETE")(w, r)
 	}
+}
+
+func (s *Server) handleAdminUserPatch(w http.ResponseWriter, r *http.Request) {
+	s.handleAdminUserRoute(w, r, s.serveAdminUserPatch)
+}
+
+func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request) {
+	s.handleAdminUserRoute(w, r, s.serveAdminUserDelete)
+}
+
+func (s *Server) handleAdminUserRoute(w http.ResponseWriter, r *http.Request, handler func(http.ResponseWriter, *http.Request, AdminUser, string)) {
+	actor, ok := s.requireAdmin(w, r, "identity", r.Method)
+	if !ok {
+		return
+	}
+	userID := r.PathValue("user_id")
+	if userID == "" || strings.Contains(userID, "/") {
+		s.handleAdminUserItem(w, r)
+		return
+	}
+	handler(w, r, actor, userID)
+}
+
+func (s *Server) adminUserMethodNotAllowed(allowedMethods string) http.HandlerFunc {
+	reject := jsonMethodNotAllowed(allowedMethods)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := s.requireAdmin(w, r, "identity", r.Method); !ok {
+			return
+		}
+		userID := r.PathValue("user_id")
+		if userID == "" || strings.Contains(userID, "/") {
+			s.handleAdminUserItem(w, r)
+			return
+		}
+		reject(w, r)
+	}
+}
+
+func (s *Server) serveAdminUserPatch(w http.ResponseWriter, r *http.Request, actor AdminUser, userID string) {
+	var req struct {
+		Username string   `json:"username"`
+		Name     string   `json:"name"`
+		Email    string   `json:"email"`
+		Role     string   `json:"role"`
+		TeamID   string   `json:"team_id"`
+		TeamIDs  []string `json:"team_ids"`
+		Status   string   `json:"status"`
+		Password string   `json:"password"`
+	}
+	if err := s.decodeJSON(w, r, &req); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	if normalizeAdminRole(actor.Role) == "team_leader" {
+		target, ok := s.findAdminUser(userID)
+		if !ok || !userHasTeam(target, actor.TeamID) || normalizeAdminRole(target.Role) != "user" {
+			writeError(w, r, NewHTTPError(403, "team_forbidden", "Team leader can only manage ordinary users in own team"))
+			return
+		}
+		if req.TeamID != "" && req.TeamID != actor.TeamID {
+			writeError(w, r, NewHTTPError(403, "team_forbidden", "Team leader can only manage own team"))
+			return
+		}
+		req.TeamID = actor.TeamID
+		req.TeamIDs = []string{actor.TeamID}
+		if req.Role != "" && normalizeAdminRole(req.Role) != "user" {
+			writeError(w, r, NewHTTPError(403, "role_forbidden", "Team leader cannot elevate user role"))
+			return
+		}
+		req.Role = "user"
+	}
+	updatedUser, err := s.store.UpdateAdminUser(userID, AdminUser{
+		Username: req.Username,
+		Name:     req.Name,
+		Email:    req.Email,
+		Role:     req.Role,
+		TeamID:   req.TeamID,
+		TeamIDs:  req.TeamIDs,
+		Status:   req.Status,
+	}, req.Password)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	s.recordAdminAudit(r, actor, "update", "admin_user", userID, "", updatedUser)
+	writeJSON(w, http.StatusOK, updatedUser)
+}
+
+func (s *Server) serveAdminUserDelete(w http.ResponseWriter, r *http.Request, actor AdminUser, userID string) {
+	if actor.ID == userID {
+		writeError(w, r, NewHTTPError(400, "cannot_delete_self", "You cannot delete your own account"))
+		return
+	}
+	if normalizeAdminRole(actor.Role) == "team_leader" {
+		target, ok := s.findAdminUser(userID)
+		if !ok || !userHasTeam(target, actor.TeamID) || normalizeAdminRole(target.Role) != "user" {
+			writeError(w, r, NewHTTPError(403, "team_forbidden", "Team leader can only delete ordinary users in own team"))
+			return
+		}
+	}
+	if err := s.store.DeleteAdminUser(userID); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	s.recordAdminAudit(r, actor, "delete", "admin_user", userID, "", nil)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleAdminUserResetPasswordEmailPost(w http.ResponseWriter, r *http.Request) {
+	actor, ok := s.requireAdmin(w, r, "identity", r.Method)
+	if !ok {
+		return
+	}
+	userID := r.PathValue("user_id")
+	if userID == "" || strings.Contains(userID, "/") {
+		s.handleAdminUserItem(w, r)
+		return
+	}
+	s.handleAdminUserResetPasswordEmail(w, r, actor, userID)
 }
 
 func (s *Server) handleAdminUserResetPasswordEmail(w http.ResponseWriter, r *http.Request, actor AdminUser, userID string) {
@@ -984,24 +1046,25 @@ func (s *Server) handleAdminUserResetPasswordEmail(w http.ResponseWriter, r *htt
 	writeJSON(w, http.StatusOK, map[string]any{"sent": true, "user": target})
 }
 
-func (s *Server) handleAdminAPIKeys(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAdminAPIKeysGet(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAdmin(w, r, "api_key", r.Method)
 	if !ok {
 		return
 	}
-	switch r.Method {
-	case http.MethodGet:
-		writeJSON(w, http.StatusOK, map[string]any{"data": s.filterAPIKeysForUser(user, s.store.ListAPIKeys())})
-	case http.MethodPost:
-		project, err := s.personalAPIKeyProject(user)
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		s.handleAdminAPIKeyCreate(w, r, user, project.ID)
-	default:
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+	writeJSON(w, http.StatusOK, map[string]any{"data": s.filterAPIKeysForUser(user, s.store.ListAPIKeys())})
+}
+
+func (s *Server) handleAdminAPIKeysPost(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdmin(w, r, "api_key", r.Method)
+	if !ok {
+		return
 	}
+	project, err := s.personalAPIKeyProject(user)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	s.handleAdminAPIKeyCreate(w, r, user, project.ID)
 }
 
 func (s *Server) personalAPIKeyProject(user AdminUser) (Project, error) {
@@ -1125,114 +1188,175 @@ func (s *Server) handleAdminAPIKeyItem(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if r.Method != http.MethodPost {
-			writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+			jsonMethodNotAllowed(http.MethodPost)(w, r)
 			return
 		}
-		var req struct {
-			GraceUntil *time.Time `json:"grace_until"`
-		}
-		if r.Body != nil && r.ContentLength != 0 {
-			if err := s.decodeJSON(w, r, &req); err != nil {
-				writeError(w, r, err)
-				return
-			}
-		}
-		key, secret, err := s.store.RotateAPIKey(keyID, req.GraceUntil)
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		s.recordAdminAudit(r, user, "rotate", "api_key", keyID, "", map[string]any{"new_key_id": key.ID})
-		for _, policyResource := range s.store.ListResources(routingPolicyResourceKind) {
-			policy := scopedRoutingPolicy(policyResource)
-			if policy.Scope == RoutingPolicyScopeAPIKey && policy.ScopeID == key.ID {
-				s.recordAdminAudit(r, user, "rotate_bind", routingPolicyResourceKind, policy.ID,
-					map[string]any{"rotated_from_key_id": keyID}, policyResource)
-				break
-			}
-		}
-		writeJSON(w, http.StatusCreated, map[string]any{
-			"id":                      key.ID,
-			"api_key":                 secret,
-			"name":                    key.Name,
-			"project_id":              key.ProjectID,
-			"owner_user_id":           key.OwnerUserID,
-			"rotated_from_id":         key.RotatedFromID,
-			"model_access_mode":       key.ModelAccessMode,
-			"allowed_models":          key.Allowed,
-			"plain_text_visible_once": true,
-		})
+		s.serveAdminAPIKeyRotate(w, r, user, keyID)
 		return
 	}
 	switch r.Method {
 	case http.MethodPatch:
-		var req struct {
-			Name            string             `json:"name"`
-			Group           string             `json:"group"`
-			OwnerUserID     *string            `json:"owner_user_id"`
-			AllowedModels   []string           `json:"allowed_models"`
-			ModelAccessMode string             `json:"model_access_mode"`
-			IPAllowlist     []string           `json:"ip_allowlist"`
-			Limits          *QuotaLimits       `json:"limits"`
-			RateLimitRPM    nullableInt64Patch `json:"rate_limit_rpm"`
-			TokenLimitTPM   nullableInt64Patch `json:"token_limit_tpm"`
-			Status          string             `json:"status"`
-			ExpiresAt       *time.Time         `json:"expires_at"`
+		s.serveAdminAPIKeyPatch(w, r, user, keyID)
+	case http.MethodDelete:
+		s.serveAdminAPIKeyDelete(w, r, user, keyID)
+	default:
+		jsonMethodNotAllowed("PATCH, DELETE")(w, r)
+	}
+}
+
+func (s *Server) handleAdminAPIKeyPatch(w http.ResponseWriter, r *http.Request) {
+	s.handleAdminAPIKeyRoute(w, r, s.serveAdminAPIKeyPatch)
+}
+
+func (s *Server) handleAdminAPIKeyDelete(w http.ResponseWriter, r *http.Request) {
+	s.handleAdminAPIKeyRoute(w, r, s.serveAdminAPIKeyDelete)
+}
+
+func (s *Server) handleAdminAPIKeyRotatePost(w http.ResponseWriter, r *http.Request) {
+	s.handleAdminAPIKeyRoute(w, r, s.serveAdminAPIKeyRotate)
+}
+
+func (s *Server) handleAdminAPIKeyRoute(w http.ResponseWriter, r *http.Request, handler func(http.ResponseWriter, *http.Request, AdminUser, string)) {
+	user, ok := s.requireAdmin(w, r, "api_key", r.Method)
+	if !ok {
+		return
+	}
+	keyID := r.PathValue("key_id")
+	if keyID == "" || strings.Contains(keyID, "/") {
+		s.handleAdminAPIKeyItem(w, r)
+		return
+	}
+	if !s.canManageAPIKey(user, keyID) {
+		writeError(w, r, NewHTTPError(403, "api_key_forbidden", "API key is not available for this user"))
+		return
+	}
+	handler(w, r, user, keyID)
+}
+
+func (s *Server) adminAPIKeyMethodNotAllowed(allowedMethods string) http.HandlerFunc {
+	reject := jsonMethodNotAllowed(allowedMethods)
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := s.requireAdmin(w, r, "api_key", r.Method)
+		if !ok {
+			return
 		}
+		keyID := r.PathValue("key_id")
+		if keyID == "" || strings.Contains(keyID, "/") {
+			s.handleAdminAPIKeyItem(w, r)
+			return
+		}
+		if !s.canManageAPIKey(user, keyID) {
+			writeError(w, r, NewHTTPError(403, "api_key_forbidden", "API key is not available for this user"))
+			return
+		}
+		reject(w, r)
+	}
+}
+
+func (s *Server) serveAdminAPIKeyRotate(w http.ResponseWriter, r *http.Request, user AdminUser, keyID string) {
+	var req struct {
+		GraceUntil *time.Time `json:"grace_until"`
+	}
+	if r.Body != nil && r.ContentLength != 0 {
 		if err := s.decodeJSON(w, r, &req); err != nil {
 			writeError(w, r, err)
 			return
 		}
-		patch := APIKey{
-			Name:            req.Name,
-			Group:           req.Group,
-			Allowed:         req.AllowedModels,
-			ModelAccessMode: req.ModelAccessMode,
-			IPAllowlist:     req.IPAllowlist,
-			LimitsSet:       req.Limits != nil,
-			RateLimitRPM:    req.RateLimitRPM.Value,
-			RateLimitSet:    req.RateLimitRPM.Set,
-			TokenLimitTPM:   req.TokenLimitTPM.Value,
-			TokenLimitSet:   req.TokenLimitTPM.Set,
-			Status:          req.Status,
-			ExpiresAt:       req.ExpiresAt,
-		}
-		if req.Limits != nil {
-			patch.Limits = *req.Limits
-		}
-		if req.OwnerUserID != nil {
-			ownerUserID, err := s.resolveAPIKeyOwner(user, *req.OwnerUserID)
-			if err != nil {
-				writeError(w, r, err)
-				return
-			}
-			patch.OwnerUserID = ownerUserID
-		}
-		existing, err := s.findAPIKey(keyID)
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		if approval, required := s.apiKeyUpdateApproval(user, existing, patch); required {
-			s.recordAdminAudit(r, user, "request_approval", "api_key", approval.ID, "", approval)
-			writeJSON(w, http.StatusAccepted, map[string]any{"approval_required": true, "approval": approval})
-			return
-		}
-		key, err := s.store.UpdateAPIKey(keyID, patch)
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		s.recordAdminAudit(r, user, "update", "api_key", keyID, existing, key)
-		writeJSON(w, http.StatusOK, key)
-	case http.MethodDelete:
-		if err := s.store.DeleteAPIKey(keyID); err != nil {
-			writeError(w, r, err)
-			return
-		}
-		s.recordAdminAudit(r, user, "delete", "api_key", keyID, "", nil)
-		w.WriteHeader(http.StatusNoContent)
-	default:
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
 	}
+	key, secret, err := s.store.RotateAPIKey(keyID, req.GraceUntil)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	s.recordAdminAudit(r, user, "rotate", "api_key", keyID, "", map[string]any{"new_key_id": key.ID})
+	for _, policyResource := range s.store.ListResources(routingPolicyResourceKind) {
+		policy := scopedRoutingPolicy(policyResource)
+		if policy.Scope == RoutingPolicyScopeAPIKey && policy.ScopeID == key.ID {
+			s.recordAdminAudit(r, user, "rotate_bind", routingPolicyResourceKind, policy.ID,
+				map[string]any{"rotated_from_key_id": keyID}, policyResource)
+			break
+		}
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"id":                      key.ID,
+		"api_key":                 secret,
+		"name":                    key.Name,
+		"project_id":              key.ProjectID,
+		"owner_user_id":           key.OwnerUserID,
+		"rotated_from_id":         key.RotatedFromID,
+		"model_access_mode":       key.ModelAccessMode,
+		"allowed_models":          key.Allowed,
+		"plain_text_visible_once": true,
+	})
+}
+
+func (s *Server) serveAdminAPIKeyPatch(w http.ResponseWriter, r *http.Request, user AdminUser, keyID string) {
+	var req struct {
+		Name            string             `json:"name"`
+		Group           string             `json:"group"`
+		OwnerUserID     *string            `json:"owner_user_id"`
+		AllowedModels   []string           `json:"allowed_models"`
+		ModelAccessMode string             `json:"model_access_mode"`
+		IPAllowlist     []string           `json:"ip_allowlist"`
+		Limits          *QuotaLimits       `json:"limits"`
+		RateLimitRPM    nullableInt64Patch `json:"rate_limit_rpm"`
+		TokenLimitTPM   nullableInt64Patch `json:"token_limit_tpm"`
+		Status          string             `json:"status"`
+		ExpiresAt       *time.Time         `json:"expires_at"`
+	}
+	if err := s.decodeJSON(w, r, &req); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	patch := APIKey{
+		Name:            req.Name,
+		Group:           req.Group,
+		Allowed:         req.AllowedModels,
+		ModelAccessMode: req.ModelAccessMode,
+		IPAllowlist:     req.IPAllowlist,
+		LimitsSet:       req.Limits != nil,
+		RateLimitRPM:    req.RateLimitRPM.Value,
+		RateLimitSet:    req.RateLimitRPM.Set,
+		TokenLimitTPM:   req.TokenLimitTPM.Value,
+		TokenLimitSet:   req.TokenLimitTPM.Set,
+		Status:          req.Status,
+		ExpiresAt:       req.ExpiresAt,
+	}
+	if req.Limits != nil {
+		patch.Limits = *req.Limits
+	}
+	if req.OwnerUserID != nil {
+		ownerUserID, err := s.resolveAPIKeyOwner(user, *req.OwnerUserID)
+		if err != nil {
+			writeError(w, r, err)
+			return
+		}
+		patch.OwnerUserID = ownerUserID
+	}
+	existing, err := s.findAPIKey(keyID)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	if approval, required := s.apiKeyUpdateApproval(user, existing, patch); required {
+		s.recordAdminAudit(r, user, "request_approval", "api_key", approval.ID, "", approval)
+		writeJSON(w, http.StatusAccepted, map[string]any{"approval_required": true, "approval": approval})
+		return
+	}
+	key, err := s.store.UpdateAPIKey(keyID, patch)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	s.recordAdminAudit(r, user, "update", "api_key", keyID, existing, key)
+	writeJSON(w, http.StatusOK, key)
+}
+
+func (s *Server) serveAdminAPIKeyDelete(w http.ResponseWriter, r *http.Request, user AdminUser, keyID string) {
+	if err := s.store.DeleteAPIKey(keyID); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	s.recordAdminAudit(r, user, "delete", "api_key", keyID, "", nil)
+	w.WriteHeader(http.StatusNoContent)
 }

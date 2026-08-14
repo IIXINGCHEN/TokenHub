@@ -78,8 +78,19 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/admin/guardrail-policies", s.handleAdminGuardrailPolicies)
 	s.mux.HandleFunc("/api/admin/guardrail-policies/test", s.handleAdminGuardrailPolicyTest)
 	s.mux.HandleFunc("/api/admin/guardrail-policies/", s.handleAdminGuardrailPolicyItem)
-	s.mux.HandleFunc("/api/admin/users", s.handleAdminUsers)
-	s.mux.HandleFunc("/api/admin/users/import", s.handleAdminUsersImport)
+	s.registerMethodRoutes("/api/admin/users", func(allowedMethods string) http.HandlerFunc {
+		return s.adminMethodNotAllowed("identity", allowedMethods)
+	},
+		methodRoute{Method: http.MethodGet, Handler: s.handleAdminUsersGet},
+		methodRoute{Method: http.MethodPost, Handler: s.handleAdminUsersPost},
+	)
+	userImportMethodNotAllowed := s.adminMethodNotAllowed("identity", http.MethodPost)
+	s.mux.HandleFunc(http.MethodPost+" /api/admin/users/import", s.handleAdminUsersImportPost)
+	s.mux.HandleFunc(http.MethodPatch+" /api/admin/users/import", userImportMethodNotAllowed)
+	s.mux.HandleFunc(http.MethodDelete+" /api/admin/users/import", userImportMethodNotAllowed)
+	s.registerDynamicMethodRoute(http.MethodPatch, "/api/admin/users/{user_id}", s.handleAdminUserPatch)
+	s.registerDynamicMethodRoute(http.MethodDelete, "/api/admin/users/{user_id}", s.handleAdminUserDelete)
+	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/users/{user_id}/reset-password-email", s.handleAdminUserResetPasswordEmailPost, s.adminUserMethodNotAllowed(http.MethodPost))
 	s.mux.HandleFunc("/api/admin/users/", s.handleAdminUserItem)
 	s.mux.HandleFunc("/api/admin/provider-catalog", s.handleAdminProviderCatalog)
 	s.mux.HandleFunc("/api/admin/provider-catalog/", s.handleAdminProviderCatalogItem)
@@ -87,7 +98,17 @@ func (s *Server) routes() {
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/provider-account-oauth/openai/generate-auth-url", s.handleAdminOpenAIAccountOAuthGenerateAuthURL, s.adminMethodNotAllowed("provider", http.MethodPost))
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/provider-account-oauth/openai/exchange-code", s.handleAdminOpenAIAccountOAuthExchangeCode, s.adminMethodNotAllowed("provider", http.MethodPost))
 	s.mux.HandleFunc("/api/admin/provider-account-oauth/openai/oauth/callback", s.handleOpenAIAccountOAuthCallback)
-	s.mux.HandleFunc("/api/admin/api-keys", s.handleAdminAPIKeys)
+	s.registerMethodRoutes("/api/admin/api-keys", func(allowedMethods string) http.HandlerFunc {
+		return s.adminMethodNotAllowed("api_key", allowedMethods)
+	},
+		methodRoute{Method: http.MethodGet, Handler: s.handleAdminAPIKeysGet},
+		methodRoute{Method: http.MethodPost, Handler: s.handleAdminAPIKeysPost},
+	)
+	s.registerMethodRoutes("/api/admin/api-keys/{key_id}", s.adminAPIKeyMethodNotAllowed,
+		methodRoute{Method: http.MethodPatch, Handler: s.handleAdminAPIKeyPatch},
+		methodRoute{Method: http.MethodDelete, Handler: s.handleAdminAPIKeyDelete},
+	)
+	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/api-keys/{key_id}/rotate", s.handleAdminAPIKeyRotatePost, s.adminAPIKeyMethodNotAllowed(http.MethodPost))
 	s.mux.HandleFunc("/api/admin/api-keys/", s.handleAdminAPIKeyItem)
 	s.mux.HandleFunc("/api/admin/analytics/credentials", s.handleAdminAnalyticsCredentials)
 	s.mux.HandleFunc("/api/admin/analytics/credentials/", s.handleAdminAnalyticsCredentialItem)
