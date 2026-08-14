@@ -75,6 +75,14 @@ TokenHub は、最後に正常に読み込んだ Provider カタログをデー�
 ## Codex OAuth Token の更新
 
 保存済みの refresh token を持つ有効な OpenAI Codex Subscription アカウントでは、TokenHub はバックエンド起動時に一度、その後は毎分認証情報を確認します。Access Token の有効期限が五分以内の場合にだけ更新します。データベースの認証情報 Lease により、クラスタ構成でも同じアカウントを更新するインスタンスは一つだけです。**Provider Channels > Advanced > Subscription quota** の **Token を更新** では、管理者が一つのアカウントを手動更新できます。手動更新は復旧用途にとどめ、繰り返しクリックしないでください。上流は更新レスポンスで refresh token をローテーションする場合がありますが、TokenHub は返却された新しい値を自動保存します。OpenAI が無効化された refresh token を返した場合、TokenHub はアカウントを再認可が必要な状態にし、定期更新を停止して、管理者に再認可の案内を表示します。
+
+### Kronk ローカル推論
+
+**Provider Channels** で **Kronk** を選択すると、独立して実行中の Kronk Model Server に接続できます。既定の Base URL は `http://127.0.0.1:11435/v1` です。Kronk 認証が無効な場合は application token を空欄にし、有効な場合は保存済みの秘密値を `Authorization: Bearer <token>` としてだけ送信します。接続テストは `/v1/liveness`、`/v1/readiness`、`/v1/models` を個別に確認し、プロセス到達性、サービス準備状態、ローカルモデル利用可能性を区別します。
+
+モデル選択画面は `GET /v1/models` から現在のインベントリを検出し、`/`、`:`、量子化サフィックスを含む Kronk モデル ID 全体を保持します。選択したインベントリを取り込んだ後、**Model Directory** で外部標準モデル名を作成し、**Routing Policies** で Kronk モデル ID にマッピングします。繰り返し取り込んでも冪等です。後続の検出が成功すると、Kronk から削除されたモデルはインベントリやルートを削除せず利用不可としてマークされます。検出に失敗した場合、既存設定は変更されません。
+
+Kronk ルートは SSE ストリーミングを含む OpenAI 互換 Chat Completions、Responses、Embeddings をサポートします。TokenHub は引き続きクライアント認証、Project 分離、クォータ、監査、ルーティング、フェイルオーバーを適用します。呼び出し元の `Authorization` ヘッダーを Kronk へ転送せず、保存済み Kronk token を管理レスポンス、監査ペイロード、ログ、上流エラーレスポンスへ公開しません。
 ## Claude Code 帰属ブロックの処理
 
 Claude Code は、Anthropic Messages リクエストの `system` 配列の先頭に帰属テキストブロックを挿入する場合があります。このブロックにはリクエストごとに変化し得るクライアントメタデータが含まれ、サードパーティー上流で本来安定しているプロンプト接頭辞を再利用できなくなることがあります。

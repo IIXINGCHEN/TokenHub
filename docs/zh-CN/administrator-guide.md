@@ -75,6 +75,14 @@ TokenHub 会把最后一次成功加载的 Provider 目录保存在数据库中�
 ## Codex OAuth Token 续租
 
 对于已启用且保存了刷新 Token 的 OpenAI Codex Subscription 账号，TokenHub 会在后端启动时检查一次，之后每分钟检查一次。只有访问 Token 将在五分钟内过期时才会续租。数据库凭证租约保证集群部署中同一个账号只会由一个实例续租。在「Provider 渠道 > 高级 > 订阅额度」中，管理员可以点击「续租 Token」手动续租单个账号。手动续租用于故障恢复，不要重复点击：上游可能在续租响应中轮换刷新 Token，TokenHub 会自动保存返回的新值。如果 OpenAI 返回刷新 Token 已失效，TokenHub 会把账号标记为需要重新授权，停止后续定时续租，并向管理员显示重新授权提示。
+
+### Kronk 本地推理
+
+在「Provider 渠道」中选择 **Kronk**，即可连接独立运行的 Kronk Model Server。默认 Base URL 为 `http://127.0.0.1:11435/v1`。Kronk 未启用认证时可将 application token 留空；启用认证后，TokenHub 只会将保存的密钥作为 `Authorization: Bearer <token>` 发送。连接测试会分别检查 `/v1/liveness`、`/v1/readiness` 和 `/v1/models`，从而区分进程可达、服务就绪和本地模型可用状态。
+
+模型选择器通过 `GET /v1/models` 发现实时库存，并完整保留 Kronk 模型 ID 中的 `/`、`:` 和量化后缀。引入选中的库存后，在「模型目录」中创建对外标准模型名，再到「路由策略」将其映射到 Kronk 模型 ID。重复引入保持幂等。后续模型发现成功时，已从 Kronk 移除的模型会被标记为不可用，但不会删除其库存或路由；发现失败不会改写现有配置。
+
+Kronk 路由支持 OpenAI-compatible Chat Completions、Responses 和 Embeddings，包括 SSE 流式输出。TokenHub 继续执行客户端认证、项目隔离、配额、审计、路由与故障转移策略；不会把调用方的 `Authorization` 请求头转发给 Kronk，也不会在管理响应、审计载荷、日志或上游错误响应中暴露保存的 Kronk token。
 ## Claude Code 归因块处理
 
 Claude Code 可能在 Anthropic Messages 请求的 `system` 数组开头插入归因文本块。该块包含可能随请求变化的客户端元数据，可能导致第三方上游无法复用原本稳定的提示词前缀。
