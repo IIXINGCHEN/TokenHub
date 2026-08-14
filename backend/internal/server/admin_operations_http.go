@@ -53,6 +53,14 @@ func (s *Server) handleAdminResources(w http.ResponseWriter, r *http.Request) {
 				writeError(w, r, err)
 				return
 			}
+			if kind == "settings" && req.ID == gatewaySettingsID {
+				s.syntheticDNSSetting.Lock()
+				defer s.syntheticDNSSetting.Unlock()
+				if err := validateProviderSyntheticDNSSettings(req); err != nil {
+					writeError(w, r, err)
+					return
+				}
+			}
 			if approval, required := s.adminResourceApproval(user, kind, "", req); required {
 				s.recordAdminAudit(r, user, "request_approval", kind, approval.ID, "", approval)
 				writeJSON(w, http.StatusAccepted, map[string]any{"approval_required": true, "approval": approval})
@@ -68,6 +76,9 @@ func (s *Server) handleAdminResources(w http.ResponseWriter, r *http.Request) {
 				}
 			} else {
 				resource = s.store.CreateResource(kind, req)
+			}
+			if kind == "settings" && resource.ID == gatewaySettingsID {
+				s.syntheticDNSPolicy.applySetting(&resource)
 			}
 			s.recordAdminAudit(r, user, "create", kind, resource.ID, "", resource)
 			writeJSON(w, http.StatusCreated, resource)
@@ -88,6 +99,10 @@ func (s *Server) handleAdminResources(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, NewHTTPError(404, "not_found", "Not found"))
 		return
 	}
+	if kind == "settings" && parts[1] == gatewaySettingsID && (r.Method == http.MethodPatch || r.Method == http.MethodDelete) {
+		s.syntheticDNSSetting.Lock()
+		defer s.syntheticDNSSetting.Unlock()
+	}
 	switch r.Method {
 	case http.MethodPatch:
 		if normalizeAdminRole(user.Role) == "team_leader" && kind == "teams" && parts[1] != user.TeamID {
@@ -103,6 +118,13 @@ func (s *Server) handleAdminResources(w http.ResponseWriter, r *http.Request) {
 			writeError(w, r, err)
 			return
 		}
+		if kind == "settings" && parts[1] == gatewaySettingsID {
+			req.ID = parts[1]
+			if err := validateProviderSyntheticDNSSettings(req); err != nil {
+				writeError(w, r, err)
+				return
+			}
+		}
 		if approval, required := s.adminResourceApproval(user, kind, parts[1], req); required {
 			s.recordAdminAudit(r, user, "request_approval", kind, approval.ID, "", approval)
 			writeJSON(w, http.StatusAccepted, map[string]any{"approval_required": true, "approval": approval})
@@ -112,6 +134,9 @@ func (s *Server) handleAdminResources(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			writeError(w, r, err)
 			return
+		}
+		if kind == "settings" && parts[1] == gatewaySettingsID {
+			s.syntheticDNSPolicy.applySetting(&resource)
 		}
 		s.recordAdminAudit(r, user, "update", kind, parts[1], "", resource)
 		writeJSON(w, http.StatusOK, resource)
@@ -132,6 +157,9 @@ func (s *Server) handleAdminResources(w http.ResponseWriter, r *http.Request) {
 		if err := s.store.DeleteResource(kind, parts[1]); err != nil {
 			writeError(w, r, err)
 			return
+		}
+		if kind == "settings" && parts[1] == gatewaySettingsID {
+			s.syntheticDNSPolicy.applySetting(nil)
 		}
 		s.recordAdminAudit(r, user, "delete", kind, parts[1], "", nil)
 		w.WriteHeader(http.StatusNoContent)

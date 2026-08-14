@@ -401,6 +401,8 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_RESPONSE_MAX_QUEUED_JOBS` | `1000` | 1 つのデプロイが受け付ける待機中および実行中のバックグラウンド Responses ジョブ上限 |
 | `TOKENHUB_API` | 空 | `tokenhub-migrate` CLI が対象とする Admin API の URL。この CLI のみが読み取り、バックエンドサーバーは読み取りません。`--to` で上書きされます |
 
+TokenHub ホストのプロキシが Fake-IP モードで動作する場合は、**システム設定 → 基本設定 → Synthetic DNS / Fake-IP 範囲** で設定します。この例外は既定で無効であり、ホスト名の DNS 解決結果にだけ適用され、リテラル IP の Provider URL には適用されません。すべての実装が `198.18.0.0/15` を使うと仮定せず、プロキシが実際に使用するプールを入力してください。この範囲はベンチマーク用に予約され、Fake-IP でよく使われますが、Fake-IP 専用ではありません。loopback、link-local、metadata、multicast、NAT64 の各範囲は引き続きブロックされます。
+
 ## フロントエンド環境変数
 
 | 変数 | デフォルト | 説明 |

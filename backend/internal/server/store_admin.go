@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -58,6 +59,12 @@ func (s *GormStore) ListResources(kind string) []AdminResource {
 	var items []AdminResource
 	_ = s.db.Where("kind = ?", kind).Order("created_at asc").Find(&items).Error
 	return items
+}
+
+func (s *GormStore) ListResourcesContext(ctx context.Context, kind string) ([]AdminResource, error) {
+	var items []AdminResource
+	err := s.db.WithContext(ctx).Where("kind = ?", kind).Order("created_at asc").Find(&items).Error
+	return items, err
 }
 
 func (s *GormStore) UpdateResource(kind string, id string, patch AdminResource) (AdminResource, error) {
