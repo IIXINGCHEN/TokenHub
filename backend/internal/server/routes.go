@@ -95,7 +95,7 @@ func (s *Server) routes() {
 	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/provider-adapters", s.handleAdminProviderAdapters, s.adminMethodNotAllowed("providers", http.MethodGet))
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/provider-account-oauth/openai/generate-auth-url", s.handleAdminOpenAIAccountOAuthGenerateAuthURL, s.adminMethodNotAllowed("provider", http.MethodPost))
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/provider-account-oauth/openai/exchange-code", s.handleAdminOpenAIAccountOAuthExchangeCode, s.adminMethodNotAllowed("provider", http.MethodPost))
-	s.mux.HandleFunc("/api/admin/provider-account-oauth/openai/oauth/callback", s.handleOpenAIAccountOAuthCallback)
+	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/provider-account-oauth/openai/oauth/callback", s.handleOpenAIAccountOAuthCallbackGet, jsonMethodNotAllowed(http.MethodGet))
 	s.registerMethodRoutes("/api/admin/api-keys", func(allowedMethods string) http.HandlerFunc {
 		return s.adminMethodNotAllowed("api_key", allowedMethods)
 	},
@@ -108,8 +108,7 @@ func (s *Server) routes() {
 	)
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/api-keys/{key_id}/rotate", s.handleAdminAPIKeyRotatePost, s.adminAPIKeyMethodNotAllowed(http.MethodPost))
 	s.mux.HandleFunc("/api/admin/api-keys/", s.handleAdminAPIKeyItem)
-	s.mux.HandleFunc("/api/admin/analytics/credentials", s.handleAdminAnalyticsCredentials)
-	s.mux.HandleFunc("/api/admin/analytics/credentials/", s.handleAdminAnalyticsCredentialItem)
+	s.registerAdminAnalyticsCredentialRoutes()
 	s.mux.HandleFunc("/api/admin/providers", s.handleAdminProviders)
 	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/providers/monitoring", s.handleAdminProviderMonitoring, s.adminMethodNotAllowed("provider", http.MethodGet))
 	s.mux.HandleFunc("/api/admin/providers/", s.handleAdminProviderNested)
