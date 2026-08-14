@@ -145,18 +145,8 @@ func BootstrapBaseData(store Store) error {
 
 func BootstrapBaseDataWithConfig(store Store, config Config) error {
 	seedDefaultOrgResources(store)
-	if _, err := store.CreateAdminUser(AdminUser{
-		ID:       "usr_admin",
-		Username: "admin",
-		Name:     "Platform Admin",
-		Email:    "admin@tokenhub.local",
-		Role:     "admin",
-		TeamID:   "team_platform",
-		Status:   StatusActive,
-	}, config.BootstrapAdminPassword); err != nil {
-		if AsHTTPError(err).Code != "admin_user_conflict" {
-			return err
-		}
+	if err := seedBootstrapAdmin(store, config.BootstrapAdminPassword); err != nil {
+		return err
 	}
 	seedDefaultProject(store)
 	if err := seedBuiltinProviderCatalog(store); err != nil {
@@ -165,6 +155,29 @@ func BootstrapBaseDataWithConfig(store Store, config Config) error {
 	pruneProviderImportedModelCatalog(store)
 	if err := seedDefaultModelCatalog(store, config.ModelCatalogFile); err != nil {
 		return err
+	}
+	return nil
+}
+
+func seedBootstrapAdmin(store Store, password string) error {
+	admin := AdminUser{
+		ID:       "usr_admin",
+		Username: "admin",
+		Name:     "Platform Admin",
+		Email:    "admin@tokenhub.local",
+		Role:     "admin",
+		TeamID:   "team_platform",
+		Status:   StatusActive,
+	}
+	for _, existing := range store.ListAdminUsers() {
+		if existing.ID == admin.ID || existing.Username == admin.Username || existing.Email == admin.Email {
+			return nil
+		}
+	}
+	if _, err := store.CreateAdminUser(admin, password); err != nil {
+		if AsHTTPError(err).Code != "admin_user_conflict" {
+			return err
+		}
 	}
 	return nil
 }
