@@ -24,10 +24,7 @@ func RunStartupBootstrap(ctx context.Context, store *GormStore, config Config) e
 		if err := contextual.NormalizeProviderAdapterTypes(leaseCtx); err != nil {
 			return err
 		}
-		if err := seed(contextual, config); err != nil {
-			return err
-		}
-		return backfillCodexImageRoutes(leaseCtx, contextual)
+		return seed(contextual, config)
 	})
 }
 
@@ -541,10 +538,6 @@ func seedMockData(store Store) error {
 	}
 	for i := 1; i <= 36; i++ {
 		providerType := providerTypes[(i-1)%len(providerTypes)]
-		providerHeaders := map[string]string{"x-mock-region": mockRegion(i)}
-		if validateProviderHeaderSupport(providerType, providerHeaders) != nil {
-			providerHeaders = nil
-		}
 		provider := store.AddProvider(Provider{
 			ID:       fmt.Sprintf("prv_mock_%03d", i),
 			Name:     fmt.Sprintf("Mock Provider %03d", i),
@@ -553,16 +546,14 @@ func seedMockData(store Store) error {
 			Status:   activeEvery(i, 10),
 			Healthy:  true,
 			Priority: 1 + (i % 9),
-			Headers:  providerHeaders,
+			Headers: map[string]string{
+				"x-mock-region": mockRegion(i),
+			},
 			Options: map[string]string{
 				"tier": mockTier(i),
 			},
 		})
 		for resourceIndex := 1; resourceIndex <= 2; resourceIndex++ {
-			resourceHeaders := map[string]string{"x-tokenhub-resource-region": mockRegion(i + resourceIndex)}
-			if validateProviderHeaderSupport(providerType, resourceHeaders) != nil {
-				resourceHeaders = nil
-			}
 			_, err := store.AddProviderResource(ProviderResource{
 				ID:             fmt.Sprintf("rsrc_mock_%03d_%d", i, resourceIndex),
 				ProviderID:     provider.ID,
@@ -578,7 +569,9 @@ func seedMockData(store Store) error {
 				RateLimitRPM:   int64(600 + i*20 + resourceIndex*50),
 				TokenLimitTPM:  int64(90000 + i*1500),
 				MaxConcurrency: int64(10 + (i % 12)),
-				Headers:        resourceHeaders,
+				Headers: map[string]string{
+					"x-tokenhub-resource-region": mockRegion(i + resourceIndex),
+				},
 				Options: map[string]string{
 					"owner": fmt.Sprintf("team_mock_%02d", ((i-1)%24)+1),
 				},

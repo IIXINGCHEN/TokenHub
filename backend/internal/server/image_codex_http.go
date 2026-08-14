@@ -46,70 +46,7 @@ type codexSubscriptionImageData struct {
 	B64JSON string `json:"b64_json"`
 }
 
-type codexImageCapabilityTestResult struct {
-	ResourceID string `json:"resource_id"`
-	Capability string `json:"capability"`
-	LatencyMS  int64  `json:"latency_ms"`
-}
-
-func (s *Server) testCodexImageCapability(ctx context.Context, resourceID string) (codexImageCapabilityTestResult, error) {
-	release, err := s.acquireImageAccount(ctx, resourceID)
-	if err != nil {
-		return codexImageCapabilityTestResult{}, err
-	}
-	defer release()
-	if _, err := s.store.RefreshProviderResourceCredentials(ctx, resourceID, false); err != nil {
-		return codexImageCapabilityTestResult{}, err
-	}
-	provider, resource, expectedIdentity, err := s.store.ProviderResourceImageCapabilitySnapshot(resourceID)
-	if err != nil {
-		return codexImageCapabilityTestResult{}, err
-	}
-	route := RouteSelection{Provider: provider, Resource: &resource, ProviderModel: codexImageUpstreamModel}
-	startedAt := time.Now()
-	_, _, _, err = s.executeCodexSubscriptionImageBound(ctx, route, ImageJob{
-		Model: codexImageModelName, Action: "generation", Prompt: "Generate a simple solid white square for an image capability test.", Quality: "auto", Size: "1024x1024",
-	}, expectedIdentity, false)
-	if err != nil {
-		if persistErr := s.persistCodexImageCapability(resourceID, expectedIdentity, codexImageCapabilityUnsupported); persistErr != nil {
-			return codexImageCapabilityTestResult{}, persistErr
-		}
-		return codexImageCapabilityTestResult{}, err
-	}
-	if err := s.persistCodexImageCapability(resourceID, expectedIdentity, codexImageCapabilitySupported); err != nil {
-		return codexImageCapabilityTestResult{}, err
-	}
-	return codexImageCapabilityTestResult{ResourceID: resourceID, Capability: codexImageCapabilitySupported, LatencyMS: time.Since(startedAt).Milliseconds()}, nil
-}
-
 func (s *Server) executeCodexSubscriptionImage(ctx context.Context, route RouteSelection, job ImageJob) ([]byte, string, Usage, error) {
-	resourceID := routeResourceID(route)
-	invoke := func() ([]byte, string, Usage, error) {
-		provider, resource, expectedIdentity, err := s.store.ProviderResourceImageCapabilitySnapshot(resourceID)
-		if err != nil {
-			return nil, "", Usage{}, err
-		}
-		if resource.Options[openAIAccountReauthorizationRequiredOption] == "true" || resource.Options[codexImageCapabilityOption] != codexImageCapabilitySupported {
-			return nil, "", Usage{}, NewHTTPError(http.StatusServiceUnavailable, "image_capability_not_verified", "Image generation is unavailable until this account passes a real image capability test")
-		}
-		route.Provider = provider
-		route.Resource = &resource
-		return s.executeCodexSubscriptionImageBound(ctx, route, job, expectedIdentity, true)
-	}
-	if _, err := s.store.RefreshProviderResourceCredentials(ctx, resourceID, false); err != nil {
-		return nil, "", Usage{}, err
-	}
-	image, revisedPrompt, usage, err := invoke()
-	if err == nil || providerErrorDisposition(err) != ProviderErrorAuthBroken {
-		return image, revisedPrompt, usage, err
-	}
-	if _, refreshErr := s.store.RefreshProviderResourceCredentials(ctx, resourceID, true); refreshErr != nil {
-		return nil, "", Usage{}, refreshErr
-	}
-	return invoke()
-}
-
-func (s *Server) executeCodexSubscriptionImageBound(ctx context.Context, route RouteSelection, job ImageJob, expectedIdentity string, recordCapability bool) ([]byte, string, Usage, error) {
 	resourceID := routeResourceID(route)
 	request, err := s.codexSubscriptionImageRequest(job)
 	if err != nil {
@@ -118,10 +55,7 @@ func (s *Server) executeCodexSubscriptionImageBound(ctx context.Context, route R
 	response, headers, err := s.codexSubscription.Image(ctx, route.Provider, resourceID, request)
 	if err != nil {
 		if AsHTTPError(err).Code == "codex_image_forbidden" {
-			if recordCapability {
-				s.recordCodexImageCapability(resourceID, expectedIdentity, codexImageCapabilityUnsupported)
-			}
-			return nil, "", Usage{}, codexImageUnsupportedError()
+			return nil, "", Usage{}, s.codexImageForbiddenError(resourceID)
 		}
 		return nil, "", Usage{}, err
 	}
@@ -136,9 +70,7 @@ func (s *Server) executeCodexSubscriptionImageBound(ctx context.Context, route R
 	applyCodexResponseMetadata(&usage, headers)
 	usage.Transport = "http_json"
 	usage.ServedModel = firstNonEmpty(usage.ServedModel, codexImageUpstreamModel)
-	if recordCapability {
-		s.recordCodexImageCapability(resourceID, expectedIdentity, codexImageCapabilitySupported)
-	}
+	s.recordCodexImageCapability(resourceID, codexImageCapabilitySupported)
 	return imageBytes, "", usage, nil
 }
 
@@ -195,14 +127,20 @@ func (a CodexSubscriptionAdapter) Image(
 	resourceID string,
 	request codexSubscriptionImageRequest,
 ) (codexSubscriptionImageResponse, http.Header, error) {
-	_ = resourceID
-	// The caller supplies one atomic Provider/resource binding. Reloading only the
-	// credentials here could send a newly authorized token to an old endpoint or
-	// with old headers. Authentication failures therefore end this invocation;
-	// the next invocation obtains a complete fresh binding.
-	credentials := ProviderResourceCredentials{
-		AccessToken: provider.APIKey,
-		AccountID:   provider.Options["account_id"],
+	if a.RefreshCredentials == nil {
+		return codexSubscriptionImageResponse{}, nil, NewHTTPError(http.StatusServiceUnavailable, "provider_credentials_unavailable", "Codex Subscription credentials are unavailable")
+	}
+	credentials, err := a.RefreshCredentials(ctx, resourceID, false)
+	if err != nil {
+		return codexSubscriptionImageResponse{}, nil, err
+	}
+	response, headers, err := a.imageWithRetry(ctx, provider, credentials, request)
+	if err == nil || providerErrorDisposition(err) != ProviderErrorAuthBroken {
+		return response, headers, err
+	}
+	credentials, refreshErr := a.RefreshCredentials(ctx, resourceID, true)
+	if refreshErr != nil {
+		return codexSubscriptionImageResponse{}, nil, refreshErr
 	}
 	return a.imageWithRetry(ctx, provider, credentials, request)
 }
@@ -347,34 +285,22 @@ func codexImageEndpoint(provider Provider, edit bool) (string, error) {
 	return parsed.String(), nil
 }
 
-func (s *Server) codexImageForbiddenError(resourceID string, expectedIdentity string) error {
-	s.recordCodexImageCapability(resourceID, expectedIdentity, codexImageCapabilityUnsupported)
-	return codexImageUnsupportedError()
-}
-
-func codexImageUnsupportedError() error {
+func (s *Server) codexImageForbiddenError(resourceID string) error {
+	s.recordCodexImageCapability(resourceID, codexImageCapabilityUnsupported)
 	return &ProviderInvocationError{
 		Err:         NewHTTPError(http.StatusForbidden, "codex_image_forbidden", "This Codex subscription account is not allowed to use image generation"),
 		Disposition: ProviderErrorModelUnsupported,
 	}
 }
 
-func (s *Server) recordCodexImageCapability(resourceID string, expectedIdentity string, capability string) {
-	if err := s.persistCodexImageCapability(resourceID, expectedIdentity, capability); err != nil {
+func (s *Server) recordCodexImageCapability(resourceID string, capability string) {
+	if strings.TrimSpace(resourceID) == "" {
+		return
+	}
+	if _, err := s.store.UpdateProviderResourceOptions(resourceID, map[string]string{
+		codexImageCapabilityOption:          capability,
+		codexImageCapabilityCheckedAtOption: time.Now().UTC().Format(time.RFC3339Nano),
+	}); err != nil {
 		log.Printf("[tokenhub] failed to record Codex image capability resource=%s: %v", resourceID, err)
 	}
-}
-
-func (s *Server) persistCodexImageCapability(resourceID string, expectedIdentity string, capability string) error {
-	if strings.TrimSpace(resourceID) == "" {
-		return NewHTTPError(http.StatusBadRequest, "provider_resource_not_found", "Provider resource is required")
-	}
-	updated, err := s.store.UpdateProviderResourceImageCapability(resourceID, expectedIdentity, capability, time.Now().UTC())
-	if err != nil {
-		return NewHTTPError(http.StatusInternalServerError, "image_capability_persist_failed", "Failed to persist image generation capability")
-	}
-	if !updated {
-		return NewHTTPError(http.StatusConflict, "image_capability_credentials_changed", "Provider resource credentials changed while image generation was being tested")
-	}
-	return nil
 }

@@ -10,7 +10,7 @@ import { defaultProviderClaudeCodeAttributionPolicy } from "../domain/provider-a
 import { customUpstreamConnectionKey, customUpstreamDiscoveryPayload, customUpstreamModelsAreCurrent, customUpstreamModelsVisible } from "../domain/provider-custom-upstream";
 import { providerCatalogModelIsSelectable } from "../domain/provider-model-selection";
 import { clearCustomValidity, countWithUnit, handleRequiredFieldInvalid, providerSaveMessage, tx } from "../i18n/runtime";
-import { adminFetch, isAuthExpiredError, providerPayload, providerResourcePayload, providerResourceToForm, providerResourceUpdatePayload, providerUpdatePayload, readAdminError } from "../resources/payloads";
+import { adminFetch, isAuthExpiredError, providerPayload, providerResourcePayload, providerUpdatePayload, readAdminError } from "../resources/payloads";
 import { assertProviderAccountResourceReady, defaultProviderResourceName, providerAccountTokenSummary, providerCreateAccountManualTokenFields, providerCreateAccountRuntimeFields, providerResourceDraftDefaults } from "../resources/provider-model-config";
 import { ReviewItem } from "../shared/modals";
 import { providerTypeOptions } from "../shared/ui";
@@ -21,8 +21,45 @@ import { ProviderInlineField, providerAccountResourceReady, providerCreateWizard
 import { ProviderAdvancedFields, ProviderConnectionFields, providerReasoningFormValues, ProviderResourceAttributionFields } from "./provider-editor-sections";
 import { ProviderResourceReasoningSettings } from "./provider-resource-reasoning-settings";
 import { providerHeaderFormError, providerHeadersFormValue, providerHeadersPayload } from "../domain/provider-headers";
-import { type CodexSubscriptionTestResult, formatImageGenerationCapability, formatImageGenerationCapabilityTag, formatQuotaPercent, launchProviderAccountAuthorization, type OpenAIAccountQuota, type ProviderAccountOAuthAction, ProviderAccountDetails, ProviderAccountImageTest, ProviderAccountTokenRenewal, ProviderOAuthCallbackModal, ProviderOAuthNoticeModal, providerResourceAccountLabel, QuotaMetric, quotaUsagePercent, quotaWindowResetLabel } from "./provider-account-ui";
+import { formatImageGenerationCapability, formatImageGenerationCapabilityTag, formatQuotaPercent, launchProviderAccountAuthorization, type OpenAIQuotaWindow, type ProviderAccountOAuthAction, ProviderAccountDetails, ProviderAccountTokenRenewal, ProviderOAuthCallbackModal, ProviderOAuthNoticeModal, providerResourceAccountLabel, QuotaMetric, quotaUsagePercent, quotaWindowResetLabel } from "./provider-account-ui";
 const openAIAccountOAuthRedirectURI = "http://localhost:1455/auth/callback";
+type OpenAIAccountQuota = {
+  account_id?: string;
+  email?: string;
+  plan_type?: string;
+  rate_limit?: {
+    allowed: boolean;
+    limit_reached: boolean;
+    primary_window?: OpenAIQuotaWindow;
+    secondary_window?: OpenAIQuotaWindow;
+  };
+  additional_rate_limits?: Array<{
+    limit_name: string;
+    metered_feature: string;
+    rate_limit?: {
+      allowed: boolean;
+      limit_reached: boolean;
+      primary_window?: OpenAIQuotaWindow;
+      secondary_window?: OpenAIQuotaWindow;
+    };
+  }>;
+  rate_limit_reset_credits?: { available_count: number };
+  fetched_at: number;
+};
+type CodexSubscriptionTestResult = {
+  resource_id: string;
+  model: string;
+  reasoning_effort: string;
+  speed: "standard" | "fast";
+  upstream_service_tier?: string;
+  output_text: string;
+  latency_ms: number;
+  usage: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
+};
 type ProviderEditTab = "connect" | "models" | "advanced";
 type ProviderAccountConfirmation = {
   action: "enable" | "disable" | "delete";
@@ -150,7 +187,6 @@ export function ProviderUpsertModal({
   const [accountOAuthNoticeError, setAccountOAuthNoticeError] = useState("");
   const [accountOAuthCallbackModalOpen, setAccountOAuthCallbackModalOpen] = useState(false);
   const [accountOAuthCallbackModalError, setAccountOAuthCallbackModalError] = useState("");
-  const [reauthorizationResourceID, setReauthorizationResourceID] = useState("");
   const [accountQuotaBusyIDs, setAccountQuotaBusyIDs] = useState<Record<string, boolean>>({});
   const [accountQuotaErrors, setAccountQuotaErrors] = useState<Record<string, string>>({});
   const [accountQuotas, setAccountQuotas] = useState<Record<string, OpenAIAccountQuota>>({});
@@ -614,39 +650,21 @@ export function ProviderUpsertModal({
       setError(tx("未在回调结果中识别到 Token。"));
       return;
     }
-    const nextValues = {
-      ...accountValues,
+    setAccountValues((current) => ({
+      ...current,
       resource_type: "openai_subscription",
       auth_type: "oauth",
-      access_token: result.access_token || accountValues.access_token || "",
-      refresh_token: result.refresh_token || accountValues.refresh_token || "",
-      id_token: result.id_token || accountValues.id_token || "",
-      account_email: result.account_email || accountValues.account_email || "",
-      account_id: result.account_id || accountValues.account_id || "",
-      organization_id: result.organization_id || accountValues.organization_id || "",
-      plan_type: result.plan_type || accountValues.plan_type || "",
-      token_type: result.token_type || accountValues.token_type || "",
-      expires_at: result.expires_at || accountValues.expires_at || "",
-      scopes: result.scopes || accountValues.scopes || "",
-    };
-    setAccountValues(nextValues);
-    if (reauthorizationResourceID) {
-      try {
-        const response = await adminFetch(api, `/api/admin/provider-resources/${encodeURIComponent(reauthorizationResourceID)}`, {
-          method: "PATCH", body: JSON.stringify(providerResourceUpdatePayload(nextValues)),
-        });
-        if (!response.ok) throw new Error(await readAdminError(response, tx("账号授权失败")));
-      } catch (reason) {
-        if (isAuthExpiredError(reason)) return;
-        const errorMessage = reason instanceof Error ? reason.message : tx("账号授权失败");
-        setAccountOAuthStatus(errorMessage);
-        setError(errorMessage);
-        return;
-      }
-      setReauthorizationResourceID("");
-      setAccountOAuthCallbackModalOpen(false);
-      await (onAccountsChanged ?? onSaved)();
-    }
+      access_token: result.access_token || current.access_token || "",
+      refresh_token: result.refresh_token || current.refresh_token || "",
+      id_token: result.id_token || current.id_token || "",
+      account_email: result.account_email || current.account_email || "",
+      account_id: result.account_id || current.account_id || "",
+      organization_id: result.organization_id || current.organization_id || "",
+      plan_type: result.plan_type || current.plan_type || "",
+      token_type: result.token_type || current.token_type || "",
+      expires_at: result.expires_at || current.expires_at || "",
+      scopes: result.scopes || current.scopes || "",
+    }));
     setAccountOAuthStatus(message);
     setError("");
   }
@@ -725,12 +743,6 @@ export function ProviderUpsertModal({
       return;
     }
     setAccountOAuthNoticeError("");
-    setAccountOAuthNoticeOpen(true);
-  }
-
-  function requestExistingAccountReauthorization(resource: ProviderResource) {
-    setReauthorizationResourceID(resource.id); setAccountValues(providerResourceToForm(resource, provider?.options));
-    setAccountOAuthCallback(""); setAccountOAuthStatus(""); setAccountOAuthNoticeError("");
     setAccountOAuthNoticeOpen(true);
   }
 
@@ -1556,8 +1568,8 @@ export function ProviderUpsertModal({
                             </span>
                             <button className="secondary-button" disabled={accountQuotaBusyIDs[resource.id]} onClick={() => void queryAccountQuota(resource, true)} type="button">
                               {tx(accountQuotaBusyIDs[resource.id] ? "查询中" : quota ? "刷新用量与重置次数" : "查询用量与重置次数")}
-                            </button><ProviderAccountImageTest api={api} resource={resource} onTested={async () => { await (onAccountsChanged ?? onSaved)(); }} />
-                            <ProviderAccountTokenRenewal api={api} resource={resource} onReauthorize={() => requestExistingAccountReauthorization(resource)} onRenewed={async () => { await (onAccountsChanged ?? onSaved)(); }} />
+                            </button>
+                            <ProviderAccountTokenRenewal api={api} resource={resource} onRenewed={async () => { await (onAccountsChanged ?? onSaved)(); }} />
                             {resource.status === "active" ? (
                               <button
                                 className="secondary-button provider-account-disable-button"
@@ -1930,14 +1942,14 @@ export function ProviderUpsertModal({
       <ProviderOAuthNoticeModal
         busy={accountOAuthBusy}
         error={accountOAuthNoticeError}
-        onClose={() => { setAccountOAuthNoticeOpen(false); setReauthorizationResourceID(""); }}
+        onClose={() => setAccountOAuthNoticeOpen(false)}
         onConfirm={() => startProviderAccountAuthorization("open")} onCopy={() => startProviderAccountAuthorization("copy")}
         open={accountOAuthNoticeOpen}
       />
       <ProviderOAuthCallbackModal
         busy={accountOAuthBusy}
         error={accountOAuthCallbackModalError}
-        onClose={() => { setAccountOAuthCallbackModalOpen(false); setReauthorizationResourceID(""); }}
+        onClose={() => setAccountOAuthCallbackModalOpen(false)}
         onConfirm={confirmProviderAccountOAuthCallback}
         onValueChange={(value) => {
           setAccountOAuthCallback(value);

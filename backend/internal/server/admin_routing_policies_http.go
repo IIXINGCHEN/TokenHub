@@ -58,9 +58,6 @@ func (s *Server) handleAdminRoutingPolicySimulation(w http.ResponseWriter, r *ht
 	} else {
 		routes, err = s.store.SelectRouteCandidates(modelName)
 	}
-	if modelName == codexImageModelName {
-		routes = s.filterAndPrioritizeCodexImageRoutes(routes)
-	}
 	if err != nil && AsHTTPError(err).Code != ErrProviderMissing.Code {
 		writeError(w, r, err)
 		return

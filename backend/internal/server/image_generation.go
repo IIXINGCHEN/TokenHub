@@ -1045,7 +1045,9 @@ func validGPTImage2Size(value string) bool {
 }
 
 func (s *Server) filterAndPrioritizeCodexImageRoutes(routes []RouteSelection) []RouteSelection {
-	normal := make([]RouteSelection, 0, len(routes))
+	supported := make([]RouteSelection, 0, len(routes))
+	recoveryDue := make([]RouteSelection, 0, len(routes))
+	unknown := make([]RouteSelection, 0, len(routes))
 	for _, route := range routes {
 		capability := ""
 		if route.Resource != nil {
@@ -1053,14 +1055,28 @@ func (s *Server) filterAndPrioritizeCodexImageRoutes(routes []RouteSelection) []
 		}
 		switch capability {
 		case codexImageCapabilityUnsupported:
-			continue
+			checkedAt, err := time.Parse(time.RFC3339Nano, route.Resource.Options[codexImageCapabilityCheckedAtOption])
+			retryAfter := time.Duration(s.config.ImageCapabilityRetrySecs) * time.Second
+			if err == nil && retryAfter > 0 && time.Since(checkedAt) < retryAfter {
+				continue
+			}
+			recoveryDue = append(recoveryDue, route)
 		case codexImageCapabilitySupported:
-			normal = append(normal, route)
+			supported = append(supported, route)
 		default:
-			continue
+			unknown = append(unknown, route)
 		}
 	}
-	return normal
+	prioritized := make([]RouteSelection, 0, len(supported)+len(recoveryDue)+len(unknown))
+	if len(recoveryDue) > 0 {
+		prioritized = append(prioritized, recoveryDue[0])
+	}
+	prioritized = append(prioritized, supported...)
+	prioritized = append(prioritized, unknown...)
+	if len(recoveryDue) > 1 {
+		prioritized = append(prioritized, recoveryDue[1:]...)
+	}
+	return prioritized
 }
 
 func imageJobErrorStatus(code string) int {

@@ -2,16 +2,10 @@ package server
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
-	"sort"
 	"strings"
 	"time"
-
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 const openAIAccountReauthorizationRequiredOption = "oauth_reauthorization_required"
@@ -65,11 +59,8 @@ func (s *GormStore) mergeOpenAIAccountCredentials(resource *ProviderResource, pa
 	if resource.Credentials != nil {
 		creds = *resource.Credentials
 	}
-	if patch != nil {
-		creds = s.providerResourceCredentialsForRuntime(*resource)
-	}
 	if patch != nil && patch.Credentials != nil {
-		mergeProviderResourceCredentials(&creds, *patch.Credentials)
+		creds = *patch.Credentials
 	}
 	if strings.TrimSpace(creds.AccessToken) == "" && resource.APIKey != "" && !strings.HasPrefix(resource.APIKey, "enc:v1:") {
 		creds.AccessToken = resource.APIKey
@@ -95,7 +86,7 @@ func (s *GormStore) mergeOpenAIAccountCredentials(resource *ProviderResource, pa
 		resource.CredentialBlob = ""
 	}
 	applyOpenAIAccountOptions(resource.Options, creds)
-	if patch != nil && patch.Credentials != nil && strings.TrimSpace(patch.Credentials.AccessToken) != "" {
+	if patch != nil && patch.Credentials != nil && hasOpenAIAccountSecret(creds) {
 		delete(resource.Options, openAIAccountReauthorizationRequiredOption)
 	}
 	resource.Credentials = nil
@@ -218,17 +209,10 @@ func (s *GormStore) RefreshProviderResourceCredentials(ctx context.Context, reso
 			return notFound(err, "provider_resource_not_found", "Provider resource not found")
 		}
 		creds := s.providerResourceCredentialsForRuntime(resource)
-		credentialVersion := providerResourceCredentialVersion(creds)
-		authenticationVersion := providerResourceAuthenticationVersion(creds)
 		if !isOpenAIAccountResource(resource.ResourceType) {
 			result = creds
 			s.mu.Unlock()
 			return nil
-		}
-		if resource.Options[openAIAccountReauthorizationRequiredOption] == "true" {
-			result = creds
-			s.mu.Unlock()
-			return NewHTTPError(409, "provider_resource_reauthorization_required", "OpenAI/Codex account session has ended. Reauthorize the account.")
 		}
 		needsRefresh, expired := providerResourceCredentialsNeedRefresh(creds, openAIAccountOAuthRefreshLead)
 		if !force && !needsRefresh {
@@ -251,35 +235,18 @@ func (s *GormStore) RefreshProviderResourceCredentials(ctx context.Context, reso
 			if httpErr := AsHTTPError(err); httpErr != nil && httpErr.Code == "provider_resource_reauthorization_required" {
 				s.mu.Lock()
 				var current ProviderResource
-				credentialsUnchanged := false
-				loadErr := s.db.WithContext(leaseCtx).Transaction(func(tx *gorm.DB) error {
-					if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, "id = ?", resourceID).Error; err != nil {
-						return err
+				loadErr := s.db.WithContext(leaseCtx).First(&current, "id = ?", resourceID).Error
+				if loadErr == nil && isOpenAIAccountResource(current.ResourceType) {
+					if current.Options == nil {
+						current.Options = map[string]string{}
 					}
-					credentialsUnchanged = providerResourceAuthenticationVersion(s.providerResourceCredentialsForRuntime(current)) == authenticationVersion
-					if !isOpenAIAccountResource(current.ResourceType) || !credentialsUnchanged {
-						return nil
-					}
-					options := cloneStringMap(current.Options)
-					if options == nil {
-						options = map[string]string{}
-					}
-					options[openAIAccountReauthorizationRequiredOption] = "true"
-					delete(options, codexImageCapabilityOption)
-					delete(options, codexImageCapabilityCheckedAtOption)
-					current.Options = options
+					current.Options[openAIAccountReauthorizationRequiredOption] = "true"
 					current.UpdatedAt = time.Now().UTC()
-					return tx.Select("Options", "UpdatedAt").Save(&current).Error
-				})
-				if loadErr == nil && !credentialsUnchanged {
-					result = s.providerResourceCredentialsForRuntime(current)
+					loadErr = s.db.WithContext(leaseCtx).Save(&current).Error
 				}
 				s.mu.Unlock()
 				if loadErr != nil {
 					return loadErr
-				}
-				if !credentialsUnchanged {
-					return nil
 				}
 			}
 			return err
@@ -287,124 +254,34 @@ func (s *GormStore) RefreshProviderResourceCredentials(ctx context.Context, reso
 
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		return s.db.WithContext(leaseCtx).Transaction(func(tx *gorm.DB) error {
-			var current ProviderResource
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, "id = ?", resourceID).Error; err != nil {
-				return notFound(err, "provider_resource_not_found", "Provider resource not found")
-			}
-			if !isOpenAIAccountResource(current.ResourceType) {
-				result = refreshed
-				return nil
-			}
-			currentCredentials := s.providerResourceCredentialsForRuntime(current)
-			if providerResourceAuthenticationVersion(currentCredentials) != authenticationVersion {
-				result = currentCredentials
-				return nil
-			}
-			if providerResourceCredentialVersion(currentCredentials) != credentialVersion {
-				refreshed = mergeRefreshedProviderResourceCredentials(currentCredentials, refreshed)
-			}
-			if current.Options == nil {
-				current.Options = map[string]string{}
-			}
-			delete(current.Options, openAIAccountReauthorizationRequiredOption)
-			current.Credentials = &refreshed
-			s.mergeOpenAIAccountCredentials(&current, &ProviderResource{Credentials: &refreshed})
-			if strings.TrimSpace(current.APIKey) != "" {
-				current.APIKey = s.encryptSecret(current.APIKey)
-			}
-			current.UpdatedAt = time.Now().UTC()
-			if err := tx.Select("APIKey", "CredentialBlob", "Options", "UpdatedAt").Save(&current).Error; err != nil {
-				return err
-			}
-			result = s.providerResourceCredentialsForRuntime(current)
+		var current ProviderResource
+		if err := s.db.WithContext(leaseCtx).First(&current, "id = ?", resourceID).Error; err != nil {
+			return notFound(err, "provider_resource_not_found", "Provider resource not found")
+		}
+		if !isOpenAIAccountResource(current.ResourceType) {
+			result = refreshed
 			return nil
-		})
+		}
+		if current.Options == nil {
+			current.Options = map[string]string{}
+		}
+		delete(current.Options, openAIAccountReauthorizationRequiredOption)
+		current.Credentials = &refreshed
+		s.mergeOpenAIAccountCredentials(&current, &ProviderResource{Credentials: &refreshed})
+		if strings.TrimSpace(current.APIKey) != "" {
+			current.APIKey = s.encryptSecret(current.APIKey)
+		}
+		current.UpdatedAt = time.Now().UTC()
+		if err := s.db.WithContext(leaseCtx).Save(&current).Error; err != nil {
+			return err
+		}
+		result = s.providerResourceCredentialsForRuntime(current)
+		return nil
 	})
 	if err != nil {
 		return result, err
 	}
 	return result, nil
-}
-
-func providerResourceCredentialVersion(creds ProviderResourceCredentials) string {
-	payload, _ := json.Marshal(creds)
-	return credentialFingerprint(string(payload))
-}
-
-func providerResourceAuthenticationVersion(creds ProviderResourceCredentials) string {
-	return credentialFingerprint(strings.Join([]string{creds.AuthType, creds.AccessToken, creds.RefreshToken, creds.IDToken, creds.ClientID}, "\x00"))
-}
-
-func providerResourceImageCapabilityIdentityVersion(creds ProviderResourceCredentials) string {
-	return credentialFingerprint(strings.Join([]string{
-		creds.AuthType, creds.AccessToken, creds.AccountID,
-	}, "\x00"))
-}
-
-func providerResourceImageCapabilityBindingVersion(provider Provider, resource ProviderResource, creds ProviderResourceCredentials) string {
-	payload, _ := json.Marshal(struct {
-		ProviderID               string
-		ProviderType             string
-		ProviderBaseURL          string
-		ProviderHeaders          map[string]string
-		ProviderSensitiveHeaders []string
-		ResourceID               string
-		ResourceProviderID       string
-		ResourceType             string
-		ResourceBaseURL          string
-		ResourceHeaders          map[string]string
-		ResourceSensitiveHeaders []string
-		ReauthorizationRequired  bool
-		AllowedCodexHosts        []string
-		CredentialIdentity       string
-	}{
-		ProviderID: provider.ID, ProviderType: provider.Type, ProviderBaseURL: provider.BaseURL, ProviderHeaders: provider.Headers,
-		ProviderSensitiveHeaders: provider.SensitiveHeaders,
-		ResourceID:               resource.ID, ResourceProviderID: resource.ProviderID, ResourceType: resource.ResourceType, ResourceBaseURL: resource.BaseURL,
-		ResourceHeaders: resource.Headers, ResourceSensitiveHeaders: resource.SensitiveHeaders,
-		ReauthorizationRequired: resource.Options[openAIAccountReauthorizationRequiredOption] == "true",
-		AllowedCodexHosts:       normalizedCodexAllowedHosts(provider.Options, resource.Options),
-		CredentialIdentity:      providerResourceImageCapabilityIdentityVersion(creds),
-	})
-	return credentialFingerprint(string(payload))
-}
-
-func normalizedCodexAllowedHosts(providerOptions map[string]string, resourceOptions map[string]string) []string {
-	value := providerOptions["allowed_codex_hosts"]
-	if resourceValue, ok := resourceOptions["allowed_codex_hosts"]; ok {
-		value = resourceValue
-	}
-	seen := map[string]struct{}{}
-	for _, candidate := range strings.Split(value, ",") {
-		host := strings.ToLower(strings.TrimSpace(candidate))
-		if host != "" {
-			seen[host] = struct{}{}
-		}
-	}
-	hosts := make([]string, 0, len(seen))
-	for host := range seen {
-		hosts = append(hosts, host)
-	}
-	sort.Strings(hosts)
-	return hosts
-}
-
-func credentialFingerprint(value string) string {
-	return fmt.Sprintf("%x", sha256.Sum256([]byte(value)))
-}
-
-func mergeRefreshedProviderResourceCredentials(current, refreshed ProviderResourceCredentials) ProviderResourceCredentials {
-	merged := current
-	merged.AuthType = firstNonEmpty(refreshed.AuthType, current.AuthType)
-	merged.AccessToken = firstNonEmpty(refreshed.AccessToken, current.AccessToken)
-	merged.RefreshToken = firstNonEmpty(refreshed.RefreshToken, current.RefreshToken)
-	merged.IDToken = firstNonEmpty(refreshed.IDToken, current.IDToken)
-	merged.ClientID = firstNonEmpty(refreshed.ClientID, current.ClientID)
-	merged.Scopes = firstNonEmpty(refreshed.Scopes, current.Scopes)
-	merged.TokenType = firstNonEmpty(refreshed.TokenType, current.TokenType)
-	merged.ExpiresAt = firstNonEmpty(refreshed.ExpiresAt, current.ExpiresAt)
-	return merged
 }
 
 func (s *GormStore) providerResourceCredentialsForRuntime(resource ProviderResource) ProviderResourceCredentials {

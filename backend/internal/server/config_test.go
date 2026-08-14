@@ -90,9 +90,10 @@ func TestConfigParsesClusterCoordinationSettings(t *testing.T) {
 
 func TestConfigParsesImageExecutionSettings(t *testing.T) {
 	t.Setenv("TOKENHUB_IMAGE_JOB_TIMEOUT_SECONDS", "300")
+	t.Setenv("TOKENHUB_IMAGE_CAPABILITY_RETRY_SECONDS", "86400")
 
 	config := ConfigFromEnv()
-	if config.ImageJobTimeoutSeconds != 300 {
+	if config.ImageJobTimeoutSeconds != 300 || config.ImageCapabilityRetrySecs != 86400 {
 		t.Fatalf("unexpected image execution settings: %+v", config)
 	}
 }

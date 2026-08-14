@@ -23,6 +23,7 @@ func responseJobTestConfig() Config {
 		ResponseMaxQueuedJobs:           100,
 		InFlightLeaseTTLSeconds:         2,
 		ClusterLockTTLSeconds:           2,
+		ImageCapabilityRetrySecs:        60,
 		UpstreamNonStreamTimeoutSeconds: 2,
 	}
 }

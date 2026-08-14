@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -17,7 +16,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -288,12 +286,16 @@ func TestCodexSubscriptionImageUsesDirectImagesAPI(t *testing.T) {
 
 			adapter := CodexSubscriptionAdapter{
 				Client: upstream.Client(),
+				RefreshCredentials: func(context.Context, string, bool) (ProviderResourceCredentials, error) {
+					return ProviderResourceCredentials{
+						AccessToken: "codex-subscription-token",
+						AccountID:   "chatgpt-account",
+					}, nil
+				},
 			}
 			response, _, err := adapter.Image(context.Background(), Provider{
 				Type:    ProviderOpenAICodex,
 				BaseURL: upstream.URL + "/backend-api/codex",
-				APIKey:  "codex-subscription-token",
-				Options: map[string]string{"account_id": "chatgpt-account"},
 			}, "rsrc_image", codexSubscriptionImageRequest{
 				Model:      codexImageUpstreamModel,
 				Prompt:     prompt,
@@ -312,7 +314,7 @@ func TestCodexSubscriptionImageUsesDirectImagesAPI(t *testing.T) {
 	}
 }
 
-func TestCodexSubscriptionImageDoesNotMixBindingsAfterUnauthorized(t *testing.T) {
+func TestCodexSubscriptionImageRefreshesOAuthAfterUnauthorized(t *testing.T) {
 	var mu sync.Mutex
 	forcedRefreshes := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -340,17 +342,17 @@ func TestCodexSubscriptionImageDoesNotMixBindingsAfterUnauthorized(t *testing.T)
 		},
 	}
 	_, _, err := adapter.Image(context.Background(), Provider{
-		Type: ProviderOpenAICodex, BaseURL: upstream.URL + "/backend-api/codex", APIKey: "expired-token", Options: map[string]string{"account_id": "chatgpt-account"},
+		Type: ProviderOpenAICodex, BaseURL: upstream.URL + "/backend-api/codex",
 	}, "rsrc_refresh", codexSubscriptionImageRequest{
 		Model: codexImageUpstreamModel, Prompt: "one green square",
 	})
-	if err == nil || providerErrorDisposition(err) != ProviderErrorAuthBroken {
-		t.Fatalf("error = %v, want authentication failure", err)
+	if err != nil {
+		t.Fatal(err)
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if forcedRefreshes != 0 {
-		t.Fatalf("forced refreshes = %d, want 0", forcedRefreshes)
+	if forcedRefreshes != 1 {
+		t.Fatalf("forced refreshes = %d, want 1", forcedRefreshes)
 	}
 }
 
@@ -388,10 +390,37 @@ func TestFilterAndPrioritizeCodexImageRoutes(t *testing.T) {
 			codexImageCapabilityOption: codexImageCapabilitySupported,
 		}}},
 	}
-	server := &Server{}
+	server := &Server{config: Config{ImageCapabilityRetrySecs: 86400}}
 	filtered := server.filterAndPrioritizeCodexImageRoutes(routes)
-	if len(filtered) != 1 || routeResourceID(filtered[0]) != "supported" {
+	if len(filtered) != 2 ||
+		routeResourceID(filtered[0]) != "supported" ||
+		routeResourceID(filtered[1]) != "unknown" {
 		t.Fatalf("unexpected image route order: %+v", filtered)
+	}
+}
+
+func TestStaleUnsupportedCodexImageRouteIsRetried(t *testing.T) {
+	server := &Server{config: Config{ImageCapabilityRetrySecs: 60}}
+	routes := []RouteSelection{
+		{Route: ModelRoute{Priority: 1}, Resource: &ProviderResource{ID: "supported", Options: map[string]string{
+			codexImageCapabilityOption: codexImageCapabilitySupported,
+		}}},
+		{Route: ModelRoute{Priority: 50}, Resource: &ProviderResource{ID: "retry", Options: map[string]string{
+			codexImageCapabilityOption:          codexImageCapabilityUnsupported,
+			codexImageCapabilityCheckedAtOption: time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339Nano),
+		}}},
+		{Route: ModelRoute{Priority: 60}, Resource: &ProviderResource{ID: "retry-later", Options: map[string]string{
+			codexImageCapabilityOption:          codexImageCapabilityUnsupported,
+			codexImageCapabilityCheckedAtOption: time.Now().Add(-3 * time.Minute).UTC().Format(time.RFC3339Nano),
+		}}},
+	}
+	planned := server.planRouteOrder(CallContext{RequestID: "req_recovery"}, routes)
+	filtered := server.filterAndPrioritizeCodexImageRoutes(planned)
+	if len(filtered) != 3 ||
+		routeResourceID(filtered[0]) != "retry" ||
+		routeResourceID(filtered[1]) != "supported" ||
+		routeResourceID(filtered[2]) != "retry-later" {
+		t.Fatalf("stale unsupported account must be retried: %+v", filtered)
 	}
 }
 
@@ -420,11 +449,7 @@ func TestCodexImageForbiddenMarksResourceUnsupportedAndAllowsFailover(t *testing
 		SecretKey:  "image-capability-test-secret",
 	})
 	t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
-	_, _, identity, err := store.ProviderResourceImageCapabilitySnapshot(resource.ID)
-	if err != nil {
-		t.Fatalf("load image capability identity: %v", err)
-	}
-	forbidden := server.codexImageForbiddenError(resource.ID, identity)
+	forbidden := server.codexImageForbiddenError(resource.ID)
 	if !shouldFailoverRoutedError(forbidden, false) {
 		t.Fatal("image entitlement failure must allow failover to another account")
 	}
@@ -550,6 +575,9 @@ func TestCodexImageVirtualModelRequiresSupportedSubscriptionAccount(t *testing.T
 		ResourceType: ProviderResourceOpenAISubscription,
 		Status:       StatusActive,
 		Healthy:      true,
+		Options: map[string]string{
+			codexImageCapabilityOption: codexImageCapabilityUnsupported,
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -574,12 +602,22 @@ func TestCodexImageVirtualModelRequiresSupportedSubscriptionAccount(t *testing.T
 	if models := store.AccessibleModels(key); len(models) != 0 {
 		t.Fatalf("unsupported account must not expose virtual image model: %+v", models)
 	}
+	store.imageCapabilityRetry = time.Minute
+	if _, err := store.UpdateProviderResourceOptions(resource.ID, map[string]string{
+		codexImageCapabilityCheckedAtOption: time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	models := store.AccessibleModels(key)
+	if len(models) != 1 || models[0].Name != codexImageModelName {
+		t.Fatalf("stale unsupported account must expose the model for a low-frequency recovery attempt: %+v", models)
+	}
 	if _, err := store.UpdateProviderResourceOptions(resource.ID, map[string]string{
 		codexImageCapabilityOption: codexImageCapabilitySupported,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	models := store.AccessibleModels(key)
+	models = store.AccessibleModels(key)
 	if len(models) != 1 || models[0].Name != codexImageModelName {
 		t.Fatalf("supported account must expose virtual image model: %+v", models)
 	}
@@ -698,14 +736,11 @@ func TestImageGenerationTimesOutAfterConfiguredLimit(t *testing.T) {
 	provider := store.AddProvider(Provider{
 		ID: "prv_timed_image", Name: "Timed Codex", Type: ProviderOpenAICodex, Status: StatusActive, Healthy: true,
 	})
-	timedResource, err := store.AddProviderResource(ProviderResource{
+	if _, err := store.AddProviderResource(ProviderResource{
 		ID: "rsrc_timed_image", ProviderID: provider.ID, Name: "Timed Codex Account",
 		ResourceType: ProviderResourceOpenAISubscription, Status: StatusActive, Healthy: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.UpdateProviderResourceOptions(timedResource.ID, map[string]string{codexImageCapabilityOption: codexImageCapabilitySupported}); err != nil {
+		Options: map[string]string{codexImageCapabilityOption: codexImageCapabilitySupported},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	store.AddRoute(ModelRoute{
@@ -901,11 +936,9 @@ func TestCodexImageRequestUsesSubscriptionCompatibleResponse(t *testing.T) {
 	resource, err := store.AddProviderResource(ProviderResource{
 		ID: "rsrc_codex_app_image", ProviderID: provider.ID, Name: "Codex App Image Account",
 		ResourceType: ProviderResourceOpenAISubscription, Status: StatusActive, Healthy: true,
+		Options: map[string]string{codexImageCapabilityOption: codexImageCapabilitySupported},
 	})
 	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.UpdateProviderResourceOptions(resource.ID, map[string]string{codexImageCapabilityOption: codexImageCapabilitySupported}); err != nil {
 		t.Fatal(err)
 	}
 	store.AddRoute(ModelRoute{
@@ -1030,9 +1063,6 @@ func TestImageGenerationAsyncUsesCodexSubscriptionAndPersistsImage(t *testing.T)
 		},
 	})
 	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.UpdateProviderResourceOptions(resource.ID, map[string]string{codexImageCapabilityOption: codexImageCapabilitySupported}); err != nil {
 		t.Fatal(err)
 	}
 	store.AddRoute(ModelRoute{
@@ -1197,189 +1227,6 @@ func TestImageGenerationAsyncUsesCodexSubscriptionAndPersistsImage(t *testing.T)
 	auditAssets, _ := firstAuditJob["assets"].([]any)
 	if len(auditAssets) != 2 {
 		t.Fatalf("input and output assets were not available in audit log: %+v", firstAuditJob)
-	}
-}
-
-func TestAdminCodexImageCapabilityTestPersistsRealResult(t *testing.T) {
-	imageBytes := realPNGFixture(t)
-	var fail atomic.Bool
-	var requests atomic.Int64
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
-		if r.URL.Path != "/backend-api/codex/images/generations" {
-			t.Errorf("unexpected image test path: %s", r.URL.Path)
-		}
-		if fail.Load() {
-			writeJSON(w, http.StatusForbidden, map[string]any{"error": map[string]any{"message": "image generation unavailable"}})
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"data": []map[string]any{{"b64_json": encodeBase64(imageBytes)}}})
-	}))
-	defer upstream.Close()
-
-	store := NewMemoryStore()
-	provider := store.AddProvider(Provider{ID: "prv_admin_image_test", Name: "Admin Image Test", Type: ProviderOpenAICodex, BaseURL: upstream.URL + "/backend-api/codex", Status: StatusActive, Healthy: true})
-	resource, err := store.AddProviderResource(ProviderResource{
-		ID: "rsrc_admin_image_test", ProviderID: provider.ID, Name: "Admin Image Account", ResourceType: ProviderResourceOpenAISubscription, Status: StatusActive, Healthy: true,
-		BaseURL:     upstream.URL + "/backend-api/codex",
-		Credentials: &ProviderResourceCredentials{AccessToken: "admin-image-access", AccountID: "admin-image-account"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	server := NewWithConfig(store, Config{AdminToken: "admin-image-token", SecretKey: "admin-image-test-secret"})
-	t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
-	server.codexSubscription.Client = upstream.Client()
-	call := func() *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPost, "/api/admin/provider-resources/"+resource.ID+"/image-test", nil)
-		req.Header.Set("authorization", "Bearer admin-image-token")
-		resp := httptest.NewRecorder()
-		server.Handler().ServeHTTP(resp, req)
-		return resp
-	}
-	if resp := call(); resp.Code != http.StatusOK {
-		t.Fatalf("expected successful real image test, got %d: %s", resp.Code, resp.Body.String())
-	}
-	updated, _ := store.GetProviderResource(resource.ID)
-	if updated.Options[codexImageCapabilityOption] != codexImageCapabilitySupported || updated.Options[codexImageCapabilityCheckedAtOption] == "" {
-		t.Fatalf("successful image test did not persist support: %+v", updated.Options)
-	}
-	fail.Store(true)
-	if resp := call(); resp.Code != http.StatusForbidden {
-		t.Fatalf("expected failed real image test, got %d: %s", resp.Code, resp.Body.String())
-	}
-	updated, _ = store.GetProviderResource(resource.ID)
-	if updated.Options[codexImageCapabilityOption] != codexImageCapabilityUnsupported {
-		t.Fatalf("failed image test did not persist unsupported state: %+v", updated.Options)
-	}
-	fail.Store(false)
-	if resp := call(); resp.Code != http.StatusOK {
-		t.Fatalf("expected image capability recovery, got %d: %s", resp.Code, resp.Body.String())
-	}
-	if err := store.db.Exec(`
-		CREATE TRIGGER fail_image_capability_persist
-		BEFORE UPDATE ON provider_resources
-		WHEN OLD.id = 'rsrc_admin_image_test'
-		BEGIN
-			SELECT RAISE(FAIL, 'forced capability persistence failure');
-		END;
-	`).Error; err != nil {
-		t.Fatal(err)
-	}
-	fail.Store(true)
-	if resp := call(); resp.Code != http.StatusInternalServerError || !strings.Contains(resp.Body.String(), "image_capability_persist_failed") {
-		t.Fatalf("capability persistence failure must not report test success, got %d: %s", resp.Code, resp.Body.String())
-	}
-	updated, _ = store.GetProviderResource(resource.ID)
-	if updated.Options[codexImageCapabilityOption] != codexImageCapabilitySupported {
-		t.Fatalf("failed persistence changed the capability state: %+v", updated.Options)
-	}
-	audits := store.ListAuditEvents()
-	foundPersistFailure := false
-	for _, audit := range audits {
-		if audit.Action == "test_image_generation" && audit.Message == "image_capability_persist_failed" && strings.Contains(audit.AfterSnapshot, `"capability":"supported"`) {
-			foundPersistFailure = true
-			break
-		}
-	}
-	if !foundPersistFailure {
-		t.Fatalf("failed test audit did not record persisted capability state: %+v", audits)
-	}
-	if requests.Load() != 4 {
-		t.Fatalf("expected four real upstream image requests, got %d", requests.Load())
-	}
-}
-
-func TestAdminCodexImageCapabilityTestUsesAccountLease(t *testing.T) {
-	var requests atomic.Int64
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
-		writeJSON(w, http.StatusOK, map[string]any{"data": []map[string]any{{"b64_json": encodeBase64(realPNGFixture(t))}}})
-	}))
-	defer upstream.Close()
-
-	store := NewMemoryStore()
-	provider := store.AddProvider(Provider{ID: "prv_image_lease", Name: "Image Lease", Type: ProviderOpenAICodex, BaseURL: upstream.URL, Status: StatusActive, Healthy: true})
-	resource, err := store.AddProviderResource(ProviderResource{
-		ID: "rsrc_image_lease", ProviderID: provider.ID, Name: "Image Lease Account", ResourceType: ProviderResourceOpenAISubscription,
-		BaseURL: upstream.URL, Status: StatusActive, Healthy: true, Credentials: &ProviderResourceCredentials{AccessToken: "image-lease-access", AccountID: "image-lease-account"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	server := NewWithConfig(store, Config{SecretKey: "image-lease-secret"})
-	t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
-	release, err := server.acquireImageAccount(context.Background(), resource.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer release()
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
-	defer cancel()
-	if _, err := server.testCodexImageCapability(ctx, resource.ID); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("capability test must wait for the existing account lease: %v", err)
-	}
-	if requests.Load() != 0 {
-		t.Fatalf("capability test reached upstream without acquiring the account lease: %d requests", requests.Load())
-	}
-}
-
-func TestCodexImageAdminDiagnosticsExcludeUntestedAndUnsupportedAccounts(t *testing.T) {
-	store := NewMemoryStore()
-	store.AddModel(Model{Name: codexImageModelName, Category: "codex", Family: "gpt-image", Modality: "image", Status: StatusActive})
-	project := store.CreateProject(Project{ID: "prj_image_diagnostics", Name: "Image Diagnostics", Status: StatusActive})
-	key, _, err := store.CreateAPIKey(project.ID, APIKey{ID: "key_image_diagnostics", Name: "Image Diagnostics", Status: StatusActive}, "thk_image_diagnostics")
-	if err != nil {
-		t.Fatal(err)
-	}
-	provider := store.AddProvider(Provider{ID: "prv_image_diagnostics", Name: "Image Diagnostics", Type: ProviderOpenAICodex, Status: StatusActive, Healthy: true})
-	resources := []ProviderResource{
-		{ID: "rsrc_image_unknown", ProviderID: provider.ID, Name: "Unknown", ResourceType: ProviderResourceOpenAISubscription, Status: StatusActive, Healthy: true},
-		{ID: "rsrc_image_unsupported", ProviderID: provider.ID, Name: "Unsupported", ResourceType: ProviderResourceOpenAISubscription, Status: StatusActive, Healthy: true},
-		{ID: "rsrc_image_supported", ProviderID: provider.ID, Name: "Supported", ResourceType: ProviderResourceOpenAISubscription, Status: StatusActive, Healthy: true},
-	}
-	for _, resource := range resources {
-		if _, err := store.AddProviderResource(resource); err != nil {
-			t.Fatal(err)
-		}
-		if resource.ID != "rsrc_image_unknown" {
-			capability := codexImageCapabilityUnsupported
-			if resource.ID == "rsrc_image_supported" {
-				capability = codexImageCapabilitySupported
-			}
-			if _, err := store.UpdateProviderResourceOptions(resource.ID, map[string]string{codexImageCapabilityOption: capability}); err != nil {
-				t.Fatal(err)
-			}
-		}
-		store.AddRoute(ModelRoute{ID: "route_" + resource.ID, ModelName: codexImageModelName, ProviderID: provider.ID, ProviderResourceID: resource.ID, ProviderModel: codexImageUpstreamModel, Priority: 1, Weight: 100, Status: StatusActive})
-	}
-	app := New(store).Handler()
-	simulation := doJSON(t, app, http.MethodPost, "/api/admin/routing-policies/simulate", map[string]any{
-		"project_id": project.ID, "api_key_id": key.ID, "model": codexImageModelName,
-	}, "")
-	if simulation.Code != http.StatusOK {
-		t.Fatalf("simulate Codex image routing: status=%d body=%s", simulation.Code, simulation.Body)
-	}
-	var resolution RoutingPolicyResolution
-	if err := json.Unmarshal([]byte(simulation.Body), &resolution); err != nil {
-		t.Fatal(err)
-	}
-	if len(resolution.Candidates) != 1 || resolution.Candidates[0].ResourceID != "rsrc_image_supported" {
-		t.Fatalf("simulation exposed an unavailable image account: %+v", resolution.Candidates)
-	}
-
-	explanation := doJSON(t, app, http.MethodGet, "/api/admin/routing-rules/route_rsrc_image_supported/explain?model="+codexImageModelName, nil, "")
-	if explanation.Code != http.StatusOK {
-		t.Fatalf("explain Codex image routing: status=%d body=%s", explanation.Code, explanation.Body)
-	}
-	var body struct {
-		Data []RouteExplainStep `json:"data"`
-	}
-	if err := json.Unmarshal([]byte(explanation.Body), &body); err != nil {
-		t.Fatal(err)
-	}
-	if len(body.Data) != 1 || body.Data[0].ResourceID != "rsrc_image_supported" {
-		t.Fatalf("route explanation exposed an unavailable image account: %+v", body.Data)
 	}
 }
 

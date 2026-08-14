@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -1134,118 +1133,12 @@ func TestAdminAllowsCodexImageVirtualModelRouteWithoutProviderInventory(t *testi
 		t.Fatalf("expected Codex image upstream validation, got %d: %s", wrongModel.Code, wrongModel.Body)
 	}
 
-	apiKeyResource := ProviderResource{
-		ID: NewID("rsrc"), ProviderID: codexProvider.ID, Name: "Legacy API Key Resource", ResourceType: ProviderResourceAPIKey, APIKey: "key", Status: StatusActive, Healthy: true,
-	}
-	if err := store.db.Create(&apiKeyResource).Error; err != nil {
-		t.Fatal(err)
-	}
-	wrongResource := doJSON(t, app, http.MethodPost, "/api/admin/routing-rules", map[string]any{
-		"model_name": codexImageModelName, "provider_id": codexProvider.ID, "provider_resource_id": apiKeyResource.ID,
-		"provider_model": codexImageUpstreamModel, "status": StatusActive,
-	}, "")
-	if wrongResource.Code != http.StatusBadRequest || !strings.Contains(wrongResource.Body, "codex_image_resource_required") {
-		t.Fatalf("expected Codex subscription resource validation, got %d: %s", wrongResource.Code, wrongResource.Body)
-	}
-	wrongGroup := doJSON(t, app, http.MethodPost, "/api/admin/routing-rules", map[string]any{
-		"model_name": codexImageModelName, "provider_id": codexProvider.ID, "resource_group": "api-key-only",
-		"provider_model": codexImageUpstreamModel, "status": StatusActive,
-	}, "")
-	if wrongGroup.Code != http.StatusBadRequest || !strings.Contains(wrongGroup.Body, "codex_image_resource_group_required") {
-		t.Fatalf("expected Codex subscription resource-group validation, got %d: %s", wrongGroup.Code, wrongGroup.Body)
-	}
-
 	created := doJSON(t, app, http.MethodPost, "/api/admin/routing-rules", map[string]any{
-		"model_name": "  " + codexImageModelName + "  ", "provider_id": "  " + codexProvider.ID + "  ",
-		"provider_model": "  " + codexImageUpstreamModel + "  ", "status": StatusActive,
+		"model_name": codexImageModelName, "provider_id": codexProvider.ID,
+		"provider_model": codexImageUpstreamModel, "status": StatusActive,
 	}, "")
 	if created.Code != http.StatusCreated {
 		t.Fatalf("expected virtual model route created without Provider inventory, got %d: %s", created.Code, created.Body)
-	}
-	var route ModelRoute
-	if err := json.Unmarshal([]byte(created.Body), &route); err != nil {
-		t.Fatal(err)
-	}
-	if route.ModelName != codexImageModelName || route.ProviderID != codexProvider.ID || route.ProviderModel != codexImageUpstreamModel {
-		t.Fatalf("route identifiers were not normalized: %+v", route)
-	}
-	patched := doJSON(t, app, http.MethodPatch, "/api/admin/routing-rules/"+route.ID, map[string]any{
-		"provider_resource_id": apiKeyResource.ID,
-	}, "")
-	if patched.Code != http.StatusBadRequest || !strings.Contains(patched.Body, "codex_image_resource_required") {
-		t.Fatalf("expected PATCH to reject API key resource, got %d: %s", patched.Code, patched.Body)
-	}
-}
-
-func TestCodexImageRouteUpgradeBackfillRunsOnce(t *testing.T) {
-	store := NewMemoryStore()
-	provider := store.AddProvider(Provider{ID: "prv_legacy_codex_image", Name: "Legacy Codex", Type: ProviderOpenAICodex, Status: StatusActive, Healthy: true})
-	if _, err := store.AddProviderResource(ProviderResource{
-		ProviderID: provider.ID, Name: "Legacy Account", ResourceType: ProviderResourceOpenAISubscription, Status: StatusActive, Healthy: true,
-		Credentials: &ProviderResourceCredentials{AccessToken: "access", RefreshToken: "refresh"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	apiKeyResource := ProviderResource{
-		ID:         NewID("rsrc"),
-		ProviderID: provider.ID, Name: "Legacy API Key", Group: "api-only", ResourceType: ProviderResourceAPIKey, Status: StatusActive, Healthy: true,
-	}
-	if err := store.db.Create(&apiKeyResource).Error; err != nil {
-		t.Fatal(err)
-	}
-	malformed := store.AddRoute(ModelRoute{ModelName: codexImageModelName, ProviderID: provider.ID, ProviderModel: "gpt-5.4", Status: StatusActive})
-	invalidBound := store.AddRoute(ModelRoute{ModelName: codexImageModelName, ProviderID: provider.ID, ProviderResourceID: apiKeyResource.ID, ProviderModel: codexImageUpstreamModel, Status: StatusActive})
-	invalidGroup := store.AddRoute(ModelRoute{ModelName: codexImageModelName, ProviderID: provider.ID, ResourceGroup: "api-only", ProviderModel: codexImageUpstreamModel, Status: StatusActive})
-	if err := store.db.Delete(&ClusterTaskState{}, "name = ?", "backfill-codex-image-routes").Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := backfillCodexImageRoutes(context.Background(), store); err != nil {
-		t.Fatal(err)
-	}
-	routes := store.ListRoutes()
-	if len(routes) != 4 {
-		t.Fatalf("legacy provider did not receive image route: %+v", routes)
-	}
-	var validRoute ModelRoute
-	for _, route := range routes {
-		if route.ProviderModel == codexImageUpstreamModel && route.Status == StatusActive {
-			validRoute = route
-		}
-	}
-	if validRoute.ID == "" {
-		t.Fatalf("malformed legacy route blocked valid route backfill: %+v", routes)
-	}
-	if err := store.DeleteRoute(validRoute.ID); err != nil {
-		t.Fatal(err)
-	}
-	if err := backfillCodexImageRoutes(context.Background(), store); err != nil {
-		t.Fatal(err)
-	}
-	if routes := store.ListRoutes(); len(routes) != 3 || !slices.ContainsFunc(routes, func(route ModelRoute) bool { return route.ID == malformed.ID }) ||
-		!slices.ContainsFunc(routes, func(route ModelRoute) bool { return route.ID == invalidBound.ID }) ||
-		!slices.ContainsFunc(routes, func(route ModelRoute) bool { return route.ID == invalidGroup.ID }) {
-		t.Fatalf("one-time upgrade backfill recreated an intentionally deleted route: %+v", routes)
-	}
-}
-
-func TestCodexImageRouteUpgradeBackfillHonorsCancellation(t *testing.T) {
-	store := NewMemoryStore()
-	provider := store.AddProvider(Provider{ID: "prv_cancelled_image_backfill", Name: "Cancelled Image Backfill", Type: ProviderOpenAICodex, Status: StatusActive, Healthy: true})
-	if _, err := store.AddProviderResource(ProviderResource{
-		ProviderID: provider.ID, Name: "Cancelled Backfill Account", ResourceType: ProviderResourceOpenAISubscription, Status: StatusActive, Healthy: true,
-		Credentials: &ProviderResourceCredentials{AccessToken: "access", RefreshToken: "refresh"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := backfillCodexImageRoutes(ctx, store); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled image route backfill returned %v", err)
-	}
-	for _, route := range store.ListRoutes() {
-		if route.ProviderID == provider.ID && route.ModelName == codexImageModelName {
-			t.Fatalf("cancelled backfill created a route: %+v", route)
-		}
 	}
 }
 

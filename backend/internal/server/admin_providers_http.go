@@ -778,28 +778,6 @@ func (s *Server) handleAdminProviderResourceNested(w http.ResponseWriter, r *htt
 		writeJSON(w, http.StatusOK, quota)
 		return
 	}
-	if parts[1] == "image-test" {
-		if r.Method != http.MethodPost {
-			writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
-			return
-		}
-		result, err := s.testCodexImageCapability(r.Context(), parts[0])
-		if err != nil {
-			httpErr := AsHTTPError(err)
-			var persistedState any
-			if resource, ok := s.providerResourceByID(parts[0]); ok {
-				if capability := strings.TrimSpace(resource.Options[codexImageCapabilityOption]); capability != "" {
-					persistedState = map[string]any{"capability": capability}
-				}
-			}
-			s.recordAdminAuditWithStatus(r, user, "test_image_generation", "provider_resource", parts[0], "failed", httpErr.Code, "", persistedState)
-			writeError(w, r, err)
-			return
-		}
-		s.recordAdminAudit(r, user, "test_image_generation", "provider_resource", parts[0], "", result)
-		writeJSON(w, http.StatusOK, result)
-		return
-	}
 	if r.Method != http.MethodPost {
 		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
 		return
@@ -1150,7 +1128,6 @@ func (s *Server) handleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 			writeError(w, r, err)
 			return
 		}
-		req = normalizeModelRouteIdentifiers(req)
 		if req.ModelName == "" || req.ProviderID == "" || req.ProviderModel == "" {
 			writeError(w, r, NewHTTPError(400, "invalid_route", "model_name, provider_id and provider_model are required"))
 			return
@@ -1215,19 +1192,10 @@ func (s *Server) handleAdminRouteItem(w http.ResponseWriter, r *http.Request) {
 			writeError(w, r, NewHTTPError(400, "missing_model", "model query is required"))
 			return
 		}
-		var routes []RouteSelection
-		var err error
-		if modelName == codexImageModelName || modelName == openAIImageModelName {
-			routes, err = s.imageRouteCandidates(modelName)
-		} else {
-			routes, err = s.store.SelectRouteCandidates(modelName)
-		}
+		routes, err := s.store.SelectRouteCandidates(modelName)
 		if err != nil {
 			writeError(w, r, err)
 			return
-		}
-		if modelName == codexImageModelName {
-			routes = s.filterAndPrioritizeCodexImageRoutes(routes)
 		}
 		call := CallContext{RequestID: NewID("exp"), Project: Project{ID: r.URL.Query().Get("project_id")}, Key: APIKey{ID: r.URL.Query().Get("api_key_id")}}
 		planned := s.planRouteOrder(call, routes)
@@ -1263,7 +1231,6 @@ func (s *Server) handleAdminRouteItem(w http.ResponseWriter, r *http.Request) {
 			writeError(w, r, err)
 			return
 		}
-		req = normalizeModelRouteIdentifiers(req)
 		current, found := modelRouteByID(s.store.ListRoutes(), routeID)
 		if !found {
 			writeError(w, r, NewHTTPError(http.StatusNotFound, "route_not_found", "Route not found"))
@@ -1368,23 +1335,6 @@ func (s *Server) validateImportedProviderModel(route ModelRoute) error {
 		if upstreamModel != codexImageUpstreamModel {
 			return NewHTTPError(http.StatusBadRequest, "codex_image_upstream_model_invalid", "The Codex subscription image route must use gpt-image-2 as its upstream model")
 		}
-		if resourceID := strings.TrimSpace(route.ProviderResourceID); resourceID != "" {
-			resource, ok := s.store.GetProviderResource(resourceID)
-			if !ok || resource.ProviderID != providerID || !isOpenAIAccountResource(resource.ResourceType) {
-				return NewHTTPError(http.StatusBadRequest, "codex_image_resource_required", "The Codex subscription image route must use an OpenAI subscription account resource")
-			}
-		} else if group := strings.TrimSpace(route.ResourceGroup); group != "" {
-			validGroup := false
-			for _, resource := range s.store.ListProviderResources() {
-				if resource.ProviderID == providerID && strings.TrimSpace(resource.Group) == group && isOpenAIAccountResource(resource.ResourceType) {
-					validGroup = true
-					break
-				}
-			}
-			if !validGroup {
-				return NewHTTPError(http.StatusBadRequest, "codex_image_resource_group_required", "The Codex subscription image route resource group must contain an OpenAI subscription account")
-			}
-		}
 		return nil
 	}
 	for _, model := range s.store.ListProviderModels() {
@@ -1393,15 +1343,6 @@ func (s *Server) validateImportedProviderModel(route ModelRoute) error {
 		}
 	}
 	return NewHTTPError(http.StatusConflict, "provider_model_not_imported", "Import the upstream model for this Provider before creating a route")
-}
-
-func normalizeModelRouteIdentifiers(route ModelRoute) ModelRoute {
-	route.ModelName = strings.TrimSpace(route.ModelName)
-	route.ProviderID = strings.TrimSpace(route.ProviderID)
-	route.ProviderResourceID = strings.TrimSpace(route.ProviderResourceID)
-	route.ResourceGroup = strings.TrimSpace(route.ResourceGroup)
-	route.ProviderModel = strings.TrimSpace(route.ProviderModel)
-	return route
 }
 
 func modelRouteMappingExists(candidate ModelRoute, routes []ModelRoute, excludeID string) bool {
