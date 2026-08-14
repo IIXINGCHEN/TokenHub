@@ -536,6 +536,97 @@ func TestGuardrailsMaskResponsesCompactBeforeRouting(t *testing.T) {
 	}
 }
 
+func TestGuardrailsMaskResponsesCompactPreservesOpaqueNumbers(t *testing.T) {
+	store := NewMemoryStore()
+	if err := SeedDemoData(store); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateGuardrailPolicy(guardrails.Policy{
+		Name: "Mask customer email",
+		DetectionItems: []guardrails.DetectionItem{{
+			Name: "Email", DetectorType: guardrails.DetectorSensitiveData, Action: guardrails.ActionMask,
+			Config: map[string]any{"data_types": []string{"email"}},
+		}},
+		Bindings: []guardrails.Binding{{ScopeType: guardrails.ScopeAllProjects}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	project := store.CreateProject(Project{Name: "Compact Number Project", Status: StatusActive})
+	_, secret, err := store.CreateAPIKey(project.ID, APIKey{
+		Name: "Compact Number Key", Allowed: []string{"gpt-compact"}, Status: StatusActive,
+	}, "thk_compact_number")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := store.AddProvider(Provider{
+		ID: "prv_compact_number", Name: "Codex Compact Number", Type: ProviderOpenAICodex,
+		BaseURL: "https://chatgpt.example/backend-api/codex", Status: StatusActive, Healthy: true,
+		Options: map[string]string{"allowed_codex_hosts": "chatgpt.example"},
+	})
+	if _, err := store.AddProviderResource(ProviderResource{
+		ID: "rsrc_compact_number", ProviderID: provider.ID, Name: "Compact Number Account",
+		ResourceType: ProviderResourceOpenAISubscription, Status: StatusActive, Healthy: true,
+		Options:     codexCapabilityOptionsForTest("gpt-compact-upstream"),
+		Credentials: &ProviderResourceCredentials{AccessToken: "access_compact_number", AccountID: "account_compact_number"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store.AddModel(Model{Name: "gpt-compact", Modality: "chat", Status: StatusActive})
+	store.AddRoute(ModelRoute{
+		ID: "route_compact_number", ModelName: "gpt-compact", ProviderID: provider.ID,
+		ProviderModel: "gpt-compact-upstream", Status: StatusActive,
+	})
+
+	server := NewWithConfig(store, Config{AdminToken: "dev_admin_token", SecretKey: "compact-number-secret"})
+	server.codexSubscription.MaxRequestRetries = 0
+	var upstreamRawBody string
+	server.codexSubscription.Client = &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		raw, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		upstreamRawBody = string(raw)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"output":[{"type":"message","role":"assistant","content":[]}]}`)),
+			Request:    req,
+		}, nil
+	})}
+
+	response := doGuardrailProtocolRequest(t, server.Handler(), "/v1/responses/compact", map[string]any{
+		"model": "gpt-compact",
+		"input": []any{
+			map[string]any{"type": "message", "role": "user", "content": "email demo@example.com"},
+			map[string]any{"sequence": 9007199254740993},
+		},
+		"instructions": "preserve this",
+	}, secret)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var upstreamPayload map[string]any
+	if err := json.Unmarshal([]byte(upstreamRawBody), &upstreamPayload); err != nil {
+		t.Fatalf("decode upstream body: %v", err)
+	}
+	input := upstreamPayload["input"].([]any)
+	message, ok := input[0].(map[string]any)
+	if !ok || message["content"] != "email [REDACTED]" {
+		t.Fatalf("masked input was not forwarded upstream: %#v", input)
+	}
+	// 9007199254740993 exceeds 2^53; re-encoding it through float64 would
+	// silently round it to 9007199254740992 and break /v1 payload fidelity.
+	if !strings.Contains(upstreamRawBody, "9007199254740993") {
+		t.Fatalf("opaque integer was not preserved after masking: %s", upstreamRawBody)
+	}
+	if strings.Contains(upstreamRawBody, "9007199254740992") {
+		t.Fatalf("opaque integer was rounded to float64: %s", upstreamRawBody)
+	}
+	if !strings.Contains(upstreamRawBody, `"instructions":"preserve this"`) {
+		t.Fatalf("unmasked instructions were rewritten: %s", upstreamRawBody)
+	}
+}
+
 func TestAdminGuardrailPolicyTestUsesUnsavedPolicyWithoutPersistingSample(t *testing.T) {
 	store := NewMemoryStore()
 	app := New(store).Handler()

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -158,8 +159,13 @@ func responsesCompactGuardrailTargets(request map[string]json.RawMessage) []guar
 		}
 	}
 	if value, exists := request["input"]; exists {
+		// Decode with UseNumber so integers beyond 2^53 survive the round trip
+		// when a mask forces the whole input to be re-encoded: plain
+		// json.Unmarshal would demote them to float64 and silently round them.
+		decoder := json.NewDecoder(bytes.NewReader(value))
+		decoder.UseNumber()
 		var input any
-		if err := json.Unmarshal(value, &input); err == nil {
+		if err := decoder.Decode(&input); err == nil {
 			appendGuardrailResponseInputTargets(&targets, input, "input", func(value any) {
 				setRawJSONField(request, "input", value, true)
 			})
