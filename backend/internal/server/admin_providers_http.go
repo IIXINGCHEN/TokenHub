@@ -782,6 +782,10 @@ func (s *Server) handleAdminProviderResourceNested(w http.ResponseWriter, r *htt
 		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
 		return
 	}
+	if parts[1] == "image-capability" {
+		s.handleAdminCodexImageCapability(w, r, user, parts[0])
+		return
+	}
 	if parts[1] == "test" {
 		resource, resourceOK := s.providerResourceByID(parts[0])
 		provider, providerOK := s.providerByID(resource.ProviderID)

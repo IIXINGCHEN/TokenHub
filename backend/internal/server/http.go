@@ -169,6 +169,7 @@ func NewWithConfig(store Store, config Config) *Server {
 	}
 	backfillProviderModelsFromRoutes(store)
 	backfillExternalModelRolesFromRoutes(store)
+	backfillCodexImageRoutes(store)
 	if config.MetricsEnabled {
 		s.metrics = NewGatewayMetrics(config.MetricsProjectLabel)
 		// Assert against the narrow MetricsSink interface rather than *GormStore, and
