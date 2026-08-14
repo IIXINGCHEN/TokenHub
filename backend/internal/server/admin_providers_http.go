@@ -829,73 +829,62 @@ func (s *Server) serveAdminProviderResourceImport(w http.ResponseWriter, r *http
 	writeJSON(w, status, result)
 }
 
-func (s *Server) handleAdminModels(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.authorizeAdminUser(w, r)
-	if !ok {
+func (s *Server) serveAdminModelsGet(w http.ResponseWriter, user AdminUser) {
+	writeJSON(w, http.StatusOK, map[string]any{"data": s.accessibleModelsForAdminUser(user)})
+}
+
+func (s *Server) serveAdminModelsPost(w http.ResponseWriter, r *http.Request, user AdminUser) {
+	var req struct {
+		Model
+		Routes []ModelRoute `json:"routes"`
+	}
+	if err := s.decodeJSON(w, r, &req); err != nil {
+		writeError(w, r, err)
 		return
 	}
-	if !canAdmin(user.Role, "model", r.Method) {
-		writeError(w, r, NewHTTPError(403, "admin_forbidden", "Admin role is not allowed to perform this action"))
+	req.Model.Name = strings.TrimSpace(req.Model.Name)
+	if req.Model.Name == "" {
+		writeError(w, r, NewHTTPError(http.StatusBadRequest, "invalid_model", "name is required"))
 		return
 	}
-	switch r.Method {
-	case http.MethodGet:
-		writeJSON(w, http.StatusOK, map[string]any{"data": s.accessibleModelsForAdminUser(user)})
-	case http.MethodPost:
-		var req struct {
-			Model
-			Routes []ModelRoute `json:"routes"`
+	priorities := routePriorityByModel(s.store.ListRoutes())
+	seenRoutes := existingProviderModelRouteSet(s.store.ListRoutes())
+	preparedRoutes := make([]ModelRoute, 0, len(req.Routes))
+	for _, route := range req.Routes {
+		route.ModelName = req.Model.Name
+		route.ProviderID = strings.TrimSpace(route.ProviderID)
+		route.ProviderModel = strings.TrimSpace(route.ProviderModel)
+		if route.ProviderID == "" || route.ProviderModel == "" {
+			writeError(w, r, NewHTTPError(http.StatusBadRequest, "invalid_route", "provider_id and provider_model are required"))
+			return
 		}
-		if err := s.decodeJSON(w, r, &req); err != nil {
+		if err := s.validateRouteAdapter(route); err != nil {
 			writeError(w, r, err)
 			return
 		}
-		req.Model.Name = strings.TrimSpace(req.Model.Name)
-		if req.Model.Name == "" {
-			writeError(w, r, NewHTTPError(http.StatusBadRequest, "invalid_model", "name is required"))
+		if err := s.validateImportedProviderModel(route); err != nil {
+			writeError(w, r, err)
 			return
 		}
-		priorities := routePriorityByModel(s.store.ListRoutes())
-		seenRoutes := existingProviderModelRouteSet(s.store.ListRoutes())
-		preparedRoutes := make([]ModelRoute, 0, len(req.Routes))
-		for _, route := range req.Routes {
-			route.ModelName = req.Model.Name
-			route.ProviderID = strings.TrimSpace(route.ProviderID)
-			route.ProviderModel = strings.TrimSpace(route.ProviderModel)
-			if route.ProviderID == "" || route.ProviderModel == "" {
-				writeError(w, r, NewHTTPError(http.StatusBadRequest, "invalid_route", "provider_id and provider_model are required"))
-				return
-			}
-			if err := s.validateRouteAdapter(route); err != nil {
-				writeError(w, r, err)
-				return
-			}
-			if err := s.validateImportedProviderModel(route); err != nil {
-				writeError(w, r, err)
-				return
-			}
-			routeKey := providerModelRouteKey(route.ProviderID, route.ProviderModel, route.ModelName)
-			if seenRoutes[routeKey] {
-				writeError(w, r, NewHTTPError(http.StatusConflict, "model_route_conflict", "This external model is already mapped to the selected provider model"))
-				return
-			}
-			seenRoutes[routeKey] = true
-			if route.Priority <= 0 {
-				route.Priority = takeNextRoutePriority(priorities, route.ModelName)
-			}
-			preparedRoutes = append(preparedRoutes, route)
-		}
-		req.Model = withExternalModelRole(req.Model)
-		model, err := s.store.CreateModelWithRoutes(req.Model, preparedRoutes)
-		if err != nil {
-			writeError(w, r, NewHTTPError(http.StatusInternalServerError, "model_create_failed", "Failed to create model and initial routes"))
+		routeKey := providerModelRouteKey(route.ProviderID, route.ProviderModel, route.ModelName)
+		if seenRoutes[routeKey] {
+			writeError(w, r, NewHTTPError(http.StatusConflict, "model_route_conflict", "This external model is already mapped to the selected provider model"))
 			return
 		}
-		s.recordAdminAudit(r, user, "create", "model", model.Name, "", model)
-		writeJSON(w, http.StatusCreated, model)
-	default:
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+		seenRoutes[routeKey] = true
+		if route.Priority <= 0 {
+			route.Priority = takeNextRoutePriority(priorities, route.ModelName)
+		}
+		preparedRoutes = append(preparedRoutes, route)
 	}
+	req.Model = withExternalModelRole(req.Model)
+	model, err := s.store.CreateModelWithRoutes(req.Model, preparedRoutes)
+	if err != nil {
+		writeError(w, r, NewHTTPError(http.StatusInternalServerError, "model_create_failed", "Failed to create model and initial routes"))
+		return
+	}
+	s.recordAdminAudit(r, user, "create", "model", model.Name, "", model)
+	writeJSON(w, http.StatusCreated, model)
 }
 
 func (s *Server) handleAdminModelsRestoreDefaults(w http.ResponseWriter, r *http.Request) {
@@ -935,30 +924,42 @@ func (s *Server) handleAdminModelItem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, NewHTTPError(404, "not_found", "Not found"))
 		return
 	}
+	if !strings.HasSuffix(r.URL.EscapedPath(), "/") && modelName == "restore-defaults" {
+		jsonMethodNotAllowed(http.MethodPost)(w, r)
+		return
+	}
 	switch r.Method {
 	case http.MethodPatch:
-		var req Model
-		if err := s.decodeJSON(w, r, &req); err != nil {
-			writeError(w, r, err)
-			return
-		}
-		model, err := s.store.UpdateModel(modelName, req)
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		s.recordAdminAudit(r, user, "update", "model", modelName, "", model)
-		writeJSON(w, http.StatusOK, model)
+		s.serveAdminModelPatch(w, r, user, modelName)
 	case http.MethodDelete:
-		if err := s.store.DeleteModel(modelName); err != nil {
-			writeError(w, r, err)
-			return
-		}
-		s.recordAdminAudit(r, user, "delete", "model", modelName, "", nil)
-		w.WriteHeader(http.StatusNoContent)
+		s.serveAdminModelDelete(w, r, user, modelName)
 	default:
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+		jsonMethodNotAllowed(http.MethodPatch+", "+http.MethodDelete)(w, r)
 	}
+}
+
+func (s *Server) serveAdminModelPatch(w http.ResponseWriter, r *http.Request, user AdminUser, modelName string) {
+	var req Model
+	if err := s.decodeJSON(w, r, &req); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	model, err := s.store.UpdateModel(modelName, req)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	s.recordAdminAudit(r, user, "update", "model", modelName, "", model)
+	writeJSON(w, http.StatusOK, model)
+}
+
+func (s *Server) serveAdminModelDelete(w http.ResponseWriter, r *http.Request, user AdminUser, modelName string) {
+	if err := s.store.DeleteModel(modelName); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	s.recordAdminAudit(r, user, "delete", "model", modelName, "", nil)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func adminModelNameFromPath(r *http.Request) (string, bool) {
@@ -985,7 +986,7 @@ func (s *Server) handleAdminModelRoutingPolicy(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if r.Method != http.MethodPatch {
-		writeError(w, r, NewHTTPError(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
+		jsonMethodNotAllowed(http.MethodPatch)(w, r)
 		return
 	}
 	modelName, ok := adminModelRoutingPolicyNameFromPath(r)
@@ -993,6 +994,10 @@ func (s *Server) handleAdminModelRoutingPolicy(w http.ResponseWriter, r *http.Re
 		writeError(w, r, NewHTTPError(http.StatusNotFound, "not_found", "Not found"))
 		return
 	}
+	s.serveAdminModelRoutingPolicyPatch(w, r, user, modelName)
+}
+
+func (s *Server) serveAdminModelRoutingPolicyPatch(w http.ResponseWriter, r *http.Request, user AdminUser, modelName string) {
 	var policy ModelRoutePolicy
 	if err := s.decodeJSON(w, r, &policy); err != nil {
 		writeError(w, r, err)
@@ -1033,60 +1038,53 @@ func adminModelRoutingPolicyNameFromPath(r *http.Request) (string, bool) {
 	return modelName, modelName != ""
 }
 
-func (s *Server) handleAdminRoutes(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAdmin(w, r, "routing", r.Method)
-	if !ok {
+func (s *Server) serveAdminRoutesGet(w http.ResponseWriter) {
+	writeJSON(w, http.StatusOK, map[string]any{"data": s.store.ListRoutes()})
+}
+
+func (s *Server) serveAdminRoutesPost(w http.ResponseWriter, r *http.Request, user AdminUser) {
+	var req ModelRoute
+	if err := s.decodeJSON(w, r, &req); err != nil {
+		writeError(w, r, err)
 		return
 	}
-	switch r.Method {
-	case http.MethodGet:
-		writeJSON(w, http.StatusOK, map[string]any{"data": s.store.ListRoutes()})
-	case http.MethodPost:
-		var req ModelRoute
-		if err := s.decodeJSON(w, r, &req); err != nil {
-			writeError(w, r, err)
-			return
-		}
-		if req.ModelName == "" || req.ProviderID == "" || req.ProviderModel == "" {
-			writeError(w, r, NewHTTPError(400, "invalid_route", "model_name, provider_id and provider_model are required"))
-			return
-		}
-		if req.Priority <= 0 {
-			req.Priority = takeNextRoutePriority(routePriorityByModel(s.store.ListRoutes()), req.ModelName)
-		}
-		if err := s.validateRouteAdapter(req); err != nil {
-			writeError(w, r, err)
-			return
-		}
-		if err := s.validateImportedProviderModel(req); err != nil {
-			writeError(w, r, err)
-			return
-		}
-		if modelRouteMappingExists(req, s.store.ListRoutes(), "") {
-			writeError(w, r, NewHTTPError(http.StatusConflict, "model_route_conflict", "This external model is already mapped to the selected provider model"))
-			return
-		}
-		route, err := s.store.CreateRoute(req)
-		if err != nil {
-			// The route was not persisted, so the catalog must not be marked
-			// as if it had been.
-			writeError(w, r, err)
-			return
-		}
-		if err := s.markExternalModel(req.ModelName); err != nil {
-			// The route was created but the model directory could not be marked as
-			// external. The next call to backfillExternalModelRolesFromRoutes will
-			// reconcile the catalog, but surface the error so the caller knows the
-			// operation was only partially successful.
-			s.recordAdminAudit(r, user, "create", "routing_rule", route.ID, "", route)
-			writeError(w, r, err)
-			return
-		}
-		s.recordAdminAudit(r, user, "create", "routing_rule", route.ID, "", route)
-		writeJSON(w, http.StatusCreated, route)
-	default:
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+	if req.ModelName == "" || req.ProviderID == "" || req.ProviderModel == "" {
+		writeError(w, r, NewHTTPError(400, "invalid_route", "model_name, provider_id and provider_model are required"))
+		return
 	}
+	if req.Priority <= 0 {
+		req.Priority = takeNextRoutePriority(routePriorityByModel(s.store.ListRoutes()), req.ModelName)
+	}
+	if err := s.validateRouteAdapter(req); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	if err := s.validateImportedProviderModel(req); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	if modelRouteMappingExists(req, s.store.ListRoutes(), "") {
+		writeError(w, r, NewHTTPError(http.StatusConflict, "model_route_conflict", "This external model is already mapped to the selected provider model"))
+		return
+	}
+	route, err := s.store.CreateRoute(req)
+	if err != nil {
+		// The route was not persisted, so the catalog must not be marked
+		// as if it had been.
+		writeError(w, r, err)
+		return
+	}
+	if err := s.markExternalModel(req.ModelName); err != nil {
+		// The route was created but the model directory could not be marked as
+		// external. The next call to backfillExternalModelRolesFromRoutes will
+		// reconcile the catalog, but surface the error so the caller knows the
+		// operation was only partially successful.
+		s.recordAdminAudit(r, user, "create", "routing_rule", route.ID, "", route)
+		writeError(w, r, err)
+		return
+	}
+	s.recordAdminAudit(r, user, "create", "routing_rule", route.ID, "", route)
+	writeJSON(w, http.StatusCreated, route)
 }
 
 func (s *Server) handleAdminRouteItem(w http.ResponseWriter, r *http.Request) {
@@ -1103,97 +1101,109 @@ func (s *Server) handleAdminRouteItem(w http.ResponseWriter, r *http.Request) {
 	if len(parts) == 2 {
 		// splitNestedAdminPath guarantees parts[1] == "explain" here.
 		if r.Method != http.MethodGet {
-			writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+			jsonMethodNotAllowed(http.MethodGet)(w, r)
 			return
 		}
-		modelName := r.URL.Query().Get("model")
-		if modelName == "" {
-			writeError(w, r, NewHTTPError(400, "missing_model", "model query is required"))
-			return
-		}
-		routes, err := s.store.SelectRouteCandidates(modelName)
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		call := CallContext{RequestID: NewID("exp"), Project: Project{ID: r.URL.Query().Get("project_id")}, Key: APIKey{ID: r.URL.Query().Get("api_key_id")}}
-		planned := s.planRouteOrder(call, routes)
-		steps := make([]RouteExplainStep, 0, len(planned))
-		for _, route := range planned {
-			steps = append(steps, RouteExplainStep{
-				RouteID:          route.Route.ID,
-				ProviderID:       route.Provider.ID,
-				ResourceID:       routeResourceID(route),
-				ProviderModel:    route.ProviderModel,
-				Priority:         route.Route.Priority,
-				ResourcePriority: routeResourcePriority(route),
-				Weight:           routeWeight(route.Route),
-				QualityScore:     routeQualityScore(route.Route),
-				CostScore:        routeCostScore(route.Route),
-				Strategy:         routeStrategy(route.Route),
-				ProjectScope:     routeProjectScope(route.Route),
-				ProjectIDs:       route.Route.ProjectIDs,
-				EffectiveWeight:  routeEffectiveWeight(route),
-				Samples:          route.Runtime.Samples,
-				SuccessRate:      route.Runtime.SuccessRate,
-				LatencyMS:        route.Runtime.LatencyMS,
-				Status:           "candidate",
-			})
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"data": steps})
+		s.serveAdminRouteExplain(w, r, user, routeID)
 		return
 	}
 	switch r.Method {
 	case http.MethodPatch:
-		var req ModelRoute
-		if err := s.decodeJSON(w, r, &req); err != nil {
-			writeError(w, r, err)
-			return
-		}
-		current, found := modelRouteByID(s.store.ListRoutes(), routeID)
-		if !found {
-			writeError(w, r, NewHTTPError(http.StatusNotFound, "route_not_found", "Route not found"))
-			return
-		}
-		candidate := mergedModelRoute(current, req)
-		if err := s.validateRouteAdapter(candidate); err != nil {
-			writeError(w, r, err)
-			return
-		}
-		if err := s.validateImportedProviderModel(candidate); err != nil {
-			writeError(w, r, err)
-			return
-		}
-		if modelRouteMappingExists(candidate, s.store.ListRoutes(), routeID) {
-			writeError(w, r, NewHTTPError(http.StatusConflict, "model_route_conflict", "This external model is already mapped to the selected provider model"))
-			return
-		}
-		route, err := s.store.UpdateRoute(routeID, req)
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		if err := s.markExternalModel(candidate.ModelName); err != nil {
-			// The route was updated but the model directory could not be marked as
-			// external. backfillExternalModelRolesFromRoutes reconciles the catalog
-			// on startup, but surface the error so the caller knows the operation
-			// was only partially successful.
-			s.recordAdminAudit(r, user, "update", "routing_rule", routeID, "", route)
-			writeError(w, r, err)
-			return
-		}
-		s.recordAdminAudit(r, user, "update", "routing_rule", routeID, "", route)
-		writeJSON(w, http.StatusOK, route)
+		s.serveAdminRoutePatch(w, r, user, routeID)
 	case http.MethodDelete:
-		if err := s.store.DeleteRoute(routeID); err != nil {
-			writeError(w, r, err)
-			return
-		}
-		s.recordAdminAudit(r, user, "delete", "routing_rule", routeID, "", nil)
-		w.WriteHeader(http.StatusNoContent)
+		s.serveAdminRouteDelete(w, r, user, routeID)
 	default:
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+		jsonMethodNotAllowed(http.MethodPatch+", "+http.MethodDelete)(w, r)
 	}
+}
+
+func (s *Server) serveAdminRouteExplain(w http.ResponseWriter, r *http.Request, _ AdminUser, _ string) {
+	modelName := r.URL.Query().Get("model")
+	if modelName == "" {
+		writeError(w, r, NewHTTPError(400, "missing_model", "model query is required"))
+		return
+	}
+	routes, err := s.store.SelectRouteCandidates(modelName)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	call := CallContext{RequestID: NewID("exp"), Project: Project{ID: r.URL.Query().Get("project_id")}, Key: APIKey{ID: r.URL.Query().Get("api_key_id")}}
+	planned := s.planRouteOrder(call, routes)
+	steps := make([]RouteExplainStep, 0, len(planned))
+	for _, route := range planned {
+		steps = append(steps, RouteExplainStep{
+			RouteID:          route.Route.ID,
+			ProviderID:       route.Provider.ID,
+			ResourceID:       routeResourceID(route),
+			ProviderModel:    route.ProviderModel,
+			Priority:         route.Route.Priority,
+			ResourcePriority: routeResourcePriority(route),
+			Weight:           routeWeight(route.Route),
+			QualityScore:     routeQualityScore(route.Route),
+			CostScore:        routeCostScore(route.Route),
+			Strategy:         routeStrategy(route.Route),
+			ProjectScope:     routeProjectScope(route.Route),
+			ProjectIDs:       route.Route.ProjectIDs,
+			EffectiveWeight:  routeEffectiveWeight(route),
+			Samples:          route.Runtime.Samples,
+			SuccessRate:      route.Runtime.SuccessRate,
+			LatencyMS:        route.Runtime.LatencyMS,
+			Status:           "candidate",
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": steps})
+}
+
+func (s *Server) serveAdminRoutePatch(w http.ResponseWriter, r *http.Request, user AdminUser, routeID string) {
+	var req ModelRoute
+	if err := s.decodeJSON(w, r, &req); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	current, found := modelRouteByID(s.store.ListRoutes(), routeID)
+	if !found {
+		writeError(w, r, NewHTTPError(http.StatusNotFound, "route_not_found", "Route not found"))
+		return
+	}
+	candidate := mergedModelRoute(current, req)
+	if err := s.validateRouteAdapter(candidate); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	if err := s.validateImportedProviderModel(candidate); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	if modelRouteMappingExists(candidate, s.store.ListRoutes(), routeID) {
+		writeError(w, r, NewHTTPError(http.StatusConflict, "model_route_conflict", "This external model is already mapped to the selected provider model"))
+		return
+	}
+	route, err := s.store.UpdateRoute(routeID, req)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	if err := s.markExternalModel(candidate.ModelName); err != nil {
+		// The route was updated but the model directory could not be marked as
+		// external. backfillExternalModelRolesFromRoutes reconciles the catalog
+		// on startup, but surface the error so the caller knows the operation
+		// was only partially successful.
+		s.recordAdminAudit(r, user, "update", "routing_rule", routeID, "", route)
+		writeError(w, r, err)
+		return
+	}
+	s.recordAdminAudit(r, user, "update", "routing_rule", routeID, "", route)
+	writeJSON(w, http.StatusOK, route)
+}
+
+func (s *Server) serveAdminRouteDelete(w http.ResponseWriter, r *http.Request, user AdminUser, routeID string) {
+	if err := s.store.DeleteRoute(routeID); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	s.recordAdminAudit(r, user, "delete", "routing_rule", routeID, "", nil)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) validateRouteAdapter(route ModelRoute) error {

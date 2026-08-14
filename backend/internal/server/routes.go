@@ -176,13 +176,34 @@ func (s *Server) routes() {
 	s.registerDynamicMethodRoute(http.MethodPatch, "/api/admin/provider-models/{provider_model_id}", s.handleAdminProviderModelPatch)
 	s.registerDynamicMethodRoute(http.MethodDelete, "/api/admin/provider-models/{provider_model_id}", s.handleAdminProviderModelDelete)
 	s.mux.HandleFunc("/api/admin/provider-models/", s.handleAdminProviderModelItem)
-	s.mux.HandleFunc("/api/admin/models", s.handleAdminModels)
-	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/models/restore-defaults", s.handleAdminModelsRestoreDefaults, s.adminMethodNotAllowed("model", http.MethodPost))
+	s.registerMethodRoutes("/api/admin/models", func(allowedMethods string) http.HandlerFunc {
+		return s.adminMethodNotAllowed("model", allowedMethods)
+	},
+		methodRoute{Method: http.MethodGet, Handler: s.handleAdminModelsGet},
+		methodRoute{Method: http.MethodPost, Handler: s.handleAdminModelsPost},
+	)
+	modelRestoreMethodNotAllowed := s.adminMethodNotAllowed("model", http.MethodPost)
+	s.mux.HandleFunc(http.MethodPost+" /api/admin/models/restore-defaults", s.handleAdminModelsRestoreDefaults)
+	s.mux.HandleFunc(http.MethodPatch+" /api/admin/models/restore-defaults", modelRestoreMethodNotAllowed)
+	s.mux.HandleFunc(http.MethodDelete+" /api/admin/models/restore-defaults", modelRestoreMethodNotAllowed)
+	s.registerDynamicMethodRoute(http.MethodPatch, "/api/admin/models/{model_name}", s.handleAdminModelPatch)
+	s.registerDynamicMethodRoute(http.MethodDelete, "/api/admin/models/{model_name}", s.handleAdminModelDelete)
 	s.mux.HandleFunc("/api/admin/models/", s.handleAdminModelItem)
+	s.registerSingleMethodRoute(http.MethodPatch, "/api/admin/model-routing-policies/{model_name}", s.handleAdminModelRoutingPolicyPatch, s.adminMethodNotAllowed("routing", http.MethodPatch))
 	s.mux.HandleFunc("/api/admin/model-routing-policies/", s.handleAdminModelRoutingPolicy)
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/routing-policies/simulate", s.handleAdminRoutingPolicySimulation, s.adminMethodNotAllowed("routing", http.MethodPost))
+	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/routing-policies/{policy_id}/bind", s.handleAdminRoutingPolicyBindPost, s.adminMethodNotAllowed("routing", http.MethodPost))
+	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/routing-policies/{policy_id}/unbind", s.handleAdminRoutingPolicyUnbindPost, s.adminMethodNotAllowed("routing", http.MethodPost))
 	s.mux.HandleFunc("/api/admin/routing-policies/", s.handleAdminRoutingPolicyAction)
-	s.mux.HandleFunc("/api/admin/routing-rules", s.handleAdminRoutes)
+	s.registerMethodRoutes("/api/admin/routing-rules", func(allowedMethods string) http.HandlerFunc {
+		return s.adminMethodNotAllowed("routing", allowedMethods)
+	},
+		methodRoute{Method: http.MethodGet, Handler: s.handleAdminRoutesGet},
+		methodRoute{Method: http.MethodPost, Handler: s.handleAdminRoutesPost},
+	)
+	s.registerDynamicMethodRoute(http.MethodPatch, "/api/admin/routing-rules/{route_id}", s.handleAdminRoutePatch)
+	s.registerDynamicMethodRoute(http.MethodDelete, "/api/admin/routing-rules/{route_id}", s.handleAdminRouteDelete)
+	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/routing-rules/{route_id}/explain", s.handleAdminRouteExplainGet, s.adminMethodNotAllowed("routing", http.MethodGet))
 	s.mux.HandleFunc("/api/admin/routing-rules/", s.handleAdminRouteItem)
 	s.mux.HandleFunc("/api/admin/resources/", s.handleAdminResources)
 	s.mux.HandleFunc("/api/admin/sqlite/backups", s.handleAdminSQLiteBackups)
