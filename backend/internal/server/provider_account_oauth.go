@@ -249,11 +249,7 @@ func (s *Server) handleAdminOpenAIAccountOAuthGenerateAuthURL(w http.ResponseWri
 	})
 }
 
-func (s *Server) handleOpenAIAccountOAuthCallback(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
-		return
-	}
+func (s *Server) handleOpenAIAccountOAuthCallbackGet(w http.ResponseWriter, r *http.Request) {
 	state := strings.TrimSpace(r.URL.Query().Get("state"))
 	session, ok, err := s.store.GetProviderAccountOAuthSessionByState(state)
 	if err != nil {

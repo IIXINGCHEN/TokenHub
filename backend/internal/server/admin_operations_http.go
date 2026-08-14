@@ -202,6 +202,19 @@ func (s *Server) handleAdminProjectQuotaIncrease(w http.ResponseWriter, r *http.
 	writeJSON(w, http.StatusAccepted, map[string]any{"approval_required": true, "approval": approval})
 }
 
+func (s *Server) handleAdminProjectQuotaIncreasePost(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("project_id")
+	if projectID == "" || strings.Contains(projectID, "/") {
+		s.handleAdminProjectNested(w, r)
+		return
+	}
+	user, ok := s.requireAdmin(w, r, "approval", r.Method)
+	if !ok {
+		return
+	}
+	s.handleAdminProjectQuotaIncrease(w, r, user, projectID)
+}
+
 func (s *Server) ensureDefaultMonitors() {
 	existing := s.store.ListResources("monitors")
 	existingIDs := map[string]bool{}
