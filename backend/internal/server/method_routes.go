@@ -26,18 +26,24 @@ func (s *Server) registerSingleMethodRoute(method string, pattern string, handle
 // shared fallback. The Allow value comes from the same route list so the two
 // cannot drift apart.
 func (s *Server) registerMethodRoutes(pattern string, methodNotAllowed methodNotAllowedFactory, routes ...methodRoute) {
-	allowedMethods := make([]string, 0, len(routes))
 	hasGET := false
 	for _, route := range routes {
-		allowedMethods = append(allowedMethods, route.Method)
 		hasGET = hasGET || route.Method == http.MethodGet
 		s.mux.HandleFunc(route.Method+" "+pattern, route.Handler)
 	}
-	fallback := methodNotAllowed(strings.Join(allowedMethods, ", "))
+	fallback := methodNotAllowed(methodRoutesAllow(routes))
 	if hasGET {
 		s.mux.HandleFunc(http.MethodHead+" "+pattern, fallback)
 	}
 	s.mux.HandleFunc(pattern, fallback)
+}
+
+func methodRoutesAllow(routes []methodRoute) string {
+	allowedMethods := make([]string, 0, len(routes))
+	for _, route := range routes {
+		allowedMethods = append(allowedMethods, route.Method)
+	}
+	return strings.Join(allowedMethods, ", ")
 }
 
 // registerDynamicGETRoute rejects the HEAD requests that a GET pattern matches

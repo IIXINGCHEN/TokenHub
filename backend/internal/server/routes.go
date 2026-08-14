@@ -75,9 +75,7 @@ func (s *Server) routes() {
 	)
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/projects/{project_id}/quota-increase", s.handleAdminProjectQuotaIncreasePost, s.adminProjectMethodNotAllowed("approval", http.MethodPost))
 	s.mux.HandleFunc("/api/admin/projects/", s.handleAdminProjectNested)
-	s.mux.HandleFunc("/api/admin/guardrail-policies", s.handleAdminGuardrailPolicies)
-	s.mux.HandleFunc("/api/admin/guardrail-policies/test", s.handleAdminGuardrailPolicyTest)
-	s.mux.HandleFunc("/api/admin/guardrail-policies/", s.handleAdminGuardrailPolicyItem)
+	s.registerAdminGuardrailPolicyRoutes()
 	s.registerMethodRoutes("/api/admin/users", func(allowedMethods string) http.HandlerFunc {
 		return s.adminMethodNotAllowed("identity", allowedMethods)
 	},
