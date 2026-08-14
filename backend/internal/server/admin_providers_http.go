@@ -685,45 +685,6 @@ func (s *Server) serveAdminProviderHealth(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, provider)
 }
 
-func (s *Server) handleAdminProviderResources(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAdmin(w, r, "provider", r.Method)
-	if !ok {
-		return
-	}
-	switch r.Method {
-	case http.MethodGet:
-		writeJSON(w, http.StatusOK, map[string]any{"data": s.store.ListProviderResources()})
-	case http.MethodPost:
-		var req ProviderResource
-		if err := s.decodeJSON(w, r, &req); err != nil {
-			writeError(w, r, err)
-			return
-		}
-		if req.ProviderID == "" || req.Name == "" {
-			writeError(w, r, NewHTTPError(400, "invalid_provider_resource", "provider_id and name are required"))
-			return
-		}
-		provider, found := s.store.GetProvider(req.ProviderID)
-		if !found {
-			writeError(w, r, NewHTTPError(http.StatusNotFound, "provider_not_found", "Provider not found"))
-			return
-		}
-		if err := validateProviderHeaderSupport(provider.Type, req.Headers); err != nil {
-			writeError(w, r, err)
-			return
-		}
-		resource, err := s.store.AddProviderResource(req)
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		s.recordAdminAudit(r, user, "create", "provider_resource", resource.ID, "", auditProviderResource(resource))
-		writeJSON(w, http.StatusCreated, resource)
-	default:
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
-	}
-}
-
 func mergeProviderPatchRequest(req *ProviderCreateRequest, current Provider) {
 	if req.Name == "" {
 		req.Name = current.Name
@@ -760,56 +721,29 @@ func (s *Server) handleAdminProviderResourceNested(w http.ResponseWriter, r *htt
 	}
 	parts := splitNestedEscapedAdminPath(r.URL.EscapedPath(), "/api/admin/provider-resources/", providerResourceActions)
 	if len(parts) == 1 && parts[0] == "bulk" {
-		s.handleAdminProviderResourceBulk(w, r, user)
+		if r.Method != http.MethodPost {
+			jsonMethodNotAllowed(http.MethodPost)(w, r)
+			return
+		}
+		s.serveAdminProviderResourceBulk(w, r, user)
 		return
 	}
 	if len(parts) == 1 && parts[0] == "import" {
-		s.handleAdminProviderResourceImport(w, r, user)
+		if r.Method != http.MethodPost {
+			jsonMethodNotAllowed(http.MethodPost)(w, r)
+			return
+		}
+		s.serveAdminProviderResourceImport(w, r, user)
 		return
 	}
 	if len(parts) == 1 {
 		switch r.Method {
 		case http.MethodPatch:
-			var req ProviderResource
-			if err := s.decodeJSON(w, r, &req); err != nil {
-				writeError(w, r, err)
-				return
-			}
-			current, found := s.store.GetProviderResource(parts[0])
-			if !found {
-				writeError(w, r, NewHTTPError(http.StatusNotFound, "provider_resource_not_found", "Provider resource not found"))
-				return
-			}
-			providerID := firstNonEmpty(req.ProviderID, current.ProviderID)
-			provider, found := s.store.GetProvider(providerID)
-			if !found {
-				writeError(w, r, NewHTTPError(http.StatusNotFound, "provider_not_found", "Provider not found"))
-				return
-			}
-			headers := req.Headers
-			if headers == nil {
-				headers = current.Headers
-			}
-			if err := validateProviderHeaderSupport(provider.Type, headers); err != nil {
-				writeError(w, r, err)
-				return
-			}
-			resource, err := s.store.UpdateProviderResource(parts[0], req)
-			if err != nil {
-				writeError(w, r, err)
-				return
-			}
-			s.recordAdminAudit(r, user, "update", "provider_resource", parts[0], "", auditProviderResource(resource))
-			writeJSON(w, http.StatusOK, resource)
+			s.serveAdminProviderResourcePatch(w, r, user, parts[0])
 		case http.MethodDelete:
-			if err := s.store.DeleteProviderResource(parts[0]); err != nil {
-				writeError(w, r, err)
-				return
-			}
-			s.recordAdminAudit(r, user, "delete", "provider_resource", parts[0], "", nil)
-			w.WriteHeader(http.StatusNoContent)
+			s.serveAdminProviderResourceDelete(w, r, user, parts[0])
 		default:
-			writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+			jsonMethodNotAllowed(http.MethodPatch+", "+http.MethodDelete)(w, r)
 		}
 		return
 	}
@@ -819,117 +753,44 @@ func (s *Server) handleAdminProviderResourceNested(w http.ResponseWriter, r *htt
 		return
 	}
 	if parts[1] == "quota/reset-credits" {
-		s.handleAdminOpenAIAccountQuotaResetCredits(w, r, user, parts[0])
+		if r.Method != http.MethodGet {
+			jsonMethodNotAllowed(http.MethodGet)(w, r)
+			return
+		}
+		s.serveAdminOpenAIAccountQuotaResetCredits(w, r, user, parts[0])
 		return
 	}
 	if parts[1] == "quota/reset" {
-		s.handleAdminOpenAIAccountQuotaReset(w, r, user, parts[0])
+		if r.Method != http.MethodPost {
+			jsonMethodNotAllowed(http.MethodPost)(w, r)
+			return
+		}
+		s.serveAdminOpenAIAccountQuotaReset(w, r, user, parts[0])
 		return
 	}
 	if parts[1] == "quota" {
 		if r.Method != http.MethodGet {
-			writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+			jsonMethodNotAllowed(http.MethodGet)(w, r)
 			return
 		}
-		quota, err := s.queryOpenAIAccountQuotaCached(r.Context(), parts[0], r.URL.Query().Get("refresh") == "true")
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		s.recordAdminAudit(r, user, "query_quota", "provider_resource", parts[0], "", quota)
-		writeJSON(w, http.StatusOK, quota)
+		s.serveAdminOpenAIAccountQuota(w, r, user, parts[0])
 		return
 	}
 	if r.Method != http.MethodPost {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+		jsonMethodNotAllowed(http.MethodPost)(w, r)
 		return
 	}
-	if parts[1] == "test" {
-		resource, resourceOK := s.providerResourceByID(parts[0])
-		provider, providerOK := s.providerByID(resource.ProviderID)
-		adapter, adapterErr := s.adapterRegistry.Resolve(provider.Type)
-		_, usesStructuredProbe := adapter.(ProviderResourceProber)
-		if resourceOK && providerOK && adapterErr == nil && usesStructuredProbe {
-			var req codexSubscriptionTestRequest
-			if err := s.decodeJSON(w, r, &req); err != nil {
-				writeError(w, r, err)
-				return
-			}
-			startedAt := time.Now()
-			rawResult, err := s.integrations.TestProviderResource(r.Context(), parts[0], &req)
-			if err != nil {
-				httpErr := AsHTTPError(err)
-				s.recordAdminAuditWithStatus(r, user, "test", "provider_resource", parts[0], "failed", httpErr.Code, "", map[string]any{
-					"healthy":          false,
-					"model":            strings.TrimSpace(req.Model),
-					"reasoning_effort": strings.ToLower(strings.TrimSpace(req.ReasoningEffort)),
-					"speed":            strings.ToLower(strings.TrimSpace(req.Speed)),
-					"latency_ms":       time.Since(startedAt).Milliseconds(),
-					"error_code":       httpErr.Code,
-				})
-				writeError(w, r, err)
-				return
-			}
-			result, ok := rawResult.(ProviderProbeResult)
-			if !ok {
-				writeError(w, r, NewHTTPError(http.StatusInternalServerError, "provider_probe_invalid_result", "Provider probe returned an invalid result"))
-				return
-			}
-			s.recordAdminAudit(r, user, "test", "provider_resource", parts[0], "", map[string]any{
-				"healthy":          true,
-				"model":            result.Model,
-				"reasoning_effort": result.ReasoningEffort,
-				"speed":            result.Speed,
-				"latency_ms":       result.LatencyMS,
-				"usage":            result.Usage,
-			})
-			writeJSON(w, http.StatusOK, result)
-			return
-		}
-		tested, err := s.integrations.TestProviderResource(r.Context(), parts[0], nil)
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		auditResult := tested
-		if testedResource, ok := tested.(ProviderResource); ok {
-			auditResult = auditProviderResource(testedResource)
-		}
-		s.recordAdminAudit(r, user, "test", "provider_resource", parts[0], "", auditResult)
-		writeJSON(w, http.StatusOK, tested)
-		return
+	switch parts[1] {
+	case "test":
+		s.serveAdminProviderResourceTest(w, r, user, parts[0])
+	case "refresh-token":
+		s.serveAdminProviderResourceRefreshToken(w, r, user, parts[0])
+	default:
+		s.serveAdminProviderResourceHealth(w, r, user, parts[0])
 	}
-	if parts[1] == "refresh-token" {
-		creds, err := s.store.RefreshProviderResourceCredentials(r.Context(), parts[0], true)
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		s.recordAdminAudit(r, user, "refresh_token", "provider_resource", parts[0], "", providerAccountCredentialSummary(creds))
-		writeJSON(w, http.StatusOK, map[string]any{"credential_summary": providerAccountCredentialSummary(creds)})
-		return
-	}
-	var req struct {
-		Healthy bool `json:"healthy"`
-	}
-	if err := s.decodeJSON(w, r, &req); err != nil {
-		writeError(w, r, err)
-		return
-	}
-	resource, err := s.store.SetProviderResourceHealth(parts[0], req.Healthy)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
-	s.recordAdminAudit(r, user, "health", "provider_resource", parts[0], "", auditProviderResource(resource))
-	writeJSON(w, http.StatusOK, resource)
 }
 
-func (s *Server) handleAdminProviderResourceBulk(w http.ResponseWriter, r *http.Request, user AdminUser) {
-	if r.Method != http.MethodPost {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
-		return
-	}
+func (s *Server) serveAdminProviderResourceBulk(w http.ResponseWriter, r *http.Request, user AdminUser) {
 	var req struct {
 		Action string   `json:"action"`
 		IDs    []string `json:"ids"`
@@ -947,11 +808,7 @@ func (s *Server) handleAdminProviderResourceBulk(w http.ResponseWriter, r *http.
 	writeJSON(w, http.StatusOK, result)
 }
 
-func (s *Server) handleAdminProviderResourceImport(w http.ResponseWriter, r *http.Request, user AdminUser) {
-	if r.Method != http.MethodPost {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
-		return
-	}
+func (s *Server) serveAdminProviderResourceImport(w http.ResponseWriter, r *http.Request, user AdminUser) {
 	var req struct {
 		Resources []ProviderResource `json:"resources"`
 	}
