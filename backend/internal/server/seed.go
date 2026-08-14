@@ -269,13 +269,14 @@ func seedDefaultOrgResources(store Store) error {
 		Description: "Public model API address, request timeout, and audit retention period.",
 		Status:      StatusActive,
 		Fields: map[string]any{
-			"public_base_url":        "http://localhost:8080",
-			"default_timeout":        "120s",
-			"audit_retention":        "180d",
-			"api_key_prefix":         DefaultAPIKeyPrefix,
-			"api_key_random_length":  DefaultAPIKeyRandomLength,
-			syntheticDNSEnabledField: false,
-			syntheticDNSCIDRsField:   defaultSyntheticDNSCIDRs,
+			"public_base_url":             "http://localhost:8080",
+			"default_timeout":             "120s",
+			"audit_retention":             "180d",
+			"api_key_prefix":              DefaultAPIKeyPrefix,
+			"api_key_random_length":       DefaultAPIKeyRandomLength,
+			syntheticDNSEnabledField:      false,
+			syntheticDNSCIDRsField:        defaultSyntheticDNSCIDRs,
+			syntheticDNSAllowPrivateField: false,
 		},
 	})
 	if err := ensureProviderSyntheticDNSSettings(store); err != nil {
@@ -402,13 +403,14 @@ func seedAdminResources(store Store) error {
 		Description: "Default OpenAI-compatible gateway configuration.",
 		Status:      StatusActive,
 		Fields: map[string]any{
-			"public_base_url":        "http://localhost:8080",
-			"default_timeout":        "120s",
-			"audit_retention":        "180d",
-			"api_key_prefix":         DefaultAPIKeyPrefix,
-			"api_key_random_length":  DefaultAPIKeyRandomLength,
-			syntheticDNSEnabledField: false,
-			syntheticDNSCIDRsField:   defaultSyntheticDNSCIDRs,
+			"public_base_url":             "http://localhost:8080",
+			"default_timeout":             "120s",
+			"audit_retention":             "180d",
+			"api_key_prefix":              DefaultAPIKeyPrefix,
+			"api_key_random_length":       DefaultAPIKeyRandomLength,
+			syntheticDNSEnabledField:      false,
+			syntheticDNSCIDRsField:        defaultSyntheticDNSCIDRs,
+			syntheticDNSAllowPrivateField: false,
 		},
 	})
 	store.CreateResource("security-policies", AdminResource{

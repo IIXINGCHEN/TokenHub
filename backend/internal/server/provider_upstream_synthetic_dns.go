@@ -15,6 +15,7 @@ const (
 	gatewaySettingsID                 = "cfg_gateway"
 	syntheticDNSEnabledField          = "provider_synthetic_dns_enabled"
 	syntheticDNSCIDRsField            = "provider_synthetic_dns_cidrs"
+	syntheticDNSAllowPrivateField     = "provider_synthetic_dns_allow_private_ranges"
 	defaultSyntheticDNSCIDRs          = "198.18.0.0/15"
 	syntheticDNSPolicyRefreshInterval = 5 * time.Second
 	syntheticDNSPolicyRefreshTimeout  = 2 * time.Second
@@ -31,12 +32,35 @@ type providerSyntheticDNSPolicy struct {
 
 	mu          sync.Mutex
 	loadedAt    time.Time
-	blocks      []*net.IPNet
+	snapshot    providerSyntheticDNSSnapshot
 	refreshDone chan struct{}
 	revision    uint64
 
 	transportsMu sync.Mutex
 	transports   []*providerUpstreamTransportPool
+}
+
+// providerSyntheticDNSSnapshot is immutable after construction. Each
+// transport generation captures one snapshot so a settings change cannot
+// alter the SSRF decision of a request that already selected that generation.
+type providerSyntheticDNSSnapshot struct {
+	blocks             []*net.IPNet
+	allowPrivateRanges bool
+}
+
+func (snapshot providerSyntheticDNSSnapshot) allowsResolvedIPContext(_ context.Context, ip net.IP) bool {
+	if ip == nil || isNonBypassableProviderSyntheticDNSIP(ip) {
+		return false
+	}
+	if ip.IsPrivate() && !snapshot.allowPrivateRanges {
+		return false
+	}
+	for _, block := range snapshot.blocks {
+		if block.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 func newProviderSyntheticDNSPolicy(store Store) *providerSyntheticDNSPolicy {
@@ -50,30 +74,25 @@ func (policy *providerSyntheticDNSPolicy) allowsResolvedIP(ip net.IP) bool {
 }
 
 func (policy *providerSyntheticDNSPolicy) allowsResolvedIPContext(ctx context.Context, ip net.IP) bool {
-	if policy == nil || ip == nil || isNonBypassableProviderSyntheticDNSIP(ip) {
+	if policy == nil {
 		return false
 	}
-	for _, block := range policy.configuredBlocks(ctx) {
-		if block.Contains(ip) {
-			return true
-		}
-	}
-	return false
+	return policy.configuredSnapshot(ctx).allowsResolvedIPContext(ctx, ip)
 }
 
 type providerSyntheticDNSContextStore interface {
 	ListResourcesContext(context.Context, string) ([]AdminResource, error)
 }
 
-func (policy *providerSyntheticDNSPolicy) configuredBlocks(ctx context.Context) []*net.IPNet {
+func (policy *providerSyntheticDNSPolicy) configuredSnapshot(ctx context.Context) providerSyntheticDNSSnapshot {
 	if policy == nil || policy.store == nil {
-		return nil
+		return providerSyntheticDNSSnapshot{}
 	}
 	policy.mu.Lock()
 	if !policy.loadedAt.IsZero() && time.Since(policy.loadedAt) < syntheticDNSPolicyRefreshInterval {
-		blocks := policy.blocks
+		snapshot := policy.snapshot
 		policy.mu.Unlock()
-		return blocks
+		return snapshot
 	}
 	if policy.refreshDone != nil {
 		done := policy.refreshDone
@@ -83,9 +102,9 @@ func (policy *providerSyntheticDNSPolicy) configuredBlocks(ctx context.Context) 
 		case <-ctx.Done():
 		}
 		policy.mu.Lock()
-		blocks := policy.blocks
+		snapshot := policy.snapshot
 		policy.mu.Unlock()
-		return blocks
+		return snapshot
 	}
 	policy.refreshDone = make(chan struct{})
 	done := policy.refreshDone
@@ -95,17 +114,17 @@ func (policy *providerSyntheticDNSPolicy) configuredBlocks(ctx context.Context) 
 	refreshCtx, cancel := context.WithTimeout(ctx, syntheticDNSPolicyRefreshTimeout)
 	defer cancel()
 	settings, err := policy.listSettings(refreshCtx)
-	var blocks []*net.IPNet
+	var snapshot providerSyntheticDNSSnapshot
 	if err == nil {
-		blocks = providerSyntheticDNSBlocksFromSettings(settings)
+		snapshot = providerSyntheticDNSSnapshotFromSettings(settings)
 	}
 
 	policy.mu.Lock()
 	changed := false
 	staleRefresh := policy.revision != revision
 	if err == nil && !staleRefresh {
-		changed = !providerSyntheticDNSBlocksEqual(policy.blocks, blocks)
-		policy.blocks = blocks
+		changed = !providerSyntheticDNSSnapshotsEqual(policy.snapshot, snapshot)
+		policy.snapshot = snapshot
 	} else if err != nil && !staleRefresh {
 		log.Printf("[tokenhub] failed to refresh Provider synthetic DNS settings: %v", err)
 	}
@@ -114,10 +133,10 @@ func (policy *providerSyntheticDNSPolicy) configuredBlocks(ctx context.Context) 
 	}
 	policy.refreshDone = nil
 	close(done)
-	current := policy.blocks
+	current := policy.snapshot
 	policy.mu.Unlock()
 	if changed {
-		policy.rotateTransports()
+		policy.rotateTransports(current)
 	}
 	return current
 }
@@ -126,7 +145,7 @@ func (policy *providerSyntheticDNSPolicy) refresh(ctx context.Context) {
 	if policy == nil {
 		return
 	}
-	_ = policy.configuredBlocks(ctx)
+	_ = policy.configuredSnapshot(ctx)
 }
 
 func (policy *providerSyntheticDNSPolicy) listSettings(ctx context.Context) ([]AdminResource, error) {
@@ -136,56 +155,46 @@ func (policy *providerSyntheticDNSPolicy) listSettings(ctx context.Context) ([]A
 	return policy.store.ListResources("settings"), nil
 }
 
-func providerSyntheticDNSBlocksFromSettings(settings []AdminResource) []*net.IPNet {
+func providerSyntheticDNSSnapshotFromSettings(settings []AdminResource) providerSyntheticDNSSnapshot {
 	for _, setting := range settings {
 		if setting.ID != gatewaySettingsID || setting.Status != StatusActive || !truthyField(setting.Fields, syntheticDNSEnabledField) {
 			continue
 		}
-		blocks, err := parseProviderSyntheticDNSCIDRs(stringField(setting.Fields, syntheticDNSCIDRsField))
+		allowPrivate := truthyField(setting.Fields, syntheticDNSAllowPrivateField)
+		blocks, err := parseProviderSyntheticDNSCIDRs(stringField(setting.Fields, syntheticDNSCIDRsField), allowPrivate)
 		if err == nil {
-			return blocks
+			return providerSyntheticDNSSnapshot{blocks: blocks, allowPrivateRanges: allowPrivate}
 		}
-		return nil
+		return providerSyntheticDNSSnapshot{}
 	}
-	return nil
-}
-
-func (policy *providerSyntheticDNSPolicy) invalidate() {
-	if policy == nil {
-		return
-	}
-	policy.mu.Lock()
-	policy.revision++
-	policy.loadedAt = time.Time{}
-	policy.mu.Unlock()
-	policy.rotateTransports()
+	return providerSyntheticDNSSnapshot{}
 }
 
 func (policy *providerSyntheticDNSPolicy) applySetting(setting *AdminResource) {
 	if policy == nil {
 		return
 	}
-	var blocks []*net.IPNet
+	var snapshot providerSyntheticDNSSnapshot
 	if setting != nil {
-		blocks = providerSyntheticDNSBlocksFromSettings([]AdminResource{*setting})
+		snapshot = providerSyntheticDNSSnapshotFromSettings([]AdminResource{*setting})
 	}
 	policy.mu.Lock()
-	changed := !providerSyntheticDNSBlocksEqual(policy.blocks, blocks)
+	changed := !providerSyntheticDNSSnapshotsEqual(policy.snapshot, snapshot)
 	policy.revision++
-	policy.blocks = blocks
+	policy.snapshot = snapshot
 	policy.loadedAt = time.Now()
 	policy.mu.Unlock()
 	if changed {
-		policy.rotateTransports()
+		policy.rotateTransports(snapshot)
 	}
 }
 
-func providerSyntheticDNSBlocksEqual(left, right []*net.IPNet) bool {
-	if len(left) != len(right) {
+func providerSyntheticDNSSnapshotsEqual(left, right providerSyntheticDNSSnapshot) bool {
+	if left.allowPrivateRanges != right.allowPrivateRanges || len(left.blocks) != len(right.blocks) {
 		return false
 	}
-	for index := range left {
-		if left[index].String() != right[index].String() {
+	for index := range left.blocks {
+		if left.blocks[index].String() != right.blocks[index].String() {
 			return false
 		}
 	}
@@ -201,7 +210,7 @@ func (policy *providerSyntheticDNSPolicy) registerTransport(transport *providerU
 	policy.transportsMu.Unlock()
 }
 
-func (policy *providerSyntheticDNSPolicy) rotateTransports() {
+func (policy *providerSyntheticDNSPolicy) rotateTransports(snapshot providerSyntheticDNSSnapshot) {
 	if policy == nil {
 		return
 	}
@@ -209,11 +218,11 @@ func (policy *providerSyntheticDNSPolicy) rotateTransports() {
 	transports := append([]*providerUpstreamTransportPool(nil), policy.transports...)
 	policy.transportsMu.Unlock()
 	for _, transport := range transports {
-		transport.rotate()
+		transport.rotate(snapshot)
 	}
 }
 
-func parseProviderSyntheticDNSCIDRs(raw string) ([]*net.IPNet, error) {
+func parseProviderSyntheticDNSCIDRs(raw string, allowPrivate bool) ([]*net.IPNet, error) {
 	entries := strings.FieldsFunc(raw, func(r rune) bool {
 		return r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t' || r == ' '
 	})
@@ -236,15 +245,38 @@ func parseProviderSyntheticDNSCIDRs(raw string) ([]*net.IPNet, error) {
 		if providerSyntheticDNSCIDRContainsNonBypassableAddress(block) {
 			return nil, NewHTTPError(http.StatusBadRequest, "provider_synthetic_dns_cidrs_not_allowed", fmt.Sprintf("Synthetic DNS CIDR %q overlaps a protected address range", entry))
 		}
+		if !allowPrivate && providerSyntheticDNSCIDRContainsPrivateAddress(block) {
+			return nil, NewHTTPError(http.StatusBadRequest, "provider_synthetic_dns_private_cidr_requires_unsafe_mode", fmt.Sprintf("Synthetic DNS CIDR %q overlaps a private address range; enable unsafe private-range trust explicitly", entry))
+		}
 		blocks = append(blocks, block)
 	}
 	return blocks, nil
 }
 
+var providerSyntheticDNSPrivateCIDRs = mustProviderUpstreamCIDRs([]string{
+	"10.0.0.0/8",
+	"172.16.0.0/12",
+	"192.168.0.0/16",
+	"fc00::/7",
+})
+
+func providerSyntheticDNSCIDRContainsPrivateAddress(candidate *net.IPNet) bool {
+	if candidate == nil {
+		return true
+	}
+	for _, private := range providerSyntheticDNSPrivateCIDRs {
+		if candidate.Contains(private.IP) || private.Contains(candidate.IP) {
+			return true
+		}
+	}
+	return false
+}
+
 // These ranges remain denied even when a synthetic-DNS exception is enabled.
-// Private/ULA, benchmarking, and documentation ranges are intentionally not
-// here: proxy products can use them as configurable synthetic pools. The
-// exception is still constrained to hostname resolution results.
+// Private/ULA ranges are gated separately by the explicit high-risk trust
+// setting. Benchmarking and documentation ranges are intentionally not here:
+// proxy products can use them as configurable synthetic pools. The exception
+// is still constrained to hostname resolution results.
 var nonBypassableProviderSyntheticDNSCIDRs = mustProviderUpstreamCIDRs([]string{
 	"0.0.0.0/8",
 	"127.0.0.0/8",
@@ -317,12 +349,17 @@ func validateProviderSyntheticDNSSettings(resource AdminResource) error {
 	if !truthyField(resource.Fields, syntheticDNSEnabledField) {
 		return nil
 	}
-	_, err := parseProviderSyntheticDNSCIDRs(stringField(resource.Fields, syntheticDNSCIDRsField))
+	allowPrivate := truthyField(resource.Fields, syntheticDNSAllowPrivateField)
+	_, err := parseProviderSyntheticDNSCIDRs(stringField(resource.Fields, syntheticDNSCIDRsField), allowPrivate)
 	return err
 }
 
 func ensureProviderSyntheticDNSSettings(store Store) error {
-	for _, setting := range store.ListResources("settings") {
+	settings, err := store.ListResourcesChecked("settings")
+	if err != nil {
+		return fmt.Errorf("read Provider synthetic DNS settings for backfill: %w", err)
+	}
+	for _, setting := range settings {
 		if setting.ID != gatewaySettingsID {
 			continue
 		}
@@ -336,6 +373,10 @@ func ensureProviderSyntheticDNSSettings(store Store) error {
 		}
 		if _, ok := setting.Fields[syntheticDNSCIDRsField]; !ok {
 			setting.Fields[syntheticDNSCIDRsField] = defaultSyntheticDNSCIDRs
+			changed = true
+		}
+		if _, ok := setting.Fields[syntheticDNSAllowPrivateField]; !ok {
+			setting.Fields[syntheticDNSAllowPrivateField] = false
 			changed = true
 		}
 		if changed {

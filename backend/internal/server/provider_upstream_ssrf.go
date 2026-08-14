@@ -294,6 +294,10 @@ type upstreamLookupFunc func(ctx context.Context, host string) ([]net.IPAddr, er
 // upstreamDialFunc dials an address, matching net.Dialer.DialContext.
 type upstreamDialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
+type providerSyntheticDNSResolver interface {
+	allowsResolvedIPContext(context.Context, net.IP) bool
+}
+
 // dialGuardedUpstream dials addr while enforcing the SSRF classification:
 // loopback identifiers pass only after explicit operator opt-in, literal IPs
 // are checked directly, and hostnames resolve to validated dial candidates,
@@ -308,7 +312,7 @@ type upstreamDialFunc func(ctx context.Context, network, addr string) (net.Conn,
 // a slow lookup followed by a silently black-holing first address must not
 // starve the healthy candidates behind it (the Happy Eyeballs fallback the
 // default transport would have provided).
-func dialGuardedUpstream(ctx context.Context, network string, addr string, allowedPrivate []*net.IPNet, syntheticDNS *providerSyntheticDNSPolicy, budget time.Duration, lookup upstreamLookupFunc, dial upstreamDialFunc) (net.Conn, error) {
+func dialGuardedUpstream(ctx context.Context, network string, addr string, allowedPrivate []*net.IPNet, syntheticDNS providerSyntheticDNSResolver, budget time.Duration, lookup upstreamLookupFunc, dial upstreamDialFunc) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, err
@@ -334,7 +338,7 @@ func dialGuardedUpstream(ctx context.Context, network string, addr string, allow
 	}
 	var allowed []net.IPAddr
 	for _, ip := range ips {
-		if !isDisallowedProviderUpstreamIP(ip.IP) || syntheticDNS.allowsResolvedIPContext(dialCtx, ip.IP) {
+		if !isDisallowedProviderUpstreamIP(ip.IP) || syntheticDNS != nil && syntheticDNS.allowsResolvedIPContext(dialCtx, ip.IP) {
 			allowed = append(allowed, ip)
 		}
 	}
@@ -476,7 +480,7 @@ func raceValidatedUpstreamCandidates(ctx context.Context, network, port string, 
 // would receive the proxy address and the guard would validate the proxy rather
 // than the request target, letting the proxy's own DNS resolution bypass the
 // check. Provider catalog fetches therefore always connect directly.
-func ssrfGuardedProviderTransport(allowedPrivate []*net.IPNet, syntheticDNS ...*providerSyntheticDNSPolicy) *http.Transport {
+func ssrfGuardedProviderTransport(allowedPrivate []*net.IPNet, syntheticDNS ...providerSyntheticDNSResolver) *http.Transport {
 	base, ok := http.DefaultTransport.(*http.Transport)
 	var transport *http.Transport
 	if ok {
@@ -490,7 +494,7 @@ func ssrfGuardedProviderTransport(allowedPrivate []*net.IPNet, syntheticDNS ...*
 		KeepAlive: 30 * time.Second,
 	}
 	resolver := net.DefaultResolver
-	var syntheticDNSPolicy *providerSyntheticDNSPolicy
+	var syntheticDNSPolicy providerSyntheticDNSResolver
 	if len(syntheticDNS) > 0 {
 		syntheticDNSPolicy = syntheticDNS[0]
 	}

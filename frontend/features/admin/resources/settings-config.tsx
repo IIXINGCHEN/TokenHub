@@ -87,10 +87,17 @@ export function systemSettingConfig(): ResourceConfig<AdminResource> {
       help: "仅当 TokenHub 所在主机启用了 Fake-IP 代理，且 Provider 域名因此解析到合成地址时开启。该例外只用于域名解析结果，不允许把字面量 IP 直接配置为 Provider Base URL。",
     },
     {
+      key: "provider_synthetic_dns_allow_private_ranges",
+      label: "允许信任私网 / ULA Synthetic DNS 网段（高风险）",
+      type: "boolean",
+      visible: (values) => values.provider_synthetic_dns_enabled === "true",
+      help: "默认仍禁止 RFC1918 私网和 IPv6 ULA。仅当代理确实把这些范围用作 Fake-IP 池（例如部分 Xray IPv6 配置）时开启；开启后，恶意或被劫持的 Provider 域名可能访问该范围内的真实内网服务。",
+    },
+    {
       key: "provider_synthetic_dns_cidrs",
       label: "Synthetic DNS / Fake-IP 网段",
       type: "textarea",
-      placeholder: "198.18.0.0/15\nfc00::/18",
+      placeholder: "198.18.0.0/15",
       help: "安全提示：每行一个 CIDR，必须与本机代理的实际 Fake-IP 池一致。198.18.0.0/15 是基准测试保留网段，只是常被代理软件用作 Fake-IP，并非 Fake-IP 专属；不同软件或配置可使用其他网段。配置过宽或填入真实内网会削弱 SSRF 防护。loopback、link-local、metadata、multicast、NAT64 等敏感范围始终禁止。",
     },
   ]);

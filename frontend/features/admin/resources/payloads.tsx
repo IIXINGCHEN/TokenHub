@@ -723,6 +723,8 @@ function localizedAdminErrorCode(code?: string) {
       return tx("Synthetic DNS CIDR 范围过宽，请缩小后重试。");
     case "provider_synthetic_dns_cidrs_not_allowed":
       return tx("该 Synthetic DNS CIDR 与受保护地址范围重叠，无法保存。");
+    case "provider_synthetic_dns_private_cidr_requires_unsafe_mode":
+      return tx("该 Synthetic DNS CIDR 属于私网或 ULA；如确认代理使用此网段，请先开启高风险私网信任。");
     default:
       return "";
   }

@@ -67,15 +67,15 @@ func (s *Server) handleAdminResources(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			var resource AdminResource
+			var err error
 			if kind == routingPolicyResourceKind {
-				var err error
 				resource, err = s.store.CreateRoutingPolicy(req)
-				if err != nil {
-					writeError(w, r, err)
-					return
-				}
 			} else {
-				resource = s.store.CreateResource(kind, req)
+				resource, err = s.store.CreateResourceChecked(kind, req)
+			}
+			if err != nil {
+				writeError(w, r, err)
+				return
 			}
 			if kind == "settings" && resource.ID == gatewaySettingsID {
 				s.syntheticDNSPolicy.applySetting(&resource)

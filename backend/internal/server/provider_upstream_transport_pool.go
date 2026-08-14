@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"sync"
@@ -14,13 +15,14 @@ import (
 type providerUpstreamTransportPool struct {
 	mu      sync.RWMutex
 	current *http.Transport
-	factory func() *http.Transport
+	factory func(providerSyntheticDNSSnapshot) *http.Transport
 	policy  *providerSyntheticDNSPolicy
 }
 
-func newProviderUpstreamTransportPool(policy *providerSyntheticDNSPolicy, factory func() *http.Transport) *providerUpstreamTransportPool {
+func newProviderUpstreamTransportPool(policy *providerSyntheticDNSPolicy, factory func(providerSyntheticDNSSnapshot) *http.Transport) *providerUpstreamTransportPool {
+	snapshot := policy.configuredSnapshot(context.Background())
 	pool := &providerUpstreamTransportPool{
-		current: factory(),
+		current: factory(snapshot),
 		factory: factory,
 		policy:  policy,
 	}
@@ -45,11 +47,11 @@ func (pool *providerUpstreamTransportPool) CloseIdleConnections() {
 	transport.CloseIdleConnections()
 }
 
-func (pool *providerUpstreamTransportPool) rotate() {
+func (pool *providerUpstreamTransportPool) rotate(snapshot providerSyntheticDNSSnapshot) {
 	if pool == nil || pool.factory == nil {
 		return
 	}
-	replacement := pool.factory()
+	replacement := pool.factory(snapshot)
 	pool.mu.Lock()
 	retired := pool.current
 	pool.current = replacement
@@ -60,15 +62,15 @@ func (pool *providerUpstreamTransportPool) rotate() {
 }
 
 func rotatingProviderUpstreamTransport(allowedPrivate []*net.IPNet, policy *providerSyntheticDNSPolicy, configure func(*http.Transport)) http.RoundTripper {
-	factory := func() *http.Transport {
-		transport := ssrfGuardedProviderTransport(allowedPrivate, policy)
+	factory := func(snapshot providerSyntheticDNSSnapshot) *http.Transport {
+		transport := ssrfGuardedProviderTransport(allowedPrivate, snapshot)
 		if configure != nil {
 			configure(transport)
 		}
 		return transport
 	}
 	if policy == nil {
-		return factory()
+		return factory(providerSyntheticDNSSnapshot{})
 	}
 	return newProviderUpstreamTransportPool(policy, factory)
 }

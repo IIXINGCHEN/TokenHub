@@ -17,23 +17,30 @@ func syntheticDNSSettings(enabled bool, cidrs string) AdminResource {
 		Name:   "Gateway Base Settings",
 		Status: StatusActive,
 		Fields: map[string]any{
-			syntheticDNSEnabledField: enabled,
-			syntheticDNSCIDRsField:   cidrs,
+			syntheticDNSEnabledField:      enabled,
+			syntheticDNSCIDRsField:        cidrs,
+			syntheticDNSAllowPrivateField: false,
 		},
 	}
 }
 
+func syntheticDNSSettingsWithPrivateTrust(enabled bool, cidrs string) AdminResource {
+	setting := syntheticDNSSettings(enabled, cidrs)
+	setting.Fields[syntheticDNSAllowPrivateField] = true
+	return setting
+}
+
 func TestProviderSyntheticDNSPolicyAllowsOnlyConfiguredResolvedAddresses(t *testing.T) {
 	store := NewMemoryStore()
-	store.CreateResource("settings", syntheticDNSSettings(true, "198.18.0.0/15\nfc00::/18"))
+	store.CreateResource("settings", syntheticDNSSettings(true, "198.18.0.0/15"))
 	policy := newProviderSyntheticDNSPolicy(store)
 
-	for _, candidate := range []string{"198.18.0.1", "198.19.255.254", "fc00::1"} {
+	for _, candidate := range []string{"198.18.0.1", "198.19.255.254"} {
 		if !policy.allowsResolvedIP(net.ParseIP(candidate)) {
 			t.Fatalf("expected configured synthetic address %s to pass", candidate)
 		}
 	}
-	for _, candidate := range []string{"10.0.0.1", "169.254.169.254", "127.0.0.1", "64:ff9b::a9fe:a9fe"} {
+	for _, candidate := range []string{"10.0.0.1", "fc00::1", "169.254.169.254", "127.0.0.1", "64:ff9b::a9fe:a9fe"} {
 		if policy.allowsResolvedIP(net.ParseIP(candidate)) {
 			t.Fatalf("expected unconfigured or protected address %s to stay blocked", candidate)
 		}
@@ -43,20 +50,30 @@ func TestProviderSyntheticDNSPolicyAllowsOnlyConfiguredResolvedAddresses(t *test
 	}
 }
 
-func TestProviderSyntheticDNSPolicyUpdatesAfterInvalidation(t *testing.T) {
-	store := NewMemoryStore()
-	setting := store.CreateResource("settings", syntheticDNSSettings(false, defaultSyntheticDNSCIDRs))
-	policy := newProviderSyntheticDNSPolicy(store)
-	if policy.allowsResolvedIP(net.ParseIP("198.18.0.1")) {
-		t.Fatal("expected disabled policy to reject the synthetic address")
+func TestProviderSyntheticDNSPrivateRangesRequireUnsafeTrust(t *testing.T) {
+	for _, cidr := range []string{"10.0.0.0/8", "fc00::/18"} {
+		err := validateProviderSyntheticDNSSettings(syntheticDNSSettings(true, cidr))
+		if code := AsHTTPError(err).Code; code != "provider_synthetic_dns_private_cidr_requires_unsafe_mode" {
+			t.Fatalf("expected %q to require unsafe private-range trust, got %s (%v)", cidr, code, err)
+		}
+		if err := validateProviderSyntheticDNSSettings(syntheticDNSSettingsWithPrivateTrust(true, cidr)); err != nil {
+			t.Fatalf("expected unsafe private-range trust to accept %q, got %v", cidr, err)
+		}
 	}
-	setting.Fields[syntheticDNSEnabledField] = true
+
+	store := NewMemoryStore()
+	setting := store.CreateResource("settings", syntheticDNSSettings(true, "10.0.0.0/8"))
+	policy := newProviderSyntheticDNSPolicy(store)
+	if policy.allowsResolvedIP(net.ParseIP("10.0.0.1")) {
+		t.Fatal("expected ordinary synthetic DNS mode to keep RFC1918 blocked")
+	}
+	setting.Fields[syntheticDNSAllowPrivateField] = true
 	if _, err := store.UpdateResource("settings", gatewaySettingsID, setting); err != nil {
 		t.Fatal(err)
 	}
-	policy.invalidate()
-	if !policy.allowsResolvedIP(net.ParseIP("198.18.0.1")) {
-		t.Fatal("expected the enabled policy to apply without restarting")
+	policy.applySetting(&setting)
+	if !policy.allowsResolvedIP(net.ParseIP("10.0.0.1")) {
+		t.Fatal("expected explicitly enabled unsafe private-range trust to allow RFC1918")
 	}
 }
 
@@ -208,19 +225,21 @@ func TestValidateProviderSyntheticDNSSettingsRejectsUnsafeCIDRs(t *testing.T) {
 		{"0.0.0.0/0", "provider_synthetic_dns_cidrs_too_broad"},
 		{"169.254.0.0/16", "provider_synthetic_dns_cidrs_not_allowed"},
 		{"fc00::/7", "provider_synthetic_dns_cidrs_too_broad"},
+		{"10.0.0.0/8", "provider_synthetic_dns_private_cidr_requires_unsafe_mode"},
+		{"fc00::/18", "provider_synthetic_dns_private_cidr_requires_unsafe_mode"},
 	} {
 		err := validateProviderSyntheticDNSSettings(syntheticDNSSettings(true, test.cidrs))
 		if code := AsHTTPError(err).Code; code != test.code {
 			t.Fatalf("expected %q to fail with %s, got %s (%v)", test.cidrs, test.code, code, err)
 		}
 	}
-	for _, cidrs := range []string{"198.18.0.0/15", "28.0.0.0/8", "fc00::/18", "10.0.0.0/8"} {
+	for _, cidrs := range []string{"198.18.0.0/15", "28.0.0.0/8"} {
 		if err := validateProviderSyntheticDNSSettings(syntheticDNSSettings(true, cidrs)); err != nil {
 			t.Fatalf("expected explicit synthetic range %q to be accepted, got %v", cidrs, err)
 		}
 	}
 	t.Setenv(providerUpstreamNAT64PrefixEnv, "fd00:64::/64")
-	err := validateProviderSyntheticDNSSettings(syntheticDNSSettings(true, "fd00:64::/64"))
+	err := validateProviderSyntheticDNSSettings(syntheticDNSSettingsWithPrivateTrust(true, "fd00:64::/64"))
 	if code := AsHTTPError(err).Code; code != "provider_synthetic_dns_cidrs_not_allowed" {
 		t.Fatalf("expected the configured NAT64 prefix to stay protected, got %s (%v)", code, err)
 	}
@@ -237,6 +256,31 @@ func TestAdminSettingsRejectInvalidSyntheticDNSCIDR(t *testing.T) {
 	response := doJSON(t, New(store).Handler(), http.MethodPatch, "/api/admin/resources/settings/"+gatewaySettingsID, setting, "")
 	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body, "provider_synthetic_dns_cidrs_not_allowed") {
 		t.Fatalf("expected invalid synthetic range to be rejected, got %d: %s", response.Code, response.Body)
+	}
+}
+
+func TestAdminSettingsRequireUnsafeTrustForPrivateSyntheticDNSCIDR(t *testing.T) {
+	store := NewMemoryStore()
+	if err := BootstrapBaseData(store); err != nil {
+		t.Fatal(err)
+	}
+	server := New(store)
+	setting := store.ListResources("settings")[0]
+	setting.Fields[syntheticDNSEnabledField] = true
+	setting.Fields[syntheticDNSCIDRsField] = "10.0.0.0/8"
+
+	response := doJSON(t, server.Handler(), http.MethodPatch, "/api/admin/resources/settings/"+gatewaySettingsID, setting, "")
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body, "provider_synthetic_dns_private_cidr_requires_unsafe_mode") {
+		t.Fatalf("expected ordinary mode to reject the private range, got %d: %s", response.Code, response.Body)
+	}
+
+	setting.Fields[syntheticDNSAllowPrivateField] = true
+	response = doJSON(t, server.Handler(), http.MethodPatch, "/api/admin/resources/settings/"+gatewaySettingsID, setting, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected explicit unsafe trust to accept the private range, got %d: %s", response.Code, response.Body)
+	}
+	if !server.syntheticDNSPolicy.allowsResolvedIP(net.ParseIP("10.0.0.1")) {
+		t.Fatal("expected the saved unsafe setting to apply to the runtime policy")
 	}
 }
 
@@ -271,6 +315,33 @@ func TestAdminSettingsPostValidatesSyntheticDNSCIDR(t *testing.T) {
 	response := doJSON(t, server.Handler(), http.MethodPost, "/api/admin/resources/settings", setting, "")
 	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body, "provider_synthetic_dns_cidrs_not_allowed") {
 		t.Fatalf("expected POST upsert to enforce the same validation as PATCH, got %d: %s", response.Code, response.Body)
+	}
+}
+
+type failingSyntheticDNSCreateStore struct {
+	Store
+}
+
+func (store failingSyntheticDNSCreateStore) CreateResourceChecked(kind string, resource AdminResource) (AdminResource, error) {
+	if kind == "settings" && resource.ID == gatewaySettingsID {
+		return AdminResource{}, errors.New("synthetic DNS settings write failed")
+	}
+	return store.Store.CreateResourceChecked(kind, resource)
+}
+
+func TestAdminSettingsPostDoesNotApplySyntheticDNSPolicyWhenPersistenceFails(t *testing.T) {
+	base := NewMemoryStore()
+	if err := BootstrapBaseData(base); err != nil {
+		t.Fatal(err)
+	}
+	server := New(failingSyntheticDNSCreateStore{Store: base})
+	address := net.ParseIP("198.18.0.1")
+	response := doJSON(t, server.Handler(), http.MethodPost, "/api/admin/resources/settings", syntheticDNSSettings(true, defaultSyntheticDNSCIDRs), "")
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("expected failed persistence to return 500, got %d: %s", response.Code, response.Body)
+	}
+	if server.syntheticDNSPolicy.allowsResolvedIP(address) {
+		t.Fatal("expected failed persistence to leave the runtime policy disabled")
 	}
 }
 
@@ -368,6 +439,34 @@ func TestBootstrapBackfillsProviderSyntheticDNSSettings(t *testing.T) {
 	if got := stringField(setting.Fields, syntheticDNSCIDRsField); got != defaultSyntheticDNSCIDRs {
 		t.Fatalf("expected default CIDR to be backfilled, got %q", got)
 	}
+	if truthyField(setting.Fields, syntheticDNSAllowPrivateField) {
+		t.Fatal("expected unsafe private-range trust to be backfilled as disabled")
+	}
+}
+
+func TestSeedDemoDataPersistsPrivateSyntheticDNSSettingAsDisabled(t *testing.T) {
+	store := NewMemoryStore()
+	if err := SeedDemoData(store); err != nil {
+		t.Fatal(err)
+	}
+	settings := store.ListResources("settings")
+	var gatewaySetting *AdminResource
+	for index := range settings {
+		if settings[index].ID == gatewaySettingsID {
+			gatewaySetting = &settings[index]
+			break
+		}
+	}
+	if gatewaySetting == nil {
+		t.Fatal("expected demo seed to persist gateway settings")
+	}
+	value, ok := gatewaySetting.Fields[syntheticDNSAllowPrivateField]
+	if !ok {
+		t.Fatalf("expected demo seed to persist %q explicitly", syntheticDNSAllowPrivateField)
+	}
+	if truthyField(map[string]any{syntheticDNSAllowPrivateField: value}, syntheticDNSAllowPrivateField) {
+		t.Fatal("expected demo seed to keep private-range trust disabled")
+	}
 }
 
 type failingSyntheticDNSBackfillStore struct {
@@ -390,5 +489,34 @@ func TestBootstrapReportsProviderSyntheticDNSBackfillFailure(t *testing.T) {
 	err := BootstrapBaseData(failingSyntheticDNSBackfillStore{Store: store})
 	if err == nil || !strings.Contains(err.Error(), "backfill Provider synthetic DNS settings") {
 		t.Fatalf("expected bootstrap to report the backfill failure, got %v", err)
+	}
+}
+
+type failingSyntheticDNSBackfillReadStore struct {
+	Store
+}
+
+func (store failingSyntheticDNSBackfillReadStore) ListResourcesChecked(kind string) ([]AdminResource, error) {
+	if kind == "settings" {
+		return nil, errors.New("settings read failed")
+	}
+	return store.Store.ListResourcesChecked(kind)
+}
+
+func TestBootstrapReportsProviderSyntheticDNSBackfillReadFailure(t *testing.T) {
+	store := NewMemoryStore()
+	err := BootstrapBaseData(failingSyntheticDNSBackfillReadStore{Store: store})
+	if err == nil || !strings.Contains(err.Error(), "read Provider synthetic DNS settings for backfill") {
+		t.Fatalf("expected bootstrap to report the settings read failure, got %v", err)
+	}
+}
+
+func TestListResourcesCheckedPreservesStoreContext(t *testing.T) {
+	store := NewMemoryStore()
+	ctx, cancel := context.WithCancel(context.Background())
+	contextual := store.WithContext(ctx)
+	cancel()
+	if _, err := contextual.ListResourcesChecked("settings"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected the checked read to preserve the canceled store context, got %v", err)
 	}
 }
