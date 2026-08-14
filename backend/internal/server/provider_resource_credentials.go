@@ -232,6 +232,23 @@ func (s *GormStore) RefreshProviderResourceCredentials(ctx context.Context, reso
 
 		refreshed, err := refreshOpenAIAccountOAuthCredentials(leaseCtx, creds)
 		if err != nil {
+			if httpErr := AsHTTPError(err); httpErr != nil && httpErr.Code == "provider_resource_reauthorization_required" {
+				s.mu.Lock()
+				var current ProviderResource
+				loadErr := s.db.WithContext(leaseCtx).First(&current, "id = ?", resourceID).Error
+				if loadErr == nil && isOpenAIAccountResource(current.ResourceType) {
+					if current.Options == nil {
+						current.Options = map[string]string{}
+					}
+					current.Options[openAIAccountReauthorizationRequiredOption] = "true"
+					current.UpdatedAt = time.Now().UTC()
+					loadErr = s.db.WithContext(leaseCtx).Save(&current).Error
+				}
+				s.mu.Unlock()
+				if loadErr != nil {
+					return loadErr
+				}
+			}
 			return err
 		}
 

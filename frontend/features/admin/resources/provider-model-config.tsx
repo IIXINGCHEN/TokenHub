@@ -133,11 +133,15 @@ export function providerResourceConfig(provider?: Provider): ResourceConfig<Prov
         title: "使用保存的 refresh token 续租账号访问 Token",
         visible: (item) => item.resource_type === "openai_subscription" && item.credential_summary?.has_refresh_token === "true",
         run: (ctx, item) => adminMutate(ctx, `/api/admin/provider-resources/${item.id}/refresh-token`, "POST", {}),
-        doneMessage: (item) => `${item.name} ${tx("Token 已续租")}`,
+        doneMessage: (item) => providerResourceActionMessage(tx("{name} Token 已续租"), { name: item.name }),
       },
     ],
     toForm: (item) => providerResourceToForm(item, provider?.options),
   };
+}
+
+function providerResourceActionMessage(template: string, values: Record<string, string>) {
+  return Object.entries(values).reduce((message, [key, value]) => message.split(`{${key}}`).join(value), template);
 }
 
 export function openAIAccountFieldVisible(values: Record<string, string>) {

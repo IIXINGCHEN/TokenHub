@@ -8,6 +8,7 @@ import (
 )
 
 const providerCredentialRefreshInterval = time.Minute
+const providerCredentialRefreshConcurrency = 4
 
 // ProviderCredentialRefreshService renews OAuth access tokens shortly before
 // they expire. RefreshProviderResourceCredentials owns the cluster lease, so
@@ -25,6 +26,7 @@ func newProviderCredentialRefreshService(store Store) *ProviderCredentialRefresh
 }
 
 func (s *ProviderCredentialRefreshService) RunDue(ctx context.Context) {
+	resources := make([]ProviderResource, 0)
 	for _, resource := range s.store.ListProviderResources() {
 		if ctx.Err() != nil {
 			return
@@ -32,14 +34,43 @@ func (s *ProviderCredentialRefreshService) RunDue(ctx context.Context) {
 		if !isOpenAIAccountResource(resource.ResourceType) || resource.Status != StatusActive || resource.CredentialSummary["has_refresh_token"] != "true" || resource.CredentialSummary[openAIAccountReauthorizationRequiredOption] == "true" {
 			continue
 		}
-		if _, err := s.store.RefreshProviderResourceCredentials(ctx, resource.ID, false); err != nil {
-			if AsHTTPError(err).Code == "provider_resource_reauthorization_required" {
-				if _, updateErr := s.store.UpdateProviderResourceOptions(resource.ID, map[string]string{openAIAccountReauthorizationRequiredOption: "true"}); updateErr != nil {
-					log.Printf("[tokenhub] could not mark provider resource %s for reauthorization: %v", resource.ID, updateErr)
-				}
+		resources = append(resources, resource)
+	}
+	if len(resources) == 0 {
+		return
+	}
+	workerCount := min(providerCredentialRefreshConcurrency, len(resources))
+	jobs := make(chan ProviderResource)
+	var workers sync.WaitGroup
+	for range workerCount {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for resource := range jobs {
+				s.renewResource(ctx, resource)
 			}
-			log.Printf("[tokenhub] OAuth token renewal failed for provider resource %s: %v", resource.ID, err)
+		}()
+	}
+	for _, resource := range resources {
+		select {
+		case jobs <- resource:
+		case <-ctx.Done():
+			close(jobs)
+			workers.Wait()
+			return
 		}
+	}
+	close(jobs)
+	workers.Wait()
+}
+
+func (s *ProviderCredentialRefreshService) renewResource(ctx context.Context, resource ProviderResource) {
+	if _, err := s.store.RefreshProviderResourceCredentials(ctx, resource.ID, false); err != nil {
+		code := "credential_refresh_failed"
+		if httpErr := AsHTTPError(err); httpErr != nil && httpErr.Code != "" {
+			code = httpErr.Code
+		}
+		log.Printf("[tokenhub] OAuth token renewal failed for provider resource %s: code=%s", resource.ID, code)
 	}
 }
 

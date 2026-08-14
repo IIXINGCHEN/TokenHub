@@ -426,7 +426,10 @@ func refreshOpenAIAccountOAuthCredentials(ctx context.Context, current ProviderR
 
 func isOpenAIAccountOAuthReauthorizationRequired(err error) bool {
 	httpErr := AsHTTPError(err)
-	return httpErr.Code == "oauth_token_failed" && strings.Contains(strings.ToLower(httpErr.Message), "refresh_token_invalidated")
+	if httpErr == nil {
+		return false
+	}
+	return httpErr.Code == "oauth_refresh_token_invalidated" || (httpErr.Code == "oauth_token_failed" && strings.Contains(strings.ToLower(httpErr.Message), "refresh_token_invalidated"))
 }
 
 func requestOpenAIAccountOAuthToken(ctx context.Context, form url.Values) (oauthTokenResponse, error) {
@@ -444,6 +447,9 @@ func requestOpenAIAccountOAuthToken(ctx context.Context, form url.Values) (oauth
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if oauthTokenEndpointErrorCode(body) == "refresh_token_invalidated" {
+			return oauthTokenResponse{}, NewHTTPError(502, "oauth_refresh_token_invalidated", fmt.Sprintf("OAuth token endpoint returned %d", resp.StatusCode))
+		}
 		detail := sanitizeOAuthErrorDetail(body)
 		if detail != "" {
 			return oauthTokenResponse{}, NewHTTPError(502, "oauth_token_failed", fmt.Sprintf("OAuth token endpoint returned %d: %s", resp.StatusCode, detail))
@@ -455,6 +461,26 @@ func requestOpenAIAccountOAuthToken(ctx context.Context, form url.Values) (oauth
 		return oauthTokenResponse{}, err
 	}
 	return token, nil
+}
+
+func oauthTokenEndpointErrorCode(body []byte) string {
+	var response struct {
+		Code  string          `json:"code"`
+		Error json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return ""
+	}
+	if code := strings.ToLower(strings.TrimSpace(response.Code)); code != "" {
+		return code
+	}
+	var nested struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(response.Error, &nested); err != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(nested.Code))
 }
 
 func openAIAccountOAuthTokenInfoFromResponse(token oauthTokenResponse, clientID string, current ProviderResourceCredentials) providerAccountOAuthTokenInfo {

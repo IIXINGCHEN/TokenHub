@@ -383,7 +383,7 @@ export const jaTranslations: Record<string, string> = {
     "OpenAI 账号资源": "OpenAI アカウントリソース",
     "添加账号资源": "アカウントリソースを追加",
     "账号资源": "アカウントリソース",
-    "使用保存的 refresh token 续租账号访问 Token": "保存済み refresh token でアカウント Access Token を更新します。", "Token 已续租": "Token を更新しました", "续租 Token": "Token を更新", "续租中": "更新中", "续租 Token 失败": "Token の更新に失敗しました",
+    "使用保存的 refresh token 续租账号访问 Token": "保存済み refresh token でアカウント Access Token を更新します。", "{name} Token 已续租": "{name} の Token を更新しました", "续租 Token": "Token を更新", "续租中": "更新中", "续租 Token 失败": "Token の更新に失敗しました",
     "账号类型": "アカウント種別",
     "认证方式": "認証方式",
     "访问 Token": "アクセストークン",

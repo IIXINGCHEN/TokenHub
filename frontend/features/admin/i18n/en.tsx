@@ -383,7 +383,7 @@ export const enTranslations: Record<string, string> = {
     "OpenAI 账号资源": "OpenAI Account Resource",
     "添加账号资源": "Add Account Resource",
     "账号资源": "Account Resources",
-    "使用保存的 refresh token 续租账号访问 Token": "Renew the account access token with the saved refresh token.", "Token 已续租": "Token renewed", "续租 Token": "Renew Token", "续租中": "Renewing", "续租 Token 失败": "Token renewal failed",
+    "使用保存的 refresh token 续租账号访问 Token": "Renew the account access token with the saved refresh token.", "{name} Token 已续租": "Renewed token for {name}", "续租 Token": "Renew Token", "续租中": "Renewing", "续租 Token 失败": "Token renewal failed",
     "账号类型": "Account Type",
     "认证方式": "Authentication",
     "访问 Token": "Access Token",
