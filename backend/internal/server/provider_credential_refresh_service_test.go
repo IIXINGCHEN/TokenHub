@@ -222,6 +222,107 @@ func TestProviderCredentialRefreshDoesNotInvalidateReplacementCredentials(t *tes
 	}
 }
 
+func TestProviderResourceCredentialMetadataPreservesOAuthState(t *testing.T) {
+	store := NewMemoryStore()
+	provider := store.AddProvider(Provider{Name: "OAuth Metadata", Type: ProviderOpenAICodex, Status: StatusActive, Healthy: true})
+	resource, err := store.AddProviderResource(ProviderResource{
+		ProviderID: provider.ID, Name: "OAuth Metadata Account", ResourceType: ProviderResourceOpenAISubscription, Status: StatusActive, Healthy: true,
+		Credentials: &ProviderResourceCredentials{
+			AccessToken: "metadata-access", RefreshToken: "metadata-refresh", AccountID: "metadata-account",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := store.UpdateProviderResourceOptions(resource.ID, map[string]string{
+		openAIAccountReauthorizationRequiredOption: "true",
+		codexImageCapabilityOption:                 codexImageCapabilitySupported,
+		codexImageCapabilityCheckedAtOption:        checkedAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := store.UpdateProviderResource(resource.ID, ProviderResource{
+		ProviderID: resource.ProviderID, Name: resource.Name, ResourceType: resource.ResourceType,
+		BaseURL: resource.BaseURL, Status: StatusActive, Healthy: true, Weight: resource.Weight,
+		Credentials: &ProviderResourceCredentials{
+			ExpiresAt: time.Now().UTC().Add(time.Hour).Format(time.RFC3339), Scopes: "openid profile",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.CredentialSummary["has_refresh_token"] != "true" || updated.CredentialSummary[openAIAccountReauthorizationRequiredOption] != "true" {
+		t.Fatalf("credential metadata edit lost OAuth state: %+v", updated.CredentialSummary)
+	}
+	if updated.Options[codexImageCapabilityOption] != codexImageCapabilitySupported || updated.Options[codexImageCapabilityCheckedAtOption] != checkedAt {
+		t.Fatalf("credential metadata edit lost image capability: %+v", updated.Options)
+	}
+	persisted, _ := store.GetProviderResource(resource.ID)
+	credentials := store.providerResourceCredentialsForRuntime(persisted)
+	if credentials.AccessToken != "metadata-access" || credentials.RefreshToken != "metadata-refresh" || credentials.AccountID != "metadata-account" || credentials.Scopes != "openid profile" {
+		t.Fatalf("credential metadata edit overwrote authentication material: %+v", credentials)
+	}
+}
+
+func TestProviderCredentialRefreshSurvivesConcurrentMetadataEdit(t *testing.T) {
+	store := NewMemoryStore()
+	provider := store.AddProvider(Provider{Name: "Concurrent OAuth Metadata", Type: ProviderOpenAICodex, Status: StatusActive, Healthy: true})
+	resource, err := store.AddProviderResource(ProviderResource{
+		ProviderID: provider.ID, Name: "Before Metadata Edit", ResourceType: ProviderResourceOpenAISubscription, Status: StatusActive, Healthy: true,
+		Credentials: &ProviderResourceCredentials{
+			AccessToken: "metadata-old-access", RefreshToken: "metadata-old-refresh", AccountID: "metadata-account",
+			ExpiresAt: time.Now().UTC().Add(time.Minute).Format(time.RFC3339),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+		writeJSON(w, http.StatusOK, map[string]any{
+			"access_token": "metadata-rotated-access", "refresh_token": "metadata-rotated-refresh", "expires_in": 3600,
+		})
+	}))
+	defer tokenServer.Close()
+	previousEndpoint := openAIAccountOAuthTokenEndpoint
+	openAIAccountOAuthTokenEndpoint = tokenServer.URL
+	defer func() { openAIAccountOAuthTokenEndpoint = previousEndpoint }()
+
+	refreshDone := make(chan error, 1)
+	go func() {
+		_, refreshErr := store.RefreshProviderResourceCredentials(context.Background(), resource.ID, true)
+		refreshDone <- refreshErr
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("credential refresh did not reach the token endpoint")
+	}
+	if _, err := store.UpdateProviderResource(resource.ID, ProviderResource{
+		ProviderID: resource.ProviderID, Name: "After Metadata Edit", ResourceType: resource.ResourceType,
+		BaseURL: resource.BaseURL, Status: StatusActive, Healthy: true, Weight: resource.Weight,
+		Credentials: &ProviderResourceCredentials{Scopes: "openid profile"},
+	}); err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-refreshDone; err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := store.GetProviderResource(resource.ID)
+	credentials := store.providerResourceCredentialsForRuntime(stored)
+	if stored.Name != "After Metadata Edit" || credentials.AccessToken != "metadata-rotated-access" ||
+		credentials.RefreshToken != "metadata-rotated-refresh" || credentials.AccountID != "metadata-account" || credentials.Scopes != "openid profile" {
+		t.Fatalf("concurrent metadata edit or rotated credentials were lost: resource=%+v credentials=%+v", stored, credentials)
+	}
+}
+
 func TestProviderCredentialRefreshServiceRenewsAccountsConcurrently(t *testing.T) {
 	store := NewMemoryStore()
 	provider := store.AddProvider(Provider{Name: "Concurrent OAuth", Type: ProviderOpenAICodex, Status: StatusActive, Healthy: true})

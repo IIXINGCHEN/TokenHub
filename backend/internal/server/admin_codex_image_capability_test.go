@@ -176,6 +176,164 @@ func TestAdminCodexImageCapabilitySerializesFinalAccountDeletionWithProbe(t *tes
 	}
 }
 
+func TestAdminCodexImageCapabilityInvalidatesReplacementCredentials(t *testing.T) {
+	imageBytes := realPNGFixture(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"data": []map[string]any{{"b64_json": encodeBase64(imageBytes)}},
+		})
+	}))
+	defer upstream.Close()
+
+	store, server, resource := newCodexImageCapabilityTestServer(t, upstream.URL)
+	server.codexSubscription.Client = upstream.Client()
+	handler := server.Handler()
+	if response := doJSON(t, handler, http.MethodPost, "/api/admin/provider-resources/"+resource.ID+"/image-capability", map[string]bool{"enabled": true}, ""); response.Code != http.StatusOK {
+		t.Fatalf("enable image capability: status=%d body=%s", response.Code, response.Body)
+	}
+
+	response := doJSON(t, handler, http.MethodPatch, "/api/admin/provider-resources/"+resource.ID, ProviderResource{
+		ProviderID:   resource.ProviderID,
+		Name:         resource.Name,
+		ResourceType: resource.ResourceType,
+		BaseURL:      resource.BaseURL,
+		Status:       StatusActive,
+		Healthy:      true,
+		Weight:       resource.Weight,
+		Credentials: &ProviderResourceCredentials{
+			AccessToken: "replacement-access", RefreshToken: "replacement-refresh", AccountID: "replacement-account",
+		},
+	}, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("replace Codex account credentials: status=%d body=%s", response.Code, response.Body)
+	}
+	updated, ok := store.GetProviderResource(resource.ID)
+	if !ok {
+		t.Fatal("Codex account disappeared after credential replacement")
+	}
+	if updated.Options[codexImageCapabilityOption] != "" || updated.Options[codexImageCapabilityCheckedAtOption] != "" || updated.Options[codexImageRouteBackfillOption] != "" {
+		t.Fatalf("replacement credentials inherited the previous account capability: %+v", updated.Options)
+	}
+	credentials := store.providerResourceCredentialsForRuntime(updated)
+	if credentials.AccessToken != "replacement-access" || credentials.RefreshToken != "replacement-refresh" || credentials.AccountID != "replacement-account" {
+		t.Fatalf("replacement credentials were not stored: %+v", credentials)
+	}
+	routes := matchingCodexImageRoutes(store.ListRoutes(), resource.ProviderID)
+	if len(routes) != 1 || routes[0].Status != StatusDisabled {
+		t.Fatalf("replacing the only tested account must disable its image route: %+v", routes)
+	}
+}
+
+func TestAdminCodexImageCapabilitySerializesCredentialReplacementWithProbe(t *testing.T) {
+	imageBytes := realPNGFixture(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+		writeJSON(w, http.StatusOK, map[string]any{
+			"data": []map[string]any{{"b64_json": encodeBase64(imageBytes)}},
+		})
+	}))
+	defer upstream.Close()
+
+	store, server, resource := newCodexImageCapabilityTestServer(t, upstream.URL)
+	server.codexSubscription.Client = upstream.Client()
+	handler := server.Handler()
+	enableDone := make(chan responseBody, 1)
+	go func() {
+		enableDone <- doJSON(t, handler, http.MethodPost, "/api/admin/provider-resources/"+resource.ID+"/image-capability", map[string]bool{"enabled": true}, "")
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("capability probe did not reach the upstream")
+	}
+
+	updateDone := make(chan responseBody, 1)
+	go func() {
+		updateDone <- doJSON(t, handler, http.MethodPatch, "/api/admin/provider-resources/"+resource.ID, ProviderResource{
+			ProviderID: resource.ProviderID, Name: resource.Name, ResourceType: resource.ResourceType, BaseURL: resource.BaseURL,
+			Status: StatusActive, Healthy: true, Weight: resource.Weight,
+			Credentials: &ProviderResourceCredentials{
+				AccessToken: "concurrent-access", RefreshToken: "concurrent-refresh", AccountID: "concurrent-account",
+			},
+		}, "")
+	}()
+	select {
+	case response := <-updateDone:
+		t.Fatalf("credential replacement bypassed the capability lease: status=%d body=%s", response.Code, response.Body)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	if response := <-enableDone; response.Code != http.StatusOK {
+		t.Fatalf("enable image capability: status=%d body=%s", response.Code, response.Body)
+	}
+	if response := <-updateDone; response.Code != http.StatusOK {
+		t.Fatalf("replace Codex account credentials: status=%d body=%s", response.Code, response.Body)
+	}
+	updated, _ := store.GetProviderResource(resource.ID)
+	if updated.Options[codexImageCapabilityOption] != "" {
+		t.Fatalf("stale probe result survived credential replacement: %+v", updated.Options)
+	}
+	routes := matchingCodexImageRoutes(store.ListRoutes(), resource.ProviderID)
+	if len(routes) != 1 || routes[0].Status != StatusDisabled {
+		t.Fatalf("credential replacement left the stale image route active: %+v", routes)
+	}
+}
+
+func TestAdminCodexImageCapabilitySerializesProviderDeletionWithProbe(t *testing.T) {
+	imageBytes := realPNGFixture(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+		writeJSON(w, http.StatusOK, map[string]any{
+			"data": []map[string]any{{"b64_json": encodeBase64(imageBytes)}},
+		})
+	}))
+	defer upstream.Close()
+
+	store, server, resource := newCodexImageCapabilityTestServer(t, upstream.URL)
+	server.codexSubscription.Client = upstream.Client()
+	handler := server.Handler()
+	enableDone := make(chan responseBody, 1)
+	go func() {
+		enableDone <- doJSON(t, handler, http.MethodPost, "/api/admin/provider-resources/"+resource.ID+"/image-capability", map[string]bool{"enabled": true}, "")
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("capability probe did not reach the upstream")
+	}
+
+	deleteDone := make(chan responseBody, 1)
+	go func() {
+		deleteDone <- doJSON(t, handler, http.MethodDelete, "/api/admin/providers/"+resource.ProviderID, nil, "")
+	}()
+	select {
+	case response := <-deleteDone:
+		t.Fatalf("Provider deletion bypassed the capability lease: status=%d body=%s", response.Code, response.Body)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	if response := <-enableDone; response.Code != http.StatusOK {
+		t.Fatalf("enable image capability: status=%d body=%s", response.Code, response.Body)
+	}
+	if response := <-deleteDone; response.Code != http.StatusNoContent {
+		t.Fatalf("delete Codex Provider: status=%d body=%s", response.Code, response.Body)
+	}
+	if _, ok := store.GetProvider(resource.ProviderID); ok {
+		t.Fatal("Codex Provider still exists after deletion")
+	}
+	if routes := matchingCodexImageRoutes(store.ListRoutes(), resource.ProviderID); len(routes) != 0 {
+		t.Fatalf("Provider deletion left orphan Codex image routes: %+v", routes)
+	}
+}
+
 func TestAdminCodexImageCapabilityClassifiesUnsupportedWithoutRoute(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]any{"error": map[string]any{"message": "not available"}})
@@ -221,6 +379,29 @@ func TestAdminCodexImageCapabilityLeavesTransientFailureRetryable(t *testing.T) 
 	}
 	if routes := matchingCodexImageRoutes(store.ListRoutes(), resource.ProviderID); len(routes) != 0 {
 		t.Fatalf("transient failure created routes: %+v", routes)
+	}
+}
+
+func TestAdminCodexImageCapabilityRejectsNonImageResult(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"data": []map[string]any{{"b64_json": encodeBase64([]byte("not an image"))}},
+		})
+	}))
+	defer upstream.Close()
+	store, server, resource := newCodexImageCapabilityTestServer(t, upstream.URL)
+	server.codexSubscription.Client = upstream.Client()
+
+	response := doJSON(t, server.Handler(), http.MethodPost, "/api/admin/provider-resources/"+resource.ID+"/image-capability", map[string]bool{"enabled": true}, "")
+	if response.Code != http.StatusBadGateway || !strings.Contains(response.Body, `"code":"image_result_invalid"`) {
+		t.Fatalf("non-image capability result: status=%d body=%s", response.Code, response.Body)
+	}
+	updated, _ := store.GetProviderResource(resource.ID)
+	if updated.Options[codexImageCapabilityOption] != "" || updated.Options[codexImageCapabilityCheckedAtOption] != "" {
+		t.Fatalf("non-image result changed capability state: %+v", updated.Options)
+	}
+	if routes := matchingCodexImageRoutes(store.ListRoutes(), resource.ProviderID); len(routes) != 0 {
+		t.Fatalf("non-image result created routes: %+v", routes)
 	}
 }
 

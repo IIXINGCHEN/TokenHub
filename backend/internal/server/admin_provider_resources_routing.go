@@ -153,7 +153,20 @@ func (s *Server) serveAdminProviderResourcePatch(w http.ResponseWriter, r *http.
 		writeError(w, r, err)
 		return
 	}
-	resource, err := s.store.UpdateProviderResource(resourceID, req)
+	var resource ProviderResource
+	updateResource := func() error {
+		var updateErr error
+		resource, updateErr = s.store.UpdateProviderResource(resourceID, req)
+		return updateErr
+	}
+	var err error
+	if current.ResourceType == ProviderResourceOpenAISubscription {
+		err = s.store.RunClusterOperation(r.Context(), "codex-image-capability:"+current.ProviderID, func(context.Context) error {
+			return updateResource()
+		})
+	} else {
+		err = updateResource()
+	}
 	if err != nil {
 		writeError(w, r, err)
 		return

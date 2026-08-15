@@ -798,7 +798,12 @@ func decodeGeneratedImage(encoded string) ([]byte, error) {
 	if len(decoded) > maxGeneratedImageBytes {
 		return nil, fmt.Errorf("image result exceeds %d bytes", maxGeneratedImageBytes)
 	}
-	return decoded, nil
+	switch http.DetectContentType(decoded) {
+	case "image/png", "image/jpeg", "image/webp":
+		return decoded, nil
+	default:
+		return nil, fmt.Errorf("image result must be PNG, JPEG, or WebP")
+	}
 }
 
 func (s *Server) imageJobResponse(r *http.Request, job ImageJob) map[string]any {

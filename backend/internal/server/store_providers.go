@@ -369,19 +369,37 @@ func (s *GormStore) GetProviderResource(id string) (ProviderResource, bool) {
 	return resource, true
 }
 
+func providerResourceMutationLeaseName(resourceID string) string {
+	return "provider-resource-mutation:" + strings.TrimSpace(resourceID)
+}
+
 func (s *GormStore) UpdateProviderResource(id string, patch ProviderResource) (ProviderResource, error) {
+	var updated ProviderResource
+	err := s.withClusterLease(context.Background(), providerResourceMutationLeaseName(id), func(leaseCtx context.Context) error {
+		var updateErr error
+		updated, updateErr = s.updateProviderResource(leaseCtx, id, patch)
+		return updateErr
+	})
+	return updated, err
+}
+
+func (s *GormStore) updateProviderResource(ctx context.Context, id string, patch ProviderResource) (ProviderResource, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	db := s.db.WithContext(ctx)
 
 	if err := validateClaudeCodeAttributionOptions(patch.Options); err != nil {
 		return ProviderResource{}, err
 	}
 	var resource ProviderResource
-	if err := s.db.First(&resource, "id = ?", id).Error; err != nil {
+	if err := db.First(&resource, "id = ?", id).Error; err != nil {
 		return ProviderResource{}, notFound(err, "provider_resource_not_found", "Provider resource not found")
 	}
+	before := resource
+	beforeCredentials := s.providerResourceCredentialsForRuntime(before)
+	beforeImageCapability := strings.TrimSpace(before.Options[codexImageCapabilityOption])
 	if patch.ProviderID != "" && patch.ProviderID != resource.ProviderID {
-		if err := s.db.First(&Provider{}, "id = ?", patch.ProviderID).Error; err != nil {
+		if err := db.First(&Provider{}, "id = ?", patch.ProviderID).Error; err != nil {
 			return ProviderResource{}, notFound(err, "provider_not_found", "Provider not found")
 		}
 		resource.ProviderID = patch.ProviderID
@@ -442,10 +460,10 @@ func (s *GormStore) UpdateProviderResource(id string, patch ProviderResource) (P
 		}
 	}
 	var provider Provider
-	if err := s.db.First(&provider, "id = ?", resource.ProviderID).Error; err != nil {
+	if err := db.First(&provider, "id = ?", resource.ProviderID).Error; err != nil {
 		return ProviderResource{}, notFound(err, "provider_not_found", "Provider not found")
 	}
-	if err := ensureProviderResourceAdapterCompatibility(s.db, &provider, resource.ResourceType); err != nil {
+	if err := ensureProviderResourceAdapterCompatibility(db, &provider, resource.ResourceType); err != nil {
 		return ProviderResource{}, err
 	}
 	if err := validateEffectiveProviderHeaders(
@@ -457,13 +475,46 @@ func (s *GormStore) UpdateProviderResource(id string, patch ProviderResource) (P
 	}
 	resource.UpdatedAt = time.Now().UTC()
 	s.prepareProviderResourceForUpdate(&resource, patch)
+	imageBindingChanged := isOpenAIAccountResource(before.ResourceType) && openAIAccountImageBindingChanged(
+		before,
+		beforeCredentials,
+		resource,
+		s.providerResourceCredentialsForRuntime(resource),
+	)
+	if imageBindingChanged {
+		delete(resource.Options, codexImageCapabilityOption)
+		delete(resource.Options, codexImageCapabilityCheckedAtOption)
+		delete(resource.Options, codexImageRouteBackfillOption)
+	}
 	if patch.Credentials != nil && strings.TrimSpace(patch.Credentials.AccessToken) != "" {
+		shouldEncryptAPIKey = true
+	}
+	if isOpenAIAccountResource(resource.ResourceType) && strings.TrimSpace(resource.APIKey) != "" && !strings.HasPrefix(resource.APIKey, "enc:v1:") {
 		shouldEncryptAPIKey = true
 	}
 	if shouldEncryptAPIKey {
 		resource.APIKey = s.encryptSecret(resource.APIKey)
 	}
-	if err := s.db.Save(&resource).Error; err != nil {
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(&resource).Error; err != nil {
+			return err
+		}
+		if !imageBindingChanged || beforeImageCapability != codexImageCapabilitySupported {
+			return nil
+		}
+		var otherAccounts int64
+		if err := tx.Model(&ProviderResource{}).
+			Where("provider_id = ? AND resource_type = ? AND id <> ?", before.ProviderID, ProviderResourceOpenAISubscription, before.ID).
+			Count(&otherAccounts).Error; err != nil {
+			return err
+		}
+		if otherAccounts > 0 {
+			return nil
+		}
+		return tx.Model(&ModelRoute{}).
+			Where("provider_id = ? AND model_name = ? AND provider_model = ?", before.ProviderID, codexImageModelName, codexImageUpstreamModel).
+			Update("status", StatusDisabled).Error
+	}); err != nil {
 		return ProviderResource{}, err
 	}
 	resource.Headers = maskedProviderHeaders(s.revealProviderHeaders(resource.Headers, resource.SensitiveHeaders), resource.SensitiveHeaders)
@@ -491,11 +542,22 @@ func (s *GormStore) ensureProviderResourceNameUnique(resourceID, name string) er
 }
 
 func (s *GormStore) UpdateProviderResourceOptions(id string, options map[string]string) (ProviderResource, error) {
+	var updated ProviderResource
+	err := s.withClusterLease(context.Background(), providerResourceMutationLeaseName(id), func(leaseCtx context.Context) error {
+		var updateErr error
+		updated, updateErr = s.updateProviderResourceOptions(leaseCtx, id, options)
+		return updateErr
+	})
+	return updated, err
+}
+
+func (s *GormStore) updateProviderResourceOptions(ctx context.Context, id string, options map[string]string) (ProviderResource, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	db := s.db.WithContext(ctx)
 
 	var resource ProviderResource
-	if err := s.db.First(&resource, "id = ?", id).Error; err != nil {
+	if err := db.First(&resource, "id = ?", id).Error; err != nil {
 		return ProviderResource{}, notFound(err, "provider_resource_not_found", "Provider resource not found")
 	}
 	if resource.Options == nil {
@@ -505,7 +567,7 @@ func (s *GormStore) UpdateProviderResourceOptions(id string, options map[string]
 		resource.Options[key] = value
 	}
 	resource.UpdatedAt = time.Now().UTC()
-	if err := s.db.Save(&resource).Error; err != nil {
+	if err := db.Save(&resource).Error; err != nil {
 		return ProviderResource{}, err
 	}
 	s.maskProviderResourceHeaderConfig(&resource)
