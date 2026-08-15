@@ -206,6 +206,17 @@ func (s *Server) routes() {
 	s.registerDynamicMethodRoute(http.MethodDelete, "/api/admin/routing-rules/{route_id}", s.handleAdminRouteDelete)
 	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/routing-rules/{route_id}/explain", s.handleAdminRouteExplainGet, s.adminMethodNotAllowed("routing", http.MethodGet))
 	s.mux.HandleFunc("/api/admin/routing-rules/", s.handleAdminRouteItem)
+	s.registerMethodRoutes("/api/admin/resources/{kind}", s.adminResourceMethodNotAllowed,
+		methodRoute{Method: http.MethodGet, Handler: s.handleAdminResourceCollectionGet},
+		methodRoute{Method: http.MethodPost, Handler: s.handleAdminResourceCollectionPost},
+	)
+	s.registerMethodRoutes("/api/admin/resources/{kind}/{resource_id}", s.adminResourceMethodNotAllowed,
+		methodRoute{Method: http.MethodPatch, Handler: s.handleAdminResourcePatch},
+		methodRoute{Method: http.MethodDelete, Handler: s.handleAdminResourceDelete},
+	)
+	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/resources/invoices/{invoice_id}/confirm", s.handleAdminInvoiceConfirmPost, s.adminMethodNotAllowed("usage", http.MethodPost))
+	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/resources/invoices/{invoice_id}/reject", s.handleAdminInvoiceRejectPost, s.adminMethodNotAllowed("usage", http.MethodPost))
+	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/resources/monitors/{monitor_id}/run", s.handleAdminMonitorRunPost, s.adminMethodNotAllowed("provider", http.MethodPost))
 	s.mux.HandleFunc("/api/admin/resources/", s.handleAdminResources)
 	s.mux.HandleFunc("/api/admin/sqlite/backups", s.handleAdminSQLiteBackups)
 	s.mux.HandleFunc("/api/admin/sqlite/backups/", s.handleAdminSQLiteBackupItem)

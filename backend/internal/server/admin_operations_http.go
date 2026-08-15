@@ -10,136 +10,6 @@ import (
 	"time"
 )
 
-func (s *Server) handleAdminResources(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAdmin(w, r, adminResourcePermission(r.URL.Path), r.Method)
-	if !ok {
-		return
-	}
-	parts := splitEscapedAdminPath(r.URL.EscapedPath(), "/api/admin/resources/")
-	if len(parts) == 0 || parts[0] == "" {
-		writeError(w, r, NewHTTPError(404, "not_found", "Not found"))
-		return
-	}
-	kind := parts[0]
-	if kind == openAIAccountQuotaResetOperationKind {
-		writeError(w, r, NewHTTPError(http.StatusNotFound, "not_found", "Not found"))
-		return
-	}
-	if len(parts) == 1 {
-		switch r.Method {
-		case http.MethodGet:
-			if kind == "monitors" {
-				s.ensureDefaultMonitors()
-			}
-			if kind == "alert-rules" {
-				s.ensureDefaultAlertRules()
-			}
-			writeJSON(w, http.StatusOK, map[string]any{"data": s.filterResourcesForUser(user, kind, s.store.ListResources(kind))})
-		case http.MethodPost:
-			if normalizeAdminRole(user.Role) == "team_leader" && kind == "teams" {
-				writeError(w, r, NewHTTPError(403, "team_forbidden", "Team leader cannot create teams"))
-				return
-			}
-			var req AdminResource
-			if err := s.decodeJSON(w, r, &req); err != nil {
-				writeError(w, r, err)
-				return
-			}
-			if req.Name == "" {
-				writeError(w, r, NewHTTPError(400, "invalid_resource", "name is required"))
-				return
-			}
-			if err := s.validateScopedResourceMutation(user, kind, "", req); err != nil {
-				writeError(w, r, err)
-				return
-			}
-			if approval, required := s.adminResourceApproval(user, kind, "", req); required {
-				s.recordAdminAudit(r, user, "request_approval", kind, approval.ID, "", approval)
-				writeJSON(w, http.StatusAccepted, map[string]any{"approval_required": true, "approval": approval})
-				return
-			}
-			var resource AdminResource
-			if kind == routingPolicyResourceKind {
-				var err error
-				resource, err = s.store.CreateRoutingPolicy(req)
-				if err != nil {
-					writeError(w, r, err)
-					return
-				}
-			} else {
-				resource = s.store.CreateResource(kind, req)
-			}
-			s.recordAdminAudit(r, user, "create", kind, resource.ID, "", resource)
-			writeJSON(w, http.StatusCreated, resource)
-		default:
-			writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
-		}
-		return
-	}
-	if kind == "invoices" && len(parts) == 3 && parts[1] != "" {
-		s.handleAdminInvoiceAction(w, r, user, parts[1], parts[2])
-		return
-	}
-	if kind == "monitors" && len(parts) == 3 && parts[1] != "" && parts[2] == "run" {
-		s.handleAdminMonitorRun(w, r, user, parts[1])
-		return
-	}
-	if len(parts) != 2 || parts[1] == "" {
-		writeError(w, r, NewHTTPError(404, "not_found", "Not found"))
-		return
-	}
-	switch r.Method {
-	case http.MethodPatch:
-		if normalizeAdminRole(user.Role) == "team_leader" && kind == "teams" && parts[1] != user.TeamID {
-			writeError(w, r, NewHTTPError(403, "team_forbidden", "Team leader can only update own team"))
-			return
-		}
-		var req AdminResource
-		if err := s.decodeJSON(w, r, &req); err != nil {
-			writeError(w, r, err)
-			return
-		}
-		if err := s.validateScopedResourceMutation(user, kind, parts[1], req); err != nil {
-			writeError(w, r, err)
-			return
-		}
-		if approval, required := s.adminResourceApproval(user, kind, parts[1], req); required {
-			s.recordAdminAudit(r, user, "request_approval", kind, approval.ID, "", approval)
-			writeJSON(w, http.StatusAccepted, map[string]any{"approval_required": true, "approval": approval})
-			return
-		}
-		resource, err := s.store.UpdateResource(kind, parts[1], req)
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		s.recordAdminAudit(r, user, "update", kind, parts[1], "", resource)
-		writeJSON(w, http.StatusOK, resource)
-	case http.MethodDelete:
-		if normalizeAdminRole(user.Role) == "team_leader" && kind == "teams" {
-			writeError(w, r, NewHTTPError(403, "team_forbidden", "Team leader cannot delete teams"))
-			return
-		}
-		if kind == "teams" {
-			if err := s.store.DeleteTeam(parts[1]); err != nil {
-				writeError(w, r, err)
-				return
-			}
-			s.recordAdminAudit(r, user, "delete", kind, parts[1], "", nil)
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		if err := s.store.DeleteResource(kind, parts[1]); err != nil {
-			writeError(w, r, err)
-			return
-		}
-		s.recordAdminAudit(r, user, "delete", kind, parts[1], "", nil)
-		w.WriteHeader(http.StatusNoContent)
-	default:
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
-	}
-}
-
 func (s *Server) handleAdminProjectQuotaIncrease(w http.ResponseWriter, r *http.Request, user AdminUser, projectID string) {
 	if r.Method != http.MethodPost {
 		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
@@ -480,9 +350,13 @@ func alertRuleKey(fields map[string]any) string {
 
 func (s *Server) handleAdminMonitorRun(w http.ResponseWriter, r *http.Request, user AdminUser, monitorID string) {
 	if r.Method != http.MethodPost {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+		jsonMethodNotAllowed(http.MethodPost)(w, r)
 		return
 	}
+	s.serveAdminMonitorRun(w, r, user, monitorID)
+}
+
+func (s *Server) serveAdminMonitorRun(w http.ResponseWriter, r *http.Request, user AdminUser, monitorID string) {
 	result, err := s.store.RunMonitor(monitorID)
 	if err != nil {
 		writeError(w, r, err)
@@ -613,9 +487,13 @@ func (s *Server) handleAdminInvoiceAction(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if r.Method != http.MethodPost {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+		jsonMethodNotAllowed(http.MethodPost)(w, r)
 		return
 	}
+	s.serveAdminInvoiceAction(w, r, user, invoiceID, action)
+}
+
+func (s *Server) serveAdminInvoiceAction(w http.ResponseWriter, r *http.Request, user AdminUser, invoiceID string, action string) {
 	var req struct {
 		InvoiceNote  string `json:"invoice_note"`
 		RejectReason string `json:"reject_reason"`
