@@ -299,8 +299,13 @@ func TestAdminProviderCatalogRoutesPreserveRefreshQuery(t *testing.T) {
 	if err := BootstrapBaseDataWithConfig(store, config); err != nil {
 		t.Fatal(err)
 	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(upstream.Close)
 	server := NewWithConfig(store, config)
-	server.providerCatalog.upstreamURL = ""
+	server.providerCatalog.upstreamURL = upstream.URL
+	server.providerCatalog.upstreamClient = upstream.Client()
 	app := server.Handler()
 	adminToken, _ := loginMethodRoutingAdmin(t, app, config.BootstrapAdminPassword)
 
