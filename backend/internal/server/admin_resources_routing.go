@@ -81,27 +81,42 @@ func (s *Server) serveAdminResourceCollectionPost(w http.ResponseWriter, r *http
 		writeError(w, r, err)
 		return
 	}
+	if kind == "settings" && req.ID == gatewaySettingsID {
+		s.syntheticDNSSetting.Lock()
+		defer s.syntheticDNSSetting.Unlock()
+		if err := validateProviderSyntheticDNSSettings(req); err != nil {
+			writeError(w, r, err)
+			return
+		}
+	}
 	if approval, required := s.adminResourceApproval(user, kind, "", req); required {
 		s.recordAdminAudit(r, user, "request_approval", kind, approval.ID, "", approval)
 		writeJSON(w, http.StatusAccepted, map[string]any{"approval_required": true, "approval": approval})
 		return
 	}
 	var resource AdminResource
+	var err error
 	if kind == routingPolicyResourceKind {
-		var err error
 		resource, err = s.store.CreateRoutingPolicy(req)
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
 	} else {
-		resource = s.store.CreateResource(kind, req)
+		resource, err = s.store.CreateResourceChecked(kind, req)
+	}
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	if kind == "settings" && resource.ID == gatewaySettingsID {
+		s.syntheticDNSPolicy.applySetting(&resource)
 	}
 	s.recordAdminAudit(r, user, "create", kind, resource.ID, "", resource)
 	writeJSON(w, http.StatusCreated, resource)
 }
 
 func (s *Server) serveAdminResourcePatch(w http.ResponseWriter, r *http.Request, user AdminUser, kind string, resourceID string) {
+	if kind == "settings" && resourceID == gatewaySettingsID {
+		s.syntheticDNSSetting.Lock()
+		defer s.syntheticDNSSetting.Unlock()
+	}
 	if normalizeAdminRole(user.Role) == "team_leader" && kind == "teams" && resourceID != user.TeamID {
 		writeError(w, r, NewHTTPError(403, "team_forbidden", "Team leader can only update own team"))
 		return
@@ -115,6 +130,13 @@ func (s *Server) serveAdminResourcePatch(w http.ResponseWriter, r *http.Request,
 		writeError(w, r, err)
 		return
 	}
+	if kind == "settings" && resourceID == gatewaySettingsID {
+		req.ID = resourceID
+		if err := validateProviderSyntheticDNSSettings(req); err != nil {
+			writeError(w, r, err)
+			return
+		}
+	}
 	if approval, required := s.adminResourceApproval(user, kind, resourceID, req); required {
 		s.recordAdminAudit(r, user, "request_approval", kind, approval.ID, "", approval)
 		writeJSON(w, http.StatusAccepted, map[string]any{"approval_required": true, "approval": approval})
@@ -125,11 +147,18 @@ func (s *Server) serveAdminResourcePatch(w http.ResponseWriter, r *http.Request,
 		writeError(w, r, err)
 		return
 	}
+	if kind == "settings" && resourceID == gatewaySettingsID {
+		s.syntheticDNSPolicy.applySetting(&resource)
+	}
 	s.recordAdminAudit(r, user, "update", kind, resourceID, "", resource)
 	writeJSON(w, http.StatusOK, resource)
 }
 
 func (s *Server) serveAdminResourceDelete(w http.ResponseWriter, r *http.Request, user AdminUser, kind string, resourceID string) {
+	if kind == "settings" && resourceID == gatewaySettingsID {
+		s.syntheticDNSSetting.Lock()
+		defer s.syntheticDNSSetting.Unlock()
+	}
 	if normalizeAdminRole(user.Role) == "team_leader" && kind == "teams" {
 		writeError(w, r, NewHTTPError(403, "team_forbidden", "Team leader cannot delete teams"))
 		return
@@ -146,6 +175,9 @@ func (s *Server) serveAdminResourceDelete(w http.ResponseWriter, r *http.Request
 	if err := s.store.DeleteResource(kind, resourceID); err != nil {
 		writeError(w, r, err)
 		return
+	}
+	if kind == "settings" && resourceID == gatewaySettingsID {
+		s.syntheticDNSPolicy.applySetting(nil)
 	}
 	s.recordAdminAudit(r, user, "delete", kind, resourceID, "", nil)
 	w.WriteHeader(http.StatusNoContent)
