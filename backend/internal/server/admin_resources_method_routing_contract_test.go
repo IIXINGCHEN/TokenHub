@@ -222,6 +222,28 @@ func TestAdminResourceMethodRoutesPreserveTrailingSlashMethodRejection(t *testin
 	}
 }
 
+func TestAdminSettingsMethodRoutesPreserveValidationOnTrailingPaths(t *testing.T) {
+	store, app := newMethodRoutingAdminServer(t, "resource-routing-settings-password")
+	setting := store.ListResources("settings")[0]
+	setting.Fields[syntheticDNSEnabledField] = true
+	setting.Fields[syntheticDNSCIDRsField] = "169.254.0.0/16"
+	path := "/api/admin/resources/settings/" + gatewaySettingsID
+
+	wrongMethod := methodRoutingRequest(app, http.MethodGet, path+"/", "dev_admin_token")
+	assertJSONError(t, wrongMethod, http.StatusMethodNotAllowed, "method_not_allowed")
+	assertAllowHeader(t, wrongMethod, http.MethodPatch+", "+http.MethodDelete)
+
+	patch := methodRoutingJSONRequest(t, app, http.MethodPatch, path+"/", setting, "dev_admin_token")
+	if patch.Code != http.StatusBadRequest || !strings.Contains(patch.Body.String(), "provider_synthetic_dns_cidrs_not_allowed") {
+		t.Fatalf("trailing settings patch bypassed Synthetic DNS validation: status=%d body=%s", patch.Code, patch.Body.String())
+	}
+
+	collection := methodRoutingJSONRequest(t, app, http.MethodPost, "/api/admin/resources/settings/", setting, "dev_admin_token")
+	if collection.Code != http.StatusBadRequest || !strings.Contains(collection.Body.String(), "provider_synthetic_dns_cidrs_not_allowed") {
+		t.Fatalf("trailing settings create bypassed Synthetic DNS validation: status=%d body=%s", collection.Code, collection.Body.String())
+	}
+}
+
 func TestAdminResourceMethodRoutesPreserveSuccessfulOperationsAndAudits(t *testing.T) {
 	store, app := newMethodRoutingAdminServer(t, "resource-routing-success-password")
 	adminToken, _ := loginMethodRoutingAdmin(t, app, "resource-routing-success-password")
@@ -389,6 +411,7 @@ func adminResourceMethodRoutes() []adminResourceMethodRoute {
 	return []adminResourceMethodRoute{
 		{name: "collection", path: "/api/admin/resources/teams", wrongMethod: http.MethodPut, allow: "GET, POST"},
 		{name: "item", path: "/api/admin/resources/teams/team-missing", wrongMethod: http.MethodGet, allow: "PATCH, DELETE"},
+		{name: "settings_item", path: "/api/admin/resources/settings/" + gatewaySettingsID, wrongMethod: http.MethodGet, allow: "PATCH, DELETE"},
 		{name: "invoice_confirm", path: "/api/admin/resources/invoices/invoice-missing/confirm", wrongMethod: http.MethodPut, allow: http.MethodPost},
 		{name: "invoice_reject", path: "/api/admin/resources/invoices/invoice-missing/reject", wrongMethod: http.MethodPut, allow: http.MethodPost},
 		{name: "monitor_run", path: "/api/admin/resources/monitors/monitor-missing/run", wrongMethod: http.MethodPut, allow: http.MethodPost},
@@ -396,7 +419,7 @@ func adminResourceMethodRoutes() []adminResourceMethodRoute {
 }
 
 func unsupportedAdminResourceMethods(allow string) []string {
-	methods := []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete}
+	methods := []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodTrace, http.MethodConnect}
 	unsupported := make([]string, 0, len(methods))
 	for _, method := range methods {
 		if !strings.Contains(","+strings.ReplaceAll(allow, " ", "")+",", ","+method+",") {

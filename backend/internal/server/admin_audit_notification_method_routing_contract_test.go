@@ -321,7 +321,7 @@ func adminAuditNotificationMethodRoutes() []adminAuditNotificationMethodRoute {
 }
 
 func unsupportedAdminAuditNotificationMethods(allow string) []string {
-	methods := []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete}
+	methods := []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodTrace, http.MethodConnect}
 	unsupported := make([]string, 0, len(methods))
 	for _, method := range methods {
 		if !strings.Contains(","+strings.ReplaceAll(allow, " ", "")+",", ","+method+",") {
