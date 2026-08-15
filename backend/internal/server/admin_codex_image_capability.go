@@ -192,6 +192,28 @@ func codexImageRouteMatches(route ModelRoute, providerID string) bool {
 		strings.TrimSpace(route.ProviderModel) == codexImageUpstreamModel
 }
 
+func codexImageRouteHasSupportedResource(route ModelRoute, resources []ProviderResource) bool {
+	providerID := strings.TrimSpace(route.ProviderID)
+	resourceID := strings.TrimSpace(route.ProviderResourceID)
+	resourceGroup := strings.TrimSpace(route.ResourceGroup)
+	for _, resource := range resources {
+		if strings.TrimSpace(resource.ProviderID) != providerID ||
+			resource.ResourceType != ProviderResourceOpenAISubscription ||
+			resource.Status != StatusActive || !resource.Healthy ||
+			strings.TrimSpace(resource.Options[codexImageCapabilityOption]) != codexImageCapabilitySupported {
+			continue
+		}
+		if resourceID != "" && strings.TrimSpace(resource.ID) != resourceID {
+			continue
+		}
+		if resourceGroup != "" && strings.TrimSpace(resource.Group) != resourceGroup {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 func activeCodexImageRoute(routes []ModelRoute, providerID string) *ModelRoute {
 	for index := range routes {
 		if codexImageRouteMatches(routes[index], providerID) && routes[index].Status == StatusActive {
@@ -303,12 +325,5 @@ func codexImageRouteBackfillDone(resources []ProviderResource, providerID string
 }
 
 func providerHasSupportedCodexImageResource(resources []ProviderResource, providerID string) bool {
-	for _, resource := range resources {
-		if resource.ProviderID == providerID && resource.ResourceType == ProviderResourceOpenAISubscription &&
-			resource.Status == StatusActive && resource.Healthy &&
-			strings.TrimSpace(resource.Options[codexImageCapabilityOption]) == codexImageCapabilitySupported {
-			return true
-		}
-	}
-	return false
+	return codexImageRouteHasSupportedResource(ModelRoute{ProviderID: providerID}, resources)
 }

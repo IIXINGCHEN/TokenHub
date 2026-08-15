@@ -224,6 +224,56 @@ func TestAdminCodexImageCapabilityInvalidatesReplacementCredentials(t *testing.T
 	}
 }
 
+func TestAdminCodexImageCapabilityReplacementScopesRouteInvalidation(t *testing.T) {
+	store := NewMemoryStore()
+	provider := store.AddProvider(Provider{ID: "prv_codex_route_scope", Name: "Codex Route Scope", Type: ProviderOpenAICodex, Status: StatusActive, Healthy: true})
+	newAccount := func(id, group string) ProviderResource {
+		resource, err := store.AddProviderResource(ProviderResource{
+			ID: id, ProviderID: provider.ID, Name: id, Group: group,
+			ResourceType: ProviderResourceOpenAISubscription, Status: StatusActive, Healthy: true,
+			Options:     map[string]string{codexImageCapabilityOption: codexImageCapabilitySupported},
+			Credentials: &ProviderResourceCredentials{AccessToken: id + "-access", RefreshToken: id + "-refresh", AccountID: id + "-account"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resource
+	}
+	primary := newAccount("rsrc_codex_scope_primary", "blue")
+	secondary := newAccount("rsrc_codex_scope_secondary", "green")
+	pinnedPrimary := store.AddRoute(ModelRoute{ID: "route_codex_scope_pinned_primary", ModelName: codexImageModelName, ProviderID: provider.ID, ProviderResourceID: primary.ID, ProviderModel: codexImageUpstreamModel, Status: StatusActive})
+	pinnedSecondary := store.AddRoute(ModelRoute{ID: "route_codex_scope_pinned_secondary", ModelName: codexImageModelName, ProviderID: provider.ID, ProviderResourceID: secondary.ID, ProviderModel: codexImageUpstreamModel, Status: StatusActive})
+	groupPrimary := store.AddRoute(ModelRoute{ID: "route_codex_scope_group_primary", ModelName: codexImageModelName, ProviderID: provider.ID, ResourceGroup: "blue", ProviderModel: codexImageUpstreamModel, Status: StatusActive})
+	groupSecondary := store.AddRoute(ModelRoute{ID: "route_codex_scope_group_secondary", ModelName: codexImageModelName, ProviderID: provider.ID, ResourceGroup: "green", ProviderModel: codexImageUpstreamModel, Status: StatusActive})
+	providerWide := store.AddRoute(ModelRoute{ID: "route_codex_scope_provider", ModelName: codexImageModelName, ProviderID: provider.ID, ProviderModel: codexImageUpstreamModel, Status: StatusActive})
+	if _, err := store.UpdateProviderResource(primary.ID, ProviderResource{
+		ProviderID: provider.ID, Name: primary.Name, Group: primary.Group, ResourceType: primary.ResourceType,
+		BaseURL: primary.BaseURL, Status: StatusActive, Healthy: true, Weight: primary.Weight,
+		Credentials: &ProviderResourceCredentials{AccessToken: "replacement-access", RefreshToken: "replacement-refresh", AccountID: "replacement-account"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		route  ModelRoute
+		status string
+	}{
+		{name: "replaced pinned resource", route: pinnedPrimary, status: StatusDisabled},
+		{name: "other pinned resource", route: pinnedSecondary, status: StatusActive},
+		{name: "replaced resource group", route: groupPrimary, status: StatusDisabled},
+		{name: "other resource group", route: groupSecondary, status: StatusActive},
+		{name: "provider wide with another account", route: providerWide, status: StatusActive},
+	} {
+		var actual ModelRoute
+		if err := store.db.First(&actual, "id = ?", test.route.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if actual.Status != test.status {
+			t.Fatalf("%s route status = %q, want %q (other account: %s)", test.name, actual.Status, test.status, secondary.ID)
+		}
+	}
+}
+
 func TestAdminCodexImageCapabilitySerializesCredentialReplacementWithProbe(t *testing.T) {
 	imageBytes := realPNGFixture(t)
 	started := make(chan struct{})
@@ -402,6 +452,33 @@ func TestAdminCodexImageCapabilityRejectsNonImageResult(t *testing.T) {
 	}
 	if routes := matchingCodexImageRoutes(store.ListRoutes(), resource.ProviderID); len(routes) != 0 {
 		t.Fatalf("non-image result created routes: %+v", routes)
+	}
+}
+
+func TestAdminCodexImageCapabilityRejectsTruncatedImageResult(t *testing.T) {
+	imageBytes := realPNGFixture(t)
+	if len(imageBytes) < 16 {
+		t.Fatal("PNG fixture is too small for a truncated-image test")
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"data": []map[string]any{{"b64_json": encodeBase64(imageBytes[:16])}},
+		})
+	}))
+	defer upstream.Close()
+	store, server, resource := newCodexImageCapabilityTestServer(t, upstream.URL)
+	server.codexSubscription.Client = upstream.Client()
+
+	response := doJSON(t, server.Handler(), http.MethodPost, "/api/admin/provider-resources/"+resource.ID+"/image-capability", map[string]bool{"enabled": true}, "")
+	if response.Code != http.StatusBadGateway || !strings.Contains(response.Body, `"code":"image_result_invalid"`) {
+		t.Fatalf("truncated image capability result: status=%d body=%s", response.Code, response.Body)
+	}
+	updated, _ := store.GetProviderResource(resource.ID)
+	if updated.Options[codexImageCapabilityOption] != "" || updated.Options[codexImageCapabilityCheckedAtOption] != "" {
+		t.Fatalf("truncated image result changed capability state: %+v", updated.Options)
+	}
+	if routes := matchingCodexImageRoutes(store.ListRoutes(), resource.ProviderID); len(routes) != 0 {
+		t.Fatalf("truncated image result created routes: %+v", routes)
 	}
 }
 

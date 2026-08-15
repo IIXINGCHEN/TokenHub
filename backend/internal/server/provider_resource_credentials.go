@@ -175,6 +175,21 @@ func mergeRefreshedProviderResourceCredentials(
 	if current.TokenType == original.TokenType {
 		current.TokenType = firstNonEmpty(refreshed.TokenType, current.TokenType)
 	}
+	if current.AccountID == original.AccountID {
+		current.AccountID = firstNonEmpty(refreshed.AccountID, current.AccountID)
+	}
+	if current.UserID == original.UserID {
+		current.UserID = firstNonEmpty(refreshed.UserID, current.UserID)
+	}
+	if current.Email == original.Email {
+		current.Email = firstNonEmpty(refreshed.Email, current.Email)
+	}
+	if current.OrganizationID == original.OrganizationID {
+		current.OrganizationID = firstNonEmpty(refreshed.OrganizationID, current.OrganizationID)
+	}
+	if current.PlanType == original.PlanType {
+		current.PlanType = firstNonEmpty(refreshed.PlanType, current.PlanType)
+	}
 	current.ExpiresAt = firstNonEmpty(refreshed.ExpiresAt, current.ExpiresAt)
 	return current
 }
@@ -342,7 +357,7 @@ func (s *GormStore) RefreshProviderResourceCredentials(ctx context.Context, reso
 					}
 					current.Options[openAIAccountReauthorizationRequiredOption] = "true"
 					current.UpdatedAt = time.Now().UTC()
-					return s.db.WithContext(mutationCtx).Save(&current).Error
+					return updateExistingProviderResourceColumns(s.db.WithContext(mutationCtx), &current, "options", "updated_at")
 				})
 				if persistErr != nil {
 					return persistErr
@@ -378,7 +393,11 @@ func (s *GormStore) RefreshProviderResourceCredentials(ctx context.Context, reso
 				current.APIKey = s.encryptSecret(current.APIKey)
 			}
 			current.UpdatedAt = time.Now().UTC()
-			if err := s.db.WithContext(mutationCtx).Save(&current).Error; err != nil {
+			if err := updateExistingProviderResourceColumns(
+				s.db.WithContext(mutationCtx),
+				&current,
+				"api_key", "credential_blob", "options", "updated_at",
+			); err != nil {
 				return err
 			}
 			result = s.providerResourceCredentialsForRuntime(current)

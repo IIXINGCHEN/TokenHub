@@ -373,6 +373,20 @@ func providerResourceMutationLeaseName(resourceID string) string {
 	return "provider-resource-mutation:" + strings.TrimSpace(resourceID)
 }
 
+func updateExistingProviderResourceColumns(db *gorm.DB, resource *ProviderResource, columns ...string) error {
+	result := db.Model(&ProviderResource{}).
+		Where("id = ?", resource.ID).
+		Select(columns).
+		Updates(resource)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return NewHTTPError(http.StatusNotFound, "provider_resource_not_found", "Provider resource not found")
+	}
+	return nil
+}
+
 func (s *GormStore) UpdateProviderResource(id string, patch ProviderResource) (ProviderResource, error) {
 	var updated ProviderResource
 	err := s.withClusterLease(context.Background(), providerResourceMutationLeaseName(id), func(leaseCtx context.Context) error {
@@ -496,24 +510,35 @@ func (s *GormStore) updateProviderResource(ctx context.Context, id string, patch
 		resource.APIKey = s.encryptSecret(resource.APIKey)
 	}
 	if err := db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Save(&resource).Error; err != nil {
+		if err := updateExistingProviderResourceColumns(tx, &resource,
+			"provider_id", "name", "group", "resource_type", "base_url", "api_key", "region", "environment",
+			"status", "healthy", "priority", "weight", "rate_limit_rpm", "token_limit_tpm", "max_concurrency",
+			"headers", "sensitive_headers", "options", "credential_blob", "updated_at",
+		); err != nil {
 			return err
 		}
 		if !imageBindingChanged || beforeImageCapability != codexImageCapabilitySupported {
 			return nil
 		}
-		var otherAccounts int64
-		if err := tx.Model(&ProviderResource{}).
-			Where("provider_id = ? AND resource_type = ? AND id <> ?", before.ProviderID, ProviderResourceOpenAISubscription, before.ID).
-			Count(&otherAccounts).Error; err != nil {
+		var resources []ProviderResource
+		if err := tx.Where("provider_id = ?", before.ProviderID).Find(&resources).Error; err != nil {
 			return err
 		}
-		if otherAccounts > 0 {
-			return nil
+		var routes []ModelRoute
+		if err := tx.
+			Where("provider_id = ? AND model_name = ? AND provider_model = ? AND status = ?", before.ProviderID, codexImageModelName, codexImageUpstreamModel, StatusActive).
+			Find(&routes).Error; err != nil {
+			return err
 		}
-		return tx.Model(&ModelRoute{}).
-			Where("provider_id = ? AND model_name = ? AND provider_model = ?", before.ProviderID, codexImageModelName, codexImageUpstreamModel).
-			Update("status", StatusDisabled).Error
+		for _, route := range routes {
+			if codexImageRouteHasSupportedResource(route, resources) {
+				continue
+			}
+			if err := tx.Model(&ModelRoute{}).Where("id = ?", route.ID).Update("status", StatusDisabled).Error; err != nil {
+				return err
+			}
+		}
+		return nil
 	}); err != nil {
 		return ProviderResource{}, err
 	}
@@ -567,7 +592,7 @@ func (s *GormStore) updateProviderResourceOptions(ctx context.Context, id string
 		resource.Options[key] = value
 	}
 	resource.UpdatedAt = time.Now().UTC()
-	if err := db.Save(&resource).Error; err != nil {
+	if err := updateExistingProviderResourceColumns(db, &resource, "options", "updated_at"); err != nil {
 		return ProviderResource{}, err
 	}
 	s.maskProviderResourceHeaderConfig(&resource)

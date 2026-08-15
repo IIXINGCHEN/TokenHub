@@ -1280,6 +1280,10 @@ func (s *Server) validateImportedProviderModel(route ModelRoute) error {
 		if upstreamModel != codexImageUpstreamModel {
 			return NewHTTPError(http.StatusBadRequest, "codex_image_upstream_model_invalid", "The Codex subscription image route must use gpt-image-2 as its upstream model")
 		}
+		status := strings.TrimSpace(route.Status)
+		if (status == "" || status == StatusActive) && !codexImageRouteHasSupportedResource(route, s.store.ListProviderResources()) {
+			return NewHTTPError(http.StatusConflict, "codex_image_capability_required", "Test image generation with an eligible Codex subscription account before activating this route")
+		}
 		return nil
 	}
 	for _, model := range s.store.ListProviderModels() {
@@ -1324,6 +1328,9 @@ func mergedModelRoute(current ModelRoute, patch ModelRoute) ModelRoute {
 	current.ResourceGroup = patch.ResourceGroup
 	if patch.ProviderModel != "" {
 		current.ProviderModel = patch.ProviderModel
+	}
+	if patch.Status != "" {
+		current.Status = patch.Status
 	}
 	if patch.Strategy != "" {
 		current.Strategy = patch.Strategy

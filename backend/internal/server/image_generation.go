@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -8,6 +9,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"net/http"
 	"os"
@@ -15,6 +19,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	_ "golang.org/x/image/webp"
 )
 
 const (
@@ -798,12 +804,12 @@ func decodeGeneratedImage(encoded string) ([]byte, error) {
 	if len(decoded) > maxGeneratedImageBytes {
 		return nil, fmt.Errorf("image result exceeds %d bytes", maxGeneratedImageBytes)
 	}
-	switch http.DetectContentType(decoded) {
-	case "image/png", "image/jpeg", "image/webp":
-		return decoded, nil
-	default:
+	if _, format, err := image.Decode(bytes.NewReader(decoded)); err != nil {
+		return nil, fmt.Errorf("decode image result: %w", err)
+	} else if format != "png" && format != "jpeg" && format != "webp" {
 		return nil, fmt.Errorf("image result must be PNG, JPEG, or WebP")
 	}
+	return decoded, nil
 }
 
 func (s *Server) imageJobResponse(r *http.Request, job ImageJob) map[string]any {
