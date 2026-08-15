@@ -366,21 +366,6 @@ func (s *Server) serveAdminMonitorRun(w http.ResponseWriter, r *http.Request, us
 	writeJSON(w, http.StatusOK, result)
 }
 
-func (s *Server) handleAdminSQLiteBackups(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAdmin(w, r, "backup", r.Method)
-	if !ok {
-		return
-	}
-	switch r.Method {
-	case http.MethodGet:
-		s.serveAdminSQLiteBackupsGet(w, r, user)
-	case http.MethodPost:
-		s.serveAdminSQLiteBackupsPost(w, r, user)
-	default:
-		jsonMethodNotAllowed(http.MethodGet+", "+http.MethodPost)(w, r)
-	}
-}
-
 func (s *Server) serveAdminSQLiteBackupsGet(w http.ResponseWriter, _ *http.Request, _ AdminUser) {
 	writeJSON(w, http.StatusOK, map[string]any{"data": s.store.ListSQLiteBackups()})
 }
