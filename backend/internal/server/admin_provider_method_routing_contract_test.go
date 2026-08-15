@@ -299,7 +299,9 @@ func TestAdminProviderCatalogRoutesPreserveRefreshQuery(t *testing.T) {
 	if err := BootstrapBaseDataWithConfig(store, config); err != nil {
 		t.Fatal(err)
 	}
-	app := NewWithConfig(store, config).Handler()
+	server := NewWithConfig(store, config)
+	server.providerCatalog.upstreamURL = ""
+	app := server.Handler()
 	adminToken, _ := loginMethodRoutingAdmin(t, app, config.BootstrapAdminPassword)
 
 	readBaseURL := func(path string) string {

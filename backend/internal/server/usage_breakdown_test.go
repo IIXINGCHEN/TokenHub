@@ -14,7 +14,7 @@ func TestUsageBreakdownQueryCountDoesNotGrowWithRecords(t *testing.T) {
 		CostCenter: "CC-BREAKDOWN",
 		Status:     StatusActive,
 	})
-	server := New(store)
+	server := &Server{store: store}
 	admin := AdminUser{ID: "usr_breakdown_admin", Role: "admin", Status: StatusActive}
 
 	insertUsageRecords := func(start, count int) {
