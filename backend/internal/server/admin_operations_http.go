@@ -373,27 +373,35 @@ func (s *Server) handleAdminSQLiteBackups(w http.ResponseWriter, r *http.Request
 	}
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, map[string]any{"data": s.store.ListSQLiteBackups()})
+		s.serveAdminSQLiteBackupsGet(w, r, user)
 	case http.MethodPost:
-		var req struct {
-			ExpireDays int `json:"expire_days"`
-		}
-		if r.Body != nil && r.ContentLength != 0 {
-			if err := s.decodeJSON(w, r, &req); err != nil {
-				writeError(w, r, err)
-				return
-			}
-		}
-		backup, err := s.store.CreateSQLiteBackup(user.ID, req.ExpireDays)
-		if err != nil {
+		s.serveAdminSQLiteBackupsPost(w, r, user)
+	default:
+		jsonMethodNotAllowed(http.MethodGet+", "+http.MethodPost)(w, r)
+	}
+}
+
+func (s *Server) serveAdminSQLiteBackupsGet(w http.ResponseWriter, _ *http.Request, _ AdminUser) {
+	writeJSON(w, http.StatusOK, map[string]any{"data": s.store.ListSQLiteBackups()})
+}
+
+func (s *Server) serveAdminSQLiteBackupsPost(w http.ResponseWriter, r *http.Request, user AdminUser) {
+	var req struct {
+		ExpireDays int `json:"expire_days"`
+	}
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := s.decodeJSON(w, r, &req); err != nil {
 			writeError(w, r, err)
 			return
 		}
-		s.recordAdminAudit(r, user, "create", "sqlite_backup", backup.ID, "", backup)
-		writeJSON(w, http.StatusCreated, backup)
-	default:
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
 	}
+	backup, err := s.store.CreateSQLiteBackup(user.ID, req.ExpireDays)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	s.recordAdminAudit(r, user, "create", "sqlite_backup", backup.ID, "", backup)
+	writeJSON(w, http.StatusCreated, backup)
 }
 
 func (s *Server) handleAdminSQLiteBackupItem(w http.ResponseWriter, r *http.Request) {
@@ -410,75 +418,91 @@ func (s *Server) handleAdminSQLiteBackupItem(w http.ResponseWriter, r *http.Requ
 	if len(parts) == 1 {
 		switch r.Method {
 		case http.MethodGet:
-			backup, err := s.store.GetSQLiteBackup(backupID)
-			if err != nil {
-				writeError(w, r, err)
-				return
-			}
-			writeJSON(w, http.StatusOK, backup)
+			s.serveAdminSQLiteBackupGet(w, r, user, backupID)
 		case http.MethodDelete:
-			before, _ := s.store.GetSQLiteBackup(backupID)
-			if err := s.store.DeleteSQLiteBackup(backupID); err != nil {
-				writeError(w, r, err)
-				return
-			}
-			s.recordAdminAudit(r, user, "delete", "sqlite_backup", backupID, before, nil)
-			w.WriteHeader(http.StatusNoContent)
+			s.serveAdminSQLiteBackupDelete(w, r, user, backupID)
 		default:
-			writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+			jsonMethodNotAllowed(http.MethodGet+", "+http.MethodDelete)(w, r)
 		}
 		return
 	}
 	switch parts[1] {
 	case "download":
 		if r.Method != http.MethodGet {
-			writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+			jsonMethodNotAllowed(http.MethodGet)(w, r)
 			return
 		}
-		backup, err := s.store.GetSQLiteBackup(backupID)
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		if backup.Status != "ready" && backup.Status != "restored" {
-			writeError(w, r, NewHTTPError(409, "backup_not_ready", "Backup is not ready to download"))
-			return
-		}
-		if _, err := os.Stat(backup.FilePath); err != nil {
-			writeError(w, r, NewHTTPError(404, "backup_file_missing", "Backup file is missing"))
-			return
-		}
-		w.Header().Set("content-type", "application/vnd.sqlite3")
-		w.Header().Set("content-disposition", `attachment; filename="`+backup.FileName+`"`)
-		http.ServeFile(w, r, backup.FilePath)
-		s.recordAdminAudit(r, user, "download", "sqlite_backup", backupID, "", map[string]any{"file_name": backup.FileName})
+		s.serveAdminSQLiteBackupDownload(w, r, user, backupID)
 	case "restore":
 		if r.Method != http.MethodPost {
-			writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+			jsonMethodNotAllowed(http.MethodPost)(w, r)
 			return
 		}
-		var req struct {
-			Confirmation string `json:"confirmation"`
-		}
-		if err := s.decodeJSON(w, r, &req); err != nil {
-			writeError(w, r, err)
-			return
-		}
-		if strings.TrimSpace(req.Confirmation) != "RESTORE "+backupID {
-			writeError(w, r, NewHTTPError(400, "invalid_restore_confirmation", "Restore confirmation is invalid"))
-			return
-		}
-		before, _ := s.store.GetSQLiteBackup(backupID)
-		backup, err := s.store.RestoreSQLiteBackup(backupID, user.ID)
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		s.recordAdminAudit(r, user, "restore", "sqlite_backup", backupID, before, backup)
-		writeJSON(w, http.StatusOK, backup)
+		s.serveAdminSQLiteBackupRestore(w, r, user, backupID)
 	default:
 		writeError(w, r, NewHTTPError(404, "not_found", "Not found"))
 	}
+}
+
+func (s *Server) serveAdminSQLiteBackupGet(w http.ResponseWriter, r *http.Request, _ AdminUser, backupID string) {
+	backup, err := s.store.GetSQLiteBackup(backupID)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, backup)
+}
+
+func (s *Server) serveAdminSQLiteBackupDelete(w http.ResponseWriter, r *http.Request, user AdminUser, backupID string) {
+	before, _ := s.store.GetSQLiteBackup(backupID)
+	if err := s.store.DeleteSQLiteBackup(backupID); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	s.recordAdminAudit(r, user, "delete", "sqlite_backup", backupID, before, nil)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) serveAdminSQLiteBackupDownload(w http.ResponseWriter, r *http.Request, user AdminUser, backupID string) {
+	backup, err := s.store.GetSQLiteBackup(backupID)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	if backup.Status != "ready" && backup.Status != "restored" {
+		writeError(w, r, NewHTTPError(409, "backup_not_ready", "Backup is not ready to download"))
+		return
+	}
+	if _, err := os.Stat(backup.FilePath); err != nil {
+		writeError(w, r, NewHTTPError(404, "backup_file_missing", "Backup file is missing"))
+		return
+	}
+	w.Header().Set("content-type", "application/vnd.sqlite3")
+	w.Header().Set("content-disposition", `attachment; filename="`+backup.FileName+`"`)
+	http.ServeFile(w, r, backup.FilePath)
+	s.recordAdminAudit(r, user, "download", "sqlite_backup", backupID, "", map[string]any{"file_name": backup.FileName})
+}
+
+func (s *Server) serveAdminSQLiteBackupRestore(w http.ResponseWriter, r *http.Request, user AdminUser, backupID string) {
+	var req struct {
+		Confirmation string `json:"confirmation"`
+	}
+	if err := s.decodeJSON(w, r, &req); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	if strings.TrimSpace(req.Confirmation) != "RESTORE "+backupID {
+		writeError(w, r, NewHTTPError(400, "invalid_restore_confirmation", "Restore confirmation is invalid"))
+		return
+	}
+	before, _ := s.store.GetSQLiteBackup(backupID)
+	backup, err := s.store.RestoreSQLiteBackup(backupID, user.ID)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	s.recordAdminAudit(r, user, "restore", "sqlite_backup", backupID, before, backup)
+	writeJSON(w, http.StatusOK, backup)
 }
 
 func (s *Server) handleAdminInvoiceAction(w http.ResponseWriter, r *http.Request, user AdminUser, invoiceID string, action string) {
@@ -616,7 +640,7 @@ func (s *Server) handleAdminExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method != http.MethodGet {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+		jsonMethodNotAllowed(http.MethodGet)(w, r)
 		return
 	}
 	kind := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/admin/export/"), "/")
@@ -624,6 +648,10 @@ func (s *Server) handleAdminExport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, NewHTTPError(404, "not_found", "Not found"))
 		return
 	}
+	s.serveAdminExport(w, r, user, kind)
+}
+
+func (s *Server) serveAdminExport(w http.ResponseWriter, r *http.Request, user AdminUser, kind string) {
 	if !s.canExportKind(user, kind) {
 		writeError(w, r, NewHTTPError(403, "export_forbidden", "Export is not available for this user"))
 		return

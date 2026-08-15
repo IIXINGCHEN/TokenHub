@@ -218,10 +218,22 @@ func (s *Server) routes() {
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/resources/invoices/{invoice_id}/reject", s.handleAdminInvoiceRejectPost, s.adminMethodNotAllowed("usage", http.MethodPost))
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/resources/monitors/{monitor_id}/run", s.handleAdminMonitorRunPost, s.adminMethodNotAllowed("provider", http.MethodPost))
 	s.mux.HandleFunc("/api/admin/resources/", s.handleAdminResources)
-	s.mux.HandleFunc("/api/admin/sqlite/backups", s.handleAdminSQLiteBackups)
+	s.registerMethodRoutes("/api/admin/sqlite/backups", func(allowedMethods string) http.HandlerFunc {
+		return s.adminMethodNotAllowed("backup", allowedMethods)
+	},
+		methodRoute{Method: http.MethodGet, Handler: s.handleAdminSQLiteBackupsGet},
+		methodRoute{Method: http.MethodPost, Handler: s.handleAdminSQLiteBackupsPost},
+	)
+	s.registerMethodRoutes("/api/admin/sqlite/backups/{backup_id}", s.adminSQLiteBackupMethodNotAllowed,
+		methodRoute{Method: http.MethodGet, Handler: s.handleAdminSQLiteBackupGet},
+		methodRoute{Method: http.MethodDelete, Handler: s.handleAdminSQLiteBackupDelete},
+	)
+	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/sqlite/backups/{backup_id}/download", s.handleAdminSQLiteBackupDownloadGet, s.adminSQLiteBackupMethodNotAllowed(http.MethodGet))
+	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/sqlite/backups/{backup_id}/restore", s.handleAdminSQLiteBackupRestorePost, s.adminSQLiteBackupMethodNotAllowed(http.MethodPost))
 	s.mux.HandleFunc("/api/admin/sqlite/backups/", s.handleAdminSQLiteBackupItem)
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/billing/generate", s.handleAdminGenerateBilling, s.adminMethodNotAllowed("usage", http.MethodPost))
 	s.registerBillingRoutes()
+	s.registerDynamicGETRoute("/api/admin/export/{dataset}", s.handleAdminExportGet, s.adminMethodNotAllowed("usage", http.MethodGet))
 	s.mux.HandleFunc("/api/admin/export/", s.handleAdminExport)
 	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/usage/summary", s.handleAdminUsageSummary, s.adminMethodNotAllowed("usage", http.MethodGet))
 	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/usage/breakdown", s.handleAdminUsageBreakdown, s.adminMethodNotAllowed("usage", http.MethodGet))
