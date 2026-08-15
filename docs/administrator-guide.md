@@ -70,7 +70,7 @@ An exceeded limit returns HTTP 429 with `api_key_rpm_exceeded` or `api_key_tpm_e
 
 ## Provider Catalog Availability
 
-TokenHub stores the last known-good provider catalog in the database. On every backend startup, it validates and loads the configured local `provider-catalog.json`, then atomically replaces the database snapshot. Ordinary **Provider Channels** requests only read the database snapshot, and administrators can manually refresh the same local catalog. If local catalog reading, parsing, or completeness validation fails, TokenHub keeps using the last known-good snapshot.
+TokenHub stores the last known-good provider catalog in the database. On every backend startup, it validates and loads the configured local `provider-catalog.json`, then atomically replaces the database snapshot. Ordinary **Provider Channels** requests only read the database snapshot. An explicit administrator refresh downloads the latest `PublicProviderConf` catalog, applies the same completeness checks, and atomically replaces the snapshot only when validation succeeds. If the upstream request or validation fails, TokenHub falls back to the configured local catalog. If that fallback also fails, the refresh returns an error and TokenHub keeps using the last known-good snapshot. Refresh responses identify the selected source as `upstream-provider-catalog` or `local-provider-catalog`.
 
 ### Kronk local inference
 
