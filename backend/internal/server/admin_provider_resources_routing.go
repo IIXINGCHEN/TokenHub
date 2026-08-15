@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
@@ -162,7 +163,21 @@ func (s *Server) serveAdminProviderResourcePatch(w http.ResponseWriter, r *http.
 }
 
 func (s *Server) serveAdminProviderResourceDelete(w http.ResponseWriter, r *http.Request, user AdminUser, resourceID string) {
-	if err := s.store.DeleteProviderResource(resourceID); err != nil {
+	deleteResource := func() error { return s.store.DeleteProviderResource(resourceID) }
+	resource, found := s.store.GetProviderResource(resourceID)
+	if !found {
+		writeError(w, r, NewHTTPError(http.StatusNotFound, "provider_resource_not_found", "Provider resource not found"))
+		return
+	}
+	var err error
+	if resource.ResourceType == ProviderResourceOpenAISubscription {
+		err = s.store.RunClusterOperation(r.Context(), "codex-image-capability:"+resource.ProviderID, func(context.Context) error {
+			return deleteResource()
+		})
+	} else {
+		err = deleteResource()
+	}
+	if err != nil {
 		writeError(w, r, err)
 		return
 	}

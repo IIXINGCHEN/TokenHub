@@ -435,7 +435,11 @@ func (s *GormStore) UpdateProviderResource(id string, patch ProviderResource) (P
 		resource.SensitiveHeaders = sensitive
 	}
 	if patch.Options != nil {
-		resource.Options = patch.Options
+		if isOpenAIAccountResource(resource.ResourceType) {
+			resource.Options = preserveOpenAIAccountProtectedOptions(resource.Options, patch)
+		} else {
+			resource.Options = patch.Options
+		}
 	}
 	var provider Provider
 	if err := s.db.First(&provider, "id = ?", resource.ProviderID).Error; err != nil {

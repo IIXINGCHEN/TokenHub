@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -120,6 +121,61 @@ func TestAdminCodexImageCapabilityDisablesRouteAfterLastAccountDeleted(t *testin
 	}
 }
 
+func TestAdminCodexImageCapabilitySerializesFinalAccountDeletionWithProbe(t *testing.T) {
+	imageBytes := realPNGFixture(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+		writeJSON(w, http.StatusOK, map[string]any{
+			"data": []map[string]any{{"b64_json": encodeBase64(imageBytes)}},
+		})
+	}))
+	defer upstream.Close()
+
+	store, server, resource := newCodexImageCapabilityTestServer(t, upstream.URL)
+	server.codexSubscription.Client = upstream.Client()
+	handler := server.Handler()
+	enableDone := make(chan responseBody, 1)
+	go func() {
+		enableDone <- doJSON(t, handler, http.MethodPost, "/api/admin/provider-resources/"+resource.ID+"/image-capability", map[string]bool{"enabled": true}, "")
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("capability probe did not reach the upstream")
+	}
+
+	deleteStarted := make(chan struct{})
+	deleteDone := make(chan responseBody, 1)
+	go func() {
+		close(deleteStarted)
+		deleteDone <- doJSON(t, handler, http.MethodDelete, "/api/admin/provider-resources/"+resource.ID, nil, "")
+	}()
+	<-deleteStarted
+	select {
+	case response := <-deleteDone:
+		t.Fatalf("final account deletion bypassed the capability lease: status=%d body=%s", response.Code, response.Body)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	if response := <-enableDone; response.Code != http.StatusOK {
+		t.Fatalf("enable image capability: status=%d body=%s", response.Code, response.Body)
+	}
+	if response := <-deleteDone; response.Code != http.StatusNoContent {
+		t.Fatalf("delete final Codex account: status=%d body=%s", response.Code, response.Body)
+	}
+	if _, ok := store.GetProviderResource(resource.ID); ok {
+		t.Fatal("final Codex account still exists after deletion")
+	}
+	routes := matchingCodexImageRoutes(store.ListRoutes(), resource.ProviderID)
+	if len(routes) != 1 || routes[0].Status != StatusDisabled {
+		t.Fatalf("serialized deletion left an active or missing Codex image route: %+v", routes)
+	}
+}
+
 func TestAdminCodexImageCapabilityClassifiesUnsupportedWithoutRoute(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]any{"error": map[string]any{"message": "not available"}})
@@ -143,9 +199,10 @@ func TestAdminCodexImageCapabilityClassifiesUnsupportedWithoutRoute(t *testing.T
 }
 
 func TestAdminCodexImageCapabilityLeavesTransientFailureRetryable(t *testing.T) {
+	const upstreamSecret = "sentinel-codex-session-secret"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Retry-After", "1")
-		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": map[string]any{"message": "rate limited"}})
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": map[string]any{"message": upstreamSecret}})
 	}))
 	defer upstream.Close()
 	store, server, resource := newCodexImageCapabilityTestServer(t, upstream.URL)
@@ -155,12 +212,75 @@ func TestAdminCodexImageCapabilityLeavesTransientFailureRetryable(t *testing.T) 
 	if response.Code != http.StatusTooManyRequests {
 		t.Fatalf("transient capability failure: status=%d body=%s", response.Code, response.Body)
 	}
+	if strings.Contains(response.Body, upstreamSecret) || !strings.Contains(response.Body, "Codex image capability test is temporarily unavailable") {
+		t.Fatalf("transient capability response exposed upstream detail: %s", response.Body)
+	}
 	updated, _ := store.GetProviderResource(resource.ID)
 	if updated.Options[codexImageCapabilityOption] != "" || updated.Options[codexImageCapabilityCheckedAtOption] != "" {
 		t.Fatalf("transient failure must not become unsupported: %+v", updated.Options)
 	}
 	if routes := matchingCodexImageRoutes(store.ListRoutes(), resource.ProviderID); len(routes) != 0 {
 		t.Fatalf("transient failure created routes: %+v", routes)
+	}
+}
+
+func TestAdminCodexImageCapabilityStateSurvivesOrdinaryAccountEdit(t *testing.T) {
+	imageBytes := realPNGFixture(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"data": []map[string]any{{"b64_json": encodeBase64(imageBytes)}},
+		})
+	}))
+	defer upstream.Close()
+
+	store, server, resource := newCodexImageCapabilityTestServer(t, upstream.URL)
+	server.codexSubscription.Client = upstream.Client()
+	handler := server.Handler()
+	if response := doJSON(t, handler, http.MethodPost, "/api/admin/provider-resources/"+resource.ID+"/image-capability", map[string]bool{"enabled": true}, ""); response.Code != http.StatusOK {
+		t.Fatalf("enable image capability: status=%d body=%s", response.Code, response.Body)
+	}
+	if _, err := store.UpdateProviderResourceOptions(resource.ID, map[string]string{
+		openAIAccountReauthorizationRequiredOption: "true",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, ok := store.GetProviderResource(resource.ID)
+	if !ok {
+		t.Fatal("Codex account disappeared before edit")
+	}
+
+	response := doJSON(t, handler, http.MethodPatch, "/api/admin/provider-resources/"+resource.ID, ProviderResource{
+		ProviderID:   before.ProviderID,
+		Name:         "Edited Codex Image Capability Account",
+		ResourceType: before.ResourceType,
+		BaseURL:      before.BaseURL,
+		Status:       before.Status,
+		Healthy:      before.Healthy,
+		Priority:     before.Priority,
+		Weight:       before.Weight,
+		Options:      map[string]string{"auth_type": "oauth", "operator_note": "retained"},
+	}, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("edit Codex account: status=%d body=%s", response.Code, response.Body)
+	}
+	after, ok := store.GetProviderResource(resource.ID)
+	if !ok {
+		t.Fatal("Codex account disappeared after edit")
+	}
+	for key, want := range map[string]string{
+		codexImageCapabilityOption:                 codexImageCapabilitySupported,
+		codexImageCapabilityCheckedAtOption:        before.Options[codexImageCapabilityCheckedAtOption],
+		codexImageRouteBackfillOption:              codexImageRouteBackfillCompleted,
+		"has_refresh_token":                        "true",
+		openAIAccountReauthorizationRequiredOption: "true",
+		"operator_note":                            "retained",
+	} {
+		if after.Options[key] != want {
+			t.Fatalf("ordinary edit changed protected option %s: got %q want %q; options=%+v", key, after.Options[key], want, after.Options)
+		}
+	}
+	if route := activeCodexImageRoute(store.ListRoutes(), resource.ProviderID); route == nil {
+		t.Fatal("ordinary account edit disabled the active Codex image route")
 	}
 }
 
@@ -246,8 +366,9 @@ func newCodexImageCapabilityTestServer(t *testing.T, baseURL string) (*GormStore
 		Status:       StatusActive,
 		Healthy:      true,
 		Credentials: &ProviderResourceCredentials{
-			AccessToken: "access_capability_test",
-			AccountID:   "account_capability_test",
+			AccessToken:  "access_capability_test",
+			RefreshToken: "refresh_capability_test",
+			AccountID:    "account_capability_test",
 		},
 	})
 	if err != nil {

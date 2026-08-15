@@ -10,6 +10,14 @@ import (
 
 const openAIAccountReauthorizationRequiredOption = "oauth_reauthorization_required"
 
+var openAIAccountProtectedOptions = []string{
+	codexImageCapabilityOption,
+	codexImageCapabilityCheckedAtOption,
+	codexImageRouteBackfillOption,
+	"has_refresh_token",
+	openAIAccountReauthorizationRequiredOption,
+}
+
 type openAIIDTokenClaims struct {
 	Email      string            `json:"email"`
 	OpenAIAuth *openAIAuthClaims `json:"https://api.openai.com/auth,omitempty"`
@@ -52,6 +60,25 @@ func (s *GormStore) prepareProviderResourceForUpdate(resource *ProviderResource,
 		resource.Options = map[string]string{}
 	}
 	s.mergeOpenAIAccountCredentials(resource, &patch)
+}
+
+func preserveOpenAIAccountProtectedOptions(current map[string]string, patch ProviderResource) map[string]string {
+	options := make(map[string]string, len(patch.Options)+len(openAIAccountProtectedOptions))
+	for key, value := range patch.Options {
+		options[key] = value
+	}
+	for _, key := range openAIAccountProtectedOptions {
+		if patch.Credentials != nil && (key == "has_refresh_token" || key == openAIAccountReauthorizationRequiredOption) {
+			delete(options, key)
+			continue
+		}
+		if value, ok := current[key]; ok {
+			options[key] = value
+		} else {
+			delete(options, key)
+		}
+	}
+	return options
 }
 
 func (s *GormStore) mergeOpenAIAccountCredentials(resource *ProviderResource, patch *ProviderResource) {
@@ -214,6 +241,13 @@ func (s *GormStore) RefreshProviderResourceCredentials(ctx context.Context, reso
 			s.mu.Unlock()
 			return nil
 		}
+		if resource.Options[openAIAccountReauthorizationRequiredOption] == "true" {
+			result = creds
+			s.mu.Unlock()
+			return NewHTTPError(409, "provider_resource_reauthorization_required", "OpenAI/Codex account session has ended. Reauthorize the account.")
+		}
+		credentialBlob := resource.CredentialBlob
+		apiKey := resource.APIKey
 		needsRefresh, expired := providerResourceCredentialsNeedRefresh(creds, openAIAccountOAuthRefreshLead)
 		if !force && !needsRefresh {
 			result = creds
@@ -236,7 +270,8 @@ func (s *GormStore) RefreshProviderResourceCredentials(ctx context.Context, reso
 				s.mu.Lock()
 				var current ProviderResource
 				loadErr := s.db.WithContext(leaseCtx).First(&current, "id = ?", resourceID).Error
-				if loadErr == nil && isOpenAIAccountResource(current.ResourceType) {
+				if loadErr == nil && isOpenAIAccountResource(current.ResourceType) &&
+					current.CredentialBlob == credentialBlob && current.APIKey == apiKey {
 					if current.Options == nil {
 						current.Options = map[string]string{}
 					}
@@ -260,6 +295,10 @@ func (s *GormStore) RefreshProviderResourceCredentials(ctx context.Context, reso
 		}
 		if !isOpenAIAccountResource(current.ResourceType) {
 			result = refreshed
+			return nil
+		}
+		if current.CredentialBlob != credentialBlob || current.APIKey != apiKey {
+			result = s.providerResourceCredentialsForRuntime(current)
 			return nil
 		}
 		if current.Options == nil {

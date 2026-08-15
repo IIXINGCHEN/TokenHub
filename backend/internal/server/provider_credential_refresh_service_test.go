@@ -112,6 +112,12 @@ func TestProviderCredentialRefreshServiceStopsRetryingInvalidatedRefreshTokens(t
 	if _, err := store.RefreshProviderResourceCredentials(context.Background(), resource.ID, true); AsHTTPError(err).Code != "provider_resource_reauthorization_required" {
 		t.Fatalf("expected manual refresh to require reauthorization, got %v", err)
 	}
+	if _, err := store.RefreshProviderResourceCredentials(context.Background(), resource.ID, true); AsHTTPError(err).Code != "provider_resource_reauthorization_required" {
+		t.Fatalf("expected marked credentials to require reauthorization without another request, got %v", err)
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("marked credentials sent %d token requests, want 1", requests.Load())
+	}
 	service := newProviderCredentialRefreshService(store)
 	service.RunDue(context.Background())
 	if requests.Load() != 1 {
@@ -129,6 +135,90 @@ func TestProviderCredentialRefreshServiceStopsRetryingInvalidatedRefreshTokens(t
 	}
 	if stored.CredentialSummary[openAIAccountReauthorizationRequiredOption] != "true" {
 		t.Fatalf("expected resource to require reauthorization, got %+v", stored.CredentialSummary)
+	}
+}
+
+func TestProviderCredentialRefreshDoesNotInvalidateReplacementCredentials(t *testing.T) {
+	store := NewMemoryStore()
+	provider := store.AddProvider(Provider{Name: "Reauthorized OAuth", Type: ProviderOpenAICodex, Status: StatusActive, Healthy: true})
+	resource, err := store.AddProviderResource(ProviderResource{
+		ProviderID: provider.ID, Name: "Reauthorized Account", ResourceType: ProviderResourceOpenAISubscription, Status: StatusActive, Healthy: true,
+		Credentials: &ProviderResourceCredentials{
+			AccessToken: "access-before-reauthorization", RefreshToken: "refresh-before-reauthorization",
+			ExpiresAt: time.Now().UTC().Add(-time.Minute).Format(time.RFC3339),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var requests atomic.Int64
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if err := r.ParseForm(); err != nil {
+			t.Errorf("parse refresh request: %v", err)
+		}
+		if token := r.Form.Get("refresh_token"); token != "refresh-before-reauthorization" {
+			t.Errorf("unexpected refresh token: %q", token)
+		}
+		close(started)
+		<-release
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"code":"refresh_token_invalidated"}}`))
+	}))
+	defer tokenServer.Close()
+	previousEndpoint := openAIAccountOAuthTokenEndpoint
+	openAIAccountOAuthTokenEndpoint = tokenServer.URL
+	defer func() { openAIAccountOAuthTokenEndpoint = previousEndpoint }()
+
+	refreshDone := make(chan error, 1)
+	go func() {
+		_, refreshErr := store.RefreshProviderResourceCredentials(context.Background(), resource.ID, true)
+		refreshDone <- refreshErr
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("old credential refresh did not reach the token endpoint")
+	}
+	replacementExpiry := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	if _, err := store.UpdateProviderResource(resource.ID, ProviderResource{
+		ProviderID:   provider.ID,
+		Name:         resource.Name,
+		ResourceType: ProviderResourceOpenAISubscription,
+		BaseURL:      resource.BaseURL,
+		Status:       StatusActive,
+		Healthy:      true,
+		Weight:       resource.Weight,
+		Options:      map[string]string{"auth_type": "oauth"},
+		Credentials: &ProviderResourceCredentials{
+			AuthType: "oauth", AccessToken: "access-after-reauthorization", RefreshToken: "refresh-after-reauthorization", ExpiresAt: replacementExpiry,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-refreshDone; AsHTTPError(err).Code != "provider_resource_reauthorization_required" {
+		t.Fatalf("expected the old refresh request to fail, got %v", err)
+	}
+	current, ok := store.GetProviderResource(resource.ID)
+	if !ok {
+		t.Fatal("reauthorized resource disappeared")
+	}
+	if current.Options[openAIAccountReauthorizationRequiredOption] != "" {
+		t.Fatalf("stale failure marked replacement credentials for reauthorization: %+v", current.Options)
+	}
+	credentials, err := store.RefreshProviderResourceCredentials(context.Background(), resource.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credentials.AccessToken != "access-after-reauthorization" || credentials.RefreshToken != "refresh-after-reauthorization" {
+		t.Fatalf("stale failure changed replacement credentials: %+v", credentials)
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("replacement credential verification sent %d token requests, want 1", requests.Load())
 	}
 }
 
