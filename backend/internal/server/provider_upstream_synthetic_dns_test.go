@@ -469,8 +469,61 @@ func TestSeedDemoDataPersistsPrivateSyntheticDNSSettingAsDisabled(t *testing.T) 
 	}
 }
 
+func TestSeedDemoDataPreservesExistingProviderSyntheticDNSSettings(t *testing.T) {
+	store := NewMemoryStore()
+	if err := BootstrapBaseData(store); err != nil {
+		t.Fatal(err)
+	}
+	findGatewaySetting := func() AdminResource {
+		t.Helper()
+		for _, setting := range store.ListResources("settings") {
+			if setting.ID == gatewaySettingsID {
+				return setting
+			}
+		}
+		t.Fatal("expected gateway settings")
+		return AdminResource{}
+	}
+	setting := findGatewaySetting()
+	setting.Fields[syntheticDNSEnabledField] = true
+	setting.Fields[syntheticDNSCIDRsField] = "28.0.0.0/8"
+	if _, err := store.UpdateResource("settings", gatewaySettingsID, setting); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SeedDemoData(store); err != nil {
+		t.Fatal(err)
+	}
+	setting = findGatewaySetting()
+	if !truthyField(setting.Fields, syntheticDNSEnabledField) {
+		t.Fatalf("expected demo seed to preserve the enabled setting, got %+v", setting.Fields)
+	}
+	if got := stringField(setting.Fields, syntheticDNSCIDRsField); got != "28.0.0.0/8" {
+		t.Fatalf("expected demo seed to preserve the custom CIDR, got %q", got)
+	}
+}
+
 type failingSyntheticDNSBackfillStore struct {
 	Store
+}
+
+type failingSyntheticDNSSeedCreateStore struct {
+	Store
+}
+
+func (store failingSyntheticDNSSeedCreateStore) CreateResourceChecked(kind string, resource AdminResource) (AdminResource, error) {
+	if kind == "settings" && resource.ID == gatewaySettingsID {
+		return AdminResource{}, errors.New("gateway settings create failed")
+	}
+	return store.Store.CreateResourceChecked(kind, resource)
+}
+
+func TestBootstrapReportsProviderSyntheticDNSSeedCreateFailure(t *testing.T) {
+	store := NewMemoryStore()
+	err := BootstrapBaseData(failingSyntheticDNSSeedCreateStore{Store: store})
+	if err == nil || !strings.Contains(err.Error(), "seed gateway settings") {
+		t.Fatalf("expected bootstrap to report the gateway settings create failure, got %v", err)
+	}
 }
 
 func (store failingSyntheticDNSBackfillStore) UpdateResource(kind string, id string, patch AdminResource) (AdminResource, error) {
@@ -492,22 +545,30 @@ func TestBootstrapReportsProviderSyntheticDNSBackfillFailure(t *testing.T) {
 	}
 }
 
-type failingSyntheticDNSBackfillReadStore struct {
+type failingSyntheticDNSSettingsReadStore struct {
 	Store
 }
 
-func (store failingSyntheticDNSBackfillReadStore) ListResourcesChecked(kind string) ([]AdminResource, error) {
+func (store failingSyntheticDNSSettingsReadStore) ListResourcesChecked(kind string) ([]AdminResource, error) {
 	if kind == "settings" {
 		return nil, errors.New("settings read failed")
 	}
 	return store.Store.ListResourcesChecked(kind)
 }
 
-func TestBootstrapReportsProviderSyntheticDNSBackfillReadFailure(t *testing.T) {
+func TestBootstrapReportsProviderSyntheticDNSSeedReadFailure(t *testing.T) {
 	store := NewMemoryStore()
-	err := BootstrapBaseData(failingSyntheticDNSBackfillReadStore{Store: store})
+	err := BootstrapBaseData(failingSyntheticDNSSettingsReadStore{Store: store})
+	if err == nil || !strings.Contains(err.Error(), "seed gateway settings") {
+		t.Fatalf("expected bootstrap to report the gateway settings read failure, got %v", err)
+	}
+}
+
+func TestEnsureProviderSyntheticDNSSettingsReportsBackfillReadFailure(t *testing.T) {
+	store := NewMemoryStore()
+	err := ensureProviderSyntheticDNSSettings(failingSyntheticDNSSettingsReadStore{Store: store})
 	if err == nil || !strings.Contains(err.Error(), "read Provider synthetic DNS settings for backfill") {
-		t.Fatalf("expected bootstrap to report the settings read failure, got %v", err)
+		t.Fatalf("expected the backfill to report the settings read failure, got %v", err)
 	}
 }
 

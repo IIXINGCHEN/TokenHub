@@ -263,7 +263,7 @@ func seedDefaultOrgResources(store Store) error {
 			"error_passthrough": "sanitized",
 		},
 	})
-	seedResourceIfMissing(store, "settings", AdminResource{
+	if err := seedResourceIfMissingChecked(store, "settings", AdminResource{
 		ID:          "cfg_gateway",
 		Name:        "Gateway Base Settings",
 		Description: "Public model API address, request timeout, and audit retention period.",
@@ -278,7 +278,9 @@ func seedDefaultOrgResources(store Store) error {
 			syntheticDNSCIDRsField:        defaultSyntheticDNSCIDRs,
 			syntheticDNSAllowPrivateField: false,
 		},
-	})
+	}); err != nil {
+		return fmt.Errorf("seed gateway settings: %w", err)
+	}
 	if err := ensureProviderSyntheticDNSSettings(store); err != nil {
 		return err
 	}
@@ -359,6 +361,20 @@ func seedResourceIfMissing(store Store, kind string, resource AdminResource) {
 	store.CreateResource(kind, resource)
 }
 
+func seedResourceIfMissingChecked(store Store, kind string, resource AdminResource) error {
+	resources, err := store.ListResourcesChecked(kind)
+	if err != nil {
+		return err
+	}
+	for _, existing := range resources {
+		if existing.ID == resource.ID {
+			return nil
+		}
+	}
+	_, err = store.CreateResourceChecked(kind, resource)
+	return err
+}
+
 func seedAdminResources(store Store) error {
 	if err := seedDefaultOrgResources(store); err != nil {
 		return err
@@ -395,22 +411,6 @@ func seedAdminResources(store Store) error {
 		Fields: map[string]any{
 			"notify_mode": "silent",
 			"target":      "all_admins",
-		},
-	})
-	store.CreateResource("settings", AdminResource{
-		ID:          "cfg_gateway",
-		Name:        "Gateway Base Settings",
-		Description: "Default OpenAI-compatible gateway configuration.",
-		Status:      StatusActive,
-		Fields: map[string]any{
-			"public_base_url":             "http://localhost:8080",
-			"default_timeout":             "120s",
-			"audit_retention":             "180d",
-			"api_key_prefix":              DefaultAPIKeyPrefix,
-			"api_key_random_length":       DefaultAPIKeyRandomLength,
-			syntheticDNSEnabledField:      false,
-			syntheticDNSCIDRsField:        defaultSyntheticDNSCIDRs,
-			syntheticDNSAllowPrivateField: false,
 		},
 	})
 	store.CreateResource("security-policies", AdminResource{
