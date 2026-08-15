@@ -30,10 +30,16 @@ func (s *providerCatalogService) refreshLocked(ctx context.Context, previous []P
 		entries, upstreamErr = prepareProviderCatalogRefresh(entries, previous)
 	}
 	if upstreamErr == nil {
+		if err := context.Cause(ctx); err != nil {
+			return nil, providerCatalogUpstreamSource, err
+		}
 		if err := s.store.SaveProviderCatalogSnapshot(entries, providerCatalogUpstreamSource, time.Now().UTC()); err != nil {
 			return nil, providerCatalogUpstreamSource, err
 		}
 		return cloneCatalogEntries(entries, false), providerCatalogUpstreamSource, nil
+	}
+	if err := context.Cause(ctx); err != nil {
+		return nil, providerCatalogUpstreamSource, err
 	}
 
 	entries, localErr := loadLocalProviderCatalog(s.catalogFile)
@@ -42,6 +48,9 @@ func (s *providerCatalogService) refreshLocked(ctx context.Context, previous []P
 	}
 	if localErr != nil {
 		return nil, providerCatalogLocalSource, fmt.Errorf("upstream provider catalog refresh failed (%v); local fallback failed: %w", upstreamErr, localErr)
+	}
+	if err := context.Cause(ctx); err != nil {
+		return nil, providerCatalogLocalSource, err
 	}
 	if err := s.store.SaveProviderCatalogSnapshot(entries, providerCatalogLocalSource, time.Now().UTC()); err != nil {
 		return nil, providerCatalogLocalSource, err
