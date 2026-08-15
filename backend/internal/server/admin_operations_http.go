@@ -601,7 +601,7 @@ func (s *Server) handleAdminRequestDetail(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if r.Method != http.MethodGet {
-		writeError(w, r, NewHTTPError(405, "method_not_allowed", "Method not allowed"))
+		jsonMethodNotAllowed(http.MethodGet)(w, r)
 		return
 	}
 	requestID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/admin/audit/requests/"), "/")
@@ -609,6 +609,10 @@ func (s *Server) handleAdminRequestDetail(w http.ResponseWriter, r *http.Request
 		writeError(w, r, NewHTTPError(404, "not_found", "Not found"))
 		return
 	}
+	s.serveAdminRequestDetail(w, r, user, requestID)
+}
+
+func (s *Server) serveAdminRequestDetail(w http.ResponseWriter, r *http.Request, user AdminUser, requestID string) {
 	detail, err := s.store.GetRequestDetail(requestID)
 	if err != nil {
 		writeError(w, r, err)
