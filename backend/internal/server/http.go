@@ -46,6 +46,9 @@ type Server struct {
 	responseInstanceID  string
 	versions            *versionService
 	guardrailEngine     *guardrails.Engine
+	upstreamClient      *http.Client
+	syntheticDNSPolicy  *providerSyntheticDNSPolicy
+	syntheticDNSSetting sync.Mutex
 }
 
 func New(store Store) *Server {
@@ -93,7 +96,8 @@ func NewWithConfig(store Store, config Config) *Server {
 	}
 	imageContext, imageCancel := context.WithCancel(context.Background())
 	responseContext, responseCancel := context.WithCancel(context.Background())
-	client, streamClient, streamIdleTimeout := newUpstreamClients(config)
+	syntheticDNSPolicy := newProviderSyntheticDNSPolicy(store)
+	client, streamClient, streamIdleTimeout := newUpstreamClients(config, syntheticDNSPolicy)
 	allowedProviderUpstreams := allowedProviderUpstreamCIDRs()
 	openai := OpenAICompatibleAdapter{Client: client, StreamClient: streamClient, StreamIdleTimeout: streamIdleTimeout}
 	kronk := KronkAdapter{OpenAICompatibleAdapter: openai}
@@ -105,7 +109,7 @@ func NewWithConfig(store Store, config Config) *Server {
 			// credential-bearing responses/compact/probe/image calls into
 			// the internal network. No Client.Timeout: streaming stays
 			// bounded by StreamIdleTimeout, exactly as before.
-			Transport:     guardProviderUpstreamRequests(ssrfGuardedProviderTransport(allowedProviderUpstreams), allowedProviderUpstreams),
+			Transport:     guardProviderUpstreamRequests(rotatingProviderUpstreamTransport(allowedProviderUpstreams, syntheticDNSPolicy, nil), allowedProviderUpstreams),
 			CheckRedirect: strictProviderUpstreamRedirect,
 		},
 		StreamIdleTimeout:  streamIdleTimeout,
@@ -138,7 +142,7 @@ func NewWithConfig(store Store, config Config) *Server {
 	s := &Server{
 		store:              store,
 		adapterRegistry:    registry,
-		integrations:       NewIntegrationService(store, registry),
+		integrations:       NewIntegrationService(store, registry, client),
 		codexSubscription:  codexSubscription,
 		providerCatalog:    newProviderCatalogService(store, config.ProviderCatalogFile),
 		billing:            newBillingService(store),
@@ -161,6 +165,8 @@ func NewWithConfig(store Store, config Config) *Server {
 			Model:   config.GuardrailModelName,
 			Timeout: time.Duration(config.GuardrailModelTimeoutSeconds) * time.Second,
 		})),
+		upstreamClient:     client,
+		syntheticDNSPolicy: syntheticDNSPolicy,
 	}
 	if jobs, err := store.FailUnfinishedImageJobs("image_worker_restarted", "Image generation stopped because the server restarted"); err != nil {
 		log.Printf("[tokenhub] failed to mark unfinished image jobs after startup: %v", err)

@@ -180,7 +180,7 @@ func (s *Server) handleAdminProviderCatalogItem(w http.ResponseWriter, r *http.R
 		var entry ProviderCatalogEntry
 		var err error
 		for _, candidate := range catalogRequests {
-			entry, err = CustomProviderCatalogFromUpstream(r.Context(), http.DefaultClient, candidate)
+			entry, err = CustomProviderCatalogFromUpstream(r.Context(), s.upstreamClient, candidate)
 			if err == nil {
 				break
 			}
@@ -581,10 +581,10 @@ func (s *Server) serveAdminProviderTestConnection(w http.ResponseWriter, r *http
 		result, healthErr := adapter.Health(ctx, provider)
 		health, err = &result, healthErr
 		if err == nil {
-			catalog, err = KronkProviderCatalogFromUpstream(ctx, http.DefaultClient, req)
+			catalog, err = KronkProviderCatalogFromUpstream(ctx, s.upstreamClient, req)
 		}
 	} else {
-		catalog, err = CustomProviderCatalogFromUpstream(ctx, http.DefaultClient, req)
+		catalog, err = CustomProviderCatalogFromUpstream(ctx, s.upstreamClient, req)
 	}
 	if err != nil {
 		writeError(w, r, err)
