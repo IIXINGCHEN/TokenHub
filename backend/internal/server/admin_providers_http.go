@@ -644,7 +644,21 @@ func (s *Server) serveAdminProviderPatch(w http.ResponseWriter, r *http.Request,
 }
 
 func (s *Server) serveAdminProviderDelete(w http.ResponseWriter, r *http.Request, user AdminUser, providerID string) {
-	if err := s.store.DeleteProvider(providerID); err != nil {
+	provider, found := s.store.GetProvider(providerID)
+	if !found {
+		writeError(w, r, NewHTTPError(http.StatusNotFound, "provider_not_found", "Provider not found"))
+		return
+	}
+	deleteProvider := func() error { return s.store.DeleteProvider(providerID) }
+	var err error
+	if provider.Type == ProviderOpenAICodex {
+		err = s.store.RunClusterOperation(r.Context(), "codex-image-capability:"+providerID, func(context.Context) error {
+			return deleteProvider()
+		})
+	} else {
+		err = deleteProvider()
+	}
+	if err != nil {
 		writeError(w, r, err)
 		return
 	}
@@ -781,6 +795,8 @@ func (s *Server) handleAdminProviderResourceNested(w http.ResponseWriter, r *htt
 		return
 	}
 	switch parts[1] {
+	case "image-capability":
+		s.handleAdminCodexImageCapability(w, r, user, parts[0])
 	case "test":
 		s.serveAdminProviderResourceTest(w, r, user, parts[0])
 	case "refresh-token":
@@ -1256,6 +1272,20 @@ func (s *Server) validateRoutePolicy(route ModelRoute) error {
 func (s *Server) validateImportedProviderModel(route ModelRoute) error {
 	providerID := strings.TrimSpace(route.ProviderID)
 	upstreamModel := strings.TrimSpace(route.ProviderModel)
+	if strings.TrimSpace(route.ModelName) == codexImageModelName {
+		provider, ok := s.providerByID(providerID)
+		if !ok || provider.Type != ProviderOpenAICodex {
+			return NewHTTPError(http.StatusBadRequest, "codex_image_provider_required", "The Codex subscription image model must use an OpenAI Codex Provider")
+		}
+		if upstreamModel != codexImageUpstreamModel {
+			return NewHTTPError(http.StatusBadRequest, "codex_image_upstream_model_invalid", "The Codex subscription image route must use gpt-image-2 as its upstream model")
+		}
+		status := strings.TrimSpace(route.Status)
+		if (status == "" || status == StatusActive) && !codexImageRouteHasSupportedResource(route, s.store.ListProviderResources()) {
+			return NewHTTPError(http.StatusConflict, "codex_image_capability_required", "Test image generation with an eligible Codex subscription account before activating this route")
+		}
+		return nil
+	}
 	for _, model := range s.store.ListProviderModels() {
 		if model.ProviderID == providerID && model.UpstreamModel == upstreamModel {
 			return nil
@@ -1298,6 +1328,9 @@ func mergedModelRoute(current ModelRoute, patch ModelRoute) ModelRoute {
 	current.ResourceGroup = patch.ResourceGroup
 	if patch.ProviderModel != "" {
 		current.ProviderModel = patch.ProviderModel
+	}
+	if patch.Status != "" {
+		current.Status = patch.Status
 	}
 	if patch.Strategy != "" {
 		current.Strategy = patch.Strategy

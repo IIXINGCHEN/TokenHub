@@ -166,6 +166,7 @@ func (s *Server) routes() {
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/provider-resources/{resource_id}/quota/reset", s.handleAdminProviderResourceQuotaResetPost, s.adminMethodNotAllowed("provider", http.MethodPost))
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/provider-resources/{resource_id}/health", s.handleAdminProviderResourceHealthPost, s.adminMethodNotAllowed("provider", http.MethodPost))
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/provider-resources/{resource_id}/test", s.handleAdminProviderResourceTestPost, s.adminMethodNotAllowed("provider", http.MethodPost))
+	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/provider-resources/{resource_id}/image-capability", s.handleAdminProviderResourceImageCapabilityPost, s.adminMethodNotAllowed("provider", http.MethodPost))
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/provider-resources/{resource_id}/refresh-token", s.handleAdminProviderResourceRefreshTokenPost, s.adminMethodNotAllowed("provider", http.MethodPost))
 	s.mux.HandleFunc("/api/admin/provider-resources/", s.handleAdminProviderResourceNested)
 	providerModelImportMethodNotAllowed := s.adminMethodNotAllowed("model", http.MethodPost)
