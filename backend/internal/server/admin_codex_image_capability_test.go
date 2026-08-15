@@ -93,6 +93,33 @@ func TestAdminCodexImageCapabilityTestsOnceAndManagesRoute(t *testing.T) {
 	}
 }
 
+func TestAdminCodexImageCapabilityDisablesRouteAfterLastAccountDeleted(t *testing.T) {
+	imageBytes := realPNGFixture(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"data": []map[string]any{{"b64_json": encodeBase64(imageBytes)}},
+		})
+	}))
+	defer upstream.Close()
+
+	store, server, resource := newCodexImageCapabilityTestServer(t, upstream.URL)
+	server.codexSubscription.Client = upstream.Client()
+	handler := server.Handler()
+	enabled := doJSON(t, handler, http.MethodPost, "/api/admin/provider-resources/"+resource.ID+"/image-capability", map[string]bool{"enabled": true}, "")
+	if enabled.Code != http.StatusOK {
+		t.Fatalf("enable image capability: status=%d body=%s", enabled.Code, enabled.Body)
+	}
+
+	deleted := doJSON(t, handler, http.MethodDelete, "/api/admin/provider-resources/"+resource.ID, nil, "")
+	if deleted.Code != http.StatusNoContent {
+		t.Fatalf("delete final Codex account: status=%d body=%s", deleted.Code, deleted.Body)
+	}
+	routes := matchingCodexImageRoutes(store.ListRoutes(), resource.ProviderID)
+	if len(routes) != 1 || routes[0].Status != StatusDisabled {
+		t.Fatalf("deleting the final Codex account must disable its image route: %+v", routes)
+	}
+}
+
 func TestAdminCodexImageCapabilityClassifiesUnsupportedWithoutRoute(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]any{"error": map[string]any{"message": "not available"}})

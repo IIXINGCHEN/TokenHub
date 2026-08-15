@@ -2,7 +2,7 @@ import { AlertCircle, Image as ImageIcon, LoaderCircle } from "lucide-react";
 import { useMemo, useState } from "react";
 import { type ApiContext, type ModelRoute, type Provider, type ProviderResource } from "../core/types";
 import { codexImageModelState, codexImageResources, codexImageRouteEnabled, defaultCodexImageResourceID } from "../domain/codex-image-capability";
-import { tx } from "../i18n/runtime";
+import { formatTranslationTemplate, tx } from "../i18n/runtime";
 import { adminFetch, isAuthExpiredError, readAdminError } from "../resources/payloads";
 import { formatImageGenerationCapabilityTag, providerResourceAccountLabel } from "./provider-account-ui";
 
@@ -134,7 +134,11 @@ export function ProviderCodexImageCapability({
             ) : null}
             {error ? <div className="provider-codex-image-error" role="alert"><AlertCircle aria-hidden="true" size={18} /><span>{error}</span></div> : null}
             {selectedResource?.options?.image_generation_capability ? (
-              <p className="provider-credential-note">{tx("该账号上次测试结果")}：{tx(formatImageGenerationCapabilityTag(selectedResource.options.image_generation_capability))}</p>
+              <p className="provider-credential-note">
+                {formatTranslationTemplate(tx("该账号上次测试结果：{result}"), {
+                  result: tx(formatImageGenerationCapabilityTag(selectedResource.options.image_generation_capability)),
+                })}
+              </p>
             ) : null}
             <div className="modal-actions">
               <button className="secondary-button" disabled={busy === "enable"} onClick={() => setDialogOpen(false)} type="button">{tx("取消")}</button>

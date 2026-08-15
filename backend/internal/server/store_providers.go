@@ -538,7 +538,24 @@ func (s *GormStore) DeleteProviderResource(id string) error {
 		if err := tx.Where("resource_id = ?", id).Delete(&AdapterSessionBinding{}).Error; err != nil {
 			return err
 		}
-		return tx.Delete(&resource).Error
+		if err := tx.Delete(&resource).Error; err != nil {
+			return err
+		}
+		if resource.ResourceType != ProviderResourceOpenAISubscription {
+			return nil
+		}
+		var remainingAccounts int64
+		if err := tx.Model(&ProviderResource{}).
+			Where("provider_id = ? AND resource_type = ?", resource.ProviderID, ProviderResourceOpenAISubscription).
+			Count(&remainingAccounts).Error; err != nil {
+			return err
+		}
+		if remainingAccounts > 0 {
+			return nil
+		}
+		return tx.Model(&ModelRoute{}).
+			Where("provider_id = ? AND model_name = ? AND provider_model = ?", resource.ProviderID, codexImageModelName, codexImageUpstreamModel).
+			Update("status", StatusDisabled).Error
 	})
 }
 

@@ -5,7 +5,7 @@ import { formatTime, modelToForm, routeStrategyLabel } from "../domain/formattin
 import { providerTypeLabel, resourceTypeLabel } from "../domain/labels";
 import { providerReasoningFieldConfigs, providerReasoningFormValues, providerSupportsAnthropicReasoning } from "../domain/provider-reasoning";
 import { availableProviderModelSelectOptions } from "../domain/provider-model-selection";
-import { tx } from "../i18n/runtime";
+import { formatTranslationTemplate, tx } from "../i18n/runtime";
 import { adminDelete, adminMutate, createModelRoutes, modelPayload, providerPayload, providerResourcePayload, providerResourceToForm, providerResourceUpdatePayload, providerUpdatePayload, routePayload, testProviderAvailability } from "./payloads";
 import { ModelNameCell, ModelRouteProviders, providerTypeOptions, StatusPill } from "../shared/ui";
 
@@ -133,15 +133,11 @@ export function providerResourceConfig(provider?: Provider): ResourceConfig<Prov
         title: "使用保存的 refresh token 续租账号访问 Token",
         visible: (item) => item.resource_type === "openai_subscription" && item.credential_summary?.has_refresh_token === "true",
         run: (ctx, item) => adminMutate(ctx, `/api/admin/provider-resources/${item.id}/refresh-token`, "POST", {}),
-        doneMessage: (item) => providerResourceActionMessage(tx("{name} Token 已续租"), { name: item.name }),
+        doneMessage: (item) => formatTranslationTemplate(tx("{name} Token 已续租"), { name: item.name }),
       },
     ],
     toForm: (item) => providerResourceToForm(item, provider?.options),
   };
-}
-
-function providerResourceActionMessage(template: string, values: Record<string, string>) {
-  return Object.entries(values).reduce((message, [key, value]) => message.split(`{${key}}`).join(value), template);
 }
 
 export function openAIAccountFieldVisible(values: Record<string, string>) {
