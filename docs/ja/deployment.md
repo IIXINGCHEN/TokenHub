@@ -427,7 +427,7 @@ SQLite は、プロジェクト、Key、Provider、ルート、ユーザー、�
 
 ## カタログファイル
 
-公開される管理対象イメージとネイティブアーカイブには、対応するバージョンの `data/model-catalog.yaml` と `data/provider-catalog.json` が含まれます。これらは Release の残りのファイルとともに `/opt/tokenhub/current/catalog/` で有効化されるため、バックエンドプログラムと両方のカタログが常に同じバージョンになります。Provider カタログは PublicProviderConf のデータをリポジトリへ取り込んで管理しており、TokenHub は実行時にリモートカタログを取得しません。
+公開される管理対象イメージとネイティブアーカイブには、対応するバージョンの `data/model-catalog.yaml` と `data/provider-catalog.json` が含まれます。これらは Release の残りのファイルとともに `/opt/tokenhub/current/catalog/` で有効化されるため、バックエンドプログラムと両方のカタログが常に同じバージョンになります。バックエンドの起動時は同梱されたローカル Provider カタログだけを読み込み、ネットワークに依存しません。管理者が Provider カタログを明示的に更新すると、`https://raw.githubusercontent.com/ThinkInAIXYZ/PublicProviderConf/dev/dist/all.json` から完全な `PublicProviderConf` カタログを取得します。レスポンスの取得に失敗した場合や内容が不完全な場合は、設定済みのローカル `provider-catalog.json` へフォールバックします。
 
 カスタムモデルカタログを使用する場合は、マウントするファイルを明示します。
 
@@ -439,7 +439,7 @@ SQLite は、プロジェクト、Key、Provider、ルート、ユーザー、�
 
 設定済みカタログファイルを更新した後は、バックエンドを再起動するか、**システム設定 → 基本設定** で **モデル参照カタログを同期** を実行します。どちらも参照メタデータを同期し、カスタム外部モデルを保持しますが、モデルは公開しません。
 
-`data/model-catalog.yaml` は追跡対象カタログの参照メタデータを提供します。ルートの許可リストではなく、モデルを公開するものでもありません。`data/provider-catalog.json` は Provider テンプレートと、Provider 設定時に選択できる上流モデルを提供します。選択項目の取り込みでは永続化された Provider モデルインベントリだけが作成されます。外部モデルと統一された顧客向け価格は Model Directory で個別に作成し、Routing Policies で取り込み済みの Provider モデルへマッピングします。`GET /v1/models` は有効かつ 1 つ以上の有効なルートを持つ外部モデルだけを返し、API Key のモデル許可リストが設定されている場合はさらに絞り込みます。カスタム Provider カタログを使うには、同じ `providers` 構造を持つローカル JSON ファイルを `TOKENHUB_PROVIDER_CATALOG_FILE` に指定します。
+`data/model-catalog.yaml` は追跡対象カタログの参照メタデータを提供します。ルートの許可リストではなく、モデルを公開するものでもありません。`data/provider-catalog.json` は Provider テンプレートと、Provider 設定時に選択できる上流モデルを提供します。選択項目の取り込みでは永続化された Provider モデルインベントリだけが作成されます。外部モデルと統一された顧客向け価格は Model Directory で個別に作成し、Routing Policies で取り込み済みの Provider モデルへマッピングします。`GET /v1/models` は有効かつ 1 つ以上の有効なルートを持つ外部モデルだけを返し、API Key のモデル許可リストが設定されている場合はさらに絞り込みます。起動時の読み込みと更新時のフォールバックにカスタム Provider カタログを使うには、同じ `providers` 構造を持つローカル JSON ファイルを `TOKENHUB_PROVIDER_CATALOG_FILE` に指定します。
 
 ### Kronk への接続
 
