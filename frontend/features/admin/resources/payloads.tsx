@@ -9,13 +9,13 @@ import { enumValueLabel, numberFromUnknown, numberOr, parseLooseValue, splitList
 import { defaultProviderClaudeCodeAttributionPolicy } from "../domain/provider-attribution";
 import { providerAnthropicAuthType } from "../domain/provider-custom-upstream";
 import { initialModelRoutes } from "../domain/provider-model-selection";
-import { modelMetadataWithDisplayName } from "../domain/model-display-name";
+import { modelMetadataPayload } from "../domain/model-display-name";
 import { defaultDisplayName } from "../domain/form-defaults";
-import { providerReasoningFormValues, providerReasoningOptions, providerReasoningOverrideFormValues } from "../domain/provider-reasoning";
+import { providerReasoningOptions, providerReasoningOverrideFormValues } from "../domain/provider-reasoning";
 import { providerHeadersFormValue, providerHeadersPayload } from "../domain/provider-headers";
 import { activeLanguage, tx } from "../i18n/runtime";
 import { handleApprovalOrJSON } from "./governance-config";
-import { projectQuotaFields, type ProjectQuotaValues } from "../views/crud-projects";
+import { projectQuotaFields, type ProjectQuotaValues } from "../domain/project-quota";
 
 export function providerPayload(values: Record<string, string>) {
   return {
@@ -209,8 +209,7 @@ export function modelPayload(values: Record<string, string>, existingMetadata?: 
   payload.supported_parameters = splitList(values.supported_parameters);
   payload.input_modalities = splitList(values.input_modalities);
   payload.output_modalities = splitList(values.output_modalities);
-  const metadata = modelMetadataWithDisplayName(existingMetadata, values.display_name ?? "");
-  if (Object.keys(metadata).length > 0) payload.metadata = metadata;
+  Object.assign(payload, modelMetadataPayload(existingMetadata, values.display_name ?? ""));
   const routes = initialModelRoutes(values.initial_provider_models);
   if (routes.length > 0) payload.routes = routes;
   return payload;

@@ -11,7 +11,7 @@ import { apiKeyConfig, projectConfig, projectMemberConfig } from "./project-key-
 import { modelConfig, providerConfig, routeConfig } from "./provider-model-config";
 import { routingPolicyConfig } from "./routing-policy-config";
 import { StatusPill } from "../shared/ui";
-import { identityProviderIconOptions, identityProviderInitialFormValues, identityProviderTemplateOptions } from "../shell/auth";
+import { identityProviderIconOptions, identityProviderInitialFormValues, identityProviderTemplateOptions } from "../shared/auth";
 
 let cachedResourceConfigs: Partial<Record<ViewKey, ResourceConfig<any>>> | undefined;
 

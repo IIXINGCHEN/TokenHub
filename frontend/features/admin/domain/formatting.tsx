@@ -3,7 +3,7 @@ import { modelCategory } from "./catalog";
 import { modelDisplayName } from "./model-display-name";
 import { codexImageCapableResources, findProvider, findProviderResource, isCodexSubscriptionImageModel, modelRoutesFor, stringifyForm, stringifyValue } from "./entities";
 import { guardrailBlockedDiagnostic, languageLocale, tx } from "../i18n/runtime";
-import { preferredModelCategories } from "../shared/ui";
+import { preferredModelCategories } from "./model-categories";
 
 export function initialView(): ViewKey {
   if (typeof window === "undefined") return "overview";

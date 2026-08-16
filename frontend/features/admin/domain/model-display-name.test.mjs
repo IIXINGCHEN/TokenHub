@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { importTypeScript } from "./typescript-test-loader.mjs";
 
-const { modelDirectorySubtitle, modelDisplayName, modelMetadataWithDisplayName } = await importTypeScript(new URL("./model-display-name.ts", import.meta.url));
+const { modelDirectorySubtitle, modelDisplayName, modelMetadataPayload, modelMetadataWithDisplayName } = await importTypeScript(new URL("./model-display-name.ts", import.meta.url));
 const { defaultDisplayName } = await importTypeScript(new URL("./form-defaults.ts", import.meta.url));
 const catalog = await readFile(new URL("../../../../data/model-catalog.yaml", import.meta.url), "utf8");
 const createModalSource = await readFile(new URL("../views/model-create-modal.tsx", import.meta.url), "utf8");
@@ -26,6 +26,11 @@ test("clearing a display name retains unrelated tracked metadata", () => {
   const metadata = modelMetadataWithDisplayName({ endpoints: catalogEndpoints, title: catalogTitle }, " ");
   assert.deepEqual(metadata, { endpoints: "chat/completions,anthropic" });
   assert.equal(modelDisplayName(metadata, "zai-org/glm-5.2"), "zai-org/glm-5.2");
+});
+
+test("clearing the only display name sends an explicit empty metadata map", () => {
+  assert.deepEqual(modelMetadataPayload({ title: catalogTitle }, " "), { metadata: {} });
+  assert.deepEqual(modelMetadataPayload(undefined, " "), {});
 });
 
 test("model creation and directory views expose the display name", () => {

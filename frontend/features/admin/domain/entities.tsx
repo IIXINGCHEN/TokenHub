@@ -4,7 +4,7 @@ import { modelCategory, modelCategoryLabel } from "./catalog";
 import { formatMoney, modelCategoryRank } from "./formatting";
 import { compactList, enumValueLabel, fieldKeyLabel, fieldValueLabel, providerTypeLabel, roleLabel, splitList } from "./labels";
 import { tx } from "../i18n/runtime";
-import { preferredModelCategories } from "../shared/ui";
+import { preferredModelCategories } from "./model-categories";
 
 export const codexSubscriptionBaseURL = "https://chatgpt.com/backend-api/codex";
 
