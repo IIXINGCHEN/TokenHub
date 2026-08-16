@@ -125,7 +125,7 @@ func TestAdminPasswordResetHashingDoesNotHoldGlobalStoreMutex(t *testing.T) {
 		t.Fatalf("password reset failed: %v", resetErr)
 	}
 	if operationBlocked {
-		operationErr = <-operationDone
+		<-operationDone
 		t.Fatal("password hashing held the global store mutex")
 	}
 	if operationErr != nil {
