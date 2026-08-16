@@ -309,72 +309,6 @@ func (s *GormStore) SelectRoute(modelName string) (RouteSelection, error) {
 	return routes[0], nil
 }
 
-func (s *GormStore) SelectRouteCandidates(modelName string) ([]RouteSelection, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	var routes []ModelRoute
-	if err := s.db.Where("model_name = ? AND status = ?", modelName, StatusActive).
-		Order("priority asc, weight desc, created_at asc").
-		Find(&routes).Error; err != nil {
-		return nil, err
-	}
-	now := time.Now().UTC()
-	selections := make([]RouteSelection, 0, len(routes))
-	for _, route := range routes {
-		var provider Provider
-		if err := s.db.First(&provider, "id = ?", route.ProviderID).Error; err != nil {
-			continue
-		}
-		if provider.Status != StatusActive || !provider.Healthy {
-			continue
-		}
-		if route.ProviderResourceID != "" {
-			var resource ProviderResource
-			if err := s.db.First(&resource, "id = ? AND provider_id = ?", route.ProviderResourceID, provider.ID).Error; err != nil {
-				continue
-			}
-			if resource.Status != StatusActive || !halfOpenEligible(resource, now) {
-				continue
-			}
-			selections = append(selections, s.routeSelection(provider, &resource, route))
-			continue
-		}
-
-		var resources []ProviderResource
-		// Unhealthy resources whose cooldown has lapsed are admitted as half-open
-		// candidates. Admission still gates them to a single trial (see
-		// CheckProviderResourceCapacity); this query only makes them reachable, which
-		// is what lets a parked resource ever be retried.
-		query := s.db.Where("provider_id = ? AND status = ? AND (healthy = ? OR cooldown_until <= ?)",
-			provider.ID, StatusActive, true, now)
-		if strings.TrimSpace(route.ResourceGroup) != "" {
-			query = query.Where("\"group\" = ?", strings.TrimSpace(route.ResourceGroup))
-		}
-		if err := query.Order("priority asc, weight desc, created_at asc").
-			Find(&resources).Error; err != nil {
-			return nil, err
-		}
-		if len(resources) == 0 {
-			selections = append(selections, s.routeSelection(provider, nil, route))
-			continue
-		}
-		for _, resource := range resources {
-			resourceRoute := route
-			resourceRoute.ProviderResourceID = resource.ID
-			if resource.Weight > 0 {
-				resourceRoute.Weight = resource.Weight
-			}
-			selections = append(selections, s.routeSelection(provider, &resource, resourceRoute))
-		}
-	}
-	s.attachRouteRuntimeStats(selections, now)
-	if len(selections) == 0 {
-		return nil, ErrProviderMissing
-	}
-	return selections, nil
-}
-
 type routeRuntimeStatsRow struct {
 	RouteID            string
 	ProviderResourceID string
@@ -383,7 +317,7 @@ type routeRuntimeStatsRow struct {
 	LatencyMS          float64
 }
 
-func (s *GormStore) attachRouteRuntimeStats(selections []RouteSelection, now time.Time) {
+func (s *GormStore) attachRouteRuntimeStats(db *gorm.DB, selections []RouteSelection, now time.Time) error {
 	routeIDs := make([]string, 0, len(selections))
 	seen := map[string]bool{}
 	for _, selection := range selections {
@@ -394,11 +328,21 @@ func (s *GormStore) attachRouteRuntimeStats(selections []RouteSelection, now tim
 		routeIDs = append(routeIDs, selection.Route.ID)
 	}
 	if len(routeIDs) == 0 {
-		return
+		return nil
+	}
+
+	const (
+		createSavepoint   = "SAVEPOINT route_candidate_runtime_stats"
+		rollbackSavepoint = "ROLLBACK TO SAVEPOINT route_candidate_runtime_stats"
+	)
+	if s.dbDriver == "postgres" {
+		if err := db.Exec(createSavepoint).Error; err != nil {
+			return fmt.Errorf("create adaptive routing stats savepoint: %w", err)
+		}
 	}
 
 	var rows []routeRuntimeStatsRow
-	err := s.db.Model(&RouteAttemptLog{}).
+	err := db.Model(&RouteAttemptLog{}).
 		Select(`route_id, provider_resource_id, COUNT(*) AS samples,
 			SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN 1 ELSE 0 END) AS successes,
 			COALESCE(AVG(CASE WHEN status_code >= 200 AND status_code < 400 THEN latency_ms ELSE NULL END), 0) AS latency_ms`).
@@ -406,8 +350,13 @@ func (s *GormStore) attachRouteRuntimeStats(selections []RouteSelection, now tim
 		Group("route_id, provider_resource_id").
 		Scan(&rows).Error
 	if err != nil {
+		if s.dbDriver == "postgres" {
+			if rollbackErr := db.Exec(rollbackSavepoint).Error; rollbackErr != nil {
+				return fmt.Errorf("load adaptive routing observations: %v; rollback savepoint: %w", err, rollbackErr)
+			}
+		}
 		log.Printf("[tokenhub] failed to load adaptive routing observations: %v", err)
-		return
+		return nil
 	}
 	stats := make(map[string]RouteRuntimeStats, len(rows))
 	for _, row := range rows {
@@ -425,6 +374,7 @@ func (s *GormStore) attachRouteRuntimeStats(selections []RouteSelection, now tim
 		selection := &selections[index]
 		selection.Runtime = stats[routeRuntimeStatsKey(selection.Route.ID, routeResourceID(*selection))]
 	}
+	return nil
 }
 
 func routeRuntimeStatsKey(routeID string, resourceID string) string {
