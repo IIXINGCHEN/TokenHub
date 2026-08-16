@@ -325,6 +325,10 @@ Token 用量与成本只挂在 generation span 上，绝不挂在根 span 上。
 
 请使用 TokenHub 后端公开地址和回调路径 `/api/admin/auth/oauth/callback`。Callback URL 可留空，让系统按后端请求 Host 自动生成；如果显式填写，完整 URL 必须与身份平台中登记的回调地址完全一致。
 
+管理员 OAuth 登录完成时，重定向 URL 不会携带管理员会话 Token。TokenHub 只向控制台返回短时、单次使用的 code；控制台完成一次交换后，仅在当前浏览器标签页保留得到的会话。刷新该标签页仍会保持登录；关闭标签页后需要重新登录。
+
+身份源 Client Secret 在管理响应中始终以掩码展示。只有平台管理员可以新增、修改或删除身份源；安全管理员只能读取已掩码的配置。
+
 | 平台 | 应用侧必填配置 | TokenHub 处理方式 |
 | --- | --- | --- |
 | 钉钉 | 创建网页应用，开启用户授权，登记回调地址，复制 App Key 和 App Secret | 使用钉钉 v1.0 JSON Token API 和专用的用户 Token 请求头。如授权资料不包含邮箱，TokenHub 会基于 `unionId` 生成稳定的内部邮箱。 |

@@ -340,11 +340,11 @@ Options: `--rebuild`, `--reset` to drop the local database, `--backend-port N`, 
 | `TOKENHUB_DEPLOYMENT_TYPE` | build-time value | Overrides the deployment type compiled into the binary: `source`, `container` or `native`. The Compose files set `container` |
 | `TOKENHUB_MANAGED_UPDATES` | `false` | Allows a container deployment to perform online update and rollback. A native deployment always allows it |
 | `TOKENHUB_INSTALL_ROOT` | `/opt/tokenhub` | Managed Release installation root used for online update and rollback |
-| `TOKENHUB_TRUSTED_PROXY_CIDRS` | empty | Comma-separated proxy IPs or CIDRs allowed to supply `X-Forwarded-For` |
+| `TOKENHUB_TRUSTED_PROXY_CIDRS` | empty | Comma-separated proxy IPs or CIDRs allowed to supply `X-Forwarded-For`, `X-Forwarded-Host`, and `X-Forwarded-Proto`. Trusted proxies must overwrite these headers rather than pass through client values |
 | `TOKENHUB_PROVIDER_UPSTREAM_ALLOWED_CIDRS` | empty | Comma-separated private CIDRs (RFC1918/ULA only) whose literal IPs may be used as custom provider base URLs, for in-house model servers. These explicitly allowed private literals may use HTTP; public provider URLs must use HTTPS. Hostnames resolving to private addresses and redirect targets stay rejected |
 | `TOKENHUB_PROVIDER_UPSTREAM_NAT64_PREFIX` | empty | Optional RFC 6052 DNS64/NAT64 prefix used to classify its embedded IPv4 targets. Supported prefix lengths: 32, 40, 48, 56, 64, and 96. Configure this when using a network-specific prefix such as `64:ff9b:1::/48`; the well-known `64:ff9b::/96` prefix works automatically |
 | `TOKENHUB_PROVIDER_UPSTREAM_ALLOW_LOOPBACK` | `false` | Explicitly allow provider base URLs, including HTTP URLs, on `localhost`, `127.0.0.1`, or `::1` for local Ollama/LM Studio development. Public provider URLs must use HTTPS. Keep disabled in production |
-| `TOKENHUB_CORS_ALLOWED_ORIGINS` | public URL | Comma-separated browser origins allowed to call the backend |
+| `TOKENHUB_CORS_ALLOWED_ORIGINS` | public URL | Comma-separated exact browser origins allowed to call the backend; when set, the same origins are the exact allowlist for OAuth console returns. Each entry must contain only the scheme, host, and optional port, with no path |
 | `TOKENHUB_ADMIN_TOKEN` | `change-me-tokenhub-admin-token` | Bootstrap admin token for Admin API access |
 | `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD` | `change-me-tokenhub-admin-password` | Password for the initial `admin` user; must be changed before production startup |
 | `TOKENHUB_SECRET_KEY` | `change-me-tokenhub-secret-key` | Backend secret key |
