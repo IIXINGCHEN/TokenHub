@@ -44,6 +44,7 @@ type Server struct {
 	responseWorkerStop  sync.Once
 	responseWorkerGroup sync.WaitGroup
 	responseInstanceID  string
+	stopHeartbeat       func()
 	versions            *versionService
 	guardrailEngine     *guardrails.Engine
 	upstreamClient      *http.Client
@@ -173,6 +174,9 @@ func NewWithConfig(store Store, config Config) *Server {
 	} else if len(jobs) > 0 {
 		log.Printf("[tokenhub] marked %d unfinished image jobs as failed after startup", len(jobs))
 	}
+	if gormStore, ok := store.(*GormStore); ok {
+		s.stopHeartbeat = gormStore.StartInstanceHeartbeat(config.AppVersion)
+	}
 	backfillProviderModelsFromRoutes(store)
 	backfillExternalModelRolesFromRoutes(store)
 	backfillCodexImageRoutes(store)
@@ -215,6 +219,21 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.Ping(ctx); err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "unavailable", "service": "tokenhub-backend"})
 		return
+	}
+	// Readiness reflects the database evolution state: a dirty or unverifiable
+	// migration ledger and incomplete blocking backfills keep the instance out
+	// of rotation; pending online backfills do not (ADR 0007).
+	if evolution, ok := s.store.(interface {
+		DatabaseEvolutionStatus(ctx context.Context) DatabaseEvolutionStatus
+	}); ok {
+		if state := evolution.DatabaseEvolutionStatus(ctx); !state.Ready {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+				"status":  "unavailable",
+				"service": "tokenhub-backend",
+				"reason":  state.Reason,
+			})
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "service": "tokenhub-backend"})
 }
