@@ -209,8 +209,9 @@ func (s *Server) handleAdminOAuthCallback(w http.ResponseWriter, r *http.Request
 	}
 	token, err := s.exchangeOAuthCode(r.Context(), provider, code, flow.RedirectURI)
 	if err != nil {
-		log.Printf("oauth token exchange failed provider_id=%s redirect_uri=%s error=%v", provider.ID, flow.RedirectURI, err)
-		http.Redirect(w, r, oauthRedirectWithError(flow.ReturnURL, oauthErrorCode("token_exchange_failed", err)), http.StatusFound)
+		httpErr := AsHTTPError(err)
+		log.Printf("oauth token exchange failed provider_id=%s redirect_uri=%s error_code=%s status=%d", provider.ID, flow.RedirectURI, httpErr.Code, httpErr.Status)
+		http.Redirect(w, r, oauthRedirectWithError(flow.ReturnURL, "token_exchange_failed"), http.StatusFound)
 		return
 	}
 	claims, err := s.fetchOAuthUserInfo(r.Context(), provider, token.AccessToken, code)
@@ -972,22 +973,6 @@ func oauthRedirectWithError(returnURL string, code string) string {
 	values := url.Values{}
 	values.Set("oauth_error", code)
 	return oauthRedirectWithFragment(returnURL, values)
-}
-
-func oauthErrorCode(code string, err error) string {
-	if err == nil {
-		return code
-	}
-	detail := strings.TrimSpace(err.Error())
-	if detail == "" {
-		return code
-	}
-	detail = strings.ReplaceAll(detail, "\n", " ")
-	detail = strings.ReplaceAll(detail, "\r", " ")
-	if len(detail) > 160 {
-		detail = detail[:160]
-	}
-	return code + ": " + detail
 }
 
 func sanitizeOAuthErrorDetail(body []byte) string {

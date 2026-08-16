@@ -302,6 +302,62 @@ func TestAdminOAuthStateCookieIsBrowserBoundAndSingleUse(t *testing.T) {
 	}
 }
 
+func TestAdminOAuthTokenExchangeErrorsDoNotLeakIntoRedirects(t *testing.T) {
+	const authorizationCode = "sensitive-authorization-code"
+	providerAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"invalid_grant","error_description":"code=` + authorizationCode + `&client_secret=server-echo-secret"}`))
+	}))
+	t.Cleanup(providerAPI.Close)
+
+	store := NewMemoryStore()
+	store.CreateResource("identity-providers", AdminResource{
+		ID: "idp_error_redaction", Name: "Error Redaction IdP", Status: StatusActive,
+		Fields: map[string]any{
+			"provider_type": "oauth2", "client_id": "client", "authorize_url": "https://idp.example/authorize",
+			"token_url": providerAPI.URL, "userinfo_url": "https://idp.example/userinfo",
+			"redirect_uri": "https://tokenhub.example/api/admin/auth/oauth/callback",
+		},
+	})
+	app := NewWithConfig(store, Config{PublicBaseURL: "https://tokenhub.example", SecretKey: "test-secret"}).Handler()
+	startRequest := httptest.NewRequest(http.MethodGet, adminOAuthStartURLForTest(t, "https://tokenhub.example/api/admin/auth/oauth/start?id=idp_error_redaction"), nil)
+	startResponse := httptest.NewRecorder()
+	app.ServeHTTP(startResponse, startRequest)
+	if startResponse.Code != http.StatusFound {
+		t.Fatalf("OAuth start failed: status=%d body=%s", startResponse.Code, startResponse.Body.String())
+	}
+	stateCookie := requireResponseCookieWithPrefix(t, startResponse, adminOAuthStateCookiePrefix)
+	authorizeURL, err := url.Parse(startResponse.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	callbackURL := "https://tokenhub.example/api/admin/auth/oauth/callback?code=" + url.QueryEscape(authorizationCode) + "&state=" + url.QueryEscape(authorizeURL.Query().Get("state"))
+	callbackRequest := httptest.NewRequest(http.MethodGet, callbackURL, nil)
+	callbackRequest.AddCookie(stateCookie)
+	callbackResponse := httptest.NewRecorder()
+	app.ServeHTTP(callbackResponse, callbackRequest)
+	if callbackResponse.Code != http.StatusFound {
+		t.Fatalf("OAuth callback failed: status=%d body=%s", callbackResponse.Code, callbackResponse.Body.String())
+	}
+	location, err := url.Parse(callbackResponse.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fragment, err := url.ParseQuery(location.Fragment)
+	if err != nil || fragment.Get("oauth_error") != "token_exchange_failed" {
+		t.Fatalf("OAuth redirect error = %q, err=%v", location.Fragment, err)
+	}
+	if location.Query().Has("oauth_error") {
+		t.Fatalf("OAuth error leaked into query: %s", location.String())
+	}
+	for _, secret := range []string{authorizationCode, "server-echo-secret", "invalid_grant", "error_description"} {
+		if strings.Contains(location.String(), secret) {
+			t.Fatalf("OAuth redirect leaked token endpoint detail %q: %s", secret, location.String())
+		}
+	}
+}
+
 func TestAdminOAuthExchangeIsPKCEBoundAndSingleUse(t *testing.T) {
 	store := NewMemoryStore()
 	user, err := store.CreateAdminUser(AdminUser{
