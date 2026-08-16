@@ -95,7 +95,7 @@ func TestDingTalkIdentityProviderLoginProtocol(t *testing.T) {
 	}
 	store.CreateResource("identity-providers", provider)
 	app := NewWithConfig(store, Config{AdminToken: "dev_admin_token", SecretKey: "test-secret"}).Handler()
-	startReq := httptest.NewRequest(http.MethodGet, "/api/admin/auth/oauth/start?id=idp_dingtalk&return_url=http%3A%2F%2Flocalhost%3A3000%2Foverview", nil)
+	startReq := httptest.NewRequest(http.MethodGet, adminOAuthStartURLForTest(t, "/api/admin/auth/oauth/start?id=idp_dingtalk&return_url=http%3A%2F%2Flocalhost%3A3000%2Foverview"), nil)
 	startReq.Host = "localhost:8080"
 	startResp := httptest.NewRecorder()
 	app.ServeHTTP(startResp, startReq)
@@ -108,9 +108,11 @@ func TestDingTalkIdentityProviderLoginProtocol(t *testing.T) {
 	}
 	callbackReq := httptest.NewRequest(http.MethodGet, "/api/admin/auth/oauth/callback?authCode=ding-code&state="+url.QueryEscape(startLocation.Query().Get("state")), nil)
 	callbackReq.Host = "localhost:8080"
+	callbackReq.AddCookie(requireResponseCookieWithPrefix(t, startResp, adminOAuthStateCookiePrefix))
 	callbackResp := httptest.NewRecorder()
 	app.ServeHTTP(callbackResp, callbackReq)
-	if callbackResp.Code != http.StatusFound || !strings.Contains(callbackResp.Header().Get("location"), "oauth_token=") {
+	callbackLocation, parseErr := url.Parse(callbackResp.Header().Get("location"))
+	if callbackResp.Code != http.StatusFound || parseErr != nil || callbackLocation.Query().Has("oauth_code") || !strings.Contains(callbackLocation.Fragment, "oauth_code=") {
 		t.Fatalf("unexpected callback response: status=%d location=%s", callbackResp.Code, callbackResp.Header().Get("location"))
 	}
 	var user AdminUser

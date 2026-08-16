@@ -243,6 +243,10 @@ type Store interface {
 	CreateAdminSession(userID string, ttl time.Duration) (AdminUser, AdminSession, error)
 	ValidateAdminSession(token string) (AdminUser, bool)
 	RevokeAdminSession(token string)
+	SaveAdminOAuthFlow(flow adminOAuthFlow) error
+	ConsumeAdminOAuthFlow(state string, browserNonce string) (adminOAuthFlow, bool, error)
+	SaveAdminOAuthExchange(exchange adminOAuthExchange) error
+	ConsumeAdminOAuthExchange(code string, codeVerifier string) (adminOAuthExchange, bool, error)
 	CreateSQLiteBackup(createdBy string, expireDays int) (SQLiteBackupRecord, error)
 	ListSQLiteBackups() []SQLiteBackupRecord
 	GetSQLiteBackup(id string) (SQLiteBackupRecord, error)

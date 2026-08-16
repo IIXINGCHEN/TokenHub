@@ -57,7 +57,7 @@ func canAdmin(role string, resource string, method string) bool {
 		if write {
 			return resource == "alert" || resource == "security" || resource == "audit" || resource == "admin_audit" || resource == "approval"
 		}
-		return resource == "overview" || resource == "usage" || resource == "audit" || resource == "admin_audit" || resource == "alert" || resource == "security" || resource == "approval"
+		return resource == "overview" || resource == "usage" || resource == "audit" || resource == "admin_audit" || resource == "alert" || resource == "security" || resource == "identity_provider" || resource == "approval"
 	case "team_leader":
 		if resource == "backup" {
 			return false
@@ -1248,7 +1248,7 @@ func adminResourcePermission(path string) string {
 		return "security"
 	}
 	if strings.Contains(path, "/identity-providers") {
-		return "security"
+		return "identity_provider"
 	}
 	if strings.Contains(path, "/alert-rules") {
 		return "alert"

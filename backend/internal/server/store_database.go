@@ -253,6 +253,8 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 			&ApprovalRequest{},
 			&AdminUser{},
 			&AdminSession{},
+			&adminOAuthFlowRecord{},
+			&adminOAuthExchangeRecord{},
 			&AdminPasswordResetToken{},
 			&SQLiteBackupRecord{},
 		); err != nil {
