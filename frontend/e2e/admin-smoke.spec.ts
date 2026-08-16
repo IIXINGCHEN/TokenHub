@@ -18,13 +18,13 @@ function sidebar(page: Page) {
   return page.getByRole("complementary").first();
 }
 
-test("管理员可以登录并退出控制台", async ({ page }) => {
+test("admin can sign in and sign out of the console", async ({ page }) => {
   await login(page);
   await page.getByTitle("退出登录").click();
   await expect(page.getByRole("heading", { name: "登录控制台" })).toBeVisible();
 });
 
-test("管理员可以验证并创建自定义 Provider", async ({ page }) => {
+test("admin can validate and create a custom Provider", async ({ page }) => {
   await login(page);
   await sidebar(page).getByRole("button", { name: "Provider 渠道", exact: true }).click();
   await expect(page).toHaveURL(/\/providers$/);
@@ -47,7 +47,7 @@ test("管理员可以验证并创建自定义 Provider", async ({ page }) => {
   await expect(page.getByText("E2E Fake Provider", { exact: true }).first()).toBeVisible();
 });
 
-test("管理员可以发放一次性 API Key", async ({ page }) => {
+test("admin can issue a one-time API Key", async ({ page }) => {
   await login(page);
   await sidebar(page).getByRole("button", { name: "Key 管理", exact: true }).click();
   await expect(page).toHaveURL(/\/api-keys$/);

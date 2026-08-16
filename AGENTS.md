@@ -11,6 +11,12 @@ TokenHub is a private enterprise AI gateway with a Go backend, a Next.js admin c
 - `deploy/`: Docker Compose deployment and environment template.
 - `docs/`: English, Simplified Chinese, and Japanese documentation.
 
+## Repository source language
+
+- Use English for source-code identifiers, code comments, test suite and test case titles, developer-facing fixtures, logs, and configuration descriptions.
+- Localized UI copy is the exception: keep Simplified Chinese as the canonical literal passed to `tx("...")`, with matching English and Japanese catalog entries.
+- Tests may use localized selectors or assertions when they intentionally exercise translated UI, but their suite names, case titles, and diagnostics must remain in English.
+
 ## Development commands
 
 Run backend checks from `backend/`:
