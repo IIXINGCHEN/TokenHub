@@ -223,6 +223,7 @@ type Store interface {
 	CreateRoutingPolicy(resource AdminResource) (AdminResource, error)
 	ListResources(kind string) []AdminResource
 	ListResourcesChecked(kind string) ([]AdminResource, error)
+	ListResourcesContext(ctx context.Context, kind string) ([]AdminResource, error)
 	UpdateResource(kind string, id string, patch AdminResource) (AdminResource, error)
 	DeleteResource(kind string, id string) error
 	DeleteTeam(id string) error
@@ -255,6 +256,8 @@ type Store interface {
 	RefreshProviderResourceCredentials(ctx context.Context, resourceID string, force bool) (ProviderResourceCredentials, error)
 	GetAdapterSessionBinding(ctx context.Context, adapterType string, providerID string, affinityKeyHash string) (AdapterSessionBinding, bool, error)
 	CommitAdapterSessionBinding(ctx context.Context, binding AdapterSessionBinding, expectedGeneration int64) (AdapterSessionBinding, bool, error)
+	DeleteRequestPayloadLogsBefore(ctx context.Context, cutoff time.Time, batchSize int) (int64, error)
+	RunClusterTask(ctx context.Context, name string, revision int64, fn func(context.Context) error) error
 	RunClusterOperation(ctx context.Context, name string, fn func(context.Context) error) error
 	SaveProviderAccountOAuthSession(session providerAccountOAuthSession) error
 	GetProviderAccountOAuthSessionByState(state string) (providerAccountOAuthSession, bool, error)

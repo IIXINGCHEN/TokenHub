@@ -20,6 +20,7 @@ func (s *Server) StartBillingScheduler() {
 	s.billing.StartScheduler(30 * time.Second)
 	s.reconciliation.StartScheduler(30 * time.Second)
 	s.credentialRefresh.StartScheduler(providerCredentialRefreshInterval)
+	s.payloadRetention.StartScheduler(requestPayloadRetentionInterval)
 }
 
 func (s *Server) handleAdminBillingConnectors(w http.ResponseWriter, r *http.Request) {

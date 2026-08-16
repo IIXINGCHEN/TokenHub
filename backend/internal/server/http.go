@@ -24,6 +24,7 @@ type Server struct {
 	billing             *BillingService
 	reconciliation      *ReconciliationService
 	credentialRefresh   *ProviderCredentialRefreshService
+	payloadRetention    *requestPayloadRetentionService
 	mux                 *http.ServeMux
 	config              Config
 	metrics             *GatewayMetrics
@@ -148,6 +149,7 @@ func NewWithConfig(store Store, config Config) *Server {
 		billing:            newBillingService(store),
 		reconciliation:     newReconciliationService(store),
 		credentialRefresh:  newProviderCredentialRefreshService(store),
+		payloadRetention:   newRequestPayloadRetentionService(store),
 		mux:                http.NewServeMux(),
 		config:             config,
 		imageStorageDir:    config.ImageStorageDir,
