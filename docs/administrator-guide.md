@@ -328,7 +328,9 @@ Use the public TokenHub backend URL with the callback path `/api/admin/auth/oaut
 
 Completing an administrator OAuth login never puts the administrator session token in a redirect URL. TokenHub returns a short-lived, single-use code to the console, which exchanges it once and keeps the resulting session only in the current browser tab. Reloading that tab preserves the session; closing it requires signing in again.
 
-Identity-source client secrets are masked in management responses. Only platform administrators can create, update, or delete identity sources; security administrators have read-only access to the masked configuration.
+Identity-source client secrets and notification-channel credentials, including webhook URLs, SMTP passwords, bot tokens, signing secrets, and access tokens, are masked in management API responses and CSV exports and redacted from audit snapshots. Alert-delivery output never exposes a complete credential-bearing URL: URL targets retain only the scheme and host, while paths, queries, and matching credentials in error text are masked. This protection also applies to alert-delivery CSV exports and delivery audit snapshots.
+
+When updating an identity source or notification channel, an empty string, the mask `••••••••`, or `[redacted]` means "keep the stored secret." Send JSON `null` to clear a secret explicitly. Clearing a notification-channel secret also removes related aliases, such as `url` / `webhook_url`, `smtp_password` / `password`, and the channel-specific token or secret aliases. Only platform administrators can create, update, or delete identity sources; security administrators have read-only access to the masked configuration.
 
 | Provider | Required application configuration | TokenHub behavior |
 | --- | --- | --- |
