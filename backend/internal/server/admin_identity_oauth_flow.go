@@ -1,11 +1,15 @@
 package server
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,15 +18,31 @@ import (
 )
 
 const (
-	adminOAuthFlowTTL           = 10 * time.Minute
-	adminOAuthExchangeTTL       = time.Minute
-	adminOAuthStateCookiePrefix = "tokenhub_admin_oauth_state_"
-	adminOAuthStateCookiePath   = "/api/admin/auth/oauth/callback"
+	adminOAuthFlowTTL                          = 10 * time.Minute
+	adminOAuthExchangeTTL                      = time.Minute
+	adminOAuthFlowsPerClientScopeProviderLimit = 16
+	adminOAuthFlowsPerClientScopeLimit         = 32
+	adminOAuthFlowsGlobalLimit                 = 4096
+	adminOAuthStateCookiePrefix                = "tokenhub_admin_oauth_state_"
+	adminOAuthStateCookiePath                  = "/api/admin/auth/oauth/callback"
 )
+
+type adminOAuthFlowLimits struct {
+	ClientScopeProvider int64
+	ClientScope         int64
+	Global              int64
+}
+
+var defaultAdminOAuthFlowLimits = adminOAuthFlowLimits{
+	ClientScopeProvider: adminOAuthFlowsPerClientScopeProviderLimit,
+	ClientScope:         adminOAuthFlowsPerClientScopeLimit,
+	Global:              adminOAuthFlowsGlobalLimit,
+}
 
 type adminOAuthFlow struct {
 	State         string
 	BrowserNonce  string
+	Source        string
 	ProviderID    string
 	ReturnURL     string
 	RedirectURI   string
@@ -35,13 +55,14 @@ type adminOAuthFlowRecord struct {
 	ID               string `gorm:"primaryKey"`
 	StateHash        string `gorm:"uniqueIndex"`
 	BrowserNonceHash string
-	ProviderID       string
+	ClientScopeHash  string `gorm:"index:idx_admin_oauth_flow_scope_expiry,priority:1;index:idx_admin_oauth_flow_scope_provider_expiry,priority:1"`
+	ProviderID       string `gorm:"index:idx_admin_oauth_flow_scope_provider_expiry,priority:2"`
 	ReturnURL        string
 	RedirectURI      string
 	CodeChallenge    string
 	CookieSecure     bool
 	CreatedAt        time.Time
-	ExpiresAt        time.Time `gorm:"index"`
+	ExpiresAt        time.Time `gorm:"index;index:idx_admin_oauth_flow_scope_expiry,priority:2;index:idx_admin_oauth_flow_scope_provider_expiry,priority:3"`
 }
 
 type adminOAuthExchange struct {
@@ -62,9 +83,21 @@ type adminOAuthExchangeRecord struct {
 
 func (s *GormStore) SaveAdminOAuthFlow(flow adminOAuthFlow) error {
 	if strings.TrimSpace(flow.State) == "" || strings.TrimSpace(flow.BrowserNonce) == "" ||
+		strings.TrimSpace(flow.Source) == "" ||
 		strings.TrimSpace(flow.ProviderID) == "" || strings.TrimSpace(flow.ReturnURL) == "" ||
 		strings.TrimSpace(flow.RedirectURI) == "" || !validAdminOAuthCodeChallenge(flow.CodeChallenge) {
 		return fmt.Errorf("admin OAuth flow is incomplete")
+	}
+	return s.saveAdminOAuthFlow(flow, defaultAdminOAuthFlowLimits)
+}
+
+func (s *GormStore) saveAdminOAuthFlow(flow adminOAuthFlow, limits adminOAuthFlowLimits) error {
+	if limits.ClientScopeProvider <= 0 || limits.ClientScope <= 0 || limits.Global <= 0 {
+		return fmt.Errorf("admin OAuth flow limits must be positive")
+	}
+	clientScopeHash, err := s.adminOAuthClientScopeHash(flow.Source)
+	if err != nil {
+		return err
 	}
 	now := time.Now().UTC()
 	if flow.CreatedAt.IsZero() {
@@ -74,6 +107,7 @@ func (s *GormStore) SaveAdminOAuthFlow(flow adminOAuthFlow) error {
 		ID:               NewID("oauth_flow"),
 		StateHash:        HashSecret(flow.State),
 		BrowserNonceHash: HashSecret(flow.BrowserNonce),
+		ClientScopeHash:  clientScopeHash,
 		ProviderID:       flow.ProviderID,
 		ReturnURL:        flow.ReturnURL,
 		RedirectURI:      flow.RedirectURI,
@@ -82,8 +116,102 @@ func (s *GormStore) SaveAdminOAuthFlow(flow adminOAuthFlow) error {
 		CreatedAt:        flow.CreatedAt,
 		ExpiresAt:        flow.CreatedAt.Add(adminOAuthFlowTTL),
 	}
-	_ = s.db.Where("expires_at <= ?", now).Delete(&adminOAuthFlowRecord{}).Error
-	return s.db.Create(&record).Error
+	var admissionErr error
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		if err := s.lockScopeForUpdate(tx, "admin_oauth_flow", "capacity"); err != nil {
+			return err
+		}
+		databaseNow, err := s.databaseNow(tx)
+		if err != nil {
+			return err
+		}
+		if err := tx.Where("expires_at <= ?", databaseNow).Delete(&adminOAuthFlowRecord{}).Error; err != nil {
+			return err
+		}
+		checks := []struct {
+			limit int64
+			where string
+			args  []any
+		}{
+			{limits.ClientScopeProvider, "client_scope_hash = ? AND provider_id = ? AND expires_at > ?", []any{record.ClientScopeHash, record.ProviderID, databaseNow}},
+			{limits.ClientScope, "client_scope_hash = ? AND expires_at > ?", []any{record.ClientScopeHash, databaseNow}},
+			{limits.Global, "expires_at > ?", []any{databaseNow}},
+		}
+		var retryAt time.Time
+		for _, check := range checks {
+			limited, availableAt, err := adminOAuthFlowLimitReached(tx, check.limit, check.where, check.args...)
+			if err != nil {
+				return err
+			}
+			if limited && availableAt.After(retryAt) {
+				retryAt = availableAt
+			}
+		}
+		if !retryAt.IsZero() {
+			admissionErr = adminOAuthFlowLimitError(databaseNow, retryAt)
+			return nil
+		}
+		return tx.Create(&record).Error
+	})
+	if err != nil {
+		return err
+	}
+	return admissionErr
+}
+
+func (s *GormStore) adminOAuthClientScopeHash(rawIP string) (string, error) {
+	address, err := netip.ParseAddr(strings.TrimSpace(rawIP))
+	if err != nil {
+		return "", fmt.Errorf("admin OAuth flow source is invalid")
+	}
+	address = address.Unmap().WithZone("")
+	prefixBits := 64
+	if address.Is4() {
+		prefixBits = 24
+	}
+	scope := netip.PrefixFrom(address, prefixBits).Masked().String()
+	key := strings.TrimSpace(s.secretKey)
+	if key == "" {
+		key = "tokenhub-admin-oauth-client-scope-development"
+	}
+	mac := hmac.New(sha256.New, []byte(key))
+	_, _ = mac.Write([]byte("tokenhub-admin-oauth-client-scope-v1\x00"))
+	_, _ = mac.Write([]byte(scope))
+	return hex.EncodeToString(mac.Sum(nil)), nil
+}
+
+func adminOAuthFlowLimitReached(tx *gorm.DB, limit int64, where string, args ...any) (bool, time.Time, error) {
+	query := tx.Model(&adminOAuthFlowRecord{}).Where(where, args...)
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return false, time.Time{}, err
+	}
+	if count < limit {
+		return false, time.Time{}, nil
+	}
+	var earliest adminOAuthFlowRecord
+	if err := tx.Model(&adminOAuthFlowRecord{}).
+		Select("expires_at").
+		Where(where, args...).
+		Order("expires_at ASC").
+		Take(&earliest).Error; err != nil {
+		return false, time.Time{}, err
+	}
+	return true, earliest.ExpiresAt, nil
+}
+
+func adminOAuthFlowLimitError(now time.Time, retryAt time.Time) error {
+	retryAfter := retryAt.Sub(now)
+	if retryAfter < time.Second {
+		retryAfter = time.Second
+	}
+	if retryAfter > adminOAuthFlowTTL {
+		retryAfter = adminOAuthFlowTTL
+	}
+	seconds := int((retryAfter + time.Second - 1) / time.Second)
+	err := NewHTTPError(http.StatusTooManyRequests, "oauth_start_rate_limited", "Too many pending OAuth sign-ins")
+	err.Headers = map[string]string{"Retry-After": strconv.Itoa(seconds)}
+	return err
 }
 
 func (s *GormStore) ConsumeAdminOAuthFlow(state string, browserNonce string) (adminOAuthFlow, bool, error) {

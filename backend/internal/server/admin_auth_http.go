@@ -159,6 +159,7 @@ func (s *Server) handleAdminOAuthStart(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.SaveAdminOAuthFlow(adminOAuthFlow{
 		State:         state,
 		BrowserNonce:  browserNonce,
+		Source:        s.clientIP(r),
 		ProviderID:    provider.ID,
 		ReturnURL:     returnURL,
 		RedirectURI:   redirectURI,

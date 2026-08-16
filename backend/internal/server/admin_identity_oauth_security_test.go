@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -493,8 +494,15 @@ func TestAdminOAuthFlowPersistsAcrossInstances(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, store := range []*GormStore{storeA, storeB} {
+		sqlDB, dbErr := store.db.DB()
+		if dbErr != nil {
+			t.Fatal(dbErr)
+		}
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	flow := adminOAuthFlow{
-		State: "cross-instance-state", BrowserNonce: "cross-instance-browser", ProviderID: "idp_shared",
+		State: "cross-instance-state", BrowserNonce: "cross-instance-browser", Source: "198.51.100.10", ProviderID: "idp_shared",
 		ReturnURL: "https://tokenhub.example/overview", RedirectURI: "https://tokenhub.example/api/admin/auth/oauth/callback",
 		CodeChallenge: testAdminOAuthCodeChallenge(t),
 	}
@@ -514,6 +522,163 @@ func TestAdminOAuthFlowPersistsAcrossInstances(t *testing.T) {
 	}
 	if consumed, ok, err := storeB.ConsumeAdminOAuthExchange(exchange.Code, testAdminOAuthCodeVerifier); err != nil || !ok || consumed.UserID != exchange.UserID {
 		t.Fatalf("second instance did not consume OAuth exchange: exchange=%+v ok=%v err=%v", consumed, ok, err)
+	}
+}
+
+func TestAdminOAuthStartBoundsPendingFlowsPerSourceAndProvider(t *testing.T) {
+	store := NewMemoryStore()
+	store.CreateResource("identity-providers", AdminResource{
+		ID: "idp_flow_limit", Name: "Flow Limit IdP", Status: StatusActive,
+		Fields: map[string]any{
+			"provider_type": "oauth2", "client_id": "client", "authorize_url": "https://idp.example/authorize",
+			"token_url": "https://idp.example/token", "userinfo_url": "https://idp.example/userinfo",
+			"redirect_uri": "https://tokenhub.example/api/admin/auth/oauth/callback",
+		},
+	})
+	server := NewWithConfig(store, Config{PublicBaseURL: "https://tokenhub.example", SecretKey: "test-secret"})
+	t.Cleanup(func() { _ = server.Shutdown(t.Context()) })
+	app := server.Handler()
+	startURL := adminOAuthStartURLForTest(t, "https://tokenhub.example/api/admin/auth/oauth/start?id=idp_flow_limit")
+
+	for index := 0; index < adminOAuthFlowsPerClientScopeProviderLimit; index++ {
+		request := httptest.NewRequest(http.MethodGet, startURL, nil)
+		request.RemoteAddr = "198.51.100.20:4321"
+		request.Header.Set("X-Forwarded-For", fmt.Sprintf("203.0.113.%d", index+1))
+		response := httptest.NewRecorder()
+		app.ServeHTTP(response, request)
+		if response.Code != http.StatusFound {
+			t.Fatalf("OAuth start %d = %d: %s", index+1, response.Code, response.Body.String())
+		}
+	}
+
+	limitedRequest := httptest.NewRequest(http.MethodGet, startURL, nil)
+	limitedRequest.RemoteAddr = "198.51.100.20:9876"
+	limitedResponse := httptest.NewRecorder()
+	app.ServeHTTP(limitedResponse, limitedRequest)
+	if limitedResponse.Code != http.StatusTooManyRequests || !strings.Contains(limitedResponse.Body.String(), "oauth_start_rate_limited") {
+		t.Fatalf("OAuth flow abuse was not limited: status=%d body=%s", limitedResponse.Code, limitedResponse.Body.String())
+	}
+	if limitedResponse.Header().Get("Retry-After") == "" || limitedResponse.Header().Get("Set-Cookie") != "" || limitedResponse.Header().Get("Location") != "" {
+		t.Fatalf("limited OAuth start returned unsafe headers: %v", limitedResponse.Header())
+	}
+
+	differentSource := httptest.NewRequest(http.MethodGet, startURL, nil)
+	differentSource.RemoteAddr = "203.0.113.21:4321"
+	differentSourceResponse := httptest.NewRecorder()
+	app.ServeHTTP(differentSourceResponse, differentSource)
+	if differentSourceResponse.Code != http.StatusFound {
+		t.Fatalf("independent source was blocked: status=%d body=%s", differentSourceResponse.Code, differentSourceResponse.Body.String())
+	}
+
+	var liveFlows int64
+	if err := store.db.Model(&adminOAuthFlowRecord{}).Where("expires_at > ?", time.Now().UTC()).Count(&liveFlows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if liveFlows != adminOAuthFlowsPerClientScopeProviderLimit+1 {
+		t.Fatalf("live OAuth flows = %d, want %d", liveFlows, adminOAuthFlowsPerClientScopeProviderLimit+1)
+	}
+}
+
+func TestAdminOAuthFlowClientScopeLimitSpansProviders(t *testing.T) {
+	store := NewMemoryStoreWithConfig(Config{SecretKey: "oauth-client-scope-secret"})
+	limits := adminOAuthFlowLimits{ClientScopeProvider: 2, ClientScope: 2, Global: 10}
+	flow := func(state string, source string, providerID string) adminOAuthFlow {
+		return adminOAuthFlow{
+			State: state, BrowserNonce: "browser-" + state, Source: source, ProviderID: providerID,
+			ReturnURL: "https://tokenhub.example/overview", RedirectURI: "https://tokenhub.example/api/admin/auth/oauth/callback",
+			CodeChallenge: testAdminOAuthCodeChallenge(t),
+		}
+	}
+	if err := store.saveAdminOAuthFlow(flow("first", "198.51.100.10", "idp_a"), limits); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.saveAdminOAuthFlow(flow("second", "198.51.100.20", "idp_b"), limits); err != nil {
+		t.Fatal(err)
+	}
+	err := store.saveAdminOAuthFlow(flow("limited", "198.51.100.30", "idp_c"), limits)
+	if httpErr := AsHTTPError(err); httpErr.Status != http.StatusTooManyRequests || httpErr.Code != "oauth_start_rate_limited" {
+		t.Fatalf("client scope bypassed the cross-provider limit: %v", err)
+	}
+	if err := store.saveAdminOAuthFlow(flow("independent", "203.0.113.10", "idp_c"), limits); err != nil {
+		t.Fatalf("independent client scope was blocked: %v", err)
+	}
+}
+
+func TestAdminOAuthFlowGlobalLimitIsSharedAcrossInstances(t *testing.T) {
+	databaseURL := "sqlite://" + filepath.Join(t.TempDir(), "oauth-flow-limit.db")
+	config := Config{SecretKey: "shared-oauth-limit-secret"}
+	storeA, err := NewSQLiteStoreWithConfig(databaseURL, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storeB, err := NewSQLiteStoreWithConfig(databaseURL, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, store := range []*GormStore{storeA, storeB} {
+		sqlDB, dbErr := store.db.DB()
+		if dbErr != nil {
+			t.Fatal(dbErr)
+		}
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
+	flow := func(state string, source string) adminOAuthFlow {
+		return adminOAuthFlow{
+			State: state, BrowserNonce: "browser-" + state, Source: source, ProviderID: "idp_shared_limit",
+			ReturnURL: "https://tokenhub.example/overview", RedirectURI: "https://tokenhub.example/api/admin/auth/oauth/callback",
+			CodeChallenge: testAdminOAuthCodeChallenge(t),
+		}
+	}
+	limits := adminOAuthFlowLimits{ClientScopeProvider: 2, ClientScope: 2, Global: 1}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for index, store := range []*GormStore{storeA, storeB} {
+		go func(index int, store *GormStore) {
+			<-start
+			results <- store.saveAdminOAuthFlow(flow(fmt.Sprintf("flow-%d", index), fmt.Sprintf("198.51.%d.30", index+100)), limits)
+		}(index, store)
+	}
+	close(start)
+	successes := 0
+	limited := 0
+	for range 2 {
+		resultErr := <-results
+		if resultErr == nil {
+			successes++
+			continue
+		}
+		if httpErr := AsHTTPError(resultErr); httpErr.Status == http.StatusTooManyRequests && httpErr.Code == "oauth_start_rate_limited" {
+			limited++
+			continue
+		}
+		t.Fatalf("unexpected OAuth admission error: %v", resultErr)
+	}
+	if successes != 1 || limited != 1 {
+		t.Fatalf("cross-instance admission results: successes=%d limited=%d", successes, limited)
+	}
+	var count int64
+	if err := storeB.db.Model(&adminOAuthFlowRecord{}).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("persisted OAuth flows = %d, want 1", count)
+	}
+
+	expired := adminOAuthFlowRecord{
+		ID: "oauth_flow_expired", StateHash: HashSecret("expired-state"), ExpiresAt: time.Now().UTC().Add(-time.Minute),
+	}
+	if err := storeA.db.Create(&expired).Error; err != nil {
+		t.Fatal(err)
+	}
+	err = storeB.saveAdminOAuthFlow(flow("cleanup", "203.0.113.40"), limits)
+	if httpErr := AsHTTPError(err); httpErr.Status != http.StatusTooManyRequests || httpErr.Code != "oauth_start_rate_limited" {
+		t.Fatalf("active global limit was bypassed after cleanup: %v", err)
+	}
+	if err := storeA.db.Model(&adminOAuthFlowRecord{}).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("rejected admission rolled back expired-flow cleanup: count=%d", count)
 	}
 }
 
