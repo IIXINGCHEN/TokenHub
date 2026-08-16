@@ -1,5 +1,6 @@
 import { type ApiExampleLanguage, type AppData, type Model, type ModelRoute, type PlaygroundChatPayload, type ProviderCatalogModel, routeViews, type ViewKey } from "../core/types";
 import { modelCategory } from "./catalog";
+import { modelDisplayName } from "./model-display-name";
 import { codexImageCapableResources, findProvider, findProviderResource, isCodexSubscriptionImageModel, modelRoutesFor, stringifyForm, stringifyValue } from "./entities";
 import { guardrailBlockedDiagnostic, languageLocale, tx } from "../i18n/runtime";
 import { preferredModelCategories } from "./model-categories";
@@ -377,6 +378,7 @@ export function formatModelPrice(model: ProviderCatalogModel) {
 export function modelToForm(item: Model) {
   return {
     ...stringifyForm(item),
+    display_name: modelDisplayName(item.metadata, ""),
     cache_read_price_usd_per_1m: item.cache_read_price_usd_per_1m
       ? String(item.cache_read_price_usd_per_1m)
       : "",

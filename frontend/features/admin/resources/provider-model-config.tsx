@@ -236,7 +236,8 @@ export function modelConfig(): ResourceConfig<Model> {
       { key: "status", label: "状态", render: (item) => <StatusPill status={item.status} /> },
     ],
     fields: [
-      { key: "name", label: "模型名", required: true },
+      { key: "name", label: "对外模型 ID", required: true, readOnlyOnEdit: true },
+      { key: "display_name", label: "显示名称" },
       {
         key: "initial_provider_models",
         label: "可用 Provider 模型",
@@ -271,7 +272,7 @@ export function modelConfig(): ResourceConfig<Model> {
     ],
     list: (ctx) => ctx.models,
     create: (ctx, values) => adminMutate(ctx, "/api/admin/models", "POST", modelPayload(values)),
-    update: (ctx, item, values) => adminMutate(ctx, `/api/admin/models/${encodeURIComponent(item.name)}`, "PATCH", modelPayload(values)),
+    update: (ctx, item, values) => adminMutate(ctx, `/api/admin/models/${encodeURIComponent(item.name)}`, "PATCH", modelPayload(values, item.metadata)),
     remove: (ctx, item) => adminDelete(ctx, `/api/admin/models/${encodeURIComponent(item.name)}`),
     actions: [
       {

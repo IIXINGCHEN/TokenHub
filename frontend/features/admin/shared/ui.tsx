@@ -4,6 +4,7 @@ import Select, { type MultiValue } from "react-select";
 import { type AdminUser, type AppData, type FieldConfig, type Model } from "../core/types";
 import { modelCategory, modelCategoryLabel } from "../domain/catalog";
 import { copyText } from "../domain/clipboard";
+import { modelDisplayName } from "../domain/model-display-name";
 import { findProvider, modelRoutesFor } from "../domain/entities";
 import { compactNumber, routeStrategyLabel } from "../domain/formatting";
 import { enumOptionLabel, enumValueLabel, splitList } from "../domain/labels";
@@ -386,10 +387,11 @@ export function StatusPill({ status, label }: { status: string; label?: string }
 }
 
 export function ModelNameCell({ model }: { model: Model }) {
+  const title = modelDisplayName(model.metadata, model.name);
   return (
     <div className="model-name-cell">
-      <strong>{model.name}</strong>
-      <span>{modelCategoryLabel(modelCategory(model))} · {model.family || "-"} · {model.modality || "chat"} · {model.context_window ? `${compactNumber(model.context_window)} ctx` : "ctx -"}</span>
+      <strong>{title}</strong>
+      <span>{title !== model.name ? `${model.name} · ` : ""}{modelCategoryLabel(modelCategory(model))} · {model.family || "-"} · {model.modality || "chat"} · {model.context_window ? `${compactNumber(model.context_window)} ctx` : "ctx -"}</span>
     </div>
   );
 }
