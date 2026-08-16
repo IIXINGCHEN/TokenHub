@@ -301,65 +301,69 @@ func (s *GormStore) SelectRoute(modelName string) (RouteSelection, error) {
 }
 
 func (s *GormStore) SelectRouteCandidates(modelName string) ([]RouteSelection, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	var selections []RouteSelection
+	err := s.withReadSnapshot(func(tx *gorm.DB) error {
+		var routes []ModelRoute
+		if err := tx.Where("model_name = ? AND status = ?", modelName, StatusActive).
+			Order("priority asc, weight desc, created_at asc").
+			Find(&routes).Error; err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		selections = make([]RouteSelection, 0, len(routes))
+		for _, route := range routes {
+			var provider Provider
+			if err := tx.First(&provider, "id = ?", route.ProviderID).Error; err != nil {
+				continue
+			}
+			if provider.Status != StatusActive || !provider.Healthy {
+				continue
+			}
+			if route.ProviderResourceID != "" {
+				var resource ProviderResource
+				if err := tx.First(&resource, "id = ? AND provider_id = ?", route.ProviderResourceID, provider.ID).Error; err != nil {
+					continue
+				}
+				if resource.Status != StatusActive || !halfOpenEligible(resource, now) {
+					continue
+				}
+				selections = append(selections, s.routeSelection(provider, &resource, route))
+				continue
+			}
 
-	var routes []ModelRoute
-	if err := s.db.Where("model_name = ? AND status = ?", modelName, StatusActive).
-		Order("priority asc, weight desc, created_at asc").
-		Find(&routes).Error; err != nil {
+			var resources []ProviderResource
+			// Unhealthy resources whose cooldown has lapsed are admitted as half-open
+			// candidates. Admission still gates them to a single trial (see
+			// CheckProviderResourceCapacity); this query only makes them reachable, which
+			// is what lets a parked resource ever be retried.
+			query := tx.Where("provider_id = ? AND status = ? AND (healthy = ? OR cooldown_until <= ?)",
+				provider.ID, StatusActive, true, now)
+			if strings.TrimSpace(route.ResourceGroup) != "" {
+				query = query.Where("\"group\" = ?", strings.TrimSpace(route.ResourceGroup))
+			}
+			if err := query.Order("priority asc, weight desc, created_at asc").
+				Find(&resources).Error; err != nil {
+				return err
+			}
+			if len(resources) == 0 {
+				selections = append(selections, s.routeSelection(provider, nil, route))
+				continue
+			}
+			for _, resource := range resources {
+				resourceRoute := route
+				resourceRoute.ProviderResourceID = resource.ID
+				if resource.Weight > 0 {
+					resourceRoute.Weight = resource.Weight
+				}
+				selections = append(selections, s.routeSelection(provider, &resource, resourceRoute))
+			}
+		}
+		s.attachRouteRuntimeStats(tx, selections, now)
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
-	now := time.Now().UTC()
-	selections := make([]RouteSelection, 0, len(routes))
-	for _, route := range routes {
-		var provider Provider
-		if err := s.db.First(&provider, "id = ?", route.ProviderID).Error; err != nil {
-			continue
-		}
-		if provider.Status != StatusActive || !provider.Healthy {
-			continue
-		}
-		if route.ProviderResourceID != "" {
-			var resource ProviderResource
-			if err := s.db.First(&resource, "id = ? AND provider_id = ?", route.ProviderResourceID, provider.ID).Error; err != nil {
-				continue
-			}
-			if resource.Status != StatusActive || !halfOpenEligible(resource, now) {
-				continue
-			}
-			selections = append(selections, s.routeSelection(provider, &resource, route))
-			continue
-		}
-
-		var resources []ProviderResource
-		// Unhealthy resources whose cooldown has lapsed are admitted as half-open
-		// candidates. Admission still gates them to a single trial (see
-		// CheckProviderResourceCapacity); this query only makes them reachable, which
-		// is what lets a parked resource ever be retried.
-		query := s.db.Where("provider_id = ? AND status = ? AND (healthy = ? OR cooldown_until <= ?)",
-			provider.ID, StatusActive, true, now)
-		if strings.TrimSpace(route.ResourceGroup) != "" {
-			query = query.Where("\"group\" = ?", strings.TrimSpace(route.ResourceGroup))
-		}
-		if err := query.Order("priority asc, weight desc, created_at asc").
-			Find(&resources).Error; err != nil {
-			return nil, err
-		}
-		if len(resources) == 0 {
-			selections = append(selections, s.routeSelection(provider, nil, route))
-			continue
-		}
-		for _, resource := range resources {
-			resourceRoute := route
-			resourceRoute.ProviderResourceID = resource.ID
-			if resource.Weight > 0 {
-				resourceRoute.Weight = resource.Weight
-			}
-			selections = append(selections, s.routeSelection(provider, &resource, resourceRoute))
-		}
-	}
-	s.attachRouteRuntimeStats(selections, now)
 	if len(selections) == 0 {
 		return nil, ErrProviderMissing
 	}
@@ -374,7 +378,7 @@ type routeRuntimeStatsRow struct {
 	LatencyMS          float64
 }
 
-func (s *GormStore) attachRouteRuntimeStats(selections []RouteSelection, now time.Time) {
+func (s *GormStore) attachRouteRuntimeStats(db *gorm.DB, selections []RouteSelection, now time.Time) {
 	routeIDs := make([]string, 0, len(selections))
 	seen := map[string]bool{}
 	for _, selection := range selections {
@@ -388,8 +392,13 @@ func (s *GormStore) attachRouteRuntimeStats(selections []RouteSelection, now tim
 		return
 	}
 
+	const savepoint = "route_runtime_stats"
+	if err := db.SavePoint(savepoint).Error; err != nil {
+		log.Printf("[tokenhub] failed to create adaptive routing savepoint: %v", err)
+		return
+	}
 	var rows []routeRuntimeStatsRow
-	err := s.db.Model(&RouteAttemptLog{}).
+	err := db.Model(&RouteAttemptLog{}).
 		Select(`route_id, provider_resource_id, COUNT(*) AS samples,
 			SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN 1 ELSE 0 END) AS successes,
 			COALESCE(AVG(CASE WHEN status_code >= 200 AND status_code < 400 THEN latency_ms ELSE NULL END), 0) AS latency_ms`).
@@ -397,6 +406,9 @@ func (s *GormStore) attachRouteRuntimeStats(selections []RouteSelection, now tim
 		Group("route_id, provider_resource_id").
 		Scan(&rows).Error
 	if err != nil {
+		if rollbackErr := db.RollbackTo(savepoint).Error; rollbackErr != nil {
+			log.Printf("[tokenhub] failed to restore adaptive routing snapshot: %v", rollbackErr)
+		}
 		log.Printf("[tokenhub] failed to load adaptive routing observations: %v", err)
 		return
 	}
@@ -476,8 +488,6 @@ func (s *GormStore) StartCall(ctx context.Context, project Project, key APIKey, 
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	var admission callAdmissionResult
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -573,23 +583,20 @@ func apiKeyRateLimitHeaders(limits QuotaLimits, counter QuotaCounter, now time.T
 
 func (s *GormStore) FinishCall(call CallContext, route RouteSelection, usage Usage, statusCode int, errorCode string, clientIP string, userAgent string) {
 	// Measured here rather than inside the deferred observation, so latency reflects
-	// what the client waited for and excludes the persistence and lock time that
-	// follows. FinishCall is invoked after the last streamed byte is written. The
+	// what the client waited for and excludes the persistence time that follows.
+	// FinishCall is invoked after the last streamed byte is written. The
 	// same value is threaded into the transaction below so the persisted latency
 	// and the reported metric describe the same interval.
 	elapsed := call.elapsed()
 	_ = s.stopInFlightLeaseHeartbeat(call.RequestID)
-	// priceUsage is pure, so it runs outside the lock and its result is final here.
+	// priceUsage is pure, so it runs before the transaction and its result is final here.
 	usage = priceUsage(call.Model, usage)
 	usage.ProviderCostUSD = s.providerCostUSD(route, usage)
-	// Registered before the lock is taken, so LIFO ordering runs it *after* the
-	// unlock: reporting metrics must not extend how long this request holds the
-	// store-wide mutex. Deferring also means the request is still counted when the
-	// transaction below fails or panics — losing persistence must not also lose the
+	// Registered before persistence starts so reporting runs after the transaction
+	// and its fallback cleanup. Deferring also means the request is still counted
+	// when persistence fails or panics — losing persistence must not also lose the
 	// observation that the request happened.
 	defer s.observeGatewayCall(call, route, usage, statusCode, errorCode, elapsed)
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	now := time.Now().UTC()
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		return s.finishCallTransaction(tx, call, route, usage, statusCode, errorCode, clientIP, userAgent, now, elapsed)
@@ -605,6 +612,11 @@ func (s *GormStore) FinishCall(call CallContext, route RouteSelection, usage Usa
 func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route RouteSelection, usage Usage, statusCode int, errorCode string, clientIP string, userAgent string, now time.Time, elapsed time.Duration) error {
 	if call.Key.ID != "" {
 		if err := s.lockScopeForUpdate(tx, "api_key", call.Key.ID); err != nil {
+			return err
+		}
+	}
+	if call.Project.ID != "" {
+		if err := s.lockScopeForSharedRead(tx, "project", call.Project.ID); err != nil {
 			return err
 		}
 	}
