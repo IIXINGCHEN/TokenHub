@@ -70,7 +70,7 @@ func TestSelectRouteCandidatesFallsBackWhenRuntimeStatsFail(t *testing.T) {
 	if err := store.db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
 		shouldFail, _ := tx.Statement.Context.Value(routeStatsFailureContextKey{}).(bool)
 		if shouldFail && tx.Statement.Table == "route_attempt_logs" {
-			tx.AddError(errors.New("route runtime stats unavailable"))
+			_ = tx.AddError(errors.New("route runtime stats unavailable"))
 		}
 	}); err != nil {
 		t.Fatal(err)
