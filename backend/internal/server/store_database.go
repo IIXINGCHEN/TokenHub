@@ -211,56 +211,10 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 		}
 	}
 
-	migrate := func() error {
-		if err := db.AutoMigrate(
-			&BillingConnector{}, &BillingRecord{}, &BillingRawSnapshot{}, &BillingSyncRun{},
-			&ReconciliationRule{}, &ReconciliationRun{}, &ReconciliationItem{},
-			&Project{},
-			&ProjectTeam{},
-			&guardrails.Policy{},
-			&guardrails.DetectionItem{},
-			&guardrails.Binding{},
-			&APIKey{},
-			&Provider{},
-			&ProviderResource{},
-			&ProviderModel{},
-			&Model{},
-			&ModelRoute{},
-			&QuotaBucket{},
-			&InFlightLease{},
-			&ClusterLease{},
-			&ClusterTaskState{},
-			&AdapterSessionBinding{},
-			&ProviderResourceObservation{},
-			&ProviderObservation{},
-			&ProviderCatalogSnapshot{},
-			&providerAccountOAuthSessionRecord{},
-			&UsageRecord{},
-			&AnalyticsSequence{},
-			&RequestLog{},
-			&AnalyticsCredential{},
-			&RequestPayloadLog{},
-			&ImageJob{},
-			&ImageAsset{},
-			&ResponseJob{},
-			&ResponseJobEvent{},
-			&RouteAttemptLog{},
-			&AlertEvent{},
-			&AlertDelivery{},
-			&ProviderResourceBucket{},
-			&AuditEvent{},
-			&AdminResource{},
-			&ApprovalRequest{},
-			&AdminUser{},
-			&AdminSession{},
-			&AdminPasswordResetToken{},
-			&SQLiteBackupRecord{},
-		); err != nil {
-			return err
-		}
-		if err := ensureRequestLogCommitSequence(db, driver); err != nil {
-			return err
-		}
+	legacySchemaFlow := func(context.Context) error {
+		return migrateSchemaObjects(db, driver)
+	}
+	legacyDataBackfills := func() error {
 		if err := backfillTeamRelationships(db); err != nil {
 			return err
 		}
@@ -269,7 +223,16 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 		}
 		return backfillRoutingPolicyBindingKeys(db)
 	}
-	if err := runSchemaMigrationLocked(sqlDB, driver, migrate); err != nil {
+	if err := runSchemaMigrationLocked(sqlDB, driver, func() error {
+		if err := adoptSchemaLedger(context.Background(), sqlDB, driver, dsn, legacySchemaFlow); err != nil {
+			return err
+		}
+		// Data repairs keep running on every boot until they become versioned
+		// data backfills (ADR 0007); they are idempotent, and legacy-shaped
+		// data can appear after adoption through backup restores or an older
+		// release writing to the same database.
+		return legacyDataBackfills()
+	}); err != nil {
 		return nil, err
 	}
 	if postgresMaxOpenConns > 0 {
@@ -693,6 +656,67 @@ func (s *GormStore) WithContext(ctx context.Context) *GormStore {
 	contextual := *s
 	contextual.db = s.db.WithContext(ctx)
 	return &contextual
+}
+
+// schemaModels is the frozen GORM model set of the bridge-release schema flow.
+// Order follows the original AutoMigrate call; keep it stable.
+func schemaModels() []any {
+	return []any{
+		&BillingConnector{}, &BillingRecord{}, &BillingRawSnapshot{}, &BillingSyncRun{},
+		&ReconciliationRule{}, &ReconciliationRun{}, &ReconciliationItem{},
+		&Project{},
+		&ProjectTeam{},
+		&guardrails.Policy{},
+		&guardrails.DetectionItem{},
+		&guardrails.Binding{},
+		&APIKey{},
+		&Provider{},
+		&ProviderResource{},
+		&ProviderModel{},
+		&Model{},
+		&ModelRoute{},
+		&QuotaBucket{},
+		&InFlightLease{},
+		&ClusterLease{},
+		&ClusterTaskState{},
+		&AdapterSessionBinding{},
+		&ProviderResourceObservation{},
+		&ProviderObservation{},
+		&ProviderCatalogSnapshot{},
+		&providerAccountOAuthSessionRecord{},
+		&UsageRecord{},
+		&AnalyticsSequence{},
+		&RequestLog{},
+		&AnalyticsCredential{},
+		&RequestPayloadLog{},
+		&ImageJob{},
+		&ImageAsset{},
+		&ResponseJob{},
+		&ResponseJobEvent{},
+		&RouteAttemptLog{},
+		&AlertEvent{},
+		&AlertDelivery{},
+		&ProviderResourceBucket{},
+		&AuditEvent{},
+		&AdminResource{},
+		&ApprovalRequest{},
+		&AdminUser{},
+		&AdminSession{},
+		&AdminPasswordResetToken{},
+		&SQLiteBackupRecord{},
+	}
+}
+
+// migrateSchemaObjects applies the structural part of the frozen startup
+// schema flow: the AutoMigrate model set plus the request-log commit sequence
+// fixtures. Data backfills stay in the startup closure. The schema reference
+// snapshot (store_schema_ledger.go) reuses this function on a scratch database
+// to derive its expectations.
+func migrateSchemaObjects(db *gorm.DB, driver string) error {
+	if err := db.AutoMigrate(schemaModels()...); err != nil {
+		return err
+	}
+	return ensureRequestLogCommitSequence(db, driver)
 }
 
 func runSchemaMigrationLocked(sqlDB *sql.DB, driver string, migrate func() error) error {
