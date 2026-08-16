@@ -57,6 +57,10 @@ func redactAuditEventsForResponse(events []AuditEvent) []AuditEvent {
 	for index, event := range events {
 		event.BeforeSnapshot = redactStoredAuditSnapshot(event.BeforeSnapshot)
 		event.AfterSnapshot = redactStoredAuditSnapshot(event.AfterSnapshot)
+		if isAlertDeliveryAuditEvent(event) {
+			event.BeforeSnapshot = redactAlertDeliveryAuditSnapshot(event.BeforeSnapshot)
+			event.AfterSnapshot = redactAlertDeliveryAuditSnapshot(event.AfterSnapshot)
+		}
 		redacted[index] = event
 	}
 	return redacted

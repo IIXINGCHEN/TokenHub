@@ -791,7 +791,7 @@ func (s *Server) serveAdminExport(w http.ResponseWriter, r *http.Request, user A
 		}
 	case "alert-deliveries":
 		_ = writer.Write([]string{"created_at", "alert_id", "channel_id", "channel", "target", "status", "status_code", "error"})
-		for _, item := range s.store.ListAlertDeliveries() {
+		for _, item := range redactAlertDeliveriesForResponse(s.store.ListAlertDeliveries()) {
 			_ = writer.Write([]string{
 				item.CreatedAt.Format(time.RFC3339),
 				item.AlertID,

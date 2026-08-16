@@ -68,7 +68,7 @@ func (s *Server) handleAdminAlertDeliveries(w http.ResponseWriter, r *http.Reque
 	if _, ok := s.requireAdmin(w, r, "alert", r.Method); !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": s.store.ListAlertDeliveries()})
+	writeJSON(w, http.StatusOK, map[string]any{"data": redactAlertDeliveriesForResponse(s.store.ListAlertDeliveries())})
 }
 
 func (s *Server) handleAdminApprovals(w http.ResponseWriter, r *http.Request) {
@@ -371,26 +371,26 @@ func (s *Server) deliverAlert(ctx context.Context, alertID string, channelID str
 	if !supportedNotificationChannel(delivery.Channel) {
 		delivery.Status = "failed"
 		delivery.Error = "unsupported notification channel"
-		return s.store.RecordAlertDelivery(delivery), nil
+		return s.recordAlertDelivery(channel, delivery), nil
 	}
 	if delivery.Channel == "email" {
 		if err := sendEmailAlert(ctx, channel, alert); err != nil {
 			delivery.Status = "failed"
 			delivery.Error = err.Error()
 		}
-		return s.store.RecordAlertDelivery(delivery), nil
+		return s.recordAlertDelivery(channel, delivery), nil
 	}
 	target, err := notificationChannelRequestTarget(channel)
 	if err != nil {
 		delivery.Status = "failed"
 		delivery.Error = err.Error()
-		return s.store.RecordAlertDelivery(delivery), nil
+		return s.recordAlertDelivery(channel, delivery), nil
 	}
 	bodyPayload, headers, err := notificationChannelPayloadForChannel(channel, payload, alert)
 	if err != nil {
 		delivery.Status = "failed"
 		delivery.Error = err.Error()
-		return s.store.RecordAlertDelivery(delivery), nil
+		return s.recordAlertDelivery(channel, delivery), nil
 	}
 	body, _ := json.Marshal(bodyPayload)
 	if delivery.Channel == "dingtalk" {
@@ -398,7 +398,7 @@ func (s *Server) deliverAlert(ctx context.Context, alertID string, channelID str
 		if err != nil {
 			delivery.Status = "failed"
 			delivery.Error = err.Error()
-			return s.store.RecordAlertDelivery(delivery), nil
+			return s.recordAlertDelivery(channel, delivery), nil
 		}
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -407,7 +407,7 @@ func (s *Server) deliverAlert(ctx context.Context, alertID string, channelID str
 	if err != nil {
 		delivery.Status = "failed"
 		delivery.Error = err.Error()
-		return s.store.RecordAlertDelivery(delivery), nil
+		return s.recordAlertDelivery(channel, delivery), nil
 	}
 	req.Header.Set("content-type", "application/json")
 	for key, value := range headers {
@@ -417,7 +417,7 @@ func (s *Server) deliverAlert(ctx context.Context, alertID string, channelID str
 	if err != nil {
 		delivery.Status = "failed"
 		delivery.Error = err.Error()
-		return s.store.RecordAlertDelivery(delivery), nil
+		return s.recordAlertDelivery(channel, delivery), nil
 	}
 	defer resp.Body.Close()
 	delivery.StatusCode = resp.StatusCode
@@ -429,7 +429,7 @@ func (s *Server) deliverAlert(ctx context.Context, alertID string, channelID str
 		delivery.Status = "failed"
 		delivery.Error = err.Error()
 	}
-	return s.store.RecordAlertDelivery(delivery), nil
+	return s.recordAlertDelivery(channel, delivery), nil
 }
 
 func signedDingTalkWebhookURL(rawURL string, secret string) (string, error) {
@@ -603,7 +603,7 @@ func notificationChannelTarget(channel AdminResource) string {
 		}
 		return "whatsapp"
 	}
-	return firstStringField(channel.Fields, "webhook_url", "url")
+	return redactNotificationDeliveryURL(firstStringField(channel.Fields, "webhook_url", "url"))
 }
 
 func notificationChannelRequestTarget(channel AdminResource) (string, error) {
