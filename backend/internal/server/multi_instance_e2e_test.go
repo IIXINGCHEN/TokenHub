@@ -66,6 +66,12 @@ func TestMultiInstancePostgresE2E(t *testing.T) {
 	t.Run("analytics checkpoints do not serialize replica writes", func(t *testing.T) {
 		testAnalyticsCommitSequence(t, storeA, storeB)
 	})
+	t.Run("route candidates use one read snapshot", func(t *testing.T) {
+		testRouteCandidateReadSnapshot(t, storeA, storeB)
+	})
+	t.Run("adaptive route stats failures remain best effort", func(t *testing.T) {
+		testRouteCandidateStatsFailure(t, storeA)
+	})
 	t.Run("analytics migration preserves legacy time windows", func(t *testing.T) {
 		testPostgresAnalyticsLegacySequenceMigration(t, storeA, config)
 	})
@@ -84,6 +90,144 @@ func TestMultiInstancePostgresE2E(t *testing.T) {
 	t.Run("lost cluster leases cancel guarded work", func(t *testing.T) {
 		testClusterLeaseLossCancelsWork(t, storeA, storeB)
 	})
+}
+
+func testRouteCandidateReadSnapshot(t *testing.T, storeA *GormStore, storeB *GormStore) {
+	t.Helper()
+	suffix := NewID("snapshot")
+	modelName := "route-snapshot-" + suffix
+	providerID := "prv_" + suffix
+	routeID := "route_" + suffix
+	storeA.AddModel(Model{Name: modelName, Modality: "chat", Status: StatusActive})
+	storeA.AddProvider(Provider{
+		ID: providerID, Name: "Route snapshot provider", Type: ProviderMock,
+		Status: StatusActive, Healthy: true,
+	})
+	storeA.AddRoute(ModelRoute{
+		ID: routeID, ModelName: modelName, ProviderID: providerID,
+		ProviderModel: modelName, Priority: 1, Weight: 100, Status: StatusActive,
+	})
+	t.Cleanup(func() {
+		_ = storeA.db.Where("id = ?", routeID).Delete(&ModelRoute{}).Error
+		_ = storeA.db.Where("id = ?", providerID).Delete(&Provider{}).Error
+		_ = storeA.db.Where("name = ?", modelName).Delete(&Model{}).Error
+	})
+
+	routeRead := make(chan struct{}, 1)
+	resume := make(chan struct{})
+	var pauseOnce sync.Once
+	callbackName := "test:route-candidate-snapshot:" + suffix
+	if err := storeA.db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Schema == nil || tx.Statement.Schema.Table != "model_routes" {
+			return
+		}
+		pauseOnce.Do(func() {
+			routeRead <- struct{}{}
+			select {
+			case <-resume:
+			case <-time.After(5 * time.Second):
+				tx.AddError(fmt.Errorf("timed out waiting to resume route snapshot query"))
+			}
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := storeA.db.Callback().Query().Remove(callbackName); err != nil {
+			t.Errorf("remove route snapshot callback: %v", err)
+		}
+	}()
+
+	type selectionResult struct {
+		candidates []RouteSelection
+		err        error
+	}
+	result := make(chan selectionResult, 1)
+	go func() {
+		candidates, err := storeA.SelectRouteCandidates(modelName)
+		result <- selectionResult{candidates: candidates, err: err}
+	}()
+	select {
+	case <-routeRead:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the route query")
+	}
+	if err := storeB.db.Model(&Provider{}).Where("id = ?", providerID).Update("healthy", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	close(resume)
+
+	select {
+	case selected := <-result:
+		if selected.err != nil {
+			t.Fatal(selected.err)
+		}
+		if len(selected.candidates) != 1 || selected.candidates[0].Provider.ID != providerID || !selected.candidates[0].Provider.Healthy {
+			t.Fatalf("snapshot candidates = %+v", selected.candidates)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for route candidates")
+	}
+}
+
+func testRouteCandidateStatsFailure(t *testing.T, store *GormStore) {
+	t.Helper()
+	suffix := NewID("stats-failure")
+	modelName := "route-stats-failure-" + suffix
+	providerID := "prv_" + suffix
+	routeID := "route_" + suffix
+	store.AddModel(Model{Name: modelName, Modality: "chat", Status: StatusActive})
+	store.AddProvider(Provider{
+		ID: providerID, Name: "Route stats failure provider", Type: ProviderMock,
+		Status: StatusActive, Healthy: true,
+	})
+	store.AddRoute(ModelRoute{
+		ID: routeID, ModelName: modelName, ProviderID: providerID,
+		ProviderModel: modelName, Priority: 1, Weight: 100,
+		Status: StatusActive, Strategy: RouteStrategyAdaptive,
+	})
+	t.Cleanup(func() {
+		_ = store.db.Where("id = ?", routeID).Delete(&ModelRoute{}).Error
+		_ = store.db.Where("id = ?", providerID).Delete(&Provider{}).Error
+		_ = store.db.Where("name = ?", modelName).Delete(&Model{}).Error
+	})
+
+	callbackName := "test:route-candidate-stats-error:" + suffix
+	resultCallbackName := callbackName + ":result"
+	var statsQueryErr error
+	if err := store.db.Callback().Row().Before("gorm:row").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Schema != nil && tx.Statement.Schema.Table == "route_attempt_logs" {
+			tx.Statement.Table = "missing_route_attempt_logs_" + suffix
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.Callback().Row().After("gorm:row").Register(resultCallbackName, func(tx *gorm.DB) {
+		if tx.Statement.Schema != nil && tx.Statement.Schema.Table == "route_attempt_logs" {
+			statsQueryErr = tx.Error
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := store.db.Callback().Row().Remove(callbackName); err != nil {
+			t.Errorf("remove route stats error callback: %v", err)
+		}
+		if err := store.db.Callback().Row().Remove(resultCallbackName); err != nil {
+			t.Errorf("remove route stats result callback: %v", err)
+		}
+	}()
+
+	candidates, err := store.SelectRouteCandidates(modelName)
+	if err != nil {
+		t.Fatalf("optional runtime stats failure rejected candidates: %v", err)
+	}
+	if statsQueryErr == nil {
+		t.Fatal("adaptive runtime stats query did not reach the intended database-side failure")
+	}
+	if len(candidates) != 1 || candidates[0].Provider.ID != providerID || candidates[0].Runtime != (RouteRuntimeStats{}) {
+		t.Fatalf("candidates after optional runtime stats failure = %+v", candidates)
+	}
 }
 
 type multiInstanceResponseAdapter struct {
