@@ -148,6 +148,11 @@ func (s *GormStore) UpdateModel(name string, patch Model) (Model, error) {
 		updated = model
 		return nil
 	})
+	if err == nil {
+		// An update can rename the model, so both the old and the new name are
+		// wrong in the snapshot until it reloads.
+		s.modelLabels.invalidate()
+	}
 	return updated, err
 }
 
@@ -155,7 +160,7 @@ func (s *GormStore) DeleteModel(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	err := s.db.Transaction(func(tx *gorm.DB) error {
 		var model Model
 		if err := tx.First(&model, "name = ?", name).Error; err != nil {
 			return notFound(err, "model_not_found", "Model not found")
@@ -165,6 +170,10 @@ func (s *GormStore) DeleteModel(name string) error {
 		}
 		return tx.Delete(&model).Error
 	})
+	if err == nil {
+		s.modelLabels.invalidate()
+	}
+	return err
 }
 
 func (s *GormStore) ListRoutes() []ModelRoute {
@@ -866,16 +875,38 @@ func gatewayAttemptSamples(attempts []RouteAttempt) []GatewayAttemptSample {
 
 // knownModelLabel keeps a model name as a label only when the catalog knows it,
 // bounding the label to configured models instead of arbitrary client input.
+// The catalog is read through a short-lived snapshot, because the caller is the
+// rejection path: a client looping over invented model names would otherwise make
+// the cheapest outcome in the gateway pay for a query every time.
 func (s *GormStore) knownModelLabel(modelName string) string {
 	modelName = strings.TrimSpace(modelName)
 	if modelName == "" || s.metrics == nil {
 		return ""
 	}
+	if known, resolved := s.modelLabels.lookup(modelName, time.Now, s.loadModelNames); resolved {
+		if known {
+			return modelName
+		}
+		return "unknown"
+	}
+	// Reached only by a store built without a label cache. A cache that exists
+	// answers for itself even while its refresh is failing, so this stays off the
+	// path a failing database would otherwise be dragged down.
 	var count int64
 	if err := s.db.Model(&Model{}).Where("name = ?", modelName).Limit(1).Count(&count).Error; err != nil || count == 0 {
 		return "unknown"
 	}
 	return modelName
+}
+
+// loadModelNames reads only the catalog's name column, which is all a label bound
+// needs to know.
+func (s *GormStore) loadModelNames() ([]string, error) {
+	var names []string
+	if err := s.db.Model(&Model{}).Pluck("name", &names).Error; err != nil {
+		return nil, err
+	}
+	return names, nil
 }
 
 func (s *GormStore) RecordRequestPayload(requestID string, requestBody string, requestTruncated bool, responseBody string, responseTruncated bool) {
