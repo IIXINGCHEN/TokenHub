@@ -98,7 +98,7 @@ func TestDeepSeekAdapterForwardsReasoningContentOnly(t *testing.T) {
 			ReasoningSignature:       "anthropic:sig",
 			RedactedReasoningContent: "opaque",
 			raw: map[string]json.RawMessage{
-				"reasoning_details": json.RawMessage(`[{"type":"reasoning.encrypted","id":"call_1","data":"codex:opaque-state"}]`),
+				"reasoning_details": json.RawMessage(`[{"type":"reasoning.encrypted","id":"call_foreign","data":"openrouter-state"},{"type":"reasoning.encrypted","id":"call_1","data":"codex:opaque-state"}]`),
 			},
 		}},
 	})
@@ -111,10 +111,18 @@ func TestDeepSeekAdapterForwardsReasoningContentOnly(t *testing.T) {
 	if message["reasoning_content"] != "deepseek continuation" {
 		t.Fatalf("DeepSeek reasoning_content was not forwarded: %v", message)
 	}
-	for _, field := range []string{"reasoning_signature", "redacted_reasoning_content", "reasoning_details"} {
+	for _, field := range []string{"reasoning_signature", "redacted_reasoning_content"} {
 		if _, present := message[field]; present {
 			t.Fatalf("%s must remain gateway-local: %v", field, message)
 		}
+	}
+	details, _ := message["reasoning_details"].([]any)
+	if len(details) != 1 {
+		t.Fatalf("non-Codex reasoning details were not preserved: %v", message)
+	}
+	detail, _ := details[0].(map[string]any)
+	if detail["id"] != "call_foreign" || detail["data"] != "openrouter-state" {
+		t.Fatalf("unexpected forwarded reasoning detail: %v", detail)
 	}
 }
 
