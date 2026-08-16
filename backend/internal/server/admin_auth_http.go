@@ -711,10 +711,8 @@ func (s *Server) upsertOAuthAdminUser(provider AdminResource, claims map[string]
 	emailClaim := strings.TrimSpace(stringField(provider.Fields, "email_claim"))
 	teamClaim := strings.TrimSpace(stringField(provider.Fields, "team_claim"))
 	email := firstOAuthClaim(claims, emailClaim, "email", "enterprise_email", "biz_mail", "public_email")
-	allowUsernameMatch := true
 	if email == "" {
 		email = identityProviderFallbackEmail(provider, claims)
-		allowUsernameMatch = email == ""
 	}
 	if email == "" {
 		return AdminUser{}, NewHTTPError(400, "oauth_email_missing", "OAuth userinfo did not include an email")
@@ -734,7 +732,7 @@ func (s *Server) upsertOAuthAdminUser(provider AdminResource, claims map[string]
 		teamID = defaultTeamID
 	}
 	users := s.store.ListAdminUsers()
-	if existing, ok := findOAuthAdminUser(users, email, username, allowUsernameMatch); ok {
+	if existing, ok := findOAuthAdminUserByEmail(users, email); ok {
 		if existing.Status != StatusActive {
 			return AdminUser{}, NewHTTPError(403, "admin_user_disabled", "Admin user is disabled")
 		}
@@ -816,19 +814,10 @@ func oauthClaimString(claims map[string]any, key string) string {
 	}
 }
 
-func findOAuthAdminUser(users []AdminUser, email string, username string, allowUsernameMatch bool) (AdminUser, bool) {
+func findOAuthAdminUserByEmail(users []AdminUser, email string) (AdminUser, bool) {
 	email = strings.ToLower(strings.TrimSpace(email))
-	username = strings.ToLower(strings.TrimSpace(username))
 	for _, user := range users {
 		if email != "" && strings.ToLower(strings.TrimSpace(user.Email)) == email {
-			return user, true
-		}
-	}
-	if !allowUsernameMatch {
-		return AdminUser{}, false
-	}
-	for _, user := range users {
-		if username != "" && strings.ToLower(strings.TrimSpace(user.Username)) == username {
 			return user, true
 		}
 	}

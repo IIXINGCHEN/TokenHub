@@ -125,6 +125,46 @@ func TestIdentityProviderMutationsRequirePlatformAdmin(t *testing.T) {
 	}
 }
 
+func TestOAuthProvisioningDoesNotBindByUsername(t *testing.T) {
+	store := NewMemoryStore()
+	existing, err := store.CreateAdminUser(AdminUser{
+		Username: "platform-admin", Email: "admin@example.test", Role: "admin", Status: StatusActive,
+	}, "platform-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := New(store)
+	provider := AdminResource{
+		ID: "idp_untrusted_username", Name: "Enterprise SSO", Status: StatusActive,
+		Fields: map[string]any{"username_claim": "preferred_username", "email_claim": "email", "default_role": "user"},
+	}
+
+	provisioned, err := server.upsertOAuthAdminUser(provider, map[string]any{
+		"preferred_username": existing.Username,
+		"email":              "attacker@example.test",
+		"name":               "Unrelated IdP User",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provisioned.ID == existing.ID || provisioned.Role != "user" || provisioned.Email != "attacker@example.test" {
+		t.Fatalf("same-name IdP account bound existing administrator: %+v", provisioned)
+	}
+	if provisioned.Username == existing.Username {
+		t.Fatalf("same-name IdP account retained conflicting username: %q", provisioned.Username)
+	}
+	var unchanged AdminUser
+	for _, candidate := range store.ListAdminUsers() {
+		if candidate.ID == existing.ID {
+			unchanged = candidate
+			break
+		}
+	}
+	if unchanged.ID == "" || unchanged.Email != existing.Email || unchanged.Role != "admin" {
+		t.Fatalf("existing administrator was modified by same-name IdP login: %+v", unchanged)
+	}
+}
+
 func TestSafeOAuthReturnURLIgnoresOriginAndReferer(t *testing.T) {
 	server := NewWithConfig(NewMemoryStore(), Config{
 		PublicBaseURL:      "https://api.tokenhub.example",
