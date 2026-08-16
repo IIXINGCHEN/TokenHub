@@ -50,6 +50,12 @@ const (
 	// caller-supplied precondition (backfills, cluster, backup, maintenance
 	// window) failed before any statement ran.
 	ErrCodeContractPrecondition = "contract_precondition_failed"
+	// ErrCodeRepairRefused marks a repair that could neither prove the target
+	// state nor safely retry the migration.
+	ErrCodeRepairRefused = "repair_refused"
+	// ErrCodeNotDirty marks a repair requested for a version without a dirty
+	// marker.
+	ErrCodeNotDirty = "not_dirty"
 )
 
 // Error carries a stable machine-readable code so startup refusals and audit
@@ -105,6 +111,11 @@ type Migration struct {
 	// proven complete (ADR 0005).
 	NonTransactional bool
 	Postcondition    func(ctx context.Context, db Execer) error
+	// SafeRetry declares that re-executing the statements after a failed
+	// non-transactional run is harmless. Repair may then drop the dirty row
+	// and re-apply the migration; without it a failed postcondition refuses
+	// repair (ADR 0005: no generic force-version escape hatch).
+	SafeRetry bool
 	// ChecksumOverride pins the checksum explicitly. It is required for Go
 	// migrations, whose source checksum is produced by the build-time manifest.
 	ChecksumOverride string
@@ -302,6 +313,9 @@ func normalizeRegistry(migrations []Migration) ([]Migration, error) {
 		}
 		if m.NonTransactional && m.Postcondition == nil {
 			return nil, fmt.Errorf("migration %q: non-transactional migrations require Postcondition", m.Name)
+		}
+		if m.SafeRetry && !m.NonTransactional {
+			return nil, fmt.Errorf("migration %q: SafeRetry requires NonTransactional", m.Name)
 		}
 	}
 	return registry, nil

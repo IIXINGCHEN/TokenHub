@@ -157,6 +157,16 @@ func (r *Runner) clearDirty(ctx context.Context, version int64) error {
 	return nil
 }
 
+// deleteAppliedRow removes a dirty row so a SafeRetry repair can re-apply the
+// version. It is the only ledger deletion the runner performs.
+func (r *Runner) deleteAppliedRow(ctx context.Context, version int64) error {
+	mark := r.placeholders(1)[0]
+	if _, err := r.db.ExecContext(ctx, "DELETE FROM schema_migrations WHERE version = "+mark+" AND dirty = 1", version); err != nil {
+		return fmt.Errorf("dbschema: drop dirty row for version %d: %w", version, err)
+	}
+	return nil
+}
+
 // beginAttempt records the start of one migration execution. The database
 // never stores raw driver errors, only stable outcome and error codes.
 func (r *Runner) beginAttempt(ctx context.Context, version int64) (int64, error) {
