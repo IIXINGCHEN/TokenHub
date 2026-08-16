@@ -1,12 +1,13 @@
 import { Activity, AlertCircle, Check, Database, Server, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { type ApiContext, type DatabaseStatus, type Model } from "../core/types";
+import { type ApiContext, type DatabaseStatus, type Model, type SchemaEvolutionStatus } from "../core/types";
 import { tx } from "../i18n/runtime";
 import { adminFetch, isAuthExpiredError } from "../resources/payloads";
 import { DataSection } from "../shared/ui";
 
 export function DatabaseStatusView({ api }: { api: ApiContext; isDark: boolean }) {
   const [status, setStatus] = useState<DatabaseStatus | null>(null);
+  const [schema, setSchema] = useState<SchemaEvolutionStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,6 +31,18 @@ export function DatabaseStatusView({ api }: { api: ApiContext; isDark: boolean }
 
       const data: DatabaseStatus = await res.json();
       setStatus(data);
+      // The evolution status is read-only diagnostics; a failure leaves the
+      // base status intact rather than failing the whole view.
+      try {
+        const schemaRes = await adminFetch(api, "/api/admin/system/schema-status", { signal: controller.signal });
+        if (schemaRes.ok) {
+          setSchema((await schemaRes.json()) as SchemaEvolutionStatus);
+        }
+      } catch (schemaErr) {
+        if (!(schemaErr instanceof DOMException && schemaErr.name === "AbortError") && !isAuthExpiredError(schemaErr)) {
+          setSchema(null);
+        }
+      }
     } catch (err) {
       // Aborted by a newer load or by unmounting, or an expired session the logout event
       // adminFetch dispatches already handles. Neither is this view's error to report.
@@ -171,6 +184,45 @@ export function DatabaseStatusView({ api }: { api: ApiContext; isDark: boolean }
             <div className="database-status-note">
               * {tx("密码已隐藏以保护敏感信息")}
             </div>
+          </div>
+        )}
+
+        {/* Read-only database evolution state */}
+        {schema && (
+          <div className="database-status-details">
+            <div className="database-status-card-header">
+              <span className="database-status-card-icon version">
+                <Database />
+              </span>
+              <h2>{tx("数据库演进")}</h2>
+            </div>
+            <div className="database-status-value-row">
+              <span className={`database-status-state ${schema.ready ? "normal" : "error"}`}>
+                {schema.ready ? tx("就绪") : tx("未就绪")}
+              </span>
+              <span className="database-status-card-value">
+                {tx("数据库状态版本")} {schema.schema_version}
+              </span>
+              {schema.compatibility && (
+                <span className="database-status-note">
+                  {tx("兼容范围")} {schema.compatibility.min_compatible} – {schema.compatibility.max_compatible}
+                </span>
+              )}
+            </div>
+            {!schema.ready && schema.reason && (
+              <div className="database-status-note" role="alert">{schema.reason}</div>
+            )}
+            <div className="database-status-note">
+              {tx("待执行迁移")}: {(schema.pending_expand?.length ?? 0) + (schema.pending_contract?.length ?? 0)}
+            </div>
+            <div className="database-status-note">
+              {tx("数据回填")}: {schema.backfills?.length ?? 0}
+            </div>
+            {schema.instances && schema.instances.length > 0 && (
+              <div className="database-status-note">
+                {tx("在线实例")}: {schema.instances.map((instance) => `${instance.instance_id} (${instance.release})`).join(", ")}
+              </div>
+            )}
           </div>
         )}
       </div>

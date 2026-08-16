@@ -63,6 +63,10 @@ type rollbackVersionInfo struct {
 	Version     string `json:"version"`
 	PublishedAt string `json:"published_at"`
 	HTMLURL     string `json:"html_url"`
+	// Compatibility marks whether the current database state allows
+	// activating this release: compatible, incompatible, or unknown.
+	Compatibility       string `json:"compatibility,omitempty"`
+	CompatibilityReason string `json:"compatibility_reason,omitempty"`
 }
 
 type githubRelease struct {
@@ -743,5 +747,6 @@ func (s *Server) handleAdminRollbackVersions(w http.ResponseWriter, r *http.Requ
 		writeError(w, r, NewHTTPError(http.StatusBadGateway, "release_lookup_failed", "Unable to load release history"))
 		return
 	}
+	s.annotateRollbackCompatibility(r.Context(), versions)
 	writeJSON(w, http.StatusOK, map[string]any{"versions": versions})
 }

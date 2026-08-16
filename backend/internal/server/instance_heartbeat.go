@@ -23,10 +23,10 @@ const (
 // InstanceHeartbeat is one published instance row (ADR 0005: every running
 // instance publishes its release through a TTL'd database heartbeat).
 type InstanceHeartbeat struct {
-	InstanceID string
-	Release    string
-	StartedAt  string
-	LastSeen   string
+	InstanceID string `json:"instance_id"`
+	Release    string `json:"release"`
+	StartedAt  string `json:"started_at"`
+	LastSeen   string `json:"last_seen"`
 }
 
 // StartInstanceHeartbeat publishes this instance and refreshes it until the

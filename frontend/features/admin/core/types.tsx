@@ -72,6 +72,23 @@ export type DatabaseStatus = {
   database_url?: string;
 };
 
+// Read-only database evolution state served by /api/admin/system/schema-status.
+export type SchemaEvolutionStatus = {
+  ready: boolean;
+  reason?: string;
+  schema_version: number;
+  pending_expand?: Array<{ version: number; name: string }>;
+  pending_contract?: Array<{ version: number; name: string }>;
+  blocking_backfills_pending?: string[];
+  backfills?: Array<{ id: string; mode: string; state: string; remaining: number }>;
+  instances?: Array<{ instance_id: string; release: string; last_seen: string }>;
+  compatibility?: {
+    target: number;
+    min_compatible: number;
+    max_compatible: number;
+  };
+};
+
 export type Provider = {
   id: string;
   name: string;
