@@ -247,7 +247,7 @@ func runContract(ctx context.Context, args []string, config server.Config, stdou
 	options := dbschema.ContractOptions{
 		DryRun:           *dryRun,
 		RequireBackfills: func(ctx context.Context) error { return requireBackfillsComplete(ctx, s) },
-		RequireCluster:   func(ctx context.Context) error { return requireNoLiveInstances(ctx, s.db) },
+		RequireCluster:   func(ctx context.Context) error { return requireNoLiveInstances(ctx, s) },
 	}
 	if !*dryRun {
 		if *backupReference == "" {
@@ -298,15 +298,21 @@ func requireBackfillsComplete(ctx context.Context, s *session) error {
 // requireNoLiveInstances refuses contract execution while any instance
 // publishes a fresh heartbeat. Compatibility-range comparison arrives with
 // the release manifest; until then any live instance counts as potentially
-// incompatible, the conservative reading of ADR 0005.
-func requireNoLiveInstances(ctx context.Context, db *sql.DB) error {
+// incompatible, the conservative reading of ADR 0005. A missing heartbeat
+// table also refuses: without it the preflight cannot prove that no instance
+// is serving, and a server whose heartbeat publication failed keeps running.
+func requireNoLiveInstances(ctx context.Context, s *session) error {
+	mark := "?"
+	if s.driver == "postgres" {
+		mark = "$1"
+	}
 	var count int
 	cutoff := time.Now().UTC().Add(-heartbeatTTL).Format(time.RFC3339)
-	err := db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM instance_heartbeats WHERE last_seen > ?", cutoff).Scan(&count)
+	err := s.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM instance_heartbeats WHERE last_seen > "+mark, cutoff).Scan(&count)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) || missingHeartbeatTable(err) {
-			return nil
+		if missingHeartbeatTable(err) {
+			return errors.New("instance heartbeat table is missing; cannot verify that no instance is serving — start the server once before contracting")
 		}
 		return err
 	}

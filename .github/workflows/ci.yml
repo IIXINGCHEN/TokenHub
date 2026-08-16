@@ -139,25 +139,27 @@ jobs:
         run: |
           set -euo pipefail
           boot_and_wait() {
-            bin="$1"; port="$2"; log="$3"
+            bin="$1"; port="$2"; probe="$3"; log="$4"
             TOKENHUB_HTTP_ADDR="127.0.0.1:${port}" TOKENHUB_DATABASE_URL="sqlite://${N1_DATABASE}" "$bin" >"$log" 2>&1 &
             pid=$!
             for _ in $(seq 1 60); do
-              curl -fsS "http://127.0.0.1:${port}/livez" >/dev/null 2>&1 && { kill "$pid"; wait "$pid" 2>/dev/null || true; return 0; }
+              curl -fsS "http://127.0.0.1:${port}${probe}" >/dev/null 2>&1 && { kill "$pid"; wait "$pid" 2>/dev/null || true; return 0; }
               kill -0 "$pid" 2>/dev/null || { echo "process died; log follows"; cat "$log"; return 1; }
               sleep 1
             done
             echo "timeout waiting for port ${port}; log follows"; cat "$log"; kill "$pid" 2>/dev/null || true; return 1
           }
-          # The previous release creates the legacy database.
-          boot_and_wait "$RUNNER_TEMP/n1-tokenhub" 18081 "$RUNNER_TEMP/n1-a.log"
-          # The current release adopts it and reports readiness.
-          boot_and_wait "$RUNNER_TEMP/current-tokenhub" 18082 "$RUNNER_TEMP/cur-b.log"
+          # The previous release creates the legacy database; its health
+          # endpoint is a plain connectivity probe.
+          boot_and_wait "$RUNNER_TEMP/n1-tokenhub" 18081 /healthz "$RUNNER_TEMP/n1-a.log"
+          # The current release adopts it and must report full readiness, not
+          # just liveness: /readyz fails on dirty or unverifiable state.
+          boot_and_wait "$RUNNER_TEMP/current-tokenhub" 18082 /readyz "$RUNNER_TEMP/cur-b.log"
           TOKENHUB_DATABASE_URL="sqlite://${N1_DATABASE}" "$RUNNER_TEMP/current-tokenhub" db verify
           # The previous release boots again on the adopted database (rollback window).
-          boot_and_wait "$RUNNER_TEMP/n1-tokenhub" 18083 "$RUNNER_TEMP/n1-d.log"
+          boot_and_wait "$RUNNER_TEMP/n1-tokenhub" 18083 /healthz "$RUNNER_TEMP/n1-d.log"
           # The current release returns to serving the same database.
-          boot_and_wait "$RUNNER_TEMP/current-tokenhub" 18084 "$RUNNER_TEMP/cur-e.log"
+          boot_and_wait "$RUNNER_TEMP/current-tokenhub" 18084 /readyz "$RUNNER_TEMP/cur-e.log"
           TOKENHUB_DATABASE_URL="sqlite://${N1_DATABASE}" "$RUNNER_TEMP/current-tokenhub" db status
 
   frontend:

@@ -83,9 +83,15 @@ func TestRepairRequiresDirtyVersion(t *testing.T) {
 
 func TestContractDryRunOnAdoptedDatabase(t *testing.T) {
 	databaseURL := cliTestEnv(t)
-	if _, err := server.NewSQLiteStore(databaseURL); err != nil {
+	// Open the store once to adopt, then simulate a drained serving instance:
+	// the heartbeat table exists but holds no live rows. Without the table the
+	// cluster preflight fails closed (it cannot prove no instance is serving).
+	store, err := server.NewSQLiteStore(databaseURL)
+	if err != nil {
 		t.Fatal(err)
 	}
+	stopHeartbeat := store.StartInstanceHeartbeat("cli-test")
+	stopHeartbeat()
 	code, output := runCLI(t, "contract", "--dry-run")
 	if code != 0 || !strings.Contains(output, "pending contract migrations: 0") || !strings.Contains(output, "dry run") {
 		t.Fatalf("contract dry run: code=%d output=%q", code, output)

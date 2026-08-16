@@ -40,6 +40,18 @@ func OpenRawDatabase(databaseURL string) (driver string, db *sql.DB, err error) 
 	if err != nil {
 		return "", nil, err
 	}
+	if driver == "sqlite" {
+		// Match the runtime handle so maintenance commands enforce the same
+		// pragmas: SQLite pragmas are connection-local, and a second pooled
+		// connection would silently run without them.
+		sqlDB.SetMaxOpenConns(1)
+		for _, pragma := range []string{"PRAGMA foreign_keys = ON", "PRAGMA busy_timeout = 5000"} {
+			if _, err := sqlDB.ExecContext(context.Background(), pragma); err != nil {
+				_ = sqlDB.Close()
+				return "", nil, fmt.Errorf("configure sqlite maintenance handle: %w", err)
+			}
+		}
+	}
 	return driver, sqlDB, nil
 }
 
@@ -56,7 +68,7 @@ func VerifySchemaSemantics(ctx context.Context, databaseURL string) error {
 		return err
 	}
 	defer db.Close()
-	reference, err := schemaReferenceSnapshot(ctx, db, driver, dsn)
+	reference, err := schemaReferenceSnapshot(ctx, driver, dsn)
 	if err != nil {
 		return err
 	}

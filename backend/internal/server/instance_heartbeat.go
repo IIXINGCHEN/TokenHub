@@ -138,6 +138,12 @@ func (s *GormStore) DatabaseEvolutionStatus(ctx context.Context) DatabaseEvoluti
 			SchemaVersion: status.CurrentVersion,
 		}
 	}
+	if len(status.PendingExpand) > 0 {
+		return DatabaseEvolutionStatus{
+			Reason:        fmt.Sprintf("%d expand migration(s) pending; run tokenhub db migrate or restart the server", len(status.PendingExpand)),
+			SchemaVersion: status.CurrentVersion,
+		}
+	}
 	pending, err := pendingBlockingBackfills(ctx, sqlDB, s.dbDriver)
 	if err != nil {
 		return DatabaseEvolutionStatus{

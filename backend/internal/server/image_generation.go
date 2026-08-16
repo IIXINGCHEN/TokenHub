@@ -469,10 +469,11 @@ func (s *Server) enqueueImageJob(work imageJobWork) error {
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
-	// Stop publishing this instance's heartbeat first so other replicas and
-	// maintenance commands see the instance leave before its workers die.
+	// The instance heartbeat stays published until every database worker has
+	// stopped: contract preflight must keep seeing this instance through the
+	// drain, on every exit path.
 	if s.stopHeartbeat != nil {
-		s.stopHeartbeat()
+		defer s.stopHeartbeat()
 	}
 	// Traces are flushed last, once every producer of completions has stopped.
 	// Deferring it also makes the flush survive the early returns below: failing to

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -27,7 +28,7 @@ import (
 // and checksums.
 func adoptSchemaLedger(ctx context.Context, db *sql.DB, driver, dsn string, legacy func(ctx context.Context) error) error {
 	reference := func(ctx context.Context) (dbschema.ObjectSet, error) {
-		return schemaReferenceSnapshot(ctx, db, driver, dsn)
+		return schemaReferenceSnapshot(ctx, driver, dsn)
 	}
 	options := []dbschema.Option{
 		dbschema.WithExternalCoordination(),
@@ -50,12 +51,35 @@ func adoptSchemaLedger(ctx context.Context, db *sql.DB, driver, dsn string, lega
 	if len(statements) > 0 {
 		options = append(options, dbschema.WithFreshBaseline(statements))
 	}
-	runner, err := dbschema.NewRunner(db, dbschema.Dialect(driver), nil, options...)
+	options = append(options, dbschema.WithLegacyRecognizer(legacyLooksLikeTokenHub(driver)))
+	runner, err := dbschema.NewRunner(db, dbschema.Dialect(driver), SchemaMigrationRegistry(), options...)
 	if err != nil {
 		return err
 	}
 	_, err = runner.Adopt(ctx, legacy)
 	return err
+}
+
+// legacyLooksLikeTokenHub refuses legacy adoption of databases that hold
+// tables but none from a known TokenHub release: the frozen flow would simply
+// complete an unrelated database and record it as the supported baseline
+// (ADR 0005).
+func legacyLooksLikeTokenHub(driver string) func(ctx context.Context, db *sql.DB) error {
+	return func(ctx context.Context, db *sql.DB) error {
+		query := "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('admin_users', 'projects', 'providers', 'request_logs')"
+		if driver == "postgres" {
+			query = "SELECT COUNT(*) FROM information_schema.tables WHERE table_type = 'BASE TABLE' AND table_schema = current_schema() " +
+				"AND table_name IN ('admin_users', 'projects', 'providers', 'request_logs')"
+		}
+		var count int
+		if err := db.QueryRowContext(ctx, query).Scan(&count); err != nil {
+			return err
+		}
+		if count == 0 {
+			return errors.New("database holds tables but none from a known TokenHub release")
+		}
+		return nil
+	}
 }
 
 // schemaReferenceCache holds one reference snapshot per driver per process:
@@ -66,11 +90,11 @@ var schemaReferenceCache sync.Map // driver string -> dbschema.ObjectSet
 // schemaReferenceSnapshot returns the semantic reference schema for the
 // driver, building it once by running the frozen structural flow on a
 // throwaway database and introspecting the result (ADR 0006).
-func schemaReferenceSnapshot(ctx context.Context, execDB *sql.DB, driver, dsn string) (dbschema.ObjectSet, error) {
+func schemaReferenceSnapshot(ctx context.Context, driver, dsn string) (dbschema.ObjectSet, error) {
 	if cached, ok := schemaReferenceCache.Load(driver); ok {
 		return cached.(dbschema.ObjectSet), nil
 	}
-	built, err := buildSchemaReference(ctx, execDB, driver, dsn)
+	built, err := buildSchemaReference(ctx, driver, dsn)
 	if err != nil {
 		return dbschema.ObjectSet{}, err
 	}
@@ -78,7 +102,7 @@ func schemaReferenceSnapshot(ctx context.Context, execDB *sql.DB, driver, dsn st
 	return stored.(dbschema.ObjectSet), nil
 }
 
-func buildSchemaReference(ctx context.Context, execDB *sql.DB, driver, dsn string) (dbschema.ObjectSet, error) {
+func buildSchemaReference(ctx context.Context, driver, dsn string) (dbschema.ObjectSet, error) {
 	switch driver {
 	case "sqlite":
 		scratchDSN := fmt.Sprintf("file:%s?mode=memory&cache=shared", NewID("schemaref"))
@@ -96,14 +120,23 @@ func buildSchemaReference(ctx context.Context, execDB *sql.DB, driver, dsn strin
 		}
 		return dbschema.Introspect(ctx, sqlDB, dbschema.DialectSQLite, "")
 	case "postgres":
-		// PostgreSQL folds unquoted identifiers to lowercase; keep the schema
-		// name lowercase so the search_path runtime parameter resolves it.
+		// A dedicated scratch schema builds the reference. PostgreSQL cannot
+		// host the frozen flow's function and trigger in pg_temp (unqualified
+		// CREATE FUNCTION lands outside the temporary schema), so this needs
+		// the database-level CREATE privilege once; setups where the role owns
+		// the public schema but lacks it get an actionable error rather than a
+		// silently skipped verification.
 		schemaName := "tokenhub_schema_ref_" + strings.ToLower(NewID(""))
-		if _, err := execDB.ExecContext(ctx, fmt.Sprintf("CREATE SCHEMA %s", quotePostgresIdent(schemaName))); err != nil {
-			return dbschema.ObjectSet{}, fmt.Errorf("create schema reference schema: %w", err)
+		admin, err := sql.Open("pgx", dsn)
+		if err != nil {
+			return dbschema.ObjectSet{}, fmt.Errorf("open postgres schema reference admin handle: %w", err)
+		}
+		defer admin.Close()
+		if _, err := admin.ExecContext(ctx, fmt.Sprintf("CREATE SCHEMA %s", quotePostgresIdent(schemaName))); err != nil {
+			return dbschema.ObjectSet{}, fmt.Errorf("create schema reference schema %s (grant CREATE on the database to this role once, e.g. GRANT CREATE ON DATABASE <db> TO <role>): %w", schemaName, err)
 		}
 		defer func() {
-			_, _ = execDB.ExecContext(context.Background(), fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", quotePostgresIdent(schemaName)))
+			_, _ = admin.ExecContext(context.Background(), fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", quotePostgresIdent(schemaName)))
 		}()
 		scratchDSN, err := postgresSearchPathDSN(dsn, schemaName)
 		if err != nil {
