@@ -272,6 +272,7 @@ type GormStore struct {
 	analyticsDB          *gorm.DB
 	mu                   *sync.Mutex
 	leaseHeartbeats      *sync.Map
+	modelLabels          *modelLabelCache
 	secretKey            string
 	metrics              *GatewayMetrics
 	failureThreshold     int
