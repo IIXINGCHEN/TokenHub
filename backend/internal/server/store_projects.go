@@ -501,6 +501,15 @@ func (s *GormStore) ListAPIKeys() []APIKey {
 	return publicKeys(items)
 }
 
+func (s *GormStore) GetAPIKey(id string) (APIKey, bool) {
+	var key APIKey
+	if err := s.db.First(&key, "id = ?", id).Error; err != nil {
+		return APIKey{}, false
+	}
+	hydrateAPIKey(&key)
+	return publicKey(key), true
+}
+
 func (s *GormStore) UpdateAPIKey(id string, patch APIKey) (APIKey, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

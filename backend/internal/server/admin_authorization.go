@@ -669,10 +669,8 @@ func (s *Server) canManageAPIKey(user AdminUser, keyID string) bool {
 }
 
 func (s *Server) findAPIKey(keyID string) (APIKey, error) {
-	for _, key := range s.store.ListAPIKeys() {
-		if key.ID == keyID {
-			return key, nil
-		}
+	if key, ok := s.store.GetAPIKey(keyID); ok {
+		return key, nil
 	}
 	return APIKey{}, NewHTTPError(404, "api_key_not_found", "API key not found")
 }
