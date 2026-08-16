@@ -165,6 +165,52 @@ func TestOAuthProvisioningDoesNotBindByUsername(t *testing.T) {
 	}
 }
 
+func TestOAuthProvisioningRejectsExplicitlyUnverifiedEmail(t *testing.T) {
+	store := NewMemoryStore()
+	existing, err := store.CreateAdminUser(AdminUser{
+		Username: "platform-admin", Email: "admin@example.test", Role: "admin", Status: StatusActive,
+	}, "platform-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := New(store)
+	provider := AdminResource{
+		ID: "idp_unverified_email", Name: "Enterprise SSO", Status: StatusActive,
+		Fields: map[string]any{"username_claim": "preferred_username", "email_claim": "email", "default_role": "user"},
+	}
+
+	for _, unverified := range []any{false, nil, "false", "unexpected", float64(1)} {
+		_, err = server.upsertOAuthAdminUser(provider, map[string]any{
+			"preferred_username": "unrelated-user",
+			"email":              existing.Email,
+			"email_verified":     unverified,
+		})
+		if httpErr := AsHTTPError(err); httpErr.Code != "oauth_email_unverified" || httpErr.Status != http.StatusForbidden {
+			t.Fatalf("unverified email value %#v was accepted: err=%v", unverified, err)
+		}
+	}
+	users := store.ListAdminUsers()
+	if len(users) != 1 || users[0].ID != existing.ID || users[0].Email != existing.Email || users[0].Role != "admin" {
+		t.Fatalf("unverified email changed administrator records: %+v", users)
+	}
+	_, err = server.upsertOAuthAdminUser(provider, map[string]any{
+		"preferred_username": "new-user",
+		"email":              "new@example.test",
+		"email_verified":     false,
+	})
+	if httpErr := AsHTTPError(err); httpErr.Code != "oauth_email_unverified" || len(store.ListAdminUsers()) != 1 {
+		t.Fatalf("unverified email created a user: err=%v users=%+v", err, store.ListAdminUsers())
+	}
+	verified, err := server.upsertOAuthAdminUser(provider, map[string]any{
+		"preferred_username": existing.Username,
+		"email":              existing.Email,
+		"email_verified":     true,
+	})
+	if err != nil || verified.ID != existing.ID {
+		t.Fatalf("verified email did not bind existing account: user=%+v err=%v", verified, err)
+	}
+}
+
 func TestSafeOAuthReturnURLIgnoresOriginAndReferer(t *testing.T) {
 	server := NewWithConfig(NewMemoryStore(), Config{
 		PublicBaseURL:      "https://api.tokenhub.example",

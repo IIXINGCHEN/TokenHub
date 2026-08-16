@@ -711,6 +711,9 @@ func (s *Server) upsertOAuthAdminUser(provider AdminResource, claims map[string]
 	emailClaim := strings.TrimSpace(stringField(provider.Fields, "email_claim"))
 	teamClaim := strings.TrimSpace(stringField(provider.Fields, "team_claim"))
 	email := firstOAuthClaim(claims, emailClaim, "email", "enterprise_email", "biz_mail", "public_email")
+	if verified, present := oauthEmailVerification(claims); email != "" && present && !verified {
+		return AdminUser{}, NewHTTPError(403, "oauth_email_unverified", "OAuth provider did not verify the account email")
+	}
 	if email == "" {
 		email = identityProviderFallbackEmail(provider, claims)
 	}
@@ -811,6 +814,21 @@ func oauthClaimString(claims map[string]any, key string) string {
 		return "false"
 	default:
 		return strings.TrimSpace(fmt.Sprint(typed))
+	}
+}
+
+func oauthEmailVerification(claims map[string]any) (bool, bool) {
+	value, present := claims["email_verified"]
+	if !present {
+		return false, false
+	}
+	switch typed := value.(type) {
+	case bool:
+		return typed, true
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "true"), true
+	default:
+		return false, true
 	}
 }
 
