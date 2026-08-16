@@ -9,8 +9,8 @@ const catalog = await readFile(new URL("../../../../data/model-catalog.yaml", im
 const createModalSource = await readFile(new URL("../views/model-create-modal.tsx", import.meta.url), "utf8");
 const directorySource = await readFile(new URL("../views/model-directory.tsx", import.meta.url), "utf8");
 const glm52 = catalog.slice(catalog.indexOf('  - name: "zai-org/glm-5.2"'), catalog.indexOf('  - name:', catalog.indexOf('  - name: "zai-org/glm-5.2"') + 1));
-const catalogTitle = glm52.match(/^    title: "([^"]+)"$/m)?.[1];
-const catalogEndpoints = glm52.match(/^      endpoints: "([^"]+)"$/m)?.[1];
+const catalogTitle = glm52.match(/^ {4}title: "([^"]+)"$/m)?.[1];
+const catalogEndpoints = glm52.match(/^ {6}endpoints: "([^"]+)"$/m)?.[1];
 
 test("model display name uses and preserves tracked GLM-5.2 metadata", () => {
   assert.equal(catalogTitle, "GLM 5.2");
