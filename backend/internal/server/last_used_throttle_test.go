@@ -112,38 +112,50 @@ func TestLastUsedThrottleNamespacesAreIndependent(t *testing.T) {
 	}
 }
 
-func TestLastUsedThrottleFailedWriteRetriesImmediately(t *testing.T) {
+func TestLastUsedThrottleFailedWriteBacksOffAndRetries(t *testing.T) {
 	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	throttle := newTestLastUsedThrottle(&clock)
 	failure := errors.New("write failed")
+	attempts := 0
 
-	if err := throttle.mark("key:a", func() error { return failure }); !errors.Is(err, failure) {
+	if err := throttle.mark("key:a", func() error {
+		attempts++
+		return failure
+	}); !errors.Is(err, failure) {
 		t.Fatalf("mark should surface the write error, got %v", err)
 	}
 
-	writes := 0
 	if err := throttle.mark("key:a", func() error {
-		writes++
+		attempts++
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if writes != 1 {
-		t.Fatalf("a failed write must not suppress the next attempt, got %d writes", writes)
+	if attempts != 1 {
+		t.Fatalf("a failed write should suppress attempts inside the backoff, got %d", attempts)
+	}
+
+	clock = clock.Add(lastUsedThrottleFailureBackoff)
+	if err := throttle.mark("key:a", func() error {
+		attempts++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 2 {
+		t.Fatalf("a failed write should retry after the backoff, got %d attempts", attempts)
 	}
 }
 
-func TestLastUsedThrottleFailedWriteRestoresPreviousTimestamp(t *testing.T) {
+func TestLastUsedThrottleFailedWriteReplacesCommittedTimestamp(t *testing.T) {
 	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	throttle := newTestLastUsedThrottle(&clock)
 
 	if err := throttle.mark("key:a", func() error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	committed := clock
-
-	// Fail a write past the window, then confirm the throttle is open again and
-	// has not been left holding an in-flight placeholder.
+	// Fail a write past the window, then confirm the in-flight placeholder was
+	// replaced by an explicit failed-at state rather than the stale success.
 	clock = clock.Add(2 * lastUsedThrottleWindow)
 	failure := errors.New("write failed")
 	if err := throttle.mark("key:a", func() error { return failure }); !errors.Is(err, failure) {
@@ -151,16 +163,17 @@ func TestLastUsedThrottleFailedWriteRestoresPreviousTimestamp(t *testing.T) {
 	}
 	value, ok := throttle.entries.Load("key:a")
 	if !ok {
-		t.Fatal("rollback dropped an entry it should have restored")
+		t.Fatal("a failed write should remain tracked during its backoff")
 	}
-	restored, ok := value.(time.Time)
-	if !ok || !restored.Equal(committed) {
-		t.Fatalf("rollback should restore the displaced timestamp, got %#v", value)
+	failed, ok := value.(lastUsedFailedAt)
+	if !ok || !failed.at.Equal(clock) {
+		t.Fatalf("expected a failed-at state for %v, got %#v", clock, value)
 	}
 }
 
-func TestLastUsedThrottleReleasesClaimOnPanic(t *testing.T) {
-	throttle := newLastUsedThrottle()
+func TestLastUsedThrottleBacksOffAfterPanic(t *testing.T) {
+	clock := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	throttle := newTestLastUsedThrottle(&clock)
 
 	func() {
 		defer func() {
@@ -178,8 +191,19 @@ func TestLastUsedThrottleReleasesClaimOnPanic(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if writes != 0 {
+		t.Fatalf("a panicking write should start a failure backoff, got %d writes", writes)
+	}
+
+	clock = clock.Add(lastUsedThrottleFailureBackoff)
+	if err := throttle.mark("route:panic", func() error {
+		writes++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if writes != 1 {
-		t.Fatalf("a panicking write must not claim the key forever, got %d writes", writes)
+		t.Fatalf("a panicking write must become retryable after the backoff, got %d writes", writes)
 	}
 }
 
@@ -253,7 +277,8 @@ func TestLastUsedThrottleSuppressesMarksWhileAWriteIsInFlight(t *testing.T) {
 
 func TestLastUsedThrottleEntryCountTracksTheMap(t *testing.T) {
 	throttle := newLastUsedThrottle()
-	throttle.window = 0 // every mark claims, so commits and rollbacks interleave
+	throttle.window = 0 // successful marks can claim again immediately
+	throttle.failureBackoff = 0
 	failure := errors.New("write failed")
 
 	var wg sync.WaitGroup
@@ -349,8 +374,12 @@ func TestLastUsedThrottleSweepDropsIdleEntries(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// An in-flight claim must survive the sweep, otherwise its rollback would
-	// have nothing to restore.
+	failure := errors.New("write failed")
+	if err := throttle.mark("route:failed", func() error { return failure }); !errors.Is(err, failure) {
+		t.Fatalf("expected failed mark, got %v", err)
+	}
+	// An in-flight claim must survive the sweep, otherwise the writer would have
+	// no place to record its outcome.
 	if _, ok := throttle.shouldWrite("route:in_flight"); !ok {
 		t.Fatal("a fresh key should be writable: route:in_flight")
 	}
@@ -483,18 +512,21 @@ func TestValidateAPIKeySucceedsWhenLastUsedWriteFails(t *testing.T) {
 		t.Fatalf("the failed write should not have persisted last_used_at, got %v", persisted)
 	}
 
-	// The rollback leaves the throttle open, so the very next request retries
-	// instead of waiting out the window.
+	// The failed-at state suppresses both the retry and its caller-side log until
+	// the backoff expires.
 	if _, _, err := store.ValidateAPIKey(secret, "127.0.0.1"); err != nil {
 		t.Fatal(err)
 	}
-	if got := attempts.Load(); got != 2 {
-		t.Fatalf("a failed write should be retried by the next request, got %d attempts", got)
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("a failed write should not retry inside the backoff, got %d attempts", got)
 	}
 
 	if err := store.db.Callback().Update().Remove("test:fail_api_key_last_used"); err != nil {
 		t.Fatal(err)
 	}
+	store.lastUsed.entries.Store(lastUsedAPIKeyKey(key.ID), lastUsedFailedAt{
+		at: time.Now().Add(-2 * lastUsedThrottleFailureBackoff),
+	})
 	if _, _, err := store.ValidateAPIKey(secret, "127.0.0.1"); err != nil {
 		t.Fatal(err)
 	}

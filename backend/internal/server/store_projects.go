@@ -716,8 +716,8 @@ func (s *GormStore) ValidateAPIKey(rawSecret string, clientIP string) (Project, 
 		return s.db.Model(&APIKey{}).Where("id = ?", key.ID).Update("last_used_at", now).Error
 	}); err != nil {
 		// last_used_at is display-only, so a failed write must not reject an
-		// otherwise valid key. The claim was rolled back, so the next request
-		// retries immediately.
+		// otherwise valid key. The failed-at state suppresses repeated attempts
+		// and logs until the failure backoff expires.
 		log.Printf("[tokenhub] failed to record api key last_used_at key=%s: %v", key.ID, err)
 	}
 	return project, publicKey(key), nil

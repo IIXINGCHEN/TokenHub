@@ -22,6 +22,10 @@ import (
 const (
 	// lastUsedThrottleWindow bounds how stale a persisted last_used_at may be.
 	lastUsedThrottleWindow = time.Minute
+	// lastUsedThrottleFailureBackoff prevents a database outage from turning
+	// every request into another write attempt and log line. Failed objects are
+	// retried after the normal throttle window.
+	lastUsedThrottleFailureBackoff = lastUsedThrottleWindow
 	// lastUsedThrottleEntryTTL is how long an idle entry survives a sweep. It
 	// must stay well above lastUsedThrottleWindow so sweeping never drops an
 	// entry that is still suppressing writes.
@@ -53,27 +57,34 @@ type lastUsedWriting struct{}
 
 var lastUsedWriteInFlight any = lastUsedWriting{}
 
+// lastUsedFailedAt records a completed write attempt that failed. Keeping it
+// distinct from a successful timestamp makes the retry policy explicit while
+// still letting sweeps reclaim the entry after it becomes idle.
+type lastUsedFailedAt struct {
+	at time.Time
+}
+
 // lastUsedClaim is one caller's right to write a key. An untracked claim means
 // the throttle was full and declined to remember the key: the caller still
 // writes, it just gets no throttling.
 type lastUsedClaim struct {
-	key      string
-	previous time.Time
-	tracked  bool
+	key     string
+	tracked bool
 }
 
 // lastUsedThrottle decides which last_used_at writes are worth making. It holds
 // no lock of its own: entries is a sync.Map and writers claim a key by swapping
 // in the in-flight placeholder.
 type lastUsedThrottle struct {
-	entries    *sync.Map // key string -> time.Time (committed) or lastUsedWriting (in flight)
-	now        func() time.Time
-	window     time.Duration
-	entryTTL   time.Duration
-	sweepEvery time.Duration
-	maxEntries int64
-	count      atomic.Int64
-	nextSweep  atomic.Int64 // unix nanos; the CAS on it single-flights sweeps
+	entries        *sync.Map // key string -> time.Time, lastUsedFailedAt or lastUsedWriting
+	now            func() time.Time
+	window         time.Duration
+	failureBackoff time.Duration
+	entryTTL       time.Duration
+	sweepEvery     time.Duration
+	maxEntries     int64
+	count          atomic.Int64
+	nextSweep      atomic.Int64 // unix nanos; the CAS on it single-flights sweeps
 }
 
 func newLastUsedThrottle() *lastUsedThrottle {
@@ -83,18 +94,20 @@ func newLastUsedThrottle() *lastUsedThrottle {
 		// would let a backwards system-clock jump suppress writes for far
 		// longer than the window. The timestamps that reach the database are
 		// the callers' own, not this clock.
-		now:        time.Now,
-		window:     lastUsedThrottleWindow,
-		entryTTL:   lastUsedThrottleEntryTTL,
-		sweepEvery: lastUsedThrottleSweepInterval,
-		maxEntries: lastUsedThrottleMaxEntries,
+		now:            time.Now,
+		window:         lastUsedThrottleWindow,
+		failureBackoff: lastUsedThrottleFailureBackoff,
+		entryTTL:       lastUsedThrottleEntryTTL,
+		sweepEvery:     lastUsedThrottleSweepInterval,
+		maxEntries:     lastUsedThrottleMaxEntries,
 	}
 }
 
 // mark runs write at most once per window for key and returns whatever write
 // returned. A skipped write reports nil: callers treat "someone else refreshed
-// this recently" as success. A failed write leaves the throttle as it found it,
-// so the next request retries immediately instead of waiting out the window.
+// this recently" as success. A failed or panicking write records a failed-at
+// state, so another attempt and its corresponding log cannot occur until the
+// failure backoff expires.
 //
 // A nil throttle writes unconditionally, so a store built without one degrades
 // to the previous behaviour rather than panicking.
@@ -106,22 +119,22 @@ func (t *lastUsedThrottle) mark(key string, write func() error) error {
 	if !ok {
 		return nil
 	}
-	// The claim is released on every path that is not a successful write,
-	// panics included: a leaked in-flight placeholder would suppress this
-	// object's writes until the process restarts.
+	// Every path that is not a successful write, panics included, replaces the
+	// in-flight placeholder with a failed-at state. Without that defer a panic
+	// would suppress this object's writes until the process restarts.
 	committed := false
 	defer func() {
 		if !committed {
-			t.rollback(claim)
+			t.fail(claim, t.now())
 		}
 	}()
 	if err := write(); err != nil {
 		return err
 	}
-	committed = true
 	// The window is measured from completion, not from the start of the write,
 	// so a slow write does not let the next one fire right after it.
 	t.commit(claim, t.now())
+	committed = true
 	return nil
 }
 
@@ -142,12 +155,20 @@ func (t *lastUsedThrottle) shouldWrite(key string) (lastUsedClaim, bool) {
 		// and judge the entry it left behind.
 		t.count.Add(-1)
 	}
-	written, ok := current.(time.Time)
-	if !ok {
+	var attemptedAt time.Time
+	var backoff time.Duration
+	switch state := current.(type) {
+	case time.Time:
+		attemptedAt = state
+		backoff = t.window
+	case lastUsedFailedAt:
+		attemptedAt = state.at
+		backoff = t.failureBackoff
+	default:
 		// Another goroutine is writing this key right now.
 		return lastUsedClaim{}, false
 	}
-	if now.Sub(written) < t.window {
+	if now.Sub(attemptedAt) < backoff {
 		return lastUsedClaim{}, false
 	}
 	if !t.entries.CompareAndSwap(key, current, lastUsedWriteInFlight) {
@@ -155,7 +176,7 @@ func (t *lastUsedThrottle) shouldWrite(key string) (lastUsedClaim, bool) {
 		// load and the swap. Skip this round; the next request re-evaluates.
 		return lastUsedClaim{}, false
 	}
-	return lastUsedClaim{key: key, previous: written, tracked: true}, true
+	return lastUsedClaim{key: key, tracked: true}, true
 }
 
 func (t *lastUsedThrottle) commit(claim lastUsedClaim, completedAt time.Time) {
@@ -165,19 +186,11 @@ func (t *lastUsedThrottle) commit(claim lastUsedClaim, completedAt time.Time) {
 	t.entries.Store(claim.key, completedAt)
 }
 
-// rollback undoes a claim whose write did not succeed, restoring the displaced
-// timestamp or removing an entry this claim created.
-func (t *lastUsedThrottle) rollback(claim lastUsedClaim) {
+func (t *lastUsedThrottle) fail(claim lastUsedClaim, failedAt time.Time) {
 	if !claim.tracked {
 		return
 	}
-	if claim.previous.IsZero() {
-		if t.entries.CompareAndDelete(claim.key, lastUsedWriteInFlight) {
-			t.count.Add(-1)
-		}
-		return
-	}
-	t.entries.CompareAndSwap(claim.key, lastUsedWriteInFlight, claim.previous)
+	t.entries.Store(claim.key, lastUsedFailedAt{at: failedAt})
 }
 
 // admit reserves room for one new entry. At the ceiling it sweeps once and
@@ -219,15 +232,24 @@ func (t *lastUsedThrottle) maybeSweep(now time.Time) {
 }
 
 // sweep drops entries no request has refreshed for entryTTL, which is how
-// deleted keys, routes and resources give their slot back. Reclamation is
-// pressure-driven: an idle entry is only dropped once the map is full, which is
-// the only time the space is worth anything. In-flight placeholders are left
-// alone so a concurrent rollback still finds its claim.
+// deleted keys, routes and resources give their slot back. Successful and
+// failed-at states are both eligible. Reclamation is pressure-driven: an idle
+// entry is only dropped once the map is full, which is the only time the space
+// is worth anything. In-flight placeholders are left alone so the writer can
+// still record its outcome.
 func (t *lastUsedThrottle) sweep(now time.Time) {
 	cutoff := now.Add(-t.entryTTL)
 	t.entries.Range(func(key, value any) bool {
-		written, ok := value.(time.Time)
-		if !ok || written.After(cutoff) {
+		var attemptedAt time.Time
+		switch state := value.(type) {
+		case time.Time:
+			attemptedAt = state
+		case lastUsedFailedAt:
+			attemptedAt = state.at
+		default:
+			return true
+		}
+		if attemptedAt.After(cutoff) {
 			return true
 		}
 		if t.entries.CompareAndDelete(key, value) {
