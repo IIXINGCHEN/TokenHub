@@ -280,7 +280,7 @@ func (e *BackfillExecutor) RunOnlineBatch(ctx context.Context) ([]OnlineProgress
 		if state.State == BackfillStateComplete {
 			continue
 		}
-		claimed, err := e.claimLease(ctx, b.ID, state)
+		claimed, err := e.claimLease(ctx, b.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -317,8 +317,8 @@ func (e *BackfillExecutor) loadOne(ctx context.Context, id string) (BackfillStat
 }
 
 func (e *BackfillExecutor) markRunning(ctx context.Context, id string) error {
-	marks := placeholderMarks(e.dialect, 2)
-	query := fmt.Sprintf("UPDATE data_backfills SET state = %s, updated_at = %s WHERE id = %s", marks[0], marks[1], marks[0])
+	marks := placeholderMarks(e.dialect, 3)
+	query := fmt.Sprintf("UPDATE data_backfills SET state = %s, updated_at = %s WHERE id = %s", marks[0], marks[1], marks[2])
 	if _, err := e.db.ExecContext(ctx, query, BackfillStateRunning, e.nowText(), id); err != nil {
 		return fmt.Errorf("dbschema: mark backfill %q running: %w", id, err)
 	}
@@ -326,47 +326,54 @@ func (e *BackfillExecutor) markRunning(ctx context.Context, id string) error {
 }
 
 func (e *BackfillExecutor) markComplete(ctx context.Context, id string) error {
-	marks := placeholderMarks(e.dialect, 2)
+	marks := placeholderMarks(e.dialect, 3)
 	query := fmt.Sprintf(
 		"UPDATE data_backfills SET state = %s, remaining = 0, lease_owner = '', lease_expires_at = '', updated_at = %s WHERE id = %s",
-		marks[0], marks[1], marks[0])
+		marks[0], marks[1], marks[2])
 	if _, err := e.db.ExecContext(ctx, query, BackfillStateComplete, e.nowText(), id); err != nil {
 		return fmt.Errorf("dbschema: mark backfill %q complete: %w", id, err)
 	}
 	return nil
 }
 
-// claimLease takes or renews the online lease for a backfill. An unexpired
-// foreign lease refuses the claim; an expired one is taken over.
-func (e *BackfillExecutor) claimLease(ctx context.Context, id string, state BackfillState) (bool, error) {
+// claimLease atomically takes or renews the online lease for a backfill. The
+// lease predicate is part of the UPDATE and the claim only succeeds when a
+// row was affected, so two replicas racing on an expired lease cannot both
+// win; an unexpired foreign lease matches no row and refuses the claim.
+func (e *BackfillExecutor) claimLease(ctx context.Context, id string) (bool, error) {
 	now := e.now().UTC()
-	if state.LeaseOwner != "" && state.LeaseOwner != e.owner {
-		if expiresAt, err := time.Parse(time.RFC3339, state.LeaseExpiresAt); err == nil && expiresAt.After(now) {
-			return false, nil
-		}
-	}
 	expires := now.Add(e.leaseTTL).Format(time.RFC3339)
-	marks := placeholderMarks(e.dialect, 4)
+	nowText := now.Format(time.RFC3339)
+	marks := placeholderMarks(e.dialect, 7)
 	query := fmt.Sprintf(
-		"UPDATE data_backfills SET lease_owner = %s, lease_expires_at = %s, state = %s, updated_at = %s WHERE id = %s",
-		marks[0], marks[1], marks[2], marks[3], marks[0])
-	if _, err := e.db.ExecContext(ctx, query, e.owner, expires, BackfillStateRunning, e.nowText(), id); err != nil {
+		"UPDATE data_backfills SET lease_owner = %s, lease_expires_at = %s, state = %s, updated_at = %s "+
+			"WHERE id = %s AND (lease_owner = '' OR lease_owner = %s OR lease_expires_at < %s)",
+		marks[0], marks[1], marks[2], marks[3], marks[4], marks[5], marks[6])
+	result, err := e.db.ExecContext(ctx, query, e.owner, expires, BackfillStateRunning, nowText, id, e.owner, nowText)
+	if err != nil {
 		return false, fmt.Errorf("dbschema: claim backfill lease %q: %w", id, err)
 	}
-	return true, nil
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("dbschema: claim backfill lease %q: %w", id, err)
+	}
+	return affected == 1, nil
 }
 
+// recordProgress publishes batch progress and extends the lease (the
+// heartbeat). The owner fence keeps a stale executor from overwriting the
+// state of the instance that took over its expired lease.
 func (e *BackfillExecutor) recordProgress(ctx context.Context, id string, remaining int64) error {
-	marks := placeholderMarks(e.dialect, 4)
-	query := fmt.Sprintf(
-		"UPDATE data_backfills SET remaining = %s, lease_expires_at = %s, state = %s, updated_at = %s WHERE id = %s",
-		marks[0], marks[1], marks[2], marks[3], marks[0])
 	state := BackfillStateRunning
 	if remaining <= 0 {
 		state = BackfillStateComplete
 	}
 	expires := e.now().UTC().Add(e.leaseTTL).Format(time.RFC3339)
-	if _, err := e.db.ExecContext(ctx, query, remaining, expires, state, e.nowText(), id); err != nil {
+	marks := placeholderMarks(e.dialect, 6)
+	query := fmt.Sprintf(
+		"UPDATE data_backfills SET remaining = %s, lease_expires_at = %s, state = %s, updated_at = %s WHERE id = %s AND lease_owner = %s",
+		marks[0], marks[1], marks[2], marks[3], marks[4], marks[5])
+	if _, err := e.db.ExecContext(ctx, query, remaining, expires, state, e.nowText(), id, e.owner); err != nil {
 		return fmt.Errorf("dbschema: record backfill progress %q: %w", id, err)
 	}
 	return nil

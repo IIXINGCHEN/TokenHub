@@ -229,11 +229,13 @@ func TestOnlineLeaseBlocksSecondExecutor(t *testing.T) {
 	if remainingWork(t, db) != 6 {
 		t.Fatalf("owner B must not have converted rows, %d left", remainingWork(t, db))
 	}
-	// After the lease expires, owner B takes over and finishes the task.
+	// After the lease expires, owner B takes over and finishes the task. The
+	// takeover instant is strictly past the expiry: the atomic claim treats an
+	// exactly-current lease as still live.
 	ownerB = mustExecutor(t, db, registry,
 		WithBackfillOwner("executor-b"),
 		WithBackfillLeaseTTL(time.Minute),
-		WithBackfillClock(func() time.Time { return fixedClock.Add(2 * time.Minute) }))
+		WithBackfillClock(func() time.Time { return fixedClock.Add(3 * time.Minute) }))
 	for range 10 {
 		progress, err = ownerB.RunOnlineBatch(ctx)
 		if err != nil {

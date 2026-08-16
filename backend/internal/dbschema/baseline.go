@@ -55,11 +55,17 @@ func readBaselineFile(path string, dialect Dialect) ([]string, error) {
 // databaseIsFresh reports whether the database holds no user tables beyond
 // the runner's own ledger tables.
 func (r *Runner) databaseIsFresh(ctx context.Context) (bool, error) {
+	return r.databaseIsFreshOn(ctx, r.db)
+}
+
+// databaseIsFreshOn is the connection-safe variant used while a dedicated
+// SQLite connection is held.
+func (r *Runner) databaseIsFreshOn(ctx context.Context, db Execer) (bool, error) {
 	query := "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
 	if r.dialect == DialectPostgres {
 		query = "SELECT table_name FROM information_schema.tables WHERE table_type = 'BASE TABLE' AND table_schema = current_schema()"
 	}
-	rows, err := r.db.QueryContext(ctx, query)
+	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		return false, fmt.Errorf("dbschema: list tables for freshness check: %w", err)
 	}
@@ -77,12 +83,132 @@ func (r *Runner) databaseIsFresh(ctx context.Context) (bool, error) {
 }
 
 func isLedgerTable(name string) bool {
-	return name == "schema_migrations" || name == "migration_attempts"
+	switch name {
+	case "schema_migrations", "migration_attempts", "data_backfills":
+		return true
+	}
+	return false
+}
+
+// adoptFreshSQLite serializes fresh adoption through BEGIN IMMEDIATE: under
+// the write lock it re-checks that no baseline was recorded and the database
+// still holds no business tables, replays the frozen baseline SQL, and records
+// the baseline. It returns handled=false when another path should take over
+// (baseline already recorded elsewhere, or business tables appeared), letting
+// the caller fall through to the legacy flow. Everything after COMMIT runs on
+// the pool once the dedicated connection is closed, because server SQLite
+// pools are single-connection.
+func (r *Runner) adoptFreshSQLite(ctx context.Context) (result Result, err error, handled bool) {
+	conn, err := r.db.Conn(ctx)
+	if err != nil {
+		return Result{}, err, true
+	}
+	rollback := true
+	defer func() {
+		if rollback {
+			_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
+		}
+		conn.Close()
+	}()
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return Result{}, err, true
+	}
+	recorded, err := r.versionRecorded(ctx, conn, BaselineVersion)
+	if err != nil {
+		return Result{}, err, true
+	}
+	if recorded {
+		if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+			return Result{}, err, true
+		}
+		rollback = false
+		conn.Close()
+		result, err = r.migrateLocked(ctx)
+		return result, err, true
+	}
+	fresh, err := r.databaseIsFreshOn(ctx, conn)
+	if err != nil {
+		return Result{}, err, true
+	}
+	if !fresh {
+		if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+			return Result{}, err, true
+		}
+		rollback = false
+		return Result{}, nil, false
+	}
+	attemptID, err := r.beginAttemptOn(ctx, conn, BaselineVersion)
+	if err != nil {
+		return Result{}, err, true
+	}
+	started := time.Now()
+	fail := func(cause error) (Result, error, bool) {
+		r.finishAttempt(ctx, attemptID, "failed", time.Since(started), ErrCodeApplyFailed)
+		return Result{}, newError(ErrCodeApplyFailed, BaselineVersion, cause), true
+	}
+	for _, statement := range r.freshBaseline {
+		if _, err := conn.ExecContext(ctx, statement); err != nil {
+			rollback = false
+			_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
+			conn.Close()
+			return fail(fmt.Errorf("baseline statement %q: %w", firstLine(statement), err))
+		}
+	}
+	if err := r.insertAppliedOn(ctx, conn, BaselineVersion, baselineName, PhaseExpand, AdoptionChecksum, false); err != nil {
+		rollback = false
+		_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
+		conn.Close()
+		return fail(err)
+	}
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		rollback = false
+		conn.Close()
+		return fail(err)
+	}
+	rollback = false
+	conn.Close()
+	r.finishAttempt(ctx, attemptID, "success", time.Since(started), "")
+	if r.adoptionReference != nil {
+		if verifyErr := r.verifyAgainstReference(ctx); verifyErr != nil {
+			return Result{}, newError(ErrCodeSchemaVerification, BaselineVersion, verifyErr), true
+		}
+	}
+	result = Result{Adopted: true, Applied: []Applied{{
+		Version:        BaselineVersion,
+		Name:           baselineName,
+		Phase:          PhaseExpand,
+		Checksum:       AdoptionChecksum,
+		AppliedAt:      r.nowText(),
+		AppliedRelease: r.appRelease,
+	}}}
+	migrated, err := r.migrateLocked(ctx)
+	if err != nil {
+		return result, err, true
+	}
+	result.Applied = append(result.Applied, migrated.Applied...)
+	return result, nil, true
+}
+
+// beginAttemptOn records an attempt start on a held SQLite connection and is
+// the single-connection-pool-safe variant of beginAttempt.
+func (r *Runner) beginAttemptOn(ctx context.Context, db Execer, version int64) (int64, error) {
+	result, err := db.ExecContext(ctx,
+		"INSERT INTO migration_attempts (version, app_release, started_at) VALUES (?, ?, ?)",
+		version, r.appRelease, r.nowText())
+	if err != nil {
+		return 0, fmt.Errorf("dbschema: record attempt: %w", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("dbschema: record attempt id: %w", err)
+	}
+	return id, nil
 }
 
 // adoptFreshLocked creates the schema from the frozen baseline SQL on an empty
-// database, semantically verifies it against the reference snapshot, and only
-// then records the baseline. The caller holds the coordination lock.
+// PostgreSQL database, semantically verifies it against the reference
+// snapshot, and only then records the baseline. The caller holds the advisory
+// lock, which serializes concurrent executors.
 func (r *Runner) adoptFreshLocked(ctx context.Context) (Result, error) {
 	attemptID, err := r.beginAttempt(ctx, BaselineVersion)
 	if err != nil {

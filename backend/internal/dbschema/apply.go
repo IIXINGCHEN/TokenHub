@@ -63,14 +63,22 @@ func (r *Runner) Adopt(ctx context.Context, frozen func(ctx context.Context) err
 		return r.migrateLocked(ctx)
 	}
 	// A database without business tables adopts from the frozen baseline SQL
-	// instead of the legacy flow (ADR 0005).
+	// instead of the legacy flow (ADR 0005). SQLite serializes the recheck
+	// and replay under BEGIN IMMEDIATE and may fall through to legacy.
 	if len(r.freshBaseline) > 0 {
-		fresh, freshErr := r.databaseIsFresh(ctx)
-		if freshErr != nil {
-			return Result{}, freshErr
-		}
-		if fresh {
-			return r.adoptFreshLocked(ctx)
+		if r.dialect == DialectSQLite {
+			result, freshErr, handled := r.adoptFreshSQLite(ctx)
+			if handled || freshErr != nil {
+				return result, freshErr
+			}
+		} else {
+			fresh, freshErr := r.databaseIsFresh(ctx)
+			if freshErr != nil {
+				return Result{}, freshErr
+			}
+			if fresh {
+				return r.adoptFreshLocked(ctx)
+			}
 		}
 	}
 	attemptID, err := r.beginAttempt(ctx, BaselineVersion)
@@ -78,6 +86,14 @@ func (r *Runner) Adopt(ctx context.Context, frozen func(ctx context.Context) err
 		return Result{}, err
 	}
 	started := time.Now()
+	// Unrecognized databases refuse adoption instead of being absorbed into
+	// the baseline by the frozen flow (ADR 0005).
+	if r.legacyRecognizer != nil {
+		if recognizeErr := r.legacyRecognizer(ctx, r.db); recognizeErr != nil {
+			r.finishAttempt(ctx, attemptID, "failed", time.Since(started), ErrCodeUnrecognizedDatabase)
+			return Result{}, newError(ErrCodeUnrecognizedDatabase, 0, recognizeErr)
+		}
+	}
 	if frozen != nil {
 		if err := frozen(ctx); err != nil {
 			r.finishAttempt(ctx, attemptID, "failed", time.Since(started), ErrCodeApplyFailed)
@@ -298,7 +314,9 @@ func (r *Runner) runOnSQLite(ctx context.Context, m Migration) (Applied, string,
 	if err := m.Postcondition(ctx, conn); err != nil {
 		return Applied{}, "dirty", fmt.Errorf("postcondition: %w", err)
 	}
-	if err := r.clearDirty(ctx, m.Version); err != nil {
+	// Must run on the held connection: the server pool is single-connection
+	// for SQLite, so asking the pool for another one here would deadlock.
+	if err := r.clearDirtyOn(ctx, conn, m.Version); err != nil {
 		return Applied{}, "dirty", err
 	}
 	return r.appliedRecord(m), "success", nil

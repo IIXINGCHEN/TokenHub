@@ -42,6 +42,12 @@ func (r *Runner) PlanContract(ctx context.Context) (ContractPlan, error) {
 	if findApplied(applied, BaselineVersion) == nil {
 		return ContractPlan{}, newError(ErrCodeBaselineMissing, BaselineVersion, errNoBaseline)
 	}
+	// Contract migrations may only run once the release's own expand
+	// migrations have been applied; executing them against an unexpanded
+	// schema would drop or reshape structures their expands never created.
+	if pending := r.pendingExpands(applied); len(pending) > 0 {
+		return ContractPlan{}, newError(ErrCodeExpandPending, 0, fmt.Errorf("%d expand migration(s) still pending; run tokenhub db migrate or restart the server first", len(pending)))
+	}
 	return ContractPlan{Migrations: r.pendingContracts(applied)}, nil
 }
 

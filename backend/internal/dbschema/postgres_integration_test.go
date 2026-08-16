@@ -96,3 +96,74 @@ func TestPostgresAdoptMigrateAndVerify(t *testing.T) {
 		t.Fatalf("expected clean fully migrated status, got %+v", status)
 	}
 }
+
+// TestPostgresBackfillExecutor pins the dialect placeholder handling of the
+// backfill ledger updates (a review finding: reused $1 placeholders made
+// every PostgreSQL update fail) and the atomic lease takeover on PostgreSQL.
+func TestPostgresBackfillExecutor(t *testing.T) {
+	db := openPostgresTestDB(t)
+	ctx := context.Background()
+	if _, err := db.Exec("CREATE TABLE backfill_work (id BIGINT PRIMARY KEY, converted INTEGER NOT NULL DEFAULT 0)"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 5; i++ {
+		if _, err := db.Exec("INSERT INTO backfill_work (id, converted) VALUES ($1, 0)", i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	executor, err := NewBackfillExecutor(db, DialectPostgres, []Backfill{{
+		ID:   "pg-blocking",
+		Mode: BackfillBlocking,
+		RunBlocking: func(ctx context.Context, db Execer) error {
+			_, err := db.ExecContext(ctx, "UPDATE backfill_work SET converted = 1")
+			return err
+		},
+	}}, WithBackfillOwner("pg-owner"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := executor.RunBlocking(ctx); err != nil {
+		t.Fatalf("RunBlocking on postgres: %v", err)
+	}
+	states, err := executor.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(states) != 1 || states[0].State != BackfillStateComplete {
+		t.Fatalf("expected completed blocking backfill, got %+v", states)
+	}
+
+	online, err := NewBackfillExecutor(db, DialectPostgres, []Backfill{{
+		ID:   "pg-online",
+		Mode: BackfillOnline,
+		RunBatch: func(ctx context.Context, db Execer, limit int) (int64, error) {
+			if _, err := db.ExecContext(ctx,
+				"UPDATE backfill_work SET converted = 2 WHERE id IN (SELECT id FROM backfill_work WHERE converted = 1 LIMIT $1)", limit); err != nil {
+				return 0, err
+			}
+			var remaining int64
+			err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM backfill_work WHERE converted = 1").Scan(&remaining)
+			return remaining, err
+		},
+		BatchLimit: 2,
+	}}, WithBackfillOwner("pg-owner"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for round := 0; round < 10; round++ {
+		progress, batchErr := online.RunOnlineBatch(ctx)
+		if batchErr != nil {
+			t.Fatalf("RunOnlineBatch on postgres: %v", batchErr)
+		}
+		if len(progress) == 1 && progress[0].Remaining == 0 {
+			break
+		}
+	}
+	var unconverted int64
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM backfill_work WHERE converted = 1").Scan(&unconverted); err != nil {
+		t.Fatal(err)
+	}
+	if unconverted != 0 {
+		t.Fatalf("online backfill did not finish, %d rows left", unconverted)
+	}
+}

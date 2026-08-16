@@ -145,13 +145,16 @@ func (r *Runner) insertAppliedOn(ctx context.Context, db Execer, version int64, 
 	return nil
 }
 
-func (r *Runner) clearDirtySQL() string {
-	mark := r.placeholders(1)[0]
-	return "UPDATE schema_migrations SET dirty = 0 WHERE version = " + mark
+func (r *Runner) clearDirty(ctx context.Context, version int64) error {
+	return r.clearDirtyOn(ctx, r.db, version)
 }
 
-func (r *Runner) clearDirty(ctx context.Context, version int64) error {
-	if _, err := r.db.ExecContext(ctx, r.clearDirtySQL(), version); err != nil {
+// clearDirtyOn clears the dirty marker on the given executor. SQLite paths
+// pass the connection they already hold: the server pool is single-connection
+// there, so routing through the pool would deadlock.
+func (r *Runner) clearDirtyOn(ctx context.Context, db Execer, version int64) error {
+	mark := r.placeholders(1)[0]
+	if _, err := db.ExecContext(ctx, "UPDATE schema_migrations SET dirty = 0 WHERE version = "+mark, version); err != nil {
 		return fmt.Errorf("dbschema: clear dirty marker for version %d: %w", version, err)
 	}
 	return nil
@@ -165,6 +168,21 @@ func (r *Runner) deleteAppliedRow(ctx context.Context, version int64) error {
 		return fmt.Errorf("dbschema: drop dirty row for version %d: %w", version, err)
 	}
 	return nil
+}
+
+// finishAttemptOn writes the attempt outcome on the given executor (used by
+// SQLite paths that hold a dedicated connection).
+func (r *Runner) finishAttemptOn(ctx context.Context, db Execer, id int64, outcome string, duration time.Duration, errorCode string) {
+	finishedExpr := "datetime('now')"
+	if r.dialect == DialectPostgres {
+		finishedExpr = "now()::text"
+	}
+	marks := r.placeholders(4)
+	query := fmt.Sprintf("UPDATE migration_attempts SET finished_at = %s, outcome = %s, duration_ms = %s, error_code = %s WHERE id = %s",
+		finishedExpr, marks[0], marks[1], marks[2], marks[3])
+	if _, err := db.ExecContext(ctx, query, outcome, duration.Milliseconds(), errorCode, id); err != nil {
+		r.log("dbschema: finish attempt %d: %v", id, err)
+	}
 }
 
 // beginAttempt records the start of one migration execution. The database

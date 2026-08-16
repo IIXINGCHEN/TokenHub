@@ -56,6 +56,12 @@ const (
 	// ErrCodeNotDirty marks a repair requested for a version without a dirty
 	// marker.
 	ErrCodeNotDirty = "not_dirty"
+	// ErrCodeExpandPending marks a contract attempt while expand migrations
+	// are still unapplied.
+	ErrCodeExpandPending = "expand_pending"
+	// ErrCodeUnrecognizedDatabase marks a refused legacy adoption: the
+	// database does not look like a known TokenHub release (ADR 0005).
+	ErrCodeUnrecognizedDatabase = "unrecognized_database"
 )
 
 // Error carries a stable machine-readable code so startup refusals and audit
@@ -87,6 +93,7 @@ func newError(code string, version int64, err error) *Error {
 // by *sql.DB, *sql.Conn, and *sql.Tx.
 type Execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
@@ -195,6 +202,7 @@ type Runner struct {
 	externalCoordination bool
 	adoptionReference    func(ctx context.Context) (ObjectSet, error)
 	freshBaseline        []string
+	legacyRecognizer     func(ctx context.Context, db *sql.DB) error
 	log                  func(format string, args ...any)
 }
 
@@ -242,6 +250,14 @@ func WithAdoptionReference(builder func(ctx context.Context) (ObjectSet, error))
 // instead (ADR 0005).
 func WithFreshBaseline(statements []string) Option {
 	return func(r *Runner) { r.freshBaseline = statements }
+}
+
+// WithLegacyRecognizer supplies a gate that runs before the frozen legacy
+// flow and refuses adoption of databases that do not look like a known
+// TokenHub release (ADR 0005: unrecognized databases refuse to start instead
+// of being absorbed into the baseline).
+func WithLegacyRecognizer(fn func(ctx context.Context, db *sql.DB) error) Option {
+	return func(r *Runner) { r.legacyRecognizer = fn }
 }
 
 // NewRunner validates the migration registry and returns a runner for the
