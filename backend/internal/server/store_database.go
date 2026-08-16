@@ -286,6 +286,7 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 		mu:                   &sync.Mutex{},
 		leaseHeartbeats:      &sync.Map{},
 		lastUsed:             newLastUsedThrottle(),
+		modelLabels:          newModelLabelCache(),
 		secretKey:            config.SecretKey,
 		failureThreshold:     defaultInt(config.ResourceFailureThreshold, 3),
 		cooldownDuration:     cooldownSecondsToDuration(defaultInt(config.ResourceCooldownSeconds, 300)),
@@ -683,7 +684,9 @@ func backfillTeamRelationships(db *gorm.DB) error {
 }
 
 // WithContext returns a store view whose database operations inherit ctx.
-// Synchronization and lease bookkeeping remain shared with the parent store.
+// Synchronization, lease bookkeeping and the model label snapshot remain shared
+// with the parent store, which is why each is held behind a pointer: the shallow
+// copy below would otherwise hand every view its own mutex and its own cache.
 func (s *GormStore) WithContext(ctx context.Context) *GormStore {
 	if ctx == nil {
 		ctx = context.Background()

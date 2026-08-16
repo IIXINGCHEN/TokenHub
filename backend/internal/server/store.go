@@ -126,6 +126,7 @@ type Store interface {
 	CreateAPIKey(projectID string, key APIKey, rawSecret string) (APIKey, string, error)
 	ListProjectKeys(projectID string) []APIKey
 	ListAPIKeys() []APIKey
+	GetAPIKey(id string) (APIKey, bool)
 	UpdateAPIKey(id string, patch APIKey) (APIKey, error)
 	RotateAPIKey(id string, graceUntil *time.Time) (APIKey, string, error)
 	DeleteAPIKey(id string) error
@@ -273,6 +274,7 @@ type GormStore struct {
 	mu                   *sync.Mutex
 	leaseHeartbeats      *sync.Map
 	lastUsed             *lastUsedThrottle
+	modelLabels          *modelLabelCache
 	secretKey            string
 	metrics              *GatewayMetrics
 	failureThreshold     int
