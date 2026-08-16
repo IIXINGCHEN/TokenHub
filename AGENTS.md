@@ -25,9 +25,17 @@ Run frontend checks from `frontend/`:
 
 ```bash
 npm ci
+npm run lint
 npm run typecheck
+npm test
 npm run build
+npx playwright install chromium
+npm run test:e2e
 ```
+
+The browser smoke suite starts an isolated Next.js frontend, Go backend, fake
+provider upstream, and temporary SQLite database. It does not require real
+credentials or an already-running TokenHub stack.
 
 Run the repository gates from the repository root. These enforce the change guidelines below, so a failure names the rule that was broken:
 
