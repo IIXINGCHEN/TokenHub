@@ -81,6 +81,13 @@ func TestMultiInstancePostgresE2E(t *testing.T) {
 	t.Run("adaptive stats failure falls back inside the read snapshot", func(t *testing.T) {
 		testPostgresAdaptiveStatsFailureFallback(t, storeA)
 	})
+	t.Run("route lookup errors preserve failover inside the read snapshot", func(t *testing.T) {
+		for _, target := range []string{"providers", "provider_resources"} {
+			t.Run(target, func(t *testing.T) {
+				testPostgresRouteLookupFailureFallback(t, storeA, target)
+			})
+		}
+	})
 	t.Run("analytics checkpoints do not serialize replica writes", func(t *testing.T) {
 		testAnalyticsCommitSequence(t, storeA, storeB)
 	})

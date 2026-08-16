@@ -313,7 +313,13 @@ func (s *GormStore) SelectRouteCandidates(modelName string) ([]RouteSelection, e
 		selections = make([]RouteSelection, 0, len(routes))
 		for _, route := range routes {
 			var provider Provider
-			if err := tx.First(&provider, "id = ?", route.ProviderID).Error; err != nil {
+			found, err := s.bestEffortRouteCandidateLookup(tx, func() error {
+				return tx.First(&provider, "id = ?", route.ProviderID).Error
+			})
+			if err != nil {
+				return err
+			}
+			if !found {
 				continue
 			}
 			if provider.Status != StatusActive || !provider.Healthy {
@@ -321,7 +327,13 @@ func (s *GormStore) SelectRouteCandidates(modelName string) ([]RouteSelection, e
 			}
 			if route.ProviderResourceID != "" {
 				var resource ProviderResource
-				if err := tx.First(&resource, "id = ? AND provider_id = ?", route.ProviderResourceID, provider.ID).Error; err != nil {
+				found, err := s.bestEffortRouteCandidateLookup(tx, func() error {
+					return tx.First(&resource, "id = ? AND provider_id = ?", route.ProviderResourceID, provider.ID).Error
+				})
+				if err != nil {
+					return err
+				}
+				if !found {
 					continue
 				}
 				if resource.Status != StatusActive || !halfOpenEligible(resource, now) {
@@ -368,6 +380,33 @@ func (s *GormStore) SelectRouteCandidates(modelName string) ([]RouteSelection, e
 		return nil, ErrProviderMissing
 	}
 	return selections, nil
+}
+
+func (s *GormStore) bestEffortRouteCandidateLookup(db *gorm.DB, lookup func() error) (bool, error) {
+	if s.dbDriver != "postgres" {
+		return lookup() == nil, nil
+	}
+	const (
+		createSavepoint   = "SAVEPOINT route_candidate_item_lookup"
+		rollbackSavepoint = "ROLLBACK TO SAVEPOINT route_candidate_item_lookup"
+		releaseSavepoint  = "RELEASE SAVEPOINT route_candidate_item_lookup"
+	)
+	if err := db.Exec(createSavepoint).Error; err != nil {
+		return false, fmt.Errorf("create route candidate item savepoint: %w", err)
+	}
+	if err := lookup(); err != nil {
+		if rollbackErr := db.Exec(rollbackSavepoint).Error; rollbackErr != nil {
+			return false, fmt.Errorf("load route candidate item: %v; rollback savepoint: %w", err, rollbackErr)
+		}
+		if releaseErr := db.Exec(releaseSavepoint).Error; releaseErr != nil {
+			return false, fmt.Errorf("release failed route candidate item savepoint: %w", releaseErr)
+		}
+		return false, nil
+	}
+	if err := db.Exec(releaseSavepoint).Error; err != nil {
+		return false, fmt.Errorf("release route candidate item savepoint: %w", err)
+	}
+	return true, nil
 }
 
 type routeRuntimeStatsRow struct {
