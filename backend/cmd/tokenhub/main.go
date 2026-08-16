@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"tokenhub/backend/internal/dbcli"
 	"tokenhub/backend/internal/server"
 )
 
@@ -21,6 +22,11 @@ var (
 
 func main() {
 	loadDotEnv()
+
+	if len(os.Args) > 1 && os.Args[1] == "db" {
+		dbcli.AppRelease = buildVersion
+		os.Exit(dbcli.Run(context.Background(), os.Args[2:], os.Stdout, os.Stderr))
+	}
 
 	addr := getenv("TOKENHUB_HTTP_ADDR", ":8080")
 	config := server.ConfigFromEnv()
