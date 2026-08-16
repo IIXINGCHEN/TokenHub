@@ -177,6 +177,7 @@ type Store interface {
 	ClaimImageJob(id string) (ImageJob, bool, error)
 	GetImageJob(id string) (ImageJob, bool)
 	ListImageJobs(limit int) []ImageJob
+	ListImageJobsForAudit(query ImageJobAuditQuery) []ImageJob
 	FailUnfinishedImageJobs(code string, message string) ([]ImageJob, error)
 	UpdateImageJob(job ImageJob, revisedPrompt string) error
 	CompleteImageJob(call CallContext, job ImageJob, revisedPrompt string, asset ImageAsset, route RouteSelection, usage Usage, clientIP string, userAgent string) error
