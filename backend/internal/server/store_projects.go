@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"sort"
 	"strconv"
@@ -707,9 +708,17 @@ func (s *GormStore) ValidateAPIKey(rawSecret string, clientIP string) (Project, 
 		return Project{}, APIKey{}, ErrAPIKeyDisabled
 	}
 	now := time.Now().UTC()
+	// The returned copy always reports this request. Callers read it as "the key
+	// was just used" and never write it back, so it stays exact even though the
+	// persisted column is throttled and may trail it by up to one window.
 	key.LastUsedAt = &now
-	if err := s.db.Model(&key).Update("last_used_at", now).Error; err != nil {
-		return Project{}, APIKey{}, err
+	if err := s.lastUsed.mark(lastUsedAPIKeyKey(key.ID), func() error {
+		return s.db.Model(&APIKey{}).Where("id = ?", key.ID).Update("last_used_at", now).Error
+	}); err != nil {
+		// last_used_at is display-only, so a failed write must not reject an
+		// otherwise valid key. The failed-at state suppresses repeated attempts
+		// and logs until the failure backoff expires.
+		log.Printf("[tokenhub] failed to record api key last_used_at key=%s: %v", key.ID, err)
 	}
 	return project, publicKey(key), nil
 }

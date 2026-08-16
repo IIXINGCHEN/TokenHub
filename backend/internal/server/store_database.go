@@ -285,6 +285,7 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 		analyticsDB:          analyticsDB,
 		mu:                   &sync.Mutex{},
 		leaseHeartbeats:      &sync.Map{},
+		lastUsed:             newLastUsedThrottle(),
 		modelLabels:          newModelLabelCache(),
 		secretKey:            config.SecretKey,
 		failureThreshold:     defaultInt(config.ResourceFailureThreshold, 3),

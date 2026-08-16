@@ -273,6 +273,7 @@ type GormStore struct {
 	analyticsDB          *gorm.DB
 	mu                   *sync.Mutex
 	leaseHeartbeats      *sync.Map
+	lastUsed             *lastUsedThrottle
 	modelLabels          *modelLabelCache
 	secretKey            string
 	metrics              *GatewayMetrics
