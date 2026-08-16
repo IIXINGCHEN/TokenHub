@@ -6,6 +6,7 @@ import { type AdminResource, type AdminUser, type ApiContext, type AppData, type
 import { notificationChannelLabel } from "../domain/catalog";
 import { providerDisplayBaseURL, providerDisplayName, providerDisplayType, providerRoutesFor, providerRouteSummary, stringifyValue } from "../domain/entities";
 import { formatNumber, formatTime } from "../domain/formatting";
+import { providerLatencyLabel, providerPerformanceExplanation, providerQualityScoreLabel } from "../domain/provider-monitoring";
 import { enumValueLabel, providerTypeLabel, reportDatasetLabel, roleLabel } from "../domain/labels";
 import { countWithUnit, languageLocale, tx } from "../i18n/runtime";
 import { reportExportDefinitions } from "../resources/governance-config";
@@ -397,11 +398,12 @@ export function ProviderChannelTable({
                 <td>
                   <div className="provider-channel-performance">
                     <div>
-                      <span>{tx("真实延迟")}<strong>{latencyDisplay(row.latencyMS)}</strong></span>
+                      <span>{tx(providerLatencyLabel)}<strong>{latencyDisplay(row.latencyMS)}</strong></span>
                       <span>{tx("24H 可用率")}<strong>{row.observed24h ? providerPercent(row.availability24h) : "-"}</strong></span>
                     </div>
                     <div className="provider-channel-quality">
                       <div className="provider-quality-score">
+                        <small className="provider-monitor-subtle">{tx(providerQualityScoreLabel)}</small>
                         <strong>{row.qualityScore}</strong>
                         <span><i style={{ width: `${row.qualityScore}%` }} /></span>
                       </div>
@@ -409,6 +411,7 @@ export function ProviderChannelTable({
                         {row.trend.map((tone, index) => <span className={tone} key={`${row.provider.id}-trend-${index}`} />)}
                       </div>
                     </div>
+                    <small className="provider-monitor-subtle">{tx(providerPerformanceExplanation)}</small>
                   </div>
                 </td>
                 <td><ProviderCodexQuota quota={row.quota} refreshing={quotaRefreshing} resources={row.resources} onRefresh={refreshQuota} /></td>

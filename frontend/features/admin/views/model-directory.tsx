@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { type ApiContext, type AppData, type Model, type ResourceConfig } from "../core/types";
 import { modelCategory, modelCategoryLabel, priceMetric } from "../domain/catalog";
 import { findProvider, modelRoutesFor } from "../domain/entities";
+import { modelMetadataFacts } from "../domain/model-endpoints";
 import { externalModels, filterExternalModels, isCustomModelAlias, modelPublicationState, modelRuntimeState, type ModelPublicationState } from "../domain/model-directory";
 import { compactNumber } from "../domain/formatting";
 import { tx } from "../i18n/runtime";
@@ -215,6 +216,9 @@ function ExternalModelsTable({ data, models, readOnly, busy, onOpenRoutes, onEdi
             const publication = modelPublicationState(model, data);
             const runtime = modelRuntimeState(model, data);
             const customAlias = isCustomModelAlias(model, routes);
+            const capabilities = model.capabilities ?? [];
+            const supportedParameters = model.supported_parameters ?? [];
+            const facts = modelMetadataFacts(model.metadata, capabilities, supportedParameters);
             return (
               <tr key={model.name}>
                 <td>
@@ -223,7 +227,7 @@ function ExternalModelsTable({ data, models, readOnly, busy, onOpenRoutes, onEdi
                     <div><strong>{model.name}</strong>{!readOnly ? <span>{customAlias ? tx("自定义别名") : tx("同名 1:1")}</span> : null}</div>
                   </div>
                 </td>
-                <td><strong>{model.modality || "chat"}</strong><span>{compactNumber(model.context_window || 0)} ctx · {(model.capabilities ?? []).slice(0, 2).join(" / ") || model.family || "-"}</span></td>
+                <td><strong>{model.modality || "chat"}</strong><span>{compactNumber(model.context_window || 0)} ctx · {capabilities.slice(0, 2).join(" / ") || model.family || "-"}</span>{facts.map((fact) => <div key={fact.kind}><small>{tx({ protocols: "支持接口协议", parameters: "支持参数", capabilities: "模型能力" }[fact.kind])}: {fact.values.join(" / ")}</small></div>)}</td>
                 {!readOnly ? <>
                   <td>
                     {primary ? <div className="mapping-summary"><span>{provider?.name || primary.provider_id}</span><strong>{primary.provider_model}</strong>{routes.length > 1 ? <em>+{routes.length - 1}</em> : null}</div> : <span className="muted">{tx("尚未映射 Provider")}</span>}

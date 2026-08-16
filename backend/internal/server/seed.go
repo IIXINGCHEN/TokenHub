@@ -156,7 +156,6 @@ func BootstrapBaseDataWithConfig(store Store, config Config) error {
 	if err := seedBuiltinProviderCatalog(store); err != nil {
 		return err
 	}
-	pruneProviderImportedModelCatalog(store)
 	if err := seedDefaultModelCatalog(store, config.ModelCatalogFile); err != nil {
 		return err
 	}
@@ -200,14 +199,6 @@ func seedDefaultProject(store Store) {
 	})
 }
 
-func pruneProviderImportedModelCatalog(store Store) {
-	for _, model := range store.ListModels() {
-		if model.Metadata != nil && model.Metadata["source"] == "public-provider-conf" {
-			_ = store.DeleteModel(model.Name)
-		}
-	}
-}
-
 func seedDefaultModelCatalog(store Store, catalogFile string) error {
 	models, err := defaultModelCatalog(catalogFile)
 	if err != nil {
@@ -224,7 +215,9 @@ func seedDefaultModelCatalog(store Store, catalogFile string) error {
 			model.OutputPriceUSDPer1M = existing.OutputPriceUSDPer1M
 			model.EmbeddingPriceUSDPer1M = existing.EmbeddingPriceUSDPer1M
 		}
-		store.AddModel(model)
+		if _, err := store.CreateModelWithRoutes(model, nil); err != nil {
+			return fmt.Errorf("seed catalog model %q: %w", model.Name, err)
+		}
 	}
 	return nil
 }
