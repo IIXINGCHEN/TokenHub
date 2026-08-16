@@ -307,6 +307,8 @@ Aliyun では請求 RPC Base URL、AccessKey ID、AccessKey Secret、ソース�
 
 関連エンドポイントは `GET/POST /api/admin/billing/reconciliation-rules`、`GET/PATCH /api/admin/billing/reconciliation-rules/{id}`、`POST /api/admin/billing/reconciliation-rules/{id}/run`、`GET /api/admin/billing/reconciliations`、`GET /api/admin/billing/reconciliations/{id}`、および `{id}/lock`、`{id}/recalculate`、`{id}/export` アクションです。これらはプラットフォーム管理者だけが利用できます。
 
+ゲートウェイ設定 `audit_retention` は、`1d` から `3650d` までの `Nd` 形式だけを受け付けます。クラスターは UTC 時間ごとに、保持期間を超えたリクエストとレスポンス本文を有界バッチで削除します。リクエストログのメタデータ、利用分析データ、管理監査イベント、アラートイベントは削除されません。
+
 ## セキュリティチェックリスト
 
 | コントロール | 要件 |

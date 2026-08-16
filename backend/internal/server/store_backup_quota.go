@@ -615,19 +615,119 @@ func quotaPolicyApplies(scope string, scopeID string, project Project, key APIKe
 	}
 }
 
+// runtimeBudgetCandidate is an active budget that can still block the current
+// call: enforced, covering the current period, and carrying a positive amount.
+type runtimeBudgetCandidate struct {
+	scope   string
+	scopeID string
+	amount  float64
+}
+
+// runtimeBudgetScopes records which scope totals the applicable budgets read, so
+// the aggregation only loads the data those budgets actually need.
+type runtimeBudgetScopes struct {
+	global     bool
+	team       bool
+	costCenter bool
+}
+
+// runtimeBudgetTotals holds the current period's spend per budget scope. Every
+// value is derived from one aggregate query, so admission issues a constant
+// number of statements no matter how many budgets or usage records exist.
+type runtimeBudgetTotals struct {
+	global     float64
+	project    float64
+	team       float64
+	costCenter float64
+}
+
+func (t runtimeBudgetTotals) forScope(scope string) float64 {
+	switch scope {
+	case "project":
+		return t.project
+	case "team":
+		return t.team
+	case "cost_center", "cost-center":
+		return t.costCenter
+	case "global", "organization":
+		return t.global
+	default:
+		return 0
+	}
+}
+
+// projectPeriodCost is one row of the per-project spend aggregate.
+type projectPeriodCost struct {
+	ProjectID string
+	Total     float64
+}
+
+// checkRuntimeBudget rejects the call when an enforced budget covering this
+// project is already spent. It filters budgets in two phases so a deployment
+// without matching budgets never reads the usage tables: the candidate pass
+// needs the budget rows alone, and the cost center, project, and usage lookups
+// only happen once a candidate is known to apply.
 func (s *GormStore) checkRuntimeBudget(tx *gorm.DB, project Project) error {
 	now := time.Now().UTC()
 	period := now.Format("2006-01")
-	costCenter := s.costCenterForProjectWithDB(tx, project)
 	var budgets []AdminResource
 	if err := tx.Where("kind = ? AND status = ?", "budgets", StatusActive).Find(&budgets).Error; err != nil {
 		return err
 	}
-	for _, budget := range budgets {
-		if !budgetEnforced(budget) {
+	candidates, hasCostCenterScope := runtimeBudgetCandidates(budgets, now, period)
+	if len(candidates) == 0 {
+		return nil
+	}
+	// The cost center only decides whether cost center scoped budgets apply, so
+	// deployments without one never read teams or quota policies here.
+	costCenter := ""
+	var teamsByID, quotasByID map[string]AdminResource
+	if hasCostCenterScope {
+		var err error
+		teamsByID, quotasByID, err = loadCostCenterResources(tx)
+		if err != nil {
+			return err
+		}
+		costCenter = costCenterForProject(project, teamsByID, quotasByID)
+	}
+	applicable := make([]runtimeBudgetCandidate, 0, len(candidates))
+	var scopes runtimeBudgetScopes
+	for _, candidate := range candidates {
+		if !budgetScopeAppliesToProject(candidate.scope, candidate.scopeID, project, costCenter) {
 			continue
 		}
-		if !budgetAppliesToProject(budget, project, costCenter) {
+		applicable = append(applicable, candidate)
+		switch candidate.scope {
+		case "team":
+			scopes.team = true
+		case "cost_center", "cost-center":
+			scopes.costCenter = true
+		case "global", "organization":
+			scopes.global = true
+		}
+	}
+	if len(applicable) == 0 {
+		return nil
+	}
+	totals, err := s.aggregateRuntimeBudgetTotals(tx, period, project, scopes, costCenter, teamsByID, quotasByID)
+	if err != nil {
+		return err
+	}
+	for _, candidate := range applicable {
+		if totals.forScope(candidate.scope) >= candidate.amount {
+			return ErrBudgetExceeded
+		}
+	}
+	return nil
+}
+
+// runtimeBudgetCandidates keeps the budgets that can block a call and reports
+// whether any of them is cost center scoped.
+func runtimeBudgetCandidates(budgets []AdminResource, now time.Time, period string) ([]runtimeBudgetCandidate, bool) {
+	candidates := make([]runtimeBudgetCandidate, 0, len(budgets))
+	hasCostCenterScope := false
+	for _, budget := range budgets {
+		if !budgetEnforced(budget) {
 			continue
 		}
 		if budgetPeriod := strings.TrimSpace(stringField(budget.Fields, "period_ref")); budgetPeriod != "" && normalizeBillingPeriod(budgetPeriod, now) != period {
@@ -637,66 +737,90 @@ func (s *GormStore) checkRuntimeBudget(tx *gorm.DB, project Project) error {
 		if amount <= 0 {
 			continue
 		}
-		used, err := s.runtimeBudgetUsed(tx, budget, period)
-		if err != nil {
-			return err
-		}
-		if used >= amount {
-			return ErrBudgetExceeded
+		scope := strings.ToLower(strings.TrimSpace(stringField(budget.Fields, "scope")))
+		candidates = append(candidates, runtimeBudgetCandidate{
+			scope:   scope,
+			scopeID: budgetScopeID(budget, scope),
+			amount:  amount,
+		})
+		if scope == "cost_center" || scope == "cost-center" {
+			hasCostCenterScope = true
 		}
 	}
-	return nil
+	return candidates, hasCostCenterScope
 }
 
-func (s *GormStore) runtimeBudgetUsed(tx *gorm.DB, budget AdminResource, period string) (float64, error) {
-	scope := strings.ToLower(strings.TrimSpace(stringField(budget.Fields, "scope")))
-	scopeID := budgetScopeID(budget, scope)
-	start := periodStart(period)
-	end := periodEnd(period)
-	switch scope {
-	case "project":
-		var total sql.NullFloat64
-		if err := tx.Model(&UsageRecord{}).
-			Where("project_id = ? AND created_at >= ? AND created_at < ?", scopeID, start, end).
-			Select("sum(cost_usd)").Scan(&total).Error; err != nil {
-			return 0, err
-		}
-		return total.Float64, nil
-	case "global", "organization":
-		var total sql.NullFloat64
-		if err := tx.Model(&UsageRecord{}).
-			Where("created_at >= ? AND created_at < ?", start, end).
-			Select("sum(cost_usd)").Scan(&total).Error; err != nil {
-			return 0, err
-		}
-		return total.Float64, nil
-	case "team", "cost_center", "cost-center":
-		var records []UsageRecord
-		if err := tx.Where("created_at >= ? AND created_at < ?", start, end).Find(&records).Error; err != nil {
-			return 0, err
-		}
-		projectCache := map[string]Project{}
-		var total float64
-		for _, record := range records {
-			project, ok := projectCache[record.ProjectID]
-			if !ok {
-				if err := tx.First(&project, "id = ?", record.ProjectID).Error; err != nil {
-					continue
-				}
-				projectCache[record.ProjectID] = project
-			}
-			if scope == "team" && project.TeamID == scopeID {
-				total += record.CostUSD
-				continue
-			}
-			if (scope == "cost_center" || scope == "cost-center") && s.costCenterForProjectWithDB(tx, project) == scopeID {
-				total += record.CostUSD
-			}
-		}
-		return total, nil
-	default:
-		return 0, nil
+// loadCostCenterResources reads the resources costCenterForProject resolves
+// against. Like the per-project lookups it replaces, it ignores resource status.
+// It does report read errors instead of falling through the cost center chain,
+// because a budget resolved against a half-read table would silently admit
+// spend the budget was meant to stop.
+func loadCostCenterResources(tx *gorm.DB) (map[string]AdminResource, map[string]AdminResource, error) {
+	var resources []AdminResource
+	if err := tx.Where("kind IN ?", []string{"teams", "quota-policies"}).Find(&resources).Error; err != nil {
+		return nil, nil, err
 	}
+	teamsByID := map[string]AdminResource{}
+	quotasByID := map[string]AdminResource{}
+	for _, resource := range resources {
+		switch resource.Kind {
+		case "teams":
+			teamsByID[resource.ID] = resource
+		case "quota-policies":
+			quotasByID[resource.ID] = resource
+		}
+	}
+	return teamsByID, quotasByID, nil
+}
+
+// aggregateRuntimeBudgetTotals sums the period once, grouped by project, and
+// folds those subtotals into every scope the applicable budgets consult.
+func (s *GormStore) aggregateRuntimeBudgetTotals(tx *gorm.DB, period string, project Project, scopes runtimeBudgetScopes, costCenter string, teamsByID, quotasByID map[string]AdminResource) (runtimeBudgetTotals, error) {
+	query := tx.Model(&UsageRecord{}).Where("created_at >= ? AND created_at < ?", periodStart(period), periodEnd(period))
+	if !scopes.global && !scopes.team && !scopes.costCenter {
+		// Only this project's own budgets are in play, so stay on the
+		// (project_id, created_at) index instead of scanning the whole period.
+		query = query.Where("project_id = ?", project.ID)
+	}
+	var rows []projectPeriodCost
+	if err := query.Select("project_id, COALESCE(SUM(cost_usd), 0) AS total").Group("project_id").Scan(&rows).Error; err != nil {
+		return runtimeBudgetTotals{}, err
+	}
+	var projectsByID map[string]Project
+	if scopes.team || scopes.costCenter {
+		var projects []Project
+		// These are the columns costCenterForProject and the team match read.
+		if err := tx.Select("id", "team_id", "cost_center", "default_quota_ref").Find(&projects).Error; err != nil {
+			return runtimeBudgetTotals{}, err
+		}
+		projectsByID = make(map[string]Project, len(projects))
+		for _, item := range projects {
+			projectsByID[item.ID] = item
+		}
+	}
+	var totals runtimeBudgetTotals
+	for _, row := range rows {
+		totals.global += row.Total
+		if row.ProjectID == project.ID {
+			totals.project += row.Total
+		}
+		if !scopes.team && !scopes.costCenter {
+			continue
+		}
+		// Usage left behind by a deleted project belongs to no team and no cost
+		// center, which is what the per-record project lookup used to decide.
+		rowProject, ok := projectsByID[row.ProjectID]
+		if !ok {
+			continue
+		}
+		if scopes.team && rowProject.TeamID == project.TeamID {
+			totals.team += row.Total
+		}
+		if scopes.costCenter && costCenterForProject(rowProject, teamsByID, quotasByID) == costCenter {
+			totals.costCenter += row.Total
+		}
+	}
+	return totals, nil
 }
 
 func budgetScopeID(budget AdminResource, scope string) string {
@@ -726,9 +850,7 @@ func budgetEnforced(budget AdminResource) bool {
 	return true
 }
 
-func budgetAppliesToProject(budget AdminResource, project Project, costCenter string) bool {
-	scope := strings.ToLower(strings.TrimSpace(stringField(budget.Fields, "scope")))
-	scopeID := budgetScopeID(budget, scope)
+func budgetScopeAppliesToProject(scope string, scopeID string, project Project, costCenter string) bool {
 	switch scope {
 	case "project":
 		return scopeID != "" && scopeID == project.ID

@@ -480,15 +480,29 @@ func raceValidatedUpstreamCandidates(ctx context.Context, network, port string, 
 // would receive the proxy address and the guard would validate the proxy rather
 // than the request target, letting the proxy's own DNS resolution bypass the
 // check. Provider catalog fetches therefore always connect directly.
+//
+// The idle pool is sized for a gateway workload: unlike a general-purpose
+// client, this transport fans a large amount of concurrent traffic out over a
+// handful of upstream hosts. The standard library's default of two idle
+// connections per host would retire every connection above that as soon as it
+// goes idle, so a busy host pays a fresh TCP and TLS handshake on nearly every
+// request. These limits cap how many idle connections are kept for reuse, not
+// how many requests may run at once; MaxConnsPerHost stays unset so the guard
+// never throttles concurrency. IdleConnTimeout stays at the standard 90
+// seconds — including on the fallback path, where a zero value would otherwise
+// keep the whole enlarged pool open forever — so connections to a host that
+// falls quiet are still released.
 func ssrfGuardedProviderTransport(allowedPrivate []*net.IPNet, syntheticDNS ...providerSyntheticDNSResolver) *http.Transport {
 	base, ok := http.DefaultTransport.(*http.Transport)
 	var transport *http.Transport
 	if ok {
 		transport = base.Clone()
 	} else {
-		transport = &http.Transport{}
+		transport = &http.Transport{IdleConnTimeout: 90 * time.Second}
 	}
 	transport.Proxy = nil
+	transport.MaxIdleConnsPerHost = 64
+	transport.MaxIdleConns = 256
 	dialer := &net.Dialer{
 		Timeout:   30 * time.Second,
 		KeepAlive: 30 * time.Second,

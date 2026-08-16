@@ -148,6 +148,11 @@ func (s *GormStore) UpdateModel(name string, patch Model) (Model, error) {
 		updated = model
 		return nil
 	})
+	if err == nil {
+		// An update can rename the model, so both the old and the new name are
+		// wrong in the snapshot until it reloads.
+		s.modelLabels.invalidate()
+	}
 	return updated, err
 }
 
@@ -155,7 +160,7 @@ func (s *GormStore) DeleteModel(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	err := s.db.Transaction(func(tx *gorm.DB) error {
 		var model Model
 		if err := tx.First(&model, "name = ?", name).Error; err != nil {
 			return notFound(err, "model_not_found", "Model not found")
@@ -165,6 +170,10 @@ func (s *GormStore) DeleteModel(name string) error {
 		}
 		return tx.Delete(&model).Error
 	})
+	if err == nil {
+		s.modelLabels.invalidate()
+	}
+	return err
 }
 
 func (s *GormStore) ListRoutes() []ModelRoute {
@@ -300,115 +309,6 @@ func (s *GormStore) SelectRoute(modelName string) (RouteSelection, error) {
 	return routes[0], nil
 }
 
-func (s *GormStore) SelectRouteCandidates(modelName string) ([]RouteSelection, error) {
-	var selections []RouteSelection
-	err := s.withReadSnapshot(func(tx *gorm.DB) error {
-		var routes []ModelRoute
-		if err := tx.Where("model_name = ? AND status = ?", modelName, StatusActive).
-			Order("priority asc, weight desc, created_at asc").
-			Find(&routes).Error; err != nil {
-			return err
-		}
-		now := time.Now().UTC()
-		selections = make([]RouteSelection, 0, len(routes))
-		for _, route := range routes {
-			var provider Provider
-			found, err := s.bestEffortRouteCandidateLookup(tx, func() error {
-				return tx.First(&provider, "id = ?", route.ProviderID).Error
-			})
-			if err != nil {
-				return err
-			}
-			if !found {
-				continue
-			}
-			if provider.Status != StatusActive || !provider.Healthy {
-				continue
-			}
-			if route.ProviderResourceID != "" {
-				var resource ProviderResource
-				found, err := s.bestEffortRouteCandidateLookup(tx, func() error {
-					return tx.First(&resource, "id = ? AND provider_id = ?", route.ProviderResourceID, provider.ID).Error
-				})
-				if err != nil {
-					return err
-				}
-				if !found {
-					continue
-				}
-				if resource.Status != StatusActive || !halfOpenEligible(resource, now) {
-					continue
-				}
-				selections = append(selections, s.routeSelection(provider, &resource, route))
-				continue
-			}
-
-			var resources []ProviderResource
-			// Unhealthy resources whose cooldown has lapsed are admitted as half-open
-			// candidates. Admission still gates them to a single trial (see
-			// CheckProviderResourceCapacity); this query only makes them reachable, which
-			// is what lets a parked resource ever be retried.
-			query := tx.Where("provider_id = ? AND status = ? AND (healthy = ? OR cooldown_until <= ?)",
-				provider.ID, StatusActive, true, now)
-			if strings.TrimSpace(route.ResourceGroup) != "" {
-				query = query.Where("\"group\" = ?", strings.TrimSpace(route.ResourceGroup))
-			}
-			if err := query.Order("priority asc, weight desc, created_at asc").
-				Find(&resources).Error; err != nil {
-				return err
-			}
-			if len(resources) == 0 {
-				selections = append(selections, s.routeSelection(provider, nil, route))
-				continue
-			}
-			for _, resource := range resources {
-				resourceRoute := route
-				resourceRoute.ProviderResourceID = resource.ID
-				if resource.Weight > 0 {
-					resourceRoute.Weight = resource.Weight
-				}
-				selections = append(selections, s.routeSelection(provider, &resource, resourceRoute))
-			}
-		}
-		s.attachRouteRuntimeStats(tx, selections, now)
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	if len(selections) == 0 {
-		return nil, ErrProviderMissing
-	}
-	return selections, nil
-}
-
-func (s *GormStore) bestEffortRouteCandidateLookup(db *gorm.DB, lookup func() error) (bool, error) {
-	if s.dbDriver != "postgres" {
-		return lookup() == nil, nil
-	}
-	const (
-		createSavepoint   = "SAVEPOINT route_candidate_item_lookup"
-		rollbackSavepoint = "ROLLBACK TO SAVEPOINT route_candidate_item_lookup"
-		releaseSavepoint  = "RELEASE SAVEPOINT route_candidate_item_lookup"
-	)
-	if err := db.Exec(createSavepoint).Error; err != nil {
-		return false, fmt.Errorf("create route candidate item savepoint: %w", err)
-	}
-	if err := lookup(); err != nil {
-		if rollbackErr := db.Exec(rollbackSavepoint).Error; rollbackErr != nil {
-			return false, fmt.Errorf("load route candidate item: %v; rollback savepoint: %w", err, rollbackErr)
-		}
-		if releaseErr := db.Exec(releaseSavepoint).Error; releaseErr != nil {
-			return false, fmt.Errorf("release failed route candidate item savepoint: %w", releaseErr)
-		}
-		return false, nil
-	}
-	if err := db.Exec(releaseSavepoint).Error; err != nil {
-		return false, fmt.Errorf("release route candidate item savepoint: %w", err)
-	}
-	return true, nil
-}
-
 type routeRuntimeStatsRow struct {
 	RouteID            string
 	ProviderResourceID string
@@ -417,7 +317,7 @@ type routeRuntimeStatsRow struct {
 	LatencyMS          float64
 }
 
-func (s *GormStore) attachRouteRuntimeStats(db *gorm.DB, selections []RouteSelection, now time.Time) {
+func (s *GormStore) attachRouteRuntimeStats(db *gorm.DB, selections []RouteSelection, now time.Time) error {
 	routeIDs := make([]string, 0, len(selections))
 	seen := map[string]bool{}
 	for _, selection := range selections {
@@ -428,14 +328,19 @@ func (s *GormStore) attachRouteRuntimeStats(db *gorm.DB, selections []RouteSelec
 		routeIDs = append(routeIDs, selection.Route.ID)
 	}
 	if len(routeIDs) == 0 {
-		return
+		return nil
 	}
 
-	const savepoint = "route_runtime_stats"
-	if err := db.SavePoint(savepoint).Error; err != nil {
-		log.Printf("[tokenhub] failed to create adaptive routing savepoint: %v", err)
-		return
+	const (
+		createSavepoint   = "SAVEPOINT route_candidate_runtime_stats"
+		rollbackSavepoint = "ROLLBACK TO SAVEPOINT route_candidate_runtime_stats"
+	)
+	if s.dbDriver == "postgres" {
+		if err := db.Exec(createSavepoint).Error; err != nil {
+			return fmt.Errorf("create adaptive routing stats savepoint: %w", err)
+		}
 	}
+
 	var rows []routeRuntimeStatsRow
 	err := db.Model(&RouteAttemptLog{}).
 		Select(`route_id, provider_resource_id, COUNT(*) AS samples,
@@ -445,11 +350,13 @@ func (s *GormStore) attachRouteRuntimeStats(db *gorm.DB, selections []RouteSelec
 		Group("route_id, provider_resource_id").
 		Scan(&rows).Error
 	if err != nil {
-		if rollbackErr := db.RollbackTo(savepoint).Error; rollbackErr != nil {
-			log.Printf("[tokenhub] failed to restore adaptive routing snapshot: %v", rollbackErr)
+		if s.dbDriver == "postgres" {
+			if rollbackErr := db.Exec(rollbackSavepoint).Error; rollbackErr != nil {
+				return fmt.Errorf("load adaptive routing observations: %v; rollback savepoint: %w", err, rollbackErr)
+			}
 		}
 		log.Printf("[tokenhub] failed to load adaptive routing observations: %v", err)
-		return
+		return nil
 	}
 	stats := make(map[string]RouteRuntimeStats, len(rows))
 	for _, row := range rows {
@@ -467,6 +374,7 @@ func (s *GormStore) attachRouteRuntimeStats(db *gorm.DB, selections []RouteSelec
 		selection := &selections[index]
 		selection.Runtime = stats[routeRuntimeStatsKey(selection.Route.ID, routeResourceID(*selection))]
 	}
+	return nil
 }
 
 func routeRuntimeStatsKey(routeID string, resourceID string) string {
@@ -499,28 +407,42 @@ func (s *GormStore) routeSelection(provider Provider, resource *ProviderResource
 	}
 }
 
+// MarkRouteUsed refreshes the route's display-only last_used_at column. The
+// write is throttled to one per lastUsedThrottleWindow per route, and the store
+// mutex is only taken when a write actually happens.
 func (s *GormStore) MarkRouteUsed(routeID string) {
 	if routeID == "" {
 		return
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	now := time.Now().UTC()
-	_ = s.db.Model(&ModelRoute{}).Where("id = ?", routeID).Update("last_used_at", now).Error
+	if err := s.lastUsed.mark(lastUsedRouteKey(routeID), func() error {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		// Sampled under the mutex so the stored timestamp is when the write
+		// happened, not when the request queued for the lock.
+		return s.db.Model(&ModelRoute{}).Where("id = ?", routeID).Update("last_used_at", time.Now().UTC()).Error
+	}); err != nil {
+		log.Printf("[tokenhub] failed to record route last_used_at route=%s: %v", routeID, err)
+	}
 }
 
+// MarkProviderResourceUsed refreshes the resource's display-only last_used_at
+// column. It still bumps updated_at with it, so throttling coarsens both columns
+// to lastUsedThrottleWindow resolution for use-driven touches; every other write
+// path sets updated_at exactly as before.
 func (s *GormStore) MarkProviderResourceUsed(resourceID string) {
 	if resourceID == "" {
 		return
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	now := time.Now().UTC()
-	_ = s.db.Model(&ProviderResource{}).
-		Where("id = ?", resourceID).
-		Updates(map[string]any{"last_used_at": now, "updated_at": now}).Error
+	if err := s.lastUsed.mark(lastUsedResourceKey(resourceID), func() error {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		now := time.Now().UTC()
+		return s.db.Model(&ProviderResource{}).
+			Where("id = ?", resourceID).
+			Updates(map[string]any{"last_used_at": now, "updated_at": now}).Error
+	}); err != nil {
+		log.Printf("[tokenhub] failed to record provider resource last_used_at resource=%s: %v", resourceID, err)
+	}
 }
 
 func (s *GormStore) StartCall(ctx context.Context, project Project, key APIKey, modelName string, tokenReservation int64) (CallContext, error) {
@@ -917,16 +839,38 @@ func gatewayAttemptSamples(attempts []RouteAttempt) []GatewayAttemptSample {
 
 // knownModelLabel keeps a model name as a label only when the catalog knows it,
 // bounding the label to configured models instead of arbitrary client input.
+// The catalog is read through a short-lived snapshot, because the caller is the
+// rejection path: a client looping over invented model names would otherwise make
+// the cheapest outcome in the gateway pay for a query every time.
 func (s *GormStore) knownModelLabel(modelName string) string {
 	modelName = strings.TrimSpace(modelName)
 	if modelName == "" || s.metrics == nil {
 		return ""
 	}
+	if known, resolved := s.modelLabels.lookup(modelName, time.Now, s.loadModelNames); resolved {
+		if known {
+			return modelName
+		}
+		return "unknown"
+	}
+	// Reached only by a store built without a label cache. A cache that exists
+	// answers for itself even while its refresh is failing, so this stays off the
+	// path a failing database would otherwise be dragged down.
 	var count int64
 	if err := s.db.Model(&Model{}).Where("name = ?", modelName).Limit(1).Count(&count).Error; err != nil || count == 0 {
 		return "unknown"
 	}
 	return modelName
+}
+
+// loadModelNames reads only the catalog's name column, which is all a label bound
+// needs to know.
+func (s *GormStore) loadModelNames() ([]string, error) {
+	var names []string
+	if err := s.db.Model(&Model{}).Pluck("name", &names).Error; err != nil {
+		return nil, err
+	}
+	return names, nil
 }
 
 func (s *GormStore) RecordRequestPayload(requestID string, requestBody string, requestTruncated bool, responseBody string, responseTruncated bool) {
@@ -1134,17 +1078,6 @@ func (s *GormStore) CompleteImageJob(call CallContext, job ImageJob, revisedProm
 			if result.RowsAffected != 1 {
 				return fmt.Errorf("image job %s is not running", job.ID)
 			}
-			if route.Route.ID != "" {
-				if err := tx.Model(&ModelRoute{}).Where("id = ?", route.Route.ID).Update("last_used_at", now).Error; err != nil {
-					return err
-				}
-			}
-			if resourceID := routeResourceID(route); resourceID != "" {
-				if err := tx.Model(&ProviderResource{}).Where("id = ?", resourceID).
-					Updates(map[string]any{"last_used_at": now, "updated_at": now}).Error; err != nil {
-					return err
-				}
-			}
 			return nil
 		})
 	}()
@@ -1153,6 +1086,13 @@ func (s *GormStore) CompleteImageJob(call CallContext, job ImageJob, revisedProm
 			log.Printf("[tokenhub] failed to release API key concurrency lease request=%s: %v", call.RequestID, releaseErr)
 		}
 	} else {
+		// The route and resource marks used to run inside the completion
+		// transaction. They are display-only and throttled now, so they run
+		// afterwards instead: the transaction stays focused on the state a
+		// caller can observe, and the marks take the store mutex themselves —
+		// which is why they must run after the closure above released it.
+		s.MarkRouteUsed(route.Route.ID)
+		s.MarkProviderResourceUsed(routeResourceID(route))
 		s.observeGatewayCall(call, route, usage, http.StatusOK, "", elapsed)
 	}
 	return err
