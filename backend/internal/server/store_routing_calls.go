@@ -448,28 +448,42 @@ func (s *GormStore) routeSelection(provider Provider, resource *ProviderResource
 	}
 }
 
+// MarkRouteUsed refreshes the route's display-only last_used_at column. The
+// write is throttled to one per lastUsedThrottleWindow per route, and the store
+// mutex is only taken when a write actually happens.
 func (s *GormStore) MarkRouteUsed(routeID string) {
 	if routeID == "" {
 		return
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	now := time.Now().UTC()
-	_ = s.db.Model(&ModelRoute{}).Where("id = ?", routeID).Update("last_used_at", now).Error
+	if err := s.lastUsed.mark(lastUsedRouteKey(routeID), func() error {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		// Sampled under the mutex so the stored timestamp is when the write
+		// happened, not when the request queued for the lock.
+		return s.db.Model(&ModelRoute{}).Where("id = ?", routeID).Update("last_used_at", time.Now().UTC()).Error
+	}); err != nil {
+		log.Printf("[tokenhub] failed to record route last_used_at route=%s: %v", routeID, err)
+	}
 }
 
+// MarkProviderResourceUsed refreshes the resource's display-only last_used_at
+// column. It still bumps updated_at with it, so throttling coarsens both columns
+// to lastUsedThrottleWindow resolution for use-driven touches; every other write
+// path sets updated_at exactly as before.
 func (s *GormStore) MarkProviderResourceUsed(resourceID string) {
 	if resourceID == "" {
 		return
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	now := time.Now().UTC()
-	_ = s.db.Model(&ProviderResource{}).
-		Where("id = ?", resourceID).
-		Updates(map[string]any{"last_used_at": now, "updated_at": now}).Error
+	if err := s.lastUsed.mark(lastUsedResourceKey(resourceID), func() error {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		now := time.Now().UTC()
+		return s.db.Model(&ProviderResource{}).
+			Where("id = ?", resourceID).
+			Updates(map[string]any{"last_used_at": now, "updated_at": now}).Error
+	}); err != nil {
+		log.Printf("[tokenhub] failed to record provider resource last_used_at resource=%s: %v", resourceID, err)
+	}
 }
 
 func (s *GormStore) StartCall(ctx context.Context, project Project, key APIKey, modelName string, tokenReservation int64) (CallContext, error) {
@@ -1083,17 +1097,6 @@ func (s *GormStore) CompleteImageJob(call CallContext, job ImageJob, revisedProm
 			if result.RowsAffected != 1 {
 				return fmt.Errorf("image job %s is not running", job.ID)
 			}
-			if route.Route.ID != "" {
-				if err := tx.Model(&ModelRoute{}).Where("id = ?", route.Route.ID).Update("last_used_at", now).Error; err != nil {
-					return err
-				}
-			}
-			if resourceID := routeResourceID(route); resourceID != "" {
-				if err := tx.Model(&ProviderResource{}).Where("id = ?", resourceID).
-					Updates(map[string]any{"last_used_at": now, "updated_at": now}).Error; err != nil {
-					return err
-				}
-			}
 			return nil
 		})
 	}()
@@ -1102,6 +1105,13 @@ func (s *GormStore) CompleteImageJob(call CallContext, job ImageJob, revisedProm
 			log.Printf("[tokenhub] failed to release API key concurrency lease request=%s: %v", call.RequestID, releaseErr)
 		}
 	} else {
+		// The route and resource marks used to run inside the completion
+		// transaction. They are display-only and throttled now, so they run
+		// afterwards instead: the transaction stays focused on the state a
+		// caller can observe, and the marks take the store mutex themselves —
+		// which is why they must run after the closure above released it.
+		s.MarkRouteUsed(route.Route.ID)
+		s.MarkProviderResourceUsed(routeResourceID(route))
 		s.observeGatewayCall(call, route, usage, http.StatusOK, "", elapsed)
 	}
 	return err
