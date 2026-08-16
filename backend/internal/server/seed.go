@@ -224,7 +224,9 @@ func seedDefaultModelCatalog(store Store, catalogFile string) error {
 			model.OutputPriceUSDPer1M = existing.OutputPriceUSDPer1M
 			model.EmbeddingPriceUSDPer1M = existing.EmbeddingPriceUSDPer1M
 		}
-		store.AddModel(model)
+		if _, err := store.CreateModelWithRoutes(model, nil); err != nil {
+			return fmt.Errorf("seed catalog model %q: %w", model.Name, err)
+		}
 	}
 	return nil
 }

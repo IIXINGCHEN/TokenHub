@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -47,6 +48,31 @@ func TestRunStartupBootstrapReloadsCatalogOnEveryStart(t *testing.T) {
 	}
 	if got := modelCategory(); got != "second-start" {
 		t.Fatalf("catalog edit was not applied on restart: category=%q", got)
+	}
+}
+
+func TestSeedDefaultModelCatalogReportsLegacyNameConflict(t *testing.T) {
+	store := NewMemoryStore()
+	store.AddModel(Model{
+		ID:       "legacy-catalog-id",
+		Name:     "catalog-conflict-model",
+		Modality: "chat",
+		Status:   StatusActive,
+	})
+	catalogPath := filepath.Join(t.TempDir(), "model-catalog.yaml")
+	if err := os.WriteFile(catalogPath, []byte("version: 1\nmodels:\n  - name: catalog-conflict-model\n    modality: chat\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := seedDefaultModelCatalog(store, catalogPath)
+	if err == nil {
+		t.Fatal("expected catalog seed conflict to be reported")
+	}
+	if !strings.Contains(err.Error(), `seed catalog model "catalog-conflict-model"`) {
+		t.Fatalf("expected model name in seed error, got %v", err)
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "duplicated key") {
+		t.Fatalf("expected database conflict cause in seed error, got %v", err)
 	}
 }
 
