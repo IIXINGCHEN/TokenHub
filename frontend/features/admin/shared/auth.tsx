@@ -1,9 +1,10 @@
 import { Box, Check, Eye, EyeOff, Fingerprint, KeyRound, LockKeyhole, Moon, Pause, Play, ShieldCheck, Sun, UserRound, UserRoundCheck, Users } from "lucide-react";
-import { type FormEvent, useState } from "react";
-import { savePendingOAuthBaseURL } from "../core/session";
+import { type FormEvent, useRef, useState } from "react";
+import { savePendingOAuthLogin } from "../core/session";
 import { type LoginIdentityProvider, viewRoutes } from "../core/types";
 import { stringifyValue } from "../domain/entities";
 import { identityProviderIconLabel } from "../domain/labels";
+import { buildOAuthLoginStartURL, createOAuthLoginPKCE } from "../domain/oauth-login";
 import { LanguageSelect } from "../i18n/language-switcher";
 import { activeLanguage, type AppLanguage, tx } from "../i18n/runtime";
 
@@ -247,11 +248,8 @@ export const identityProviderTemplateOptions = identityProviderTemplates.map((te
 
 export type LoginIdentityProviderIconComponent = React.ComponentType<{ size?: number }>;
 
-export function identityProviderLoginURL(baseURL: string, provider: LoginIdentityProvider, returnURL: string) {
-  const target = new URL(`${baseURL.replace(/\/$/, "")}/api/admin/auth/oauth/start`);
-  target.searchParams.set("id", provider.id);
-  target.searchParams.set("return_url", returnURL);
-  return target.toString();
+export function identityProviderLoginURL(baseURL: string, provider: LoginIdentityProvider, returnURL: string, codeChallenge?: string) {
+  return buildOAuthLoginStartURL(baseURL, provider.id, returnURL, codeChallenge);
 }
 
 export function currentOAuthReturnURL() {
@@ -571,6 +569,9 @@ export function LoginView({
   const [password, setPassword] = useState("");
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [heroPaused, setHeroPaused] = useState(false);
+  const [ssoLoading, setSSOLoading] = useState(false);
+  const [ssoError, setSSOError] = useState("");
+  const ssoStarting = useRef(false);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -690,7 +691,7 @@ export function LoginView({
             </span>
             <button type="button">{tx("忘记密码？")}</button>
           </div>
-          {error ? <div className="login-error">{error}</div> : null}
+          {error || ssoError ? <div className="login-error">{error || ssoError}</div> : null}
           <button className="button login-submit" disabled={loading} type="submit">
             {loading ? tx("登录中") : tx("登录控制台")}
           </button>
@@ -706,17 +707,28 @@ export function LoginView({
                   const displayName = loginIdentityProviderDisplayName(provider);
                   return (
                     <a
-                      aria-disabled={loading}
+                      aria-disabled={loading || ssoLoading}
                       aria-label={`${tx("使用")} ${displayName} ${tx("登录")}`}
                       className="login-sso-button"
                       href={identityProviderLoginURL(baseURL, provider, oauthReturnURL)}
                       key={provider.id}
-                      onClick={(event) => {
-                        if (loading) {
-                          event.preventDefault();
+                      onClick={async (event) => {
+                        event.preventDefault();
+                        if (loading || ssoStarting.current) {
                           return;
                         }
-                        savePendingOAuthBaseURL(baseURL);
+                        ssoStarting.current = true;
+                        setSSOLoading(true);
+                        setSSOError("");
+                        try {
+                          const pkce = await createOAuthLoginPKCE();
+                          savePendingOAuthLogin(baseURL, pkce.codeVerifier);
+                          window.location.assign(identityProviderLoginURL(baseURL, provider, oauthReturnURL, pkce.codeChallenge));
+                        } catch {
+                          ssoStarting.current = false;
+                          setSSOError(tx("OAuth 登录失败"));
+                          setSSOLoading(false);
+                        }
                       }}
                     >
                       <LoginIdentityProviderIcon provider={provider} />

@@ -4,7 +4,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { type LoadedData, loadPlanForView, mergeLoadedData } from "../core/data-loading";
 import { allNavGroupTitles, canAccessView, defaultViewForRole, rememberRecentView, standaloneViewMeta } from "../core/navigation";
-import { clearOAuthLoginResult, clearPendingOAuthBaseURL, clearProviderAccountOAuthResultFromLocation, clearSavedSession, forwardOAuthAuthorizationResponse, hasPendingProviderAccountOAuthResult, isOAuthAuthorizationResponse, readOAuthLoginResult, readPendingOAuthBaseURL, readProviderAccountOAuthResultFromLocation, readSavedSession, savePendingProviderAccountOAuthResult, saveSession } from "../core/session";
+import { clearOAuthAuthorizationResponse, clearOAuthLoginResult, clearPendingOAuthLogin, clearProviderAccountOAuthResultFromLocation, clearSavedSession, forwardOAuthAuthorizationResponse, hasPendingProviderAccountOAuthResult, isOAuthAuthorizationResponse, isProviderAccountOAuthAuthorizationResponse, readOAuthLoginResult, readPendingOAuthLogin, readProviderAccountOAuthResultFromLocation, readSavedSession, savePendingProviderAccountOAuthResult, saveSession } from "../core/session";
 import { type AdminResource, type AdminUser, type AlertDelivery, type AlertEvent, type APIKey, type AppData, type ApprovalRequest, type AuditEvent, authExpiredEventName, type BillingConnector, type BillingRecord, type BillingSyncRun, type ConfirmState, languageStorageKey, type LoginIdentityProvider, type ModalState, type Model, type ModelRoute, type ModelRoutePolicy, notificationChannelTypes, type Project, type Provider, type ProviderCatalogEntry, type ProviderModel, type ProviderMonitoringSnapshot, type ProviderResource, type ReconciliationRule, type ReconciliationRun, type ReportExportHistoryItem, type RequestLog, type ResourceAction, type ResourceConfig, type SettingsTabKey, type SQLiteBackup, type ToolbarAction, type UsageBreakdown, type UsagePoint, type ViewKey, viewRoutes } from "../core/types";
 import { emptyData, emptySummary, filterByModelCategory, filterRows } from "../domain/catalog";
 import { filterAPIKeys } from "../domain/api-key-filter";
@@ -12,6 +12,7 @@ import { auditRequestPagePath } from "../domain/audit-request-page";
 import { modelRouteDefaults, rowTitle } from "../domain/entities";
 import { uniqueUIID, viewFromPath } from "../domain/formatting";
 import { reportDatasetLabel } from "../domain/labels";
+import { exchangeOAuthLoginCode, resolvePendingOAuthLoginResult } from "../domain/oauth-login";
 import { resourceCreateTarget } from "../domain/resource-create-target";
 import { type AppLanguage, bulkDeleteConfirmMessage, deleteConfirmMessage, importUsersDoneMessage, importUsersSkippedMessage, isIssuedAPIKey, readSavedLanguage, setActiveLanguage, tx } from "../i18n/runtime";
 import { createKeyWithCapture } from "../resources/generic-config";
@@ -122,37 +123,59 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
     let cancelled = false;
     async function bootstrapSession() {
       const saved = readSavedSession();
-      const oauth = readOAuthLoginResult();
-      const sessionBaseURL = readPendingOAuthBaseURL() ?? saved?.baseURL ?? defaultBaseURL;
-      if (!oauth && forwardOAuthAuthorizationResponse(sessionBaseURL)) return;
-      if (oauth?.error) {
-        clearOAuthLoginResult();
-        clearPendingOAuthBaseURL();
+      const pendingLogin = readPendingOAuthLogin();
+      const oauthCallback = resolvePendingOAuthLoginResult(window.location, pendingLogin);
+      if (oauthCallback.status === "none" && pendingLogin && forwardOAuthAuthorizationResponse(pendingLogin.baseURL)) return;
+      if (
+        oauthCallback.status === "none" &&
+        !isProviderAccountOAuthAuthorizationResponse() &&
+        isOAuthAuthorizationResponse()
+      ) {
+        clearOAuthAuthorizationResponse();
+        clearPendingOAuthLogin();
         setError(tx("OAuth 登录失败"));
+        setBootstrapped(true);
+        return;
       }
-      if (oauth?.token) {
+      if (oauthCallback.status === "unexpected") {
+        clearOAuthLoginResult();
+        clearPendingOAuthLogin();
+        setError(tx("OAuth 登录失败"));
+        setBootstrapped(true);
+        return;
+      }
+      if (oauthCallback.status === "ready" && oauthCallback.result.error) {
+        clearOAuthLoginResult();
+        clearPendingOAuthLogin();
+        setError(tx("OAuth 登录失败"));
+        setBootstrapped(true);
+        return;
+      }
+      if (oauthCallback.status === "ready" && oauthCallback.result.code) {
+        const sessionBaseURL = oauthCallback.baseURL;
         setBaseURL(sessionBaseURL);
         setLoading(true);
         try {
-          const resp = await fetch(`${sessionBaseURL.replace(/\/$/, "")}/api/admin/auth/me`, {
-            headers: { authorization: `Bearer ${oauth.token}` },
-          });
-          if (!resp.ok) {
-            throw new Error(await readAdminError(resp, "OAuth 会话校验失败"));
+          const exchange = await exchangeOAuthLoginCode(sessionBaseURL, oauthCallback.result.code, oauthCallback.codeVerifier);
+          const resp = new Response(exchange.body, { status: exchange.status });
+          if (!exchange.ok) {
+            throw new Error(await readAdminError(resp, tx("登录失败")));
           }
-          const payload = (await resp.json()) as { user: AdminUser };
-          const expiresAt = oauth.expiresAt || new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString();
+          const payload = JSON.parse(exchange.body) as { token?: string; user?: AdminUser; expires_at?: string };
+          if (!payload.token || !payload.user || !payload.expires_at) {
+            throw new Error(tx("登录失败"));
+          }
           if (cancelled) return;
           setData(emptyData());
-          setAdminToken(oauth.token);
+          setAdminToken(payload.token);
           setCurrentUser(payload.user);
-          saveSession({ baseURL: sessionBaseURL, token: oauth.token, user: payload.user, expiresAt });
+          saveSession({ baseURL: sessionBaseURL, token: payload.token, user: payload.user, expiresAt: payload.expires_at });
           setError("");
         } catch (err) {
           if (!cancelled) setError(err instanceof Error ? err.message : tx("OAuth 登录失败"));
         } finally {
           clearOAuthLoginResult();
-          clearPendingOAuthBaseURL();
+          clearPendingOAuthLogin();
           if (!cancelled) {
             setLoading(false);
             setBootstrapped(true);
@@ -160,6 +183,7 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
         }
         return;
       }
+      clearOAuthLoginResult();
       if (saved) {
         setBaseURL(saved.baseURL);
         setAdminToken(saved.token);
