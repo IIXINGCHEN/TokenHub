@@ -27,6 +27,8 @@ func TestOpenAIResponsesUsageObjectIncludesStandardDetailsAndLegacyAliases(t *te
 
 	if result["input_tokens"] != usage.PromptTokens ||
 		result["output_tokens"] != usage.CompletionTokens ||
+		result["prompt_tokens"] != usage.PromptTokens ||
+		result["completion_tokens"] != usage.CompletionTokens ||
 		result["total_tokens"] != usage.TotalTokens {
 		t.Fatalf("Responses token totals = %#v", result)
 	}

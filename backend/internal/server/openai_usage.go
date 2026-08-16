@@ -31,6 +31,8 @@ func openAIResponsesUsageObject(usage Usage) map[string]any {
 	result := tokenHubUsageAliases(usage)
 	result["input_tokens"] = usage.PromptTokens
 	result["output_tokens"] = usage.CompletionTokens
+	result["prompt_tokens"] = usage.PromptTokens
+	result["completion_tokens"] = usage.CompletionTokens
 	result["total_tokens"] = usage.TotalTokens
 
 	inputDetails := map[string]any{}

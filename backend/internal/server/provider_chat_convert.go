@@ -350,9 +350,11 @@ func withoutGatewayExtensions(req ChatCompletionRequest, preserveReasoningConten
 		_, hasReasoningContent := message.raw["reasoning_content"]
 		_, hasReasoningSignature := message.raw["reasoning_signature"]
 		_, hasRedactedReasoningContent := message.raw["redacted_reasoning_content"]
+		_, hasReasoningDetails := message.raw["reasoning_details"]
 		if (!preserveReasoningContent && (message.ReasoningContent != "" || hasReasoningContent)) ||
 			message.ReasoningSignature != "" || hasReasoningSignature ||
-			message.RedactedReasoningContent != "" || hasRedactedReasoningContent {
+			message.RedactedReasoningContent != "" || hasRedactedReasoningContent ||
+			hasReasoningDetails {
 			needsCopy = true
 			break
 		}
@@ -374,6 +376,7 @@ func withoutGatewayExtensions(req ChatCompletionRequest, preserveReasoningConten
 		messages[index].RedactedReasoningContent = ""
 		delete(messages[index].raw, "reasoning_signature")
 		delete(messages[index].raw, "redacted_reasoning_content")
+		delete(messages[index].raw, "reasoning_details")
 	}
 	req.Messages = messages
 	return req
