@@ -9,11 +9,11 @@ import { enumValueLabel, numberFromUnknown, numberOr, parseLooseValue, splitList
 import { defaultProviderClaudeCodeAttributionPolicy } from "../domain/provider-attribution";
 import { providerAnthropicAuthType } from "../domain/provider-custom-upstream";
 import { initialModelRoutes } from "../domain/provider-model-selection";
-import { providerReasoningFormValues, providerReasoningOptions, providerReasoningOverrideFormValues } from "../domain/provider-reasoning";
+import { providerReasoningOptions, providerReasoningOverrideFormValues } from "../domain/provider-reasoning";
 import { providerHeadersFormValue, providerHeadersPayload } from "../domain/provider-headers";
 import { activeLanguage, tx } from "../i18n/runtime";
 import { handleApprovalOrJSON } from "./governance-config";
-import { projectQuotaFields, type ProjectQuotaValues } from "../views/crud-projects";
+import { projectQuotaFields, type ProjectQuotaValues } from "../domain/project-quota";
 
 export function providerPayload(values: Record<string, string>) {
   return {
