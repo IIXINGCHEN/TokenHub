@@ -61,8 +61,30 @@ func preserveAdminResourceSecrets(kind string, existing map[string]any, patch ma
 		return patch
 	}
 	fields := cloneAdminResourceFields(patch)
+	explicitlyCleared := map[string]bool{}
 	for key, value := range patch {
-		if !sensitive[strings.ToLower(strings.TrimSpace(key))] || !isAdminResourceSecretPlaceholder(value) {
+		normalizedKey := strings.ToLower(strings.TrimSpace(key))
+		if !sensitive[normalizedKey] || value != nil {
+			continue
+		}
+		aliases := adminResourceSecretAliases(kind, key, existing, patch)
+		if len(aliases) == 0 {
+			aliases = []string{normalizedKey}
+		}
+		for _, alias := range aliases {
+			explicitlyCleared[alias] = true
+		}
+	}
+	for key, value := range patch {
+		normalizedKey := strings.ToLower(strings.TrimSpace(key))
+		if !sensitive[normalizedKey] {
+			continue
+		}
+		if explicitlyCleared[normalizedKey] {
+			delete(fields, key)
+			continue
+		}
+		if !isAdminResourceSecretPlaceholder(value) {
 			continue
 		}
 		if stored, ok := existingAdminResourceSecret(kind, key, existing, patch); ok {
@@ -165,7 +187,7 @@ func cloneAdminResourceFields(fields map[string]any) map[string]any {
 func isAdminResourceSecretPlaceholder(value any) bool {
 	text, ok := value.(string)
 	if !ok {
-		return value == nil
+		return false
 	}
 	text = strings.TrimSpace(text)
 	return text == "" || text == providerHeaderMask || text == "[redacted]"

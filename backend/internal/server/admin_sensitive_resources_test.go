@@ -253,6 +253,61 @@ func TestNotificationChannelPatchDoesNotCarryMaskedSecretAcrossChannelTypes(t *t
 	}
 }
 
+func TestSensitiveResourcePatchUsesNullToClearStoredSecrets(t *testing.T) {
+	store := NewMemoryStore()
+	const (
+		identitySecret = "identity-secret-to-clear"
+		webhookSecret  = "https://hooks.example.test/services/secret-to-clear"
+	)
+	identity := store.CreateResource("identity-providers", AdminResource{
+		Name: "Clearable IdP", Status: StatusActive,
+		Fields: map[string]any{"client_id": "client", "client_secret": identitySecret},
+	})
+	channel := store.CreateResource("notification-channels", AdminResource{
+		Name: "Clearable Webhook", Status: StatusActive,
+		Fields: map[string]any{"type": "webhook", "url": webhookSecret},
+	})
+	server := NewWithConfig(store, Config{AdminToken: "clear-secret-admin", SecretKey: "clear-secret-key"})
+	t.Cleanup(func() { _ = server.Shutdown(t.Context()) })
+
+	identityResponse := doJSON(t, server.Handler(), http.MethodPatch, "/api/admin/resources/identity-providers/"+identity.ID, map[string]any{
+		"name":   identity.Name,
+		"fields": map[string]any{"client_id": "client", "client_secret": nil},
+	}, "clear-secret-admin")
+	if identityResponse.Code != http.StatusOK || strings.Contains(identityResponse.Body, identitySecret) {
+		t.Fatalf("clear identity secret = %d: %s", identityResponse.Code, identityResponse.Body)
+	}
+	storedIdentity, err := server.findResource("identity-providers", identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, retained := storedIdentity.Fields["client_secret"]; retained {
+		t.Fatalf("identity secret survived explicit null: %+v", storedIdentity.Fields)
+	}
+
+	channelResponse := doJSON(t, server.Handler(), http.MethodPatch, "/api/admin/resources/notification-channels/"+channel.ID, map[string]any{
+		"name":   channel.Name,
+		"fields": map[string]any{"type": "webhook", "webhook_url": nil},
+	}, "clear-secret-admin")
+	if channelResponse.Code != http.StatusOK || strings.Contains(channelResponse.Body, webhookSecret) {
+		t.Fatalf("clear notification secret = %d: %s", channelResponse.Code, channelResponse.Body)
+	}
+	storedChannel, err := server.findResource("notification-channels", channel.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"url", "webhook_url"} {
+		if _, retained := storedChannel.Fields[key]; retained {
+			t.Fatalf("notification secret alias %s survived explicit null: %+v", key, storedChannel.Fields)
+		}
+	}
+
+	auditResponse := doJSON(t, server.Handler(), http.MethodGet, "/api/admin/audit/events", nil, "clear-secret-admin")
+	if auditResponse.Code != http.StatusOK || strings.Contains(auditResponse.Body, identitySecret) || strings.Contains(auditResponse.Body, webhookSecret) {
+		t.Fatalf("cleared secrets leaked through audit response = %d: %s", auditResponse.Code, auditResponse.Body)
+	}
+}
+
 func assertSensitiveResourceResponse(t *testing.T, body string, secrets map[string]string) {
 	t.Helper()
 	assertNoSecretValues(t, body, secrets)
