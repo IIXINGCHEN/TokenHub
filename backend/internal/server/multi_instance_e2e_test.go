@@ -72,6 +72,13 @@ func TestMultiInstancePostgresE2E(t *testing.T) {
 	t.Run("adaptive route stats failures remain best effort", func(t *testing.T) {
 		testRouteCandidateStatsFailure(t, storeA)
 	})
+	t.Run("route candidate lookup errors preserve failover", func(t *testing.T) {
+		for _, target := range []string{"providers", "provider_resources"} {
+			t.Run(target, func(t *testing.T) {
+				testRouteCandidateLookupFailover(t, storeA, target)
+			})
+		}
+	})
 	t.Run("analytics migration preserves legacy time windows", func(t *testing.T) {
 		testPostgresAnalyticsLegacySequenceMigration(t, storeA, config)
 	})
@@ -126,7 +133,7 @@ func testRouteCandidateReadSnapshot(t *testing.T, storeA *GormStore, storeB *Gor
 			select {
 			case <-resume:
 			case <-time.After(5 * time.Second):
-				tx.AddError(fmt.Errorf("timed out waiting to resume route snapshot query"))
+				_ = tx.AddError(fmt.Errorf("timed out waiting to resume route snapshot query"))
 			}
 		})
 	}); err != nil {
@@ -227,6 +234,89 @@ func testRouteCandidateStatsFailure(t *testing.T, store *GormStore) {
 	}
 	if len(candidates) != 1 || candidates[0].Provider.ID != providerID || candidates[0].Runtime != (RouteRuntimeStats{}) {
 		t.Fatalf("candidates after optional runtime stats failure = %+v", candidates)
+	}
+}
+
+func testRouteCandidateLookupFailover(t *testing.T, store *GormStore, target string) {
+	t.Helper()
+	suffix := NewID("lookup-failover")
+	modelName := "route-lookup-failover-" + suffix
+	providers := make([]Provider, 0, 2)
+	resources := make([]ProviderResource, 0, 2)
+	routes := make([]ModelRoute, 0, 2)
+	store.AddModel(Model{Name: modelName, Modality: "chat", Status: StatusActive})
+	for index, label := range []string{"bad", "good"} {
+		provider := store.AddProvider(Provider{
+			ID: "prv_" + label + "_" + suffix, Name: "Route lookup " + label,
+			Type: ProviderMock, Status: StatusActive, Healthy: true,
+		})
+		resource, err := store.AddProviderResource(ProviderResource{
+			ID: "rsrc_" + label + "_" + suffix, ProviderID: provider.ID,
+			Name: "Route lookup " + label, Status: StatusActive, Healthy: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		providers = append(providers, provider)
+		resources = append(resources, resource)
+		routes = append(routes, store.AddRoute(ModelRoute{
+			ID: "route_" + label + "_" + suffix, ModelName: modelName,
+			ProviderID: provider.ID, ProviderResourceID: resource.ID, ProviderModel: modelName,
+			Priority: index + 1, Weight: 100, Status: StatusActive,
+		}))
+	}
+	t.Cleanup(func() {
+		for _, route := range routes {
+			_ = store.db.Where("id = ?", route.ID).Delete(&ModelRoute{}).Error
+		}
+		for _, resource := range resources {
+			_ = store.db.Where("id = ?", resource.ID).Delete(&ProviderResource{}).Error
+		}
+		for _, provider := range providers {
+			_ = store.db.Where("id = ?", provider.ID).Delete(&Provider{}).Error
+		}
+		_ = store.db.Where("name = ?", modelName).Delete(&Model{}).Error
+	})
+
+	attempts := 0
+	databaseErrors := 0
+	callbackName := "test:route-candidate-lookup-failover:" + suffix
+	resultCallbackName := callbackName + ":result"
+	if err := store.db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Schema != nil && tx.Statement.Schema.Table == target {
+			attempts++
+			if attempts <= 2 {
+				tx.Statement.Table = "missing_" + target + "_" + suffix
+			}
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.Callback().Query().After("gorm:query").Register(resultCallbackName, func(tx *gorm.DB) {
+		if tx.Statement.Schema != nil && tx.Statement.Schema.Table == target && tx.Error != nil {
+			databaseErrors++
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := store.db.Callback().Query().Remove(callbackName); err != nil {
+			t.Errorf("remove route lookup failover callback: %v", err)
+		}
+		if err := store.db.Callback().Query().Remove(resultCallbackName); err != nil {
+			t.Errorf("remove route lookup failover result callback: %v", err)
+		}
+	}()
+
+	candidates, err := store.SelectRouteCandidates(modelName)
+	if err != nil {
+		t.Fatalf("lookup failure rejected unaffected candidates: %v", err)
+	}
+	if attempts != 3 || databaseErrors != 2 {
+		t.Fatalf("lookup attempts/errors = %d/%d, want 3/2", attempts, databaseErrors)
+	}
+	if len(candidates) != 1 || candidates[0].Route.ID != routes[1].ID {
+		t.Fatalf("lookup failover candidates = %+v, want route %s", candidates, routes[1].ID)
 	}
 }
 

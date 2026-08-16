@@ -207,36 +207,76 @@ func TestSelectRouteCandidatesPreservesGroupsAndProviderFallback(t *testing.T) {
 	}
 }
 
-func TestSelectRouteCandidatesReturnsBatchLookupErrors(t *testing.T) {
-	store := NewMemoryStore()
-	modelName := "lookup-error-model"
-	store.AddModel(Model{Name: modelName, Modality: "chat", Status: StatusActive})
-	provider := store.AddProvider(Provider{
-		ID: "prv_lookup_error", Name: "Lookup error", Type: ProviderMock,
-		Status: StatusActive, Healthy: true,
-	})
-	store.AddRoute(ModelRoute{
-		ID: "route_lookup_error", ModelName: modelName, ProviderID: provider.ID,
-		ProviderModel: modelName, Priority: 1, Weight: 100, Status: StatusActive,
-	})
+func TestSelectRouteCandidatesFallsBackAfterBatchLookupErrors(t *testing.T) {
+	for _, target := range []string{"providers", "provider_resources"} {
+		t.Run(target, func(t *testing.T) {
+			store := NewMemoryStore()
+			modelName := "lookup-error-" + target
+			store.AddModel(Model{Name: modelName, Modality: "chat", Status: StatusActive})
+			badProvider := store.AddProvider(Provider{
+				ID: "prv_lookup_error_bad_" + target, Name: "Lookup error bad", Type: ProviderMock,
+				Status: StatusActive, Healthy: true,
+			})
+			goodProvider := store.AddProvider(Provider{
+				ID: "prv_lookup_error_good_" + target, Name: "Lookup error good", Type: ProviderMock,
+				Status: StatusActive, Healthy: true,
+			})
+			badResource, err := store.AddProviderResource(ProviderResource{
+				ID: "rsrc_lookup_error_bad_" + target, ProviderID: badProvider.ID,
+				Name: "Lookup error bad", Status: StatusActive, Healthy: true,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			goodResource, err := store.AddProviderResource(ProviderResource{
+				ID: "rsrc_lookup_error_good_" + target, ProviderID: goodProvider.ID,
+				Name: "Lookup error good", Status: StatusActive, Healthy: true,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for index, route := range []ModelRoute{
+				{ID: "route_lookup_error_bad_" + target, ProviderID: badProvider.ID, ProviderResourceID: badResource.ID},
+				{ID: "route_lookup_error_good_" + target, ProviderID: goodProvider.ID, ProviderResourceID: goodResource.ID},
+			} {
+				route.ModelName = modelName
+				route.ProviderModel = modelName
+				route.Priority = index + 1
+				route.Weight = 100
+				route.Status = StatusActive
+				store.AddRoute(route)
+			}
 
-	wantErr := errors.New("provider batch lookup failed")
-	callbackName := "test:route-candidate-query-error"
-	if err := store.db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
-		if tx.Statement.Schema != nil && tx.Statement.Schema.Table == "providers" {
-			tx.AddError(wantErr)
-		}
-	}); err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := store.db.Callback().Query().Remove(callbackName); err != nil {
-			t.Errorf("remove query callback: %v", err)
-		}
-	}()
+			wantErr := errors.New(target + " lookup failed")
+			attempts := 0
+			callbackName := "test:route-candidate-query-error:" + target
+			if err := store.db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+				if tx.Statement.Schema != nil && tx.Statement.Schema.Table == target {
+					attempts++
+					if attempts <= 2 {
+						_ = tx.AddError(wantErr)
+					}
+				}
+			}); err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := store.db.Callback().Query().Remove(callbackName); err != nil {
+					t.Errorf("remove query callback: %v", err)
+				}
+			}()
 
-	if _, err := store.SelectRouteCandidates(modelName); !errors.Is(err, wantErr) {
-		t.Fatalf("SelectRouteCandidates error = %v, want %v", err, wantErr)
+			candidates, err := store.SelectRouteCandidates(modelName)
+			if err != nil {
+				t.Fatalf("SelectRouteCandidates returned batch lookup error: %v", err)
+			}
+			if attempts != 3 {
+				t.Fatalf("%s lookup attempts = %d, want batch plus two individual attempts", target, attempts)
+			}
+			if len(candidates) != 1 || candidates[0].Route.ID != "route_lookup_error_good_"+target {
+				t.Fatalf("fallback candidates = %+v, want the unaffected route", candidates)
+			}
+		})
 	}
 }
 
