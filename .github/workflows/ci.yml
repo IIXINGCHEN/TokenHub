@@ -100,7 +100,65 @@ jobs:
       - name: Test PostgreSQL migrations and multi-instance behavior
         env:
           TEST_POSTGRES_URL: postgresql://tokenhub:tokenhub-e2e-password@localhost:5432/tokenhub_e2e?sslmode=disable
-        run: go test -tags=integration ./internal/server -run '^TestMultiInstancePostgresE2E$' -count=1 -v
+        run: |
+          go test -tags=integration ./internal/server -run '^TestMultiInstancePostgresE2E$|^TestPostgresBaselineSQLIsCurrent$|^TestPostgresFreshStoreAdoptsFromBaselineSQL$' -count=1 -v
+          go test -tags=integration ./internal/dbschema -run '^TestPostgres' -count=1 -v
+
+  backend-db-n1:
+    name: Backend database N-1 contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Check out previous release tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: v0.4.0
+          path: n1
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Build both release binaries
+        run: |
+          (cd backend && go build -o "$RUNNER_TEMP/current-tokenhub" ./cmd/tokenhub)
+          (cd n1/backend && go build -o "$RUNNER_TEMP/n1-tokenhub" ./cmd/tokenhub)
+
+      - name: Run the N-1 two-way compatibility contract
+        env:
+          TOKENHUB_ADMIN_TOKEN: n1-contract-token
+          N1_DATABASE: ${{ runner.temp }}/n1-contract.db
+        run: |
+          set -euo pipefail
+          boot_and_wait() {
+            bin="$1"; port="$2"; log="$3"
+            TOKENHUB_HTTP_ADDR="127.0.0.1:${port}" TOKENHUB_DATABASE_URL="sqlite://${N1_DATABASE}" "$bin" >"$log" 2>&1 &
+            pid=$!
+            for _ in $(seq 1 60); do
+              curl -fsS "http://127.0.0.1:${port}/livez" >/dev/null 2>&1 && { kill "$pid"; wait "$pid" 2>/dev/null || true; return 0; }
+              kill -0 "$pid" 2>/dev/null || { echo "process died; log follows"; cat "$log"; return 1; }
+              sleep 1
+            done
+            echo "timeout waiting for port ${port}; log follows"; cat "$log"; kill "$pid" 2>/dev/null || true; return 1
+          }
+          # The previous release creates the legacy database.
+          boot_and_wait "$RUNNER_TEMP/n1-tokenhub" 18081 "$RUNNER_TEMP/n1-a.log"
+          # The current release adopts it and reports readiness.
+          boot_and_wait "$RUNNER_TEMP/current-tokenhub" 18082 "$RUNNER_TEMP/cur-b.log"
+          TOKENHUB_DATABASE_URL="sqlite://${N1_DATABASE}" "$RUNNER_TEMP/current-tokenhub" db verify
+          # The previous release boots again on the adopted database (rollback window).
+          boot_and_wait "$RUNNER_TEMP/n1-tokenhub" 18083 "$RUNNER_TEMP/n1-d.log"
+          # The current release returns to serving the same database.
+          boot_and_wait "$RUNNER_TEMP/current-tokenhub" 18084 "$RUNNER_TEMP/cur-e.log"
+          TOKENHUB_DATABASE_URL="sqlite://${N1_DATABASE}" "$RUNNER_TEMP/current-tokenhub" db status
 
   frontend:
     name: Frontend
