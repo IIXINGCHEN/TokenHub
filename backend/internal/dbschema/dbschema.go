@@ -1,0 +1,391 @@
+// Package dbschema owns TokenHub's forward-only database schema evolution: a
+// narrow migration runner with a per-version ledger, checksum verification,
+// dirty-state handling, and bounded cross-process locking. It executes only
+// registered SQL statements or Go callbacks and deliberately does not grow
+// into a general migration framework or SQL parser (ADR 0006).
+package dbschema
+
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"sort"
+	"time"
+)
+
+// Dialect identifies the database engine the runner operates on.
+type Dialect string
+
+const (
+	DialectSQLite   Dialect = "sqlite"
+	DialectPostgres Dialect = "postgres"
+)
+
+// Phase classifies a migration. Expand migrations stay compatible with the
+// supported rollback window and may run at startup; contract migrations only
+// run through an explicit maintenance operation and are never applied by
+// Runner.Migrate (ADR 0005).
+type Phase string
+
+const (
+	PhaseExpand   Phase = "expand"
+	PhaseContract Phase = "contract"
+)
+
+// Stable error codes surfaced through *Error and recorded in
+// migration_attempts. Raw driver errors never reach the ledger.
+const (
+	ErrCodeChecksumMismatch   = "checksum_mismatch"
+	ErrCodeDirtyState         = "dirty_state"
+	ErrCodeLockTimeout        = "lock_timeout"
+	ErrCodeApplyFailed        = "apply_failed"
+	ErrCodeUnknownApplied     = "unknown_applied_version"
+	ErrCodeBaselineMissing    = "baseline_missing"
+	ErrCodeInvalidRegistry    = "invalid_registry"
+	ErrCodeSchemaVerification = "schema_verification_failed"
+	// ErrCodeContractPrecondition marks a contract execution refused because a
+	// caller-supplied precondition (backfills, cluster, backup, maintenance
+	// window) failed before any statement ran.
+	ErrCodeContractPrecondition = "contract_precondition_failed"
+)
+
+// Error carries a stable machine-readable code so startup refusals and audit
+// records do not depend on driver-specific error text.
+type Error struct {
+	Code    string
+	Version int64
+	Err     error
+}
+
+func (e *Error) Error() string {
+	switch {
+	case e.Err != nil && e.Version != 0:
+		return fmt.Sprintf("dbschema: %s (version %d): %v", e.Code, e.Version, e.Err)
+	case e.Err != nil:
+		return fmt.Sprintf("dbschema: %s: %v", e.Code, e.Err)
+	default:
+		return fmt.Sprintf("dbschema: %s", e.Code)
+	}
+}
+
+func (e *Error) Unwrap() error { return e.Err }
+
+func newError(code string, version int64, err error) *Error {
+	return &Error{Code: code, Version: version, Err: err}
+}
+
+// Execer is the execution surface a migration body receives. It is satisfied
+// by *sql.DB, *sql.Conn, and *sql.Tx.
+type Execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// GoMigration is a migration implemented as a Go callback instead of SQL.
+type GoMigration func(ctx context.Context, db Execer) error
+
+// Migration is one registered schema change. Exactly one of Statements or Go
+// must be set. Content is frozen once released: the checksum of an applied
+// migration is verified on every startup.
+type Migration struct {
+	Version int64
+	Name    string
+	Phase   Phase
+	// Dialect restricts the migration to one engine; empty means all engines.
+	Dialect Dialect
+	// Statements are executed verbatim in order.
+	Statements []string
+	Go         GoMigration
+	// NonTransactional opts out of per-migration transaction atomicity. A
+	// non-transactional migration must declare Postcondition; while it runs the
+	// ledger holds a dirty marker that refuses startup until the migration is
+	// proven complete (ADR 0005).
+	NonTransactional bool
+	Postcondition    func(ctx context.Context, db Execer) error
+	// ChecksumOverride pins the checksum explicitly. It is required for Go
+	// migrations, whose source checksum is produced by the build-time manifest.
+	ChecksumOverride string
+}
+
+func (m Migration) transactional() bool { return !m.NonTransactional }
+
+// Checksum returns the stable checksum of the migration's frozen content.
+func (m Migration) Checksum() string {
+	if m.ChecksumOverride != "" {
+		return m.ChecksumOverride
+	}
+	dialectTag := string(m.Dialect)
+	if dialectTag == "" {
+		dialectTag = "*"
+	}
+	hash := sha256.New()
+	fmt.Fprintf(hash, "tokenhub-migration-v1\n%s\n%s\n", m.Phase, dialectTag)
+	for _, statement := range m.Statements {
+		fmt.Fprintf(hash, "%s\n--\n", statement)
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+// Applied is one row of the schema_migrations ledger.
+type Applied struct {
+	Version        int64
+	Name           string
+	Phase          Phase
+	Checksum       string
+	Dirty          bool
+	AppliedAt      string
+	AppliedRelease string
+}
+
+// Status is the runner's read-only view of the ledger.
+type Status struct {
+	BaselineRecorded bool
+	CurrentVersion   int64
+	Applied          []Applied
+	PendingExpand    []Migration
+	PendingContract  []Migration
+	Dirty            bool
+	DirtyVersion     int64
+}
+
+// Result reports what a Migrate or Adopt call changed.
+type Result struct {
+	Adopted bool
+	Applied []Applied
+}
+
+const (
+	// BaselineVersion is the ledger version recorded when a legacy or fresh
+	// database is adopted by the frozen bridge-release flow.
+	BaselineVersion int64 = 1
+	baselineName          = "legacy-adoption-baseline"
+	// DefaultLockWait bounds how long the runner waits for the cross-process
+	// migration lock before staying not-ready instead of blocking forever.
+	DefaultLockWait = 2 * time.Minute
+)
+
+// AdoptionChecksum pins the adoption pseudo-migration. A later release binds it
+// to the release manifest checksum (ADR 0005).
+var AdoptionChecksum = func() string {
+	sum := sha256.Sum256([]byte("tokenhub:legacy-adoption:v1"))
+	return hex.EncodeToString(sum[:])
+}()
+
+// Runner applies and verifies schema migrations for one database handle.
+type Runner struct {
+	db                   *sql.DB
+	dialect              Dialect
+	registry             []Migration
+	lockWait             time.Duration
+	appRelease           string
+	externalCoordination bool
+	adoptionReference    func(ctx context.Context) (ObjectSet, error)
+	freshBaseline        []string
+	log                  func(format string, args ...any)
+}
+
+// Option customizes a Runner.
+type Option func(*Runner)
+
+// WithLockWait overrides the bounded wait for the migration lock.
+func WithLockWait(wait time.Duration) Option {
+	return func(r *Runner) { r.lockWait = wait }
+}
+
+// WithAppRelease stamps the release identifier into ledger and attempt rows.
+func WithAppRelease(release string) Option {
+	return func(r *Runner) { r.appRelease = release }
+}
+
+// WithLogger receives bounded-wait diagnostics while the runner queues behind
+// another executor.
+func WithLogger(log func(format string, args ...any)) Option {
+	return func(r *Runner) {
+		if log != nil {
+			r.log = log
+		}
+	}
+}
+
+// WithExternalCoordination declares that the caller already serializes schema
+// work across processes (for example the store's advisory-locked startup
+// section); the runner then skips its own lock acquisition.
+func WithExternalCoordination() Option {
+	return func(r *Runner) { r.externalCoordination = true }
+}
+
+// WithAdoptionReference supplies a reference schema snapshot that the runner
+// verifies semantically against the database before recording the adoption
+// baseline (ADR 0005/0006). The builder only runs on the adoption path, never
+// on ordinary restarts.
+func WithAdoptionReference(builder func(ctx context.Context) (ObjectSet, error)) Option {
+	return func(r *Runner) { r.adoptionReference = builder }
+}
+
+// WithFreshBaseline supplies the frozen SQL that creates the baseline schema
+// on a database that holds no business tables yet. Databases that already
+// carry business tables ignore it and run the frozen legacy-adoption callback
+// instead (ADR 0005).
+func WithFreshBaseline(statements []string) Option {
+	return func(r *Runner) { r.freshBaseline = statements }
+}
+
+// NewRunner validates the migration registry and returns a runner for the
+// given database handle. Registry versions must be unique, positive, and
+// greater than the reserved baseline version.
+func NewRunner(db *sql.DB, dialect Dialect, migrations []Migration, opts ...Option) (*Runner, error) {
+	if db == nil {
+		return nil, errors.New("dbschema: nil database handle")
+	}
+	switch dialect {
+	case DialectSQLite, DialectPostgres:
+	default:
+		return nil, fmt.Errorf("dbschema: unsupported dialect %q", dialect)
+	}
+	registry, err := normalizeRegistry(migrations)
+	if err != nil {
+		return nil, newError(ErrCodeInvalidRegistry, 0, err)
+	}
+	runner := &Runner{
+		db:       db,
+		dialect:  dialect,
+		registry: registry,
+		lockWait: DefaultLockWait,
+		log:      func(string, ...any) {},
+	}
+	for _, opt := range opts {
+		opt(runner)
+	}
+	return runner, nil
+}
+
+func normalizeRegistry(migrations []Migration) ([]Migration, error) {
+	registry := make([]Migration, len(migrations))
+	copy(registry, migrations)
+	sort.Slice(registry, func(i, j int) bool { return registry[i].Version < registry[j].Version })
+	seen := make(map[int64]bool, len(registry))
+	for i := range registry {
+		m := &registry[i]
+		if m.Version <= BaselineVersion {
+			return nil, fmt.Errorf("migration %q: version %d is reserved or invalid (must be > %d)", m.Name, m.Version, BaselineVersion)
+		}
+		if seen[m.Version] {
+			return nil, fmt.Errorf("duplicate migration version %d", m.Version)
+		}
+		seen[m.Version] = true
+		if m.Name == "" {
+			return nil, fmt.Errorf("migration version %d: empty name", m.Version)
+		}
+		switch m.Phase {
+		case "":
+			m.Phase = PhaseExpand
+		case PhaseExpand, PhaseContract:
+		default:
+			return nil, fmt.Errorf("migration %q: invalid phase %q", m.Name, m.Phase)
+		}
+		switch m.Dialect {
+		case "", DialectSQLite, DialectPostgres:
+		default:
+			return nil, fmt.Errorf("migration %q: invalid dialect %q", m.Name, m.Dialect)
+		}
+		hasSQL, hasGo := len(m.Statements) > 0, m.Go != nil
+		switch {
+		case hasSQL && hasGo:
+			return nil, fmt.Errorf("migration %q: statements and Go callback are mutually exclusive", m.Name)
+		case !hasSQL && !hasGo:
+			return nil, fmt.Errorf("migration %q: no statements and no Go callback", m.Name)
+		case hasGo && m.ChecksumOverride == "":
+			return nil, fmt.Errorf("migration %q: Go migrations require ChecksumOverride", m.Name)
+		}
+		if m.NonTransactional && m.Postcondition == nil {
+			return nil, fmt.Errorf("migration %q: non-transactional migrations require Postcondition", m.Name)
+		}
+	}
+	return registry, nil
+}
+
+// Status ensures the ledger tables exist and reports the current migration
+// state, including pending expand and contract migrations.
+func (r *Runner) Status(ctx context.Context) (Status, error) {
+	if err := r.ensureLedger(ctx); err != nil {
+		return Status{}, err
+	}
+	applied, err := r.loadApplied(ctx)
+	if err != nil {
+		return Status{}, err
+	}
+	status := Status{Applied: applied}
+	appliedSet := make(map[int64]bool, len(applied))
+	for _, row := range applied {
+		appliedSet[row.Version] = true
+		if row.Version > status.CurrentVersion {
+			status.CurrentVersion = row.Version
+		}
+		if row.Version == BaselineVersion {
+			status.BaselineRecorded = true
+		}
+		if row.Dirty {
+			status.Dirty = true
+			if row.Version > status.DirtyVersion {
+				status.DirtyVersion = row.Version
+			}
+		}
+	}
+	for _, m := range r.registry {
+		if appliedSet[m.Version] || !m.appliesTo(r.dialect) {
+			continue
+		}
+		if m.Phase == PhaseContract {
+			status.PendingContract = append(status.PendingContract, m)
+		} else {
+			status.PendingExpand = append(status.PendingExpand, m)
+		}
+	}
+	return status, nil
+}
+
+// Verify checks ledger integrity without applying anything: checksums of
+// applied versions, unknown applied versions, and dirty state.
+func (r *Runner) Verify(ctx context.Context) error {
+	if err := r.ensureLedger(ctx); err != nil {
+		return err
+	}
+	applied, err := r.loadApplied(ctx)
+	if err != nil {
+		return err
+	}
+	return r.verifyApplied(applied)
+}
+
+func (r *Runner) verifyApplied(applied []Applied) error {
+	registryByVer := make(map[int64]Migration, len(r.registry))
+	for _, m := range r.registry {
+		registryByVer[m.Version] = m
+	}
+	for _, row := range applied {
+		if row.Dirty {
+			return newError(ErrCodeDirtyState, row.Version, errors.New("ledger holds a dirty migration; repair required before startup"))
+		}
+		if row.Version == BaselineVersion {
+			if row.Checksum != AdoptionChecksum {
+				return newError(ErrCodeChecksumMismatch, row.Version, errors.New("adoption baseline checksum mismatch"))
+			}
+			continue
+		}
+		m, ok := registryByVer[row.Version]
+		if !ok {
+			return newError(ErrCodeUnknownApplied, row.Version, fmt.Errorf("applied version is not in the registry"))
+		}
+		if m.Checksum() != row.Checksum {
+			return newError(ErrCodeChecksumMismatch, row.Version, errors.New("applied migration content changed after release"))
+		}
+	}
+	return nil
+}
+
+func (m Migration) appliesTo(dialect Dialect) bool {
+	return m.Dialect == "" || m.Dialect == dialect
+}
