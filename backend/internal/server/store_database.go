@@ -215,6 +215,12 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 		return migrateSchemaObjects(db, driver)
 	}
 	legacyDataBackfills := func() error {
+		// The commit-sequence history reorder runs per boot: legacy-shaped
+		// sequence data can reappear through backup restores or an older
+		// release writing to the same database.
+		if err := backfillRequestLogCommitSequence(db, driver); err != nil {
+			return err
+		}
 		if err := backfillTeamRelationships(db); err != nil {
 			return err
 		}
@@ -379,9 +385,6 @@ END;`}
 		if err := db.Exec(statement).Error; err != nil {
 			return fmt.Errorf("create request log sequence trigger: %w", err)
 		}
-	}
-	if err := backfillRequestLogCommitSequence(db, driver); err != nil {
-		return err
 	}
 	return nil
 }

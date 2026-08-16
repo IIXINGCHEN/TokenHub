@@ -12,6 +12,7 @@ import (
 var migrationFS embed.FS
 
 const sqliteBaselinePath = "migrations/sqlite/000001_baseline.json"
+const postgresBaselinePath = "migrations/postgres/000001_baseline.json"
 
 type baselineFile struct {
 	Version    int64    `json:"version"`
@@ -25,16 +26,28 @@ type baselineFile struct {
 // business tables run the frozen legacy-adoption flow). Regenerate the file
 // with UPDATE_BASELINE=1 go test ./internal/server -run TestSQLiteBaselineSQLIsCurrent.
 func SQLiteBaselineStatements() ([]string, error) {
-	raw, err := migrationFS.ReadFile(sqliteBaselinePath)
+	return readBaselineFile(sqliteBaselinePath, DialectSQLite)
+}
+
+// PostgresBaselineStatements returns the frozen SQL statements that create
+// the adoption-baseline schema on a fresh PostgreSQL database. Regenerate the
+// file with UPDATE_BASELINE=1 and TEST_POSTGRES_URL set while running
+// ./internal/server -run TestPostgresBaselineSQLIsCurrent (integration tag).
+func PostgresBaselineStatements() ([]string, error) {
+	return readBaselineFile(postgresBaselinePath, DialectPostgres)
+}
+
+func readBaselineFile(path string, dialect Dialect) ([]string, error) {
+	raw, err := migrationFS.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("dbschema: read sqlite baseline: %w", err)
+		return nil, fmt.Errorf("dbschema: read %s baseline: %w", dialect, err)
 	}
 	var file baselineFile
 	if err := json.Unmarshal(raw, &file); err != nil {
-		return nil, fmt.Errorf("dbschema: parse sqlite baseline: %w", err)
+		return nil, fmt.Errorf("dbschema: parse %s baseline: %w", dialect, err)
 	}
-	if file.Version != BaselineVersion || file.Dialect != string(DialectSQLite) {
-		return nil, fmt.Errorf("dbschema: sqlite baseline declares version %d dialect %q", file.Version, file.Dialect)
+	if file.Version != BaselineVersion || file.Dialect != string(dialect) {
+		return nil, fmt.Errorf("dbschema: %s baseline declares version %d dialect %q", dialect, file.Version, file.Dialect)
 	}
 	return file.Statements, nil
 }
@@ -101,8 +114,21 @@ func (r *Runner) adoptFreshLocked(ctx context.Context) (Result, error) {
 	return result, nil
 }
 
-// execStatements runs the frozen baseline statements in one transaction.
+// execStatements runs the frozen baseline statements. SQLite runs them in one
+// transaction; PostgreSQL runs each statement standalone because the baseline
+// includes CREATE INDEX CONCURRENTLY, which cannot run inside a transaction.
+// A failed fresh PostgreSQL adoption self-heals: the half-built database no
+// longer counts as fresh, so the next start completes it through the frozen
+// legacy flow before recording the baseline.
 func (r *Runner) execStatements(ctx context.Context, statements []string) error {
+	if r.dialect == DialectPostgres {
+		for _, statement := range statements {
+			if _, err := r.db.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("baseline statement %q: %w", firstLine(statement), err)
+			}
+		}
+		return nil
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
