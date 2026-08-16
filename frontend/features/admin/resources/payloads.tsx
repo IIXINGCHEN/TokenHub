@@ -9,6 +9,8 @@ import { enumValueLabel, numberFromUnknown, numberOr, parseLooseValue, splitList
 import { defaultProviderClaudeCodeAttributionPolicy } from "../domain/provider-attribution";
 import { providerAnthropicAuthType } from "../domain/provider-custom-upstream";
 import { initialModelRoutes } from "../domain/provider-model-selection";
+import { modelMetadataWithDisplayName } from "../domain/model-display-name";
+import { defaultDisplayName } from "../domain/form-defaults";
 import { providerReasoningFormValues, providerReasoningOptions, providerReasoningOverrideFormValues } from "../domain/provider-reasoning";
 import { providerHeadersFormValue, providerHeadersPayload } from "../domain/provider-headers";
 import { activeLanguage, tx } from "../i18n/runtime";
@@ -184,7 +186,7 @@ export function providerResourceAttributionPolicyPayload(resource: ProviderResou
   };
 }
 
-export function modelPayload(values: Record<string, string>) {
+export function modelPayload(values: Record<string, string>, existingMetadata?: Record<string, string>) {
   const payload = numberPayload(
     {
       name: values.name,
@@ -207,6 +209,8 @@ export function modelPayload(values: Record<string, string>) {
   payload.supported_parameters = splitList(values.supported_parameters);
   payload.input_modalities = splitList(values.input_modalities);
   payload.output_modalities = splitList(values.output_modalities);
+  const metadata = modelMetadataWithDisplayName(existingMetadata, values.display_name ?? "");
+  if (Object.keys(metadata).length > 0) payload.metadata = metadata;
   const routes = initialModelRoutes(values.initial_provider_models);
   if (routes.length > 0) payload.routes = routes;
   return payload;
@@ -479,7 +483,7 @@ export function defaultFormValues<T>(config: ResourceConfig<T>, data: AppData, c
     if (field.key === "owner") values[field.key] = firstActiveUser(data)?.id ?? "";
     if (field.key === "cost_center") values[field.key] = firstCostCenterCode(data);
     if (field.key === "role_key") values[field.key] = "user";
-    if (field.key === "display_name") values[field.key] = "普通用户";
+    if (field.key === "display_name") values[field.key] = defaultDisplayName(config.view);
     if (field.key === "data_scope") values[field.key] = "self";
     if (field.key === "permissions") values[field.key] = "overview:read, project:read";
     if (field.key === "menu_scopes") values[field.key] = "overview, projects";
