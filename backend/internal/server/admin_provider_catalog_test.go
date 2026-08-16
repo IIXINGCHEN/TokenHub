@@ -96,6 +96,57 @@ func TestAdminCreatesProviderModelAndRoute(t *testing.T) {
 	}
 }
 
+func TestAdminRouteRejectsKnownModelProviderProtocolMismatch(t *testing.T) {
+	store := NewMemoryStore()
+	if err := SeedDemoData(store); err != nil {
+		t.Fatal(err)
+	}
+	provider := store.AddProvider(Provider{ID: "prv_native_anthropic", Name: "Native Anthropic", Type: ProviderAnthropic, Status: StatusActive, Healthy: true})
+	store.AddProviderModel(ProviderModel{ProviderID: provider.ID, UpstreamModel: "gpt-5.6-luna", Status: StatusActive})
+	store.AddModel(Model{Name: "gpt-5.6-luna", Modality: "chat", Status: StatusActive, Metadata: map[string]string{"endpoints": "responses,chat/completions"}})
+
+	response := doJSON(t, New(store).Handler(), http.MethodPost, "/api/admin/routing-rules", map[string]any{
+		"model_name": "gpt-5.6-luna", "provider_id": provider.ID, "provider_model": "gpt-5.6-luna", "status": StatusActive,
+	}, "")
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body, `"code":"route_protocol_mismatch"`) {
+		t.Fatalf("expected protocol mismatch rejection, got %d: %s", response.Code, response.Body)
+	}
+}
+
+func TestAdminModelCreateRejectsInitialRouteProtocolMismatch(t *testing.T) {
+	store := NewMemoryStore()
+	if err := SeedDemoData(store); err != nil {
+		t.Fatal(err)
+	}
+	provider := store.AddProvider(Provider{ID: "prv_initial_anthropic", Name: "Native Anthropic", Type: ProviderAnthropic, Status: StatusActive, Healthy: true})
+	store.AddProviderModel(ProviderModel{ProviderID: provider.ID, UpstreamModel: "responses-only", Status: StatusActive})
+
+	response := doJSON(t, New(store).Handler(), http.MethodPost, "/api/admin/models", map[string]any{
+		"name": "responses-only", "modality": "chat", "metadata": map[string]string{"endpoints": "responses"},
+		"routes": []map[string]any{{"provider_id": provider.ID, "provider_model": "responses-only", "status": StatusActive}},
+	}, "")
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body, `"code":"route_protocol_mismatch"`) {
+		t.Fatalf("expected initial route protocol mismatch rejection, got %d: %s", response.Code, response.Body)
+	}
+}
+
+func TestAdminRouteAllowsCatalogModelWithMatchingProviderProtocol(t *testing.T) {
+	store := NewMemoryStore()
+	if err := SeedDemoData(store); err != nil {
+		t.Fatal(err)
+	}
+	provider := store.AddProvider(Provider{ID: "prv_protocol_openai", Name: "OpenAI Compatible", Type: ProviderOpenAICompatible, Status: StatusActive, Healthy: true})
+	store.AddProviderModel(ProviderModel{ProviderID: provider.ID, UpstreamModel: "gpt-5.6-luna", Status: StatusActive})
+	store.AddModel(Model{Name: "gpt-5.6-luna", Modality: "chat", Status: StatusActive, Metadata: map[string]string{"endpoints": "responses,chat/completions"}})
+
+	response := doJSON(t, New(store).Handler(), http.MethodPost, "/api/admin/routing-rules", map[string]any{
+		"model_name": "gpt-5.6-luna", "provider_id": provider.ID, "provider_model": "gpt-5.6-luna", "status": StatusActive,
+	}, "")
+	if response.Code != http.StatusCreated {
+		t.Fatalf("expected compatible route creation, got %d: %s", response.Code, response.Body)
+	}
+}
+
 func TestAdminProviderConfigurationFailsEarlyAndPatchPreservesFields(t *testing.T) {
 	app := newTestServer()
 

@@ -874,7 +874,7 @@ func (s *Server) serveAdminModelsPost(w http.ResponseWriter, r *http.Request, us
 			writeError(w, r, NewHTTPError(http.StatusBadRequest, "invalid_route", "provider_id and provider_model are required"))
 			return
 		}
-		if err := s.validateRouteAdapter(route); err != nil {
+		if err := s.validateRouteAdapterForModel(route, &req.Model); err != nil {
 			writeError(w, r, err)
 			return
 		}
@@ -1223,6 +1223,10 @@ func (s *Server) serveAdminRouteDelete(w http.ResponseWriter, r *http.Request, u
 }
 
 func (s *Server) validateRouteAdapter(route ModelRoute) error {
+	return s.validateRouteAdapterForModel(route, nil)
+}
+
+func (s *Server) validateRouteAdapterForModel(route ModelRoute, pendingModel *Model) error {
 	if err := s.validateRoutePolicy(route); err != nil {
 		return err
 	}
@@ -1230,8 +1234,12 @@ func (s *Server) validateRouteAdapter(route ModelRoute) error {
 	if !ok {
 		return NewHTTPError(http.StatusBadRequest, "route_provider_not_found", "Route provider does not exist")
 	}
-	if _, ok := s.adapterRegistry.Describe(provider.Type); !ok {
+	descriptor, ok := s.adapterRegistry.Describe(provider.Type)
+	if !ok {
 		return NewHTTPError(http.StatusBadRequest, "provider_adapter_missing", "Route provider adapter is not registered")
+	}
+	if err := s.validateRouteModelProtocol(route.ModelName, pendingModel, provider.Type, descriptor); err != nil {
+		return err
 	}
 	if strings.TrimSpace(route.ProviderResourceID) == "" {
 		return nil
@@ -1241,6 +1249,57 @@ func (s *Server) validateRouteAdapter(route ModelRoute) error {
 		return NewHTTPError(http.StatusBadRequest, "route_resource_mismatch", "Route resource must belong to the selected Provider")
 	}
 	return nil
+}
+
+// validateRouteModelProtocol rejects only known catalog mismatches. Models
+// without endpoint metadata remain valid so operators can route custom models.
+func (s *Server) validateRouteModelProtocol(modelName string, pendingModel *Model, providerType string, descriptor AdapterDescriptor) error {
+	var model Model
+	found := pendingModel != nil && pendingModel.Name == modelName
+	if found {
+		model = *pendingModel
+	} else {
+		for _, candidate := range s.store.ListModels() {
+			if candidate.Name == modelName {
+				model, found = candidate, true
+				break
+			}
+		}
+	}
+	if !found || model.Metadata == nil {
+		return nil
+	}
+	endpoints := strings.Split(model.Metadata["endpoints"], ",")
+	if len(endpoints) == 0 || strings.TrimSpace(model.Metadata["endpoints"]) == "" {
+		return nil
+	}
+	compatible := routeProviderProtocols(providerType, descriptor)
+	for _, endpoint := range endpoints {
+		if compatible[strings.ToLower(strings.TrimSpace(endpoint))] {
+			return nil
+		}
+	}
+	return NewHTTPError(http.StatusBadRequest, "route_protocol_mismatch", "Model does not support the selected Provider protocol")
+}
+
+func routeProviderProtocols(providerType string, descriptor AdapterDescriptor) map[string]bool {
+	if providerType == ProviderAnthropic {
+		return map[string]bool{"anthropic": true}
+	}
+	if providerType == ProviderGemini {
+		return map[string]bool{"gemini": true}
+	}
+	protocols := map[string]bool{}
+	if adapterSupports(descriptor, AdapterCapabilityChat) {
+		protocols["chat/completions"] = true
+	}
+	if adapterSupports(descriptor, AdapterCapabilityResponses) {
+		protocols["responses"] = true
+	}
+	if adapterSupports(descriptor, AdapterCapabilityEmbeddings) {
+		protocols["embeddings"] = true
+	}
+	return protocols
 }
 
 func (s *Server) validateRoutePolicy(route ModelRoute) error {
