@@ -522,8 +522,10 @@ func canonicalOAuthReturnURL(config Config, r *http.Request) string {
 	if origin, ok := normalizedOAuthOrigin(config.PublicBaseURL, false); ok {
 		return origin + "/overview"
 	}
-	if origin, ok := requestOAuthOrigin(r); ok {
-		return origin + "/overview"
+	if r != nil {
+		if origin, ok := requestOAuthOrigin(r); ok {
+			return origin + "/overview"
+		}
 	}
 	return "http://localhost:3000/overview"
 }

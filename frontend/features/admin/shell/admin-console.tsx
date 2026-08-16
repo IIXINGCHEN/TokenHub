@@ -4,7 +4,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { type LoadedData, loadPlanForView, mergeLoadedData } from "../core/data-loading";
 import { allNavGroupTitles, canAccessView, defaultViewForRole, rememberRecentView, standaloneViewMeta } from "../core/navigation";
-import { clearOAuthAuthorizationResponse, clearOAuthLoginResult, clearPendingOAuthLogin, clearProviderAccountOAuthResultFromLocation, clearSavedSession, forwardOAuthAuthorizationResponse, hasPendingProviderAccountOAuthResult, isOAuthAuthorizationResponse, isProviderAccountOAuthAuthorizationResponse, readOAuthLoginResult, readPendingOAuthLogin, readProviderAccountOAuthResultFromLocation, readSavedSession, savePendingProviderAccountOAuthResult, saveSession } from "../core/session";
+import { clearOAuthAuthorizationResponse, clearOAuthLoginResult, clearPendingOAuthLogin, clearProviderAccountOAuthResultFromLocation, clearSavedSession, consumePasswordResetToken, forwardOAuthAuthorizationResponse, hasPendingProviderAccountOAuthResult, isOAuthAuthorizationResponse, isProviderAccountOAuthAuthorizationResponse, readOAuthLoginResult, readPendingOAuthLogin, readProviderAccountOAuthResultFromLocation, readSavedSession, savePendingProviderAccountOAuthResult, saveSession } from "../core/session";
 import { type AdminResource, type AdminUser, type AlertDelivery, type AlertEvent, type APIKey, type AppData, type ApprovalRequest, type AuditEvent, authExpiredEventName, type BillingConnector, type BillingRecord, type BillingSyncRun, type ConfirmState, languageStorageKey, type LoginIdentityProvider, type ModalState, type Model, type ModelRoute, type ModelRoutePolicy, notificationChannelTypes, type Project, type Provider, type ProviderCatalogEntry, type ProviderModel, type ProviderMonitoringSnapshot, type ProviderResource, type ReconciliationRule, type ReconciliationRun, type ReportExportHistoryItem, type RequestLog, type ResourceAction, type ResourceConfig, type SettingsTabKey, type SQLiteBackup, type ToolbarAction, type UsageBreakdown, type UsagePoint, type ViewKey, viewRoutes } from "../core/types";
 import { emptyData, emptySummary, filterByModelCategory, filterRows } from "../domain/catalog";
 import { filterAPIKeys } from "../domain/api-key-filter";
@@ -79,7 +79,7 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
   const [confirmRestoreModels, setConfirmRestoreModels] = useState(false);
   const [issuedKey, setIssuedKey] = useState("");
   const [reportHistory, setReportHistory] = useState<ReportExportHistoryItem[]>([]);
-  const resetToken = typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("reset_token") ?? "";
+  const [resetToken, setResetToken] = useState("");
 
   const api = useMemo(() => ({ baseURL, adminToken }), [baseURL, adminToken]);
   const activeConfig = resourceConfigFor(activeView);
@@ -122,6 +122,16 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
   useEffect(() => {
     let cancelled = false;
     async function bootstrapSession() {
+      const passwordResetToken = consumePasswordResetToken();
+      if (passwordResetToken) {
+        clearSavedSession();
+        clearOAuthLoginResult();
+        clearOAuthAuthorizationResponse();
+        clearPendingOAuthLogin();
+        setResetToken(passwordResetToken);
+        setBootstrapped(true);
+        return;
+      }
       const saved = readSavedSession();
       const pendingLogin = readPendingOAuthLogin();
       const oauthCallback = resolvePendingOAuthLoginResult(window.location, pendingLogin);
@@ -500,7 +510,7 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
         body: JSON.stringify({ token, password }),
       });
       if (!resp.ok) throw new Error(`reset password ${resp.status}`);
-      window.history.replaceState(null, "", window.location.pathname);
+      setResetToken("");
       setNotice(tx("密码已重置，请使用新密码登录"));
     } catch (err) {
       setError(err instanceof Error ? err.message : tx("密码重置失败"));

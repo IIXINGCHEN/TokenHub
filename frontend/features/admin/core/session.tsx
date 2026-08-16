@@ -7,6 +7,7 @@ import {
   type OAuthLoginResult,
   type PendingOAuthLogin,
 } from "../domain/oauth-login";
+import { consumePasswordResetTokenFromURL } from "../domain/password-reset";
 
 export type SavedSession = StoredAdminSession<AdminUser>;
 
@@ -272,6 +273,13 @@ export function clearOAuthLoginResult() {
   if (changed) {
     window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
   }
+}
+
+export function consumePasswordResetToken() {
+  if (typeof window === "undefined") return "";
+  return consumePasswordResetTokenFromURL(window.location.href, (url) => {
+    window.history.replaceState(window.history.state, "", url);
+  });
 }
 
 export function clearOAuthAuthorizationResponse() {

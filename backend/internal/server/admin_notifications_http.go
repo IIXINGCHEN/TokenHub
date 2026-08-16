@@ -758,30 +758,19 @@ func (s *Server) sendAdminPasswordResetEmail(r *http.Request, channel AdminResou
 	if err != nil {
 		return err
 	}
-	resetLink := adminPasswordResetLink(r, plainToken)
+	resetLink := s.adminPasswordResetLink(r, plainToken)
 	return sendEmail(r.Context(), channel.Fields, []string{user.Email}, passwordResetEmailMessage(channel.Fields, []string{user.Email}, user, resetLink, token.ExpiresAt))
 }
 
-func adminPasswordResetLink(r *http.Request, token string) string {
-	baseURL := ""
-	if r != nil {
-		scheme := "http"
-		if r.TLS != nil {
-			scheme = "https"
-		}
-		if proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); proto != "" {
-			scheme = strings.TrimSpace(strings.Split(proto, ",")[0])
-		}
-		if host := strings.TrimSpace(r.Header.Get("X-Forwarded-Host")); host != "" {
-			baseURL = scheme + "://" + strings.TrimSpace(strings.Split(host, ",")[0])
-		} else if r.Host != "" {
-			baseURL = scheme + "://" + r.Host
-		}
+func (s *Server) adminPasswordResetLink(r *http.Request, token string) string {
+	returnURL := canonicalOAuthReturnURL(s.config, r)
+	origin, ok := normalizedOAuthOrigin(returnURL, false)
+	if !ok {
+		origin = "http://localhost:3000"
 	}
-	if baseURL == "" {
-		baseURL = "http://localhost:3000"
-	}
-	return strings.TrimRight(baseURL, "/") + "/?reset_token=" + token
+	values := url.Values{}
+	values.Set("reset_token", token)
+	return oauthRedirectWithFragment(origin+"/", values)
 }
 
 func passwordResetEmailMessage(fields map[string]any, recipients []string, user AdminUser, resetLink string, expiresAt time.Time) []byte {
