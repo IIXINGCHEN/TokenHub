@@ -705,6 +705,20 @@ func (s *Server) handleAdminSystemRollback(w http.ResponseWriter, r *http.Reques
 
 	ctx, cancel := nativeOperationContext(r.Context())
 	defer cancel()
+	// Refuse before touching releases or the network when the current
+	// database state is not one the target release can safely run on.
+	if compatibility := s.rollbackCompatibility(ctx, request.Version); compatibility.Compatibility != rollbackCompatible {
+		status := http.StatusConflict
+		code := "rollback_incompatible"
+		if compatibility.Compatibility == rollbackUnknown {
+			status = http.StatusUnprocessableEntity
+			code = "rollback_compatibility_unknown"
+		}
+		message := fmt.Sprintf("Rollback to %s refused: %s", compatibility.Release, compatibility.Reason)
+		s.recordSystemVersionAudit(r, actor, "rollback", request.Version, "failed", message)
+		writeError(w, r, NewHTTPError(status, code, message))
+		return
+	}
 	version, err := s.versions.rollbackNativeRelease(ctx, request.Version)
 	if err != nil {
 		s.recordSystemVersionAudit(r, actor, "rollback", request.Version, "failed", err.Error())
