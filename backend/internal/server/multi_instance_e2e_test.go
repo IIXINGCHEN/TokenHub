@@ -63,6 +63,24 @@ func TestMultiInstancePostgresE2E(t *testing.T) {
 	t.Run("HTTP quotas and concurrency are cluster wide", func(t *testing.T) {
 		testClusterWideHTTPEnforcement(t, storeA, storeB, config)
 	})
+	t.Run("gateway hot paths do not serialize unrelated API keys", func(t *testing.T) {
+		testPostgresGatewayHotPathConcurrency(t, storeA)
+	})
+	t.Run("gateway read snapshots use repeatable read", func(t *testing.T) {
+		testPostgresGatewayReadSnapshot(t, storeA)
+	})
+	t.Run("API key deletion is ordered with admission and settlement", func(t *testing.T) {
+		testPostgresAPIKeyDeletionOrdering(t, storeA)
+	})
+	t.Run("project disable is ordered with admission", func(t *testing.T) {
+		testPostgresProjectDisableOrdering(t, storeA)
+	})
+	t.Run("API key admin updates preserve concurrent last used", func(t *testing.T) {
+		testPostgresAPIKeyUpdatePreservesLastUsed(t, storeA)
+	})
+	t.Run("adaptive stats failure falls back inside the read snapshot", func(t *testing.T) {
+		testPostgresAdaptiveStatsFailureFallback(t, storeA)
+	})
 	t.Run("analytics checkpoints do not serialize replica writes", func(t *testing.T) {
 		testAnalyticsCommitSequence(t, storeA, storeB)
 	})

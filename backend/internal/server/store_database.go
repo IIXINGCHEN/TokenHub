@@ -780,6 +780,20 @@ func (s *GormStore) WithContext(ctx context.Context) *GormStore {
 	return &contextual
 }
 
+// withReadSnapshot runs a compound read against one consistent database
+// snapshot. PostgreSQL's default read-committed isolation can observe a new
+// snapshot for each statement, so explicitly pin multi-query reads there.
+// SQLite already pins reads for the lifetime of a transaction.
+func (s *GormStore) withReadSnapshot(read func(*gorm.DB) error) error {
+	if s.dbDriver == "postgres" {
+		return s.db.Transaction(read, &sql.TxOptions{
+			Isolation: sql.LevelRepeatableRead,
+			ReadOnly:  true,
+		})
+	}
+	return s.db.Transaction(read)
+}
+
 func runSchemaMigrationLocked(sqlDB *sql.DB, driver string, migrate func() error) error {
 	if driver != "postgres" {
 		return migrate()

@@ -449,8 +449,6 @@ func (s *GormStore) StartCall(ctx context.Context, project Project, key APIKey, 
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	var admission callAdmissionResult
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -546,23 +544,20 @@ func apiKeyRateLimitHeaders(limits QuotaLimits, counter QuotaCounter, now time.T
 
 func (s *GormStore) FinishCall(call CallContext, route RouteSelection, usage Usage, statusCode int, errorCode string, clientIP string, userAgent string) {
 	// Measured here rather than inside the deferred observation, so latency reflects
-	// what the client waited for and excludes the persistence and lock time that
-	// follows. FinishCall is invoked after the last streamed byte is written. The
+	// what the client waited for and excludes the persistence time that follows.
+	// FinishCall is invoked after the last streamed byte is written. The
 	// same value is threaded into the transaction below so the persisted latency
 	// and the reported metric describe the same interval.
 	elapsed := call.elapsed()
 	_ = s.stopInFlightLeaseHeartbeat(call.RequestID)
-	// priceUsage is pure, so it runs outside the lock and its result is final here.
+	// priceUsage is pure, so it runs before the transaction and its result is final here.
 	usage = priceUsage(call.Model, usage)
 	usage.ProviderCostUSD = s.providerCostUSD(route, usage)
-	// Registered before the lock is taken, so LIFO ordering runs it *after* the
-	// unlock: reporting metrics must not extend how long this request holds the
-	// store-wide mutex. Deferring also means the request is still counted when the
-	// transaction below fails or panics — losing persistence must not also lose the
+	// Registered before persistence starts so reporting runs after the transaction
+	// and its fallback cleanup. Deferring also means the request is still counted
+	// when persistence fails or panics — losing persistence must not also lose the
 	// observation that the request happened.
 	defer s.observeGatewayCall(call, route, usage, statusCode, errorCode, elapsed)
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	now := time.Now().UTC()
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		return s.finishCallTransaction(tx, call, route, usage, statusCode, errorCode, clientIP, userAgent, now, elapsed)
@@ -578,6 +573,11 @@ func (s *GormStore) FinishCall(call CallContext, route RouteSelection, usage Usa
 func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route RouteSelection, usage Usage, statusCode int, errorCode string, clientIP string, userAgent string, now time.Time, elapsed time.Duration) error {
 	if call.Key.ID != "" {
 		if err := s.lockScopeForUpdate(tx, "api_key", call.Key.ID); err != nil {
+			return err
+		}
+	}
+	if call.Project.ID != "" {
+		if err := s.lockScopeForSharedRead(tx, "project", call.Project.ID); err != nil {
 			return err
 		}
 	}

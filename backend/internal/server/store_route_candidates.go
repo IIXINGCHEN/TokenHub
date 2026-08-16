@@ -1,7 +1,6 @@
 package server
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -13,21 +12,14 @@ import (
 const routeCandidateLookupBatchSize = 500
 
 func (s *GormStore) SelectRouteCandidates(modelName string) ([]RouteSelection, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	var selections []RouteSelection
 	now := time.Now().UTC()
 	runRead := func(load func(*gorm.DB, string, time.Time) ([]RouteSelection, error)) error {
-		read := func(db *gorm.DB) error {
+		return s.withReadSnapshot(func(db *gorm.DB) error {
 			var err error
 			selections, err = load(db, modelName, now)
 			return err
-		}
-		if s.dbDriver == "postgres" {
-			return s.db.Transaction(read, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
-		}
-		return read(s.db)
+		})
 	}
 	err := runRead(s.loadRouteCandidates)
 	var batchErr *routeCandidateBatchLookupError

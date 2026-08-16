@@ -860,6 +860,14 @@ func (s *GormStore) lockScopeForUpdate(tx *gorm.DB, scopeType string, scopeID st
 	return tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", key).Error
 }
 
+func (s *GormStore) lockScopeForSharedRead(tx *gorm.DB, scopeType string, scopeID string) error {
+	if s.dbDriver != "postgres" {
+		return nil
+	}
+	key := "tokenhub:" + scopeType + ":" + scopeID
+	return tx.Exec("SELECT pg_advisory_xact_lock_shared(hashtextextended(?, 0))", key).Error
+}
+
 func (s *GormStore) acquireInFlightLease(tx *gorm.DB, scopeType string, scopeID string, limit int64, leaseID string) (time.Duration, error) {
 	if limit <= 0 {
 		return 0, nil
