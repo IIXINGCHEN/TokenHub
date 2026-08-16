@@ -10,7 +10,7 @@ import { actionLabel, enumValueLabel, resourceTypeLabel } from "../domain/labels
 import { countWithUnit, routeAttemptCountText, tx } from "../i18n/runtime";
 import { adminFetch, isAuthExpiredError } from "../resources/payloads";
 import { DataSection, SimpleTable, StatusPill } from "../shared/ui";
-import { PaginationControls, type PaginationState } from "./settings-table";
+import { PaginationControls, type PaginationState } from "../shared/pagination";
 
 export function AuditView({ api, data, user }: { api: ApiContext; data: AppData; user: AdminUser }) {
   const [activeAuditTab, setActiveAuditTab] = useState<"requests" | "admin">("requests");

@@ -13,7 +13,7 @@ const yamlList = (field) => (glm.match(new RegExp(`^    ${field}: \\[(.*)\\]$`, 
   .split(",")
   .map((value) => value.trim().replaceAll('"', ""))
   .filter(Boolean);
-const glmMetadata = { endpoints: glm.match(/^      endpoints: "(.*)"$/m)?.[1] ?? "" };
+const glmMetadata = { endpoints: glm.match(/^ {6}endpoints: "(.*)"$/m)?.[1] ?? "" };
 const glmCapabilities = yamlList("capabilities");
 const glmSupportedParameters = yamlList("supported_parameters");
 

@@ -114,12 +114,6 @@ const en: Record<string, string> = {
   "还没有路由策略": "No routing policies yet",
   "为对外模型添加 Provider 线路，并设置优先级、权重与流量策略。路由不会改变统一对外价格。": "Add Provider routes for external models and configure priority, weight, and traffic policies. Routing does not change unified external pricing.",
   "为模型添加路由": "Add a Model Route",
-  // Model-availability and Key-issuing copy. It lives here rather than in en.tsx because
-  // that file is frozen at its current line count by tools/source-lines.mjs, and the
-  // Japanese half was missing for long enough that ja users saw the raw Chinese source.
-  "当前没有可选择的启用模型。请先在模型目录和路由策略里启用模型。": "No enabled models are available. Enable models in the model catalog and routing policy first.",
-  "可以先使用默认额度，之后再按调用量调整。IP 白名单留空表示不限来源。": "You can start with the default limits and adjust later. Leave IP allowlist empty to allow any source.",
-  "完整 Key 只会展示一次。关闭弹窗后只能看到前后缀，后续需要通过轮换生成新 Key。": "The full Key is shown only once. After closing the modal, only the prefix and suffix are visible; rotate to generate a new Key later.",
   "普通用户看到的是当前账号可见的模型；实际调用还会受项目 Key 白名单和项目权限限制。": "Users see models visible to this account; actual calls are still limited by the project Key allowlist and project permissions.",
   "可用模型需要同时满足：模型目录启用、至少一条路由启用、Provider 或账号资源健康。": "Available models require an enabled catalog entry, at least one enabled route, and a healthy Provider or account resource.",
   "模型目录状态不是启用，前台不会作为可调用模型。": "The model catalog status is not active, so it is not callable from the frontend.",
@@ -251,9 +245,6 @@ const ja: Record<string, string> = {
   "还没有路由策略": "ルーティングポリシーがまだありません",
   "为对外模型添加 Provider 线路，并设置优先级、权重与流量策略。路由不会改变统一对外价格。": "外部モデルに Provider ルートを追加し、優先度、重み、トラフィックポリシーを設定します。ルーティングによって統一外部価格は変わりません。",
   "为模型添加路由": "モデルルートを追加",
-  "当前没有可选择的启用模型。请先在模型目录和路由策略里启用模型。": "選択できる有効なモデルがありません。先にモデルカタログとルーティングポリシーでモデルを有効化してください。",
-  "可以先使用默认额度，之后再按调用量调整。IP 白名单留空表示不限来源。": "まずは既定のクォータで開始し、後から利用量に応じて調整できます。IP 許可リストを空欄にすると送信元を制限しません。",
-  "完整 Key 只会展示一次。关闭弹窗后只能看到前后缀，后续需要通过轮换生成新 Key。": "完全な Key は一度だけ表示されます。ダイアログを閉じるとプレフィックスとサフィックスのみ確認でき、以降は新しい Key をローテーションで生成する必要があります。",
   "普通用户看到的是当前账号可见的模型；实际调用还会受项目 Key 白名单和项目权限限制。": "一般ユーザーには現在のアカウントで表示可能なモデルが表示されます。実際の呼び出しはプロジェクトの Key 許可リストとプロジェクト権限による制限も受けます。",
   "可用模型需要同时满足：模型目录启用、至少一条路由启用、Provider 或账号资源健康。": "利用可能なモデルには、モデルカタログが有効であること、有効なルートが 1 件以上あること、Provider またはアカウントリソースが正常であることのすべてが必要です。",
   "模型目录状态不是启用，前台不会作为可调用模型。": "モデルカタログの状態が有効ではないため、呼び出し可能なモデルとしては表示されません。",
