@@ -77,7 +77,7 @@ export function systemSettingConfig(): ResourceConfig<AdminResource> {
   const base = genericResourceConfig("settings", "系统设置", "网关地址、审计保留、企业集成和默认策略", [
     { key: "public_base_url", label: "公开 Base URL", help: "对外展示给业务系统和 API 文档示例的网关地址。" },
     { key: "default_timeout", label: "默认超时", help: "网关转发上游请求的默认等待时间，例如 120s。" },
-    { key: "audit_retention", label: "审计保留", help: "请求审计日志的默认保留周期，例如 180d。" },
+    { key: "audit_retention", label: "审计保留", help: "请求和响应正文的保留周期，范围为 1d 至 3650d；请求元数据不会被清理。" },
     { key: "api_key_prefix", label: "API Key 前缀", placeholder: "sk_", help: "新建和轮换 Key 时使用；建议以 _ 结尾，例如 sk_。" },
     { key: "api_key_random_length", label: "API Key 随机长度", type: "number", placeholder: "48", help: "前缀后面的随机字符数，系统会限制在 24-128 之间。" },
     {

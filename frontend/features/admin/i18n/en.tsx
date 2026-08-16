@@ -160,7 +160,7 @@ export const enTranslations: Record<string, string> = {
     "系统启动时会初始化默认网关配置；请刷新数据或检查初始化脚本。": "The system initializes the default gateway settings at startup. Refresh data or check the initialization script.",
     "对外展示给业务系统和 API 文档示例的网关地址。": "Gateway address shown to business applications and API documentation examples.",
     "网关转发上游请求的默认等待时间，例如 120s。": "Default wait time for gateway requests forwarded upstream, such as 120s.",
-    "请求审计日志的默认保留周期，例如 180d。": "Default retention period for request audit logs, such as 180d.",
+    "请求和响应正文的保留周期，范围为 1d 至 3650d；请求元数据不会被清理。": "Retention period for request and response bodies, from 1d through 3650d. Request metadata is not deleted.",
     "选择标准模型，按当前路由策略发起测试对话，验证 Provider、路由和返回内容。": "Test a standard model through the current routing policy and verify Provider, route, and response behavior.",
     "面向业务开发者的模型 API 调用说明、认证方式、示例代码和错误排查。": "Model API usage, authentication, examples, and troubleshooting for application developers.",
     "按模型、项目和日期查看请求量、Token 和成本归因。": "View requests, tokens, and cost attribution by model, project, and date.",

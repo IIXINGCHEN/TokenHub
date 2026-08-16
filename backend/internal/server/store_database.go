@@ -261,6 +261,9 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 		if err := ensureRequestLogCommitSequence(db, driver); err != nil {
 			return err
 		}
+		if err := ensureRequestPayloadRetentionIndex(db, driver); err != nil {
+			return err
+		}
 		if err := backfillTeamRelationships(db); err != nil {
 			return err
 		}

@@ -307,6 +307,8 @@ Token 用量与成本只挂在 generation span 上，绝不挂在根 span 上。
 
 相关端点包括 `GET/POST /api/admin/billing/reconciliation-rules`、`GET/PATCH /api/admin/billing/reconciliation-rules/{id}`、`POST /api/admin/billing/reconciliation-rules/{id}/run`、`GET /api/admin/billing/reconciliations`、`GET /api/admin/billing/reconciliations/{id}`，以及 `{id}/lock`、`{id}/recalculate` 和 `{id}/export` 操作。这些端点仅允许平台管理员访问。
 
+`audit_retention` 网关设置仅接受 `1d` 至 `3650d` 的 `Nd` 格式。集群每个 UTC 小时分批删除超过保留期的请求和响应正文。请求日志元数据、用量分析数据、后台审计事件和告警事件不受该设置影响。
+
 ## 安全检查清单
 
 | 控制项 | 要求 |

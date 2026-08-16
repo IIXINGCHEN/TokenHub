@@ -78,6 +78,12 @@ func TestMultiInstancePostgresE2E(t *testing.T) {
 	t.Run("startup task revision runs once", func(t *testing.T) {
 		testClusterTaskRunsOnce(t, storeA, storeB)
 	})
+	t.Run("request payload retention deletes in PostgreSQL", func(t *testing.T) {
+		testRequestPayloadRetentionPostgres(t, storeA)
+	})
+	t.Run("request payload retention index recovers in PostgreSQL", func(t *testing.T) {
+		testRequestPayloadRetentionIndexRecoveryPostgres(t, storeA)
+	})
 	t.Run("startup operations run on every start and serialize replicas", func(t *testing.T) {
 		testClusterOperationRunsEveryStart(t, storeA, storeB)
 	})
@@ -979,6 +985,79 @@ func testClusterTaskRunsOnce(t *testing.T, storeA *GormStore, storeB *GormStore)
 	}
 	if reran.Load() {
 		t.Fatal("completed cluster task revision ran again")
+	}
+}
+
+func testRequestPayloadRetentionPostgres(t *testing.T, store *GormStore) {
+	t.Helper()
+	suffix := NewID("payload-retention")
+	cutoff := time.Date(2001, time.January, 1, 0, 0, 0, 0, time.UTC)
+	expired := RequestPayloadLog{ID: suffix + "-expired", RequestID: suffix + "-expired-request", CreatedAt: cutoff.Add(-time.Second)}
+	current := RequestPayloadLog{ID: suffix + "-current", RequestID: suffix + "-current-request", CreatedAt: cutoff}
+	if err := store.db.Create(&[]RequestPayloadLog{expired, current}).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = store.db.Where("id IN ?", []string{expired.ID, current.ID}).Delete(&RequestPayloadLog{}).Error
+	})
+	deleted, err := store.DeleteRequestPayloadLogsBefore(t.Context(), cutoff, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted < 1 {
+		t.Fatalf("PostgreSQL cleanup deleted %d rows, want at least 1", deleted)
+	}
+	var expiredCount int64
+	if err := store.db.Model(&RequestPayloadLog{}).Where("id = ?", expired.ID).Count(&expiredCount).Error; err != nil || expiredCount != 0 {
+		t.Fatalf("expired PostgreSQL payload remained: count=%d err=%v", expiredCount, err)
+	}
+	var currentCount int64
+	if err := store.db.Model(&RequestPayloadLog{}).Where("id = ?", current.ID).Count(&currentCount).Error; err != nil || currentCount != 1 {
+		t.Fatalf("boundary PostgreSQL payload changed: count=%d err=%v", currentCount, err)
+	}
+}
+
+func testRequestPayloadRetentionIndexRecoveryPostgres(t *testing.T, store *GormStore) {
+	t.Helper()
+	if err := store.db.Exec("DROP INDEX CONCURRENTLY IF EXISTS " + requestPayloadRetentionIndexName).Error; err != nil {
+		t.Fatal(err)
+	}
+	suffix := NewID("payload-retention-index")
+	duplicateTime := time.Date(2000, time.January, 1, 0, 0, 0, 0, time.UTC)
+	duplicates := []RequestPayloadLog{
+		{ID: suffix + "-a", RequestID: suffix + "-request-a", CreatedAt: duplicateTime},
+		{ID: suffix + "-b", RequestID: suffix + "-request-b", CreatedAt: duplicateTime},
+	}
+	if err := store.db.Create(&duplicates).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = store.db.Where("id IN ?", []string{duplicates[0].ID, duplicates[1].ID}).Delete(&RequestPayloadLog{}).Error
+	})
+	if err := store.db.Exec("CREATE UNIQUE INDEX CONCURRENTLY " + requestPayloadRetentionIndexName + " ON request_payload_logs(created_at)").Error; err == nil {
+		t.Fatal("expected duplicate payload timestamps to leave a failed concurrent index")
+	}
+	if err := ensureRequestPayloadRetentionIndex(store.db, "postgres"); err != nil {
+		t.Fatal(err)
+	}
+	type indexState struct {
+		Valid   bool
+		Columns string
+	}
+	var state indexState
+	if err := store.db.Raw(`SELECT index_state.indisvalid AS valid,
+       string_agg(attribute.attname, ',' ORDER BY key_column.ordinality) AS columns
+FROM pg_index AS index_state
+JOIN LATERAL unnest(index_state.indkey) WITH ORDINALITY AS key_column(attnum, ordinality) ON TRUE
+JOIN pg_attribute AS attribute
+  ON attribute.attrelid = index_state.indrelid
+ AND attribute.attnum = key_column.attnum
+WHERE index_state.indexrelid = to_regclass(?)
+GROUP BY index_state.indisvalid`, requestPayloadRetentionIndexName).Scan(&state).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !state.Valid || state.Columns != "created_at,id" {
+		t.Fatalf("recovered PostgreSQL index = valid:%t columns:%q, want valid:true columns:%q", state.Valid, state.Columns, "created_at,id")
 	}
 }
 
