@@ -213,3 +213,47 @@ models:
 		t.Fatalf("new catalog model did not use catalog prices: %+v", newModel)
 	}
 }
+
+func TestBootstrapBaseDataPreservesRoutesWhenRefreshingLegacyCatalogModel(t *testing.T) {
+	store := NewMemoryStore()
+	const modelName = "deepseek-v4-flash"
+	store.AddModel(Model{
+		Name:     modelName,
+		Modality: "chat",
+		Status:   StatusActive,
+		Metadata: map[string]string{"source": "public-provider-conf"},
+	})
+	provider := store.AddProvider(Provider{
+		ID:      "prv_catalog_route",
+		Name:    "Catalog Route Provider",
+		Type:    ProviderOpenAICompatible,
+		Status:  StatusActive,
+		Healthy: true,
+	})
+	route := store.AddRoute(ModelRoute{
+		ID:            "route_catalog_model",
+		ModelName:     modelName,
+		ProviderID:    provider.ID,
+		ProviderModel: modelName,
+		Status:        StatusActive,
+	})
+	config := Config{
+		BootstrapAdminPassword: "catalog-route-bootstrap-password",
+		ModelCatalogFile:       "../../../data/model-catalog.yaml",
+	}
+
+	if err := BootstrapBaseDataWithConfig(store, config); err != nil {
+		t.Fatal(err)
+	}
+
+	model, ok := modelByNameForTest(store.ListModels(), modelName)
+	if !ok || model.Metadata["source"] != "tokenhub-standard-catalog" {
+		t.Fatalf("expected standard catalog model after refresh, got %+v", model)
+	}
+	for _, existing := range store.ListRoutes() {
+		if existing.ID == route.ID && existing.ModelName == modelName {
+			return
+		}
+	}
+	t.Fatalf("expected catalog refresh to preserve route %+v", route)
+}

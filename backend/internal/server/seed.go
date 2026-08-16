@@ -156,7 +156,6 @@ func BootstrapBaseDataWithConfig(store Store, config Config) error {
 	if err := seedBuiltinProviderCatalog(store); err != nil {
 		return err
 	}
-	pruneProviderImportedModelCatalog(store)
 	if err := seedDefaultModelCatalog(store, config.ModelCatalogFile); err != nil {
 		return err
 	}
@@ -198,14 +197,6 @@ func seedDefaultProject(store Store) {
 		CostCenter:  "AI-PLATFORM",
 		Status:      StatusActive,
 	})
-}
-
-func pruneProviderImportedModelCatalog(store Store) {
-	for _, model := range store.ListModels() {
-		if model.Metadata != nil && model.Metadata["source"] == "public-provider-conf" {
-			_ = store.DeleteModel(model.Name)
-		}
-	}
 }
 
 func seedDefaultModelCatalog(store Store, catalogFile string) error {
