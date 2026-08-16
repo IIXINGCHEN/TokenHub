@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -499,18 +500,30 @@ func (s *GormStore) CreateAdminPasswordResetToken(userID string, createdBy strin
 }
 
 func (s *GormStore) ResetAdminUserPassword(token string, password string) (AdminUser, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	return s.resetAdminUserPassword(token, password, hashPassword)
+}
 
+func (s *GormStore) resetAdminUserPassword(token string, password string, passwordHasher func(string) (string, error)) (AdminUser, error) {
 	if strings.TrimSpace(token) == "" || strings.TrimSpace(password) == "" {
 		return AdminUser{}, NewHTTPError(400, "invalid_reset_request", "token and password are required")
 	}
-	passwordHash, err := hashPassword(password)
+	tokenHash := HashSecret(token)
+	var candidate AdminPasswordResetToken
+	if err := s.db.Select("id").Take(&candidate, "token_hash = ? AND used_at IS NULL AND expires_at > ?", tokenHash, time.Now().UTC()).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return AdminUser{}, NewHTTPError(400, "invalid_reset_token", "Reset token is invalid or expired")
+		}
+		return AdminUser{}, err
+	}
+	passwordHash, err := passwordHasher(password)
 	if err != nil {
 		return AdminUser{}, err
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	now := time.Now().UTC()
-	tokenHash := HashSecret(token)
 	var user AdminUser
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
 		claimed := tx.Model(&AdminPasswordResetToken{}).
