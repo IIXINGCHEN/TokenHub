@@ -66,7 +66,7 @@ func (a MockAdapter) Chat(ctx context.Context, provider Provider, providerModel 
 				"finish_reason": "stop",
 			},
 		},
-		"usage": usage,
+		"usage": openAIChatUsageObject(usage),
 	}, usage, nil
 }
 
@@ -133,7 +133,7 @@ func (a MockAdapter) Responses(ctx context.Context, provider Provider, providerM
 				},
 			},
 		},
-		"usage": usage,
+		"usage": openAIResponsesUsageObject(usage),
 	}, usage, nil
 }
 
@@ -1204,7 +1204,7 @@ func responseObject(model string, text string, usage Usage) map[string]any {
 				"content": []map[string]any{{"type": "output_text", "text": text}},
 			},
 		},
-		"usage": usage,
+		"usage": openAIResponsesUsageObject(usage),
 	}
 }
 
