@@ -269,12 +269,6 @@ func (s *Server) linkProjectQuotaPolicy(quota AdminResource, payload map[string]
 	return err
 }
 
-func (s *Server) usageSummaryForUser(user AdminUser) map[string]any {
-	records := s.filterUsageRecordsForUser(user, s.store.ListUsageRecords())
-	logs := s.filterRequestLogsForUser(user, s.store.ListRequestLogs())
-	return summarizeUsage(records, logs)
-}
-
 func (s *Server) usageBreakdownForUser(user AdminUser) map[string]any {
 	records := s.filterUsageRecordsForUser(user, s.store.ListUsageRecords())
 	projectsByID := indexProjectsByID(s.store.ListProjects())

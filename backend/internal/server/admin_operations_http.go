@@ -679,7 +679,12 @@ func (s *Server) handleAdminUsageSummary(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, s.usageSummaryForUser(user))
+	summary, err := s.usageSummaryForUser(r.Context(), user)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
 }
 
 func (s *Server) handleAdminUsageBreakdown(w http.ResponseWriter, r *http.Request) {
