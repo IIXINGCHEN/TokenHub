@@ -15,13 +15,13 @@ test("consumes a password reset token from the fragment and scrubs the URL immed
   assert.deepEqual(replacements, ["/?language=zh#oauth_code=pending"]);
 });
 
-test("accepts legacy query links but removes the token before login bootstrap", () => {
+test("rejects query reset tokens while scrubbing them from the URL", () => {
   const replacements = [];
   const token = consumePasswordResetTokenFromURL(
     "https://console.example.test/?reset_token=legacy-secret&language=en",
     (url) => replacements.push(url),
   );
-  assert.equal(token, "legacy-secret");
+  assert.equal(token, "");
   assert.deepEqual(replacements, ["/?language=en"]);
 });
 

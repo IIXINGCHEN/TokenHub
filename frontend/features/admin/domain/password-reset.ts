@@ -1,6 +1,5 @@
 export function consumePasswordResetTokenFromURL(href: string, replaceURL: (url: string) => void): string {
   const target = new URL(href);
-  const queryToken = target.searchParams.get("reset_token")?.trim() ?? "";
   const fragment = new URLSearchParams(target.hash.replace(/^#/, ""));
   const fragmentToken = fragment.get("reset_token")?.trim() ?? "";
   let changed = false;
@@ -17,5 +16,5 @@ export function consumePasswordResetTokenFromURL(href: string, replaceURL: (url:
   if (changed) {
     replaceURL(`${target.pathname}${target.search}${target.hash}`);
   }
-  return fragmentToken || queryToken;
+  return fragmentToken;
 }
