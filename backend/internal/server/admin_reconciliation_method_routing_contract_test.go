@@ -236,7 +236,7 @@ func TestAdminReconciliationMethodRoutesPreserveStateAndCSV(t *testing.T) {
 		t.Fatalf("run rule: status=%d body=%s", runResponse.Code, runResponse.Body.String())
 	}
 	var run ReconciliationRun
-	if err := json.Unmarshal([]byte(runResponse.Body.String()), &run); err != nil {
+	if err := json.Unmarshal(runResponse.Body.Bytes(), &run); err != nil {
 		t.Fatal(err)
 	}
 	if run.Status != ReconciliationRunSucceeded || run.RuleID != rule.ID {
