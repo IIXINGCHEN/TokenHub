@@ -78,12 +78,12 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		usage(stdout)
 		return 0
 	default:
-		fmt.Fprintf(stderr, "unknown db command %q\n\n", args[0])
+		_, _ = fmt.Fprintf(stderr, "unknown db command %q\n\n", args[0])
 		usage(stderr)
 		return 2
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "tokenhub db %s: %v\n", args[0], err)
+		_, _ = fmt.Fprintf(stderr, "tokenhub db %s: %v\n", args[0], err)
 		return 1
 	}
 	return 0
@@ -99,21 +99,21 @@ func runStatus(ctx context.Context, config server.Config, stdout io.Writer) erro
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "driver:              %s\n", s.driver)
-	fmt.Fprintf(stdout, "baseline recorded:   %t\n", status.BaselineRecorded)
-	fmt.Fprintf(stdout, "current version:     %d\n", status.CurrentVersion)
-	fmt.Fprintf(stdout, "dirty:               %t", status.Dirty)
+	_, _ = fmt.Fprintf(stdout, "driver:              %s\n", s.driver)
+	_, _ = fmt.Fprintf(stdout, "baseline recorded:   %t\n", status.BaselineRecorded)
+	_, _ = fmt.Fprintf(stdout, "current version:     %d\n", status.CurrentVersion)
+	_, _ = fmt.Fprintf(stdout, "dirty:               %t", status.Dirty)
 	if status.Dirty {
-		fmt.Fprintf(stdout, " (version %d; repair required)", status.DirtyVersion)
+		_, _ = fmt.Fprintf(stdout, " (version %d; repair required)", status.DirtyVersion)
 	}
-	fmt.Fprintln(stdout)
-	fmt.Fprintf(stdout, "pending expand:      %d\n", len(status.PendingExpand))
+	_, _ = fmt.Fprintln(stdout)
+	_, _ = fmt.Fprintf(stdout, "pending expand:      %d\n", len(status.PendingExpand))
 	for _, m := range status.PendingExpand {
-		fmt.Fprintf(stdout, "  %d %s\n", m.Version, m.Name)
+		_, _ = fmt.Fprintf(stdout, "  %d %s\n", m.Version, m.Name)
 	}
-	fmt.Fprintf(stdout, "pending contract:    %d\n", len(status.PendingContract))
+	_, _ = fmt.Fprintf(stdout, "pending contract:    %d\n", len(status.PendingContract))
 	for _, m := range status.PendingContract {
-		fmt.Fprintf(stdout, "  %d %s\n", m.Version, m.Name)
+		_, _ = fmt.Fprintf(stdout, "  %d %s\n", m.Version, m.Name)
 	}
 	if err := printBackfillStatus(ctx, s, stdout); err != nil {
 		return err
@@ -130,9 +130,9 @@ func printBackfillStatus(ctx context.Context, s *session, stdout io.Writer) erro
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "data backfills:      %d\n", len(states))
+	_, _ = fmt.Fprintf(stdout, "data backfills:      %d\n", len(states))
 	for _, state := range states {
-		fmt.Fprintf(stdout, "  %s [%s] state=%s remaining=%d\n", state.ID, state.Mode, state.State, state.Remaining)
+		_, _ = fmt.Fprintf(stdout, "  %s [%s] state=%s remaining=%d\n", state.ID, state.Mode, state.State, state.Remaining)
 	}
 	return nil
 }
@@ -143,20 +143,20 @@ func printHeartbeatStatus(ctx context.Context, db *sql.DB, stdout io.Writer) err
 	if err != nil {
 		// The heartbeat table ships with the managed-upgrade rollout; treat
 		// its absence as no live instances.
-		fmt.Fprintln(stdout, "live instances:      0")
+		_, _ = fmt.Fprintln(stdout, "live instances:      0")
 		return nil
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	count := 0
 	for rows.Next() {
 		var instanceID, release, lastSeen string
 		if err := rows.Scan(&instanceID, &release, &lastSeen); err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "  %s release=%s last_seen=%s\n", instanceID, release, lastSeen)
+		_, _ = fmt.Fprintf(stdout, "  %s release=%s last_seen=%s\n", instanceID, release, lastSeen)
 		count++
 	}
-	fmt.Fprintf(stdout, "live instances:      %d\n", count)
+	_, _ = fmt.Fprintf(stdout, "live instances:      %d\n", count)
 	return rows.Err()
 }
 
@@ -169,12 +169,12 @@ func runVerify(ctx context.Context, config server.Config, stdout io.Writer) erro
 		s.close()
 		return err
 	}
-	fmt.Fprintln(stdout, "ledger: verified (checksums, versions, dirty state)")
+	_, _ = fmt.Fprintln(stdout, "ledger: verified (checksums, versions, dirty state)")
 	s.close()
 	if err := server.VerifySchemaSemantics(ctx, config.DatabaseURL); err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, "schema: verified against the frozen reference snapshot")
+	_, _ = fmt.Fprintln(stdout, "schema: verified against the frozen reference snapshot")
 	return nil
 }
 
@@ -193,11 +193,11 @@ func runMigrate(ctx context.Context, config server.Config, stdout io.Writer) err
 		return err
 	}
 	if len(result.Applied) == 0 {
-		fmt.Fprintln(stdout, "nothing to migrate")
+		_, _ = fmt.Fprintln(stdout, "nothing to migrate")
 		return nil
 	}
 	for _, record := range result.Applied {
-		fmt.Fprintf(stdout, "applied %d %s\n", record.Version, record.Name)
+		_, _ = fmt.Fprintf(stdout, "applied %d %s\n", record.Version, record.Name)
 	}
 	return nil
 }
@@ -223,9 +223,9 @@ func runRepair(ctx context.Context, args []string, config server.Config, stdout,
 	}
 	switch outcome {
 	case dbschema.RepairVerifiedComplete:
-		fmt.Fprintf(stdout, "version %d: target state verified, dirty marker cleared\n", *versionFlag)
+		_, _ = fmt.Fprintf(stdout, "version %d: target state verified, dirty marker cleared\n", *versionFlag)
 	case dbschema.RepairRetried:
-		fmt.Fprintf(stdout, "version %d: dirty row dropped and migration re-applied\n", *versionFlag)
+		_, _ = fmt.Fprintf(stdout, "version %d: dirty row dropped and migration re-applied\n", *versionFlag)
 	}
 	return nil
 }
@@ -248,9 +248,9 @@ func runContract(ctx context.Context, args []string, config server.Config, stdou
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "pending contract migrations: %d\n", len(plan.Migrations))
+	_, _ = fmt.Fprintf(stdout, "pending contract migrations: %d\n", len(plan.Migrations))
 	for _, m := range plan.Migrations {
-		fmt.Fprintf(stdout, "  %d %s\n", m.Version, m.Name)
+		_, _ = fmt.Fprintf(stdout, "  %d %s\n", m.Version, m.Name)
 	}
 	options := dbschema.ContractOptions{
 		DryRun:           *dryRun,
@@ -277,7 +277,7 @@ func runContract(ctx context.Context, args []string, config server.Config, stdou
 			if *backupReference == "" {
 				return errors.New("executing contract migrations on postgres requires --backup-reference <verified external backup>")
 			}
-			fmt.Fprintf(stdout, "backup reference: %s\n", *backupReference)
+			_, _ = fmt.Fprintf(stdout, "backup reference: %s\n", *backupReference)
 			options.RequireBackup = func(ctx context.Context) error {
 				if *backupReference == "" {
 					return errors.New("executing contract migrations on postgres requires --backup-reference <verified external backup>")
@@ -295,9 +295,9 @@ func runContract(ctx context.Context, args []string, config server.Config, stdou
 			if backupErr != nil {
 				return fmt.Errorf("create verified backup before contract: %w", backupErr)
 			}
-			fmt.Fprintf(stdout, "backup created and verified: %s\n", record.ID)
+			_, _ = fmt.Fprintf(stdout, "backup created and verified: %s\n", record.ID)
 			if *backupReference != "" {
-				fmt.Fprintln(stdout, "note: --backup-reference ignored on sqlite; an internal verified backup is created instead")
+				_, _ = fmt.Fprintln(stdout, "note: --backup-reference ignored on sqlite; an internal verified backup is created instead")
 			}
 			options.RequireBackup = func(ctx context.Context) error {
 				_, err := store.GetSQLiteBackup(record.ID)
@@ -310,15 +310,15 @@ func runContract(ctx context.Context, args []string, config server.Config, stdou
 		return err
 	}
 	if *dryRun {
-		fmt.Fprintln(stdout, "dry run: preconditions verified, nothing executed")
+		_, _ = fmt.Fprintln(stdout, "dry run: preconditions verified, nothing executed")
 		return nil
 	}
 	if len(result.Applied) == 0 {
-		fmt.Fprintln(stdout, "nothing to execute")
+		_, _ = fmt.Fprintln(stdout, "nothing to execute")
 		return nil
 	}
 	for _, record := range result.Applied {
-		fmt.Fprintf(stdout, "executed %d %s\n", record.Version, record.Name)
+		_, _ = fmt.Fprintf(stdout, "executed %d %s\n", record.Version, record.Name)
 	}
 	return nil
 }
@@ -388,7 +388,7 @@ func heartbeatTableExists(ctx context.Context, s *session) (bool, error) {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, `usage: tokenhub db <command> [flags]
+	_, _ = fmt.Fprintln(w, `usage: tokenhub db <command> [flags]
 
 commands:
   status                      show ledger, backfill, and instance state

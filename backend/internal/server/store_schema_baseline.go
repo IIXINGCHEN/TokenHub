@@ -26,7 +26,7 @@ func exportSQLiteBaselineStatements(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer sqlDB.Close()
+	defer func() { _ = sqlDB.Close() }()
 	if err := migrateSchemaObjects(db, "sqlite"); err != nil {
 		return nil, fmt.Errorf("build sqlite baseline dump: %w", err)
 	}
@@ -36,7 +36,7 @@ func exportSQLiteBaselineStatements(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("dump sqlite baseline statements: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var statements []string
 	for rows.Next() {
 		var statement string
@@ -48,7 +48,7 @@ func exportSQLiteBaselineStatements(ctx context.Context) ([]string, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	rows.Close()
+	_ = rows.Close()
 
 	// The request-log commit-sequence trigger reads a seed row that the frozen
 	// flow creates alongside the schema; the baseline must carry it too or
@@ -66,7 +66,7 @@ func appendAnalyticsSequenceSeeds(ctx context.Context, db *sql.DB, label, falseL
 	if err != nil {
 		return nil, fmt.Errorf("dump %s baseline seeds: %w", label, err)
 	}
-	defer seedRows.Close()
+	defer func() { _ = seedRows.Close() }()
 	for seedRows.Next() {
 		var name string
 		var lastValue, sequenceOffset int64

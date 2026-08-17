@@ -69,7 +69,7 @@ func (r *Runner) databaseIsFreshOn(ctx context.Context, db Execer) (bool, error)
 	if err != nil {
 		return false, fmt.Errorf("dbschema: list tables for freshness check: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {

@@ -23,7 +23,7 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "n1check:", err)
+		_, _ = fmt.Fprintln(os.Stderr, "n1check:", err)
 		os.Exit(1)
 	}
 }
@@ -69,7 +69,7 @@ func run() error {
 	if violations := dbschema.CompareObjects(fixture, actual); len(violations) > 0 {
 		return fmt.Errorf("legacy database does not match the immutable N-1 schema fixture:\n%s", dbschema.FormatViolations(violations))
 	}
-	fmt.Fprintf(os.Stdout, "N-1 legacy schema fixture verified (%d tables, driver=%s)\n", len(actual.Tables), driver)
+	_, _ = fmt.Fprintf(os.Stdout, "N-1 legacy schema fixture verified (%d tables, driver=%s)\n", len(actual.Tables), driver)
 	return nil
 }
 

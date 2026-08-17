@@ -29,7 +29,7 @@ func dumpSQLiteMasterStatements(t *testing.T, db *sql.DB) []string {
 	if err != nil {
 		t.Fatalf("dump sqlite_master: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var statements []string
 	for rows.Next() {
 		var statement string

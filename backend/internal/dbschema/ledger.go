@@ -66,7 +66,7 @@ func (r *Runner) loadApplied(ctx context.Context) ([]Applied, error) {
 	if err != nil {
 		return nil, fmt.Errorf("dbschema: load ledger: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var applied []Applied
 	for rows.Next() {
 		var row Applied

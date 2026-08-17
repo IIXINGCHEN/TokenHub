@@ -163,9 +163,9 @@ func (m Migration) Checksum() string {
 		dialectTag = "*"
 	}
 	hash := sha256.New()
-	fmt.Fprintf(hash, "tokenhub-migration-v1\n%s\n%s\n", m.Phase, dialectTag)
+	_, _ = fmt.Fprintf(hash, "tokenhub-migration-v1\n%s\n%s\n", m.Phase, dialectTag)
 	for _, statement := range m.Statements {
-		fmt.Fprintf(hash, "%s\n--\n", statement)
+		_, _ = fmt.Fprintf(hash, "%s\n--\n", statement)
 	}
 	return hex.EncodeToString(hash.Sum(nil))
 }

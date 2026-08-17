@@ -93,16 +93,16 @@ func introspectSQLite(ctx context.Context, db *sql.DB) (ObjectSet, error) {
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return ObjectSet{}, err
 		}
 		tableNames = append(tableNames, name)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
+		_ = rows.Close()
 		return ObjectSet{}, err
 	}
-	rows.Close()
+	_ = rows.Close()
 
 	set := ObjectSet{}
 	for _, table := range tableNames {
@@ -134,16 +134,16 @@ func introspectSQLiteTable(ctx context.Context, db *sql.DB, table string) (Table
 		var defaultValue sql.NullString
 		var col sqliteColumn
 		if err := infoRows.Scan(&cid, &col.name, &col.typeName, &col.notNull, &defaultValue, &col.pk); err != nil {
-			infoRows.Close()
+			_ = infoRows.Close()
 			return TableObjects{}, err
 		}
 		columns = append(columns, col)
 	}
 	if err := infoRows.Err(); err != nil {
-		infoRows.Close()
+		_ = infoRows.Close()
 		return TableObjects{}, err
 	}
-	infoRows.Close()
+	_ = infoRows.Close()
 
 	pkByPosition := map[int]string{}
 	for _, col := range columns {
@@ -183,16 +183,16 @@ func introspectSQLiteTable(ctx context.Context, db *sql.DB, table string) (Table
 		var idx sqliteIndex
 		var partial bool
 		if err := indexRows.Scan(&seq, &idx.name, &idx.unique, &idx.origin, &partial); err != nil {
-			indexRows.Close()
+			_ = indexRows.Close()
 			return TableObjects{}, err
 		}
 		indexes = append(indexes, idx)
 	}
 	if err := indexRows.Err(); err != nil {
-		indexRows.Close()
+		_ = indexRows.Close()
 		return TableObjects{}, err
 	}
-	indexRows.Close()
+	_ = indexRows.Close()
 
 	for _, idx := range indexes {
 		// Primary-key autoindexes duplicate the PK column comparison.
@@ -216,16 +216,16 @@ func introspectSQLiteTable(ctx context.Context, db *sql.DB, table string) (Table
 	for triggerRows.Next() {
 		var name string
 		if err := triggerRows.Scan(&name); err != nil {
-			triggerRows.Close()
+			_ = triggerRows.Close()
 			return TableObjects{}, err
 		}
 		objects.Triggers = append(objects.Triggers, name)
 	}
 	if err := triggerRows.Err(); err != nil {
-		triggerRows.Close()
+		_ = triggerRows.Close()
 		return TableObjects{}, err
 	}
-	triggerRows.Close()
+	_ = triggerRows.Close()
 	return objects, nil
 }
 
@@ -234,7 +234,7 @@ func sqliteIndexColumns(ctx context.Context, db *sql.DB, index string) ([]string
 	if err != nil {
 		return nil, fmt.Errorf("dbschema: sqlite index_info(%s): %w", index, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var columns []string
 	for rows.Next() {
 		var seqno, cid int
@@ -262,16 +262,16 @@ func introspectPostgres(ctx context.Context, db *sql.DB, schema string) (ObjectS
 	for tableRows.Next() {
 		var name string
 		if err := tableRows.Scan(&name); err != nil {
-			tableRows.Close()
+			_ = tableRows.Close()
 			return ObjectSet{}, err
 		}
 		tableNames = append(tableNames, name)
 	}
 	if err := tableRows.Err(); err != nil {
-		tableRows.Close()
+		_ = tableRows.Close()
 		return ObjectSet{}, err
 	}
-	tableRows.Close()
+	_ = tableRows.Close()
 
 	set := ObjectSet{}
 	for _, table := range tableNames {
@@ -307,7 +307,7 @@ func introspectPostgresTable(ctx context.Context, db *sql.DB, schema, table stri
 		var col ColumnObjects
 		var isNullable string
 		if err := columnRows.Scan(&col.Name, &col.Type, &isNullable); err != nil {
-			columnRows.Close()
+			_ = columnRows.Close()
 			return TableObjects{}, err
 		}
 		col.Type = normalizeColumnType(col.Type)
@@ -315,10 +315,10 @@ func introspectPostgresTable(ctx context.Context, db *sql.DB, schema, table stri
 		objects.Columns = append(objects.Columns, col)
 	}
 	if err := columnRows.Err(); err != nil {
-		columnRows.Close()
+		_ = columnRows.Close()
 		return TableObjects{}, err
 	}
-	columnRows.Close()
+	_ = columnRows.Close()
 
 	pkRows, err := db.QueryContext(ctx,
 		"SELECT kcu.column_name FROM information_schema.table_constraints tc "+
@@ -331,16 +331,16 @@ func introspectPostgresTable(ctx context.Context, db *sql.DB, schema, table stri
 	for pkRows.Next() {
 		var name string
 		if err := pkRows.Scan(&name); err != nil {
-			pkRows.Close()
+			_ = pkRows.Close()
 			return TableObjects{}, err
 		}
 		objects.PKColumns = append(objects.PKColumns, name)
 	}
 	if err := pkRows.Err(); err != nil {
-		pkRows.Close()
+		_ = pkRows.Close()
 		return TableObjects{}, err
 	}
-	pkRows.Close()
+	_ = pkRows.Close()
 
 	indexRows, err := db.QueryContext(ctx,
 		"SELECT i.relname, ix.indisunique, a.attname FROM pg_index ix "+
@@ -367,7 +367,7 @@ func introspectPostgresTable(ctx context.Context, db *sql.DB, schema, table stri
 		var indexName, columnName string
 		var unique bool
 		if err := indexRows.Scan(&indexName, &unique, &columnName); err != nil {
-			indexRows.Close()
+			_ = indexRows.Close()
 			return TableObjects{}, err
 		}
 		if _, seen := indexColumns[indexName]; !seen {
@@ -377,10 +377,10 @@ func introspectPostgresTable(ctx context.Context, db *sql.DB, schema, table stri
 		indexColumns[indexName] = append(indexColumns[indexName], columnName)
 	}
 	if err := indexRows.Err(); err != nil {
-		indexRows.Close()
+		_ = indexRows.Close()
 		return TableObjects{}, err
 	}
-	indexRows.Close()
+	_ = indexRows.Close()
 	for _, indexName := range indexOrder {
 		columns := indexColumns[indexName]
 		if len(columns) == 0 {
@@ -398,16 +398,16 @@ func introspectPostgresTable(ctx context.Context, db *sql.DB, schema, table stri
 	for triggerRows.Next() {
 		var name string
 		if err := triggerRows.Scan(&name); err != nil {
-			triggerRows.Close()
+			_ = triggerRows.Close()
 			return TableObjects{}, err
 		}
 		objects.Triggers = append(objects.Triggers, name)
 	}
 	if err := triggerRows.Err(); err != nil {
-		triggerRows.Close()
+		_ = triggerRows.Close()
 		return TableObjects{}, err
 	}
-	triggerRows.Close()
+	_ = triggerRows.Close()
 	return objects, nil
 }
 

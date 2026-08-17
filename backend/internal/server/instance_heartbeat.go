@@ -106,7 +106,7 @@ func (s *GormStore) ListInstanceHeartbeats(ctx context.Context) ([]InstanceHeart
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var heartbeats []InstanceHeartbeat
 	for rows.Next() {
 		var heartbeat InstanceHeartbeat

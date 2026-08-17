@@ -34,8 +34,6 @@ const (
 	DefaultBackfillLeaseTTL = 2 * time.Minute
 	// ErrCodeBackfillFailed marks a backfill that did not complete.
 	ErrCodeBackfillFailed = "backfill_failed"
-	// unknownRemaining is recorded until a batch reports progress.
-	unknownRemaining = int64(-1)
 )
 
 // Backfill is one registered one-time data conversion. Operations that drift
@@ -184,6 +182,7 @@ func (e *BackfillExecutor) EnsureLedger(ctx context.Context) error {
 	if e.dialect == DialectPostgres {
 		intType = "BIGINT"
 	}
+	// remaining starts at -1 (unknown) until the first batch reports progress.
 	if _, err := e.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS data_backfills (
 		id TEXT PRIMARY KEY,
 		mode TEXT NOT NULL,
@@ -217,7 +216,7 @@ func (e *BackfillExecutor) Status(ctx context.Context) ([]BackfillState, error) 
 	if err != nil {
 		return nil, fmt.Errorf("dbschema: load data backfills: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var states []BackfillState
 	for rows.Next() {
 		var state BackfillState
