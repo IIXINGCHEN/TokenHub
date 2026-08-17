@@ -344,6 +344,7 @@ func introspectPostgresTable(ctx context.Context, db *sql.DB, schema, table stri
 			"JOIN pg_namespace n ON n.oid = t.relnamespace "+
 			"JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey) "+
 			"WHERE n.nspname = "+schemaFilter+" AND t.relname = $"+fmt.Sprint(len(schemaArg)+1)+" AND ix.indisprimary = false "+
+			"AND ix.indisvalid AND ix.indisready "+
 			"ORDER BY i.relname, a.attnum",
 		append(schemaArg, table)...)
 	if err != nil {

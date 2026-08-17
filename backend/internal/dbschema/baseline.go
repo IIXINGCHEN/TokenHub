@@ -142,45 +142,41 @@ func (r *Runner) adoptFreshSQLite(ctx context.Context) (result Result, err error
 		return Result{}, err, true
 	}
 	started := time.Now()
-	fail := func(cause error) (Result, error, bool) {
-		r.finishAttempt(ctx, attemptID, "failed", time.Since(started), ErrCodeApplyFailed)
-		return Result{}, newError(ErrCodeApplyFailed, BaselineVersion, cause), true
+	fail := func(code, outcome string, cause error) (Result, error, bool) {
+		r.finishAttempt(ctx, attemptID, outcome, time.Since(started), code)
+		return Result{}, newError(code, BaselineVersion, cause), true
 	}
 	for _, statement := range r.freshBaseline {
 		if _, err := conn.ExecContext(ctx, statement); err != nil {
 			rollback = false
 			_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
 			conn.Close()
-			return fail(fmt.Errorf("baseline statement %q: %w", firstLine(statement), err))
+			return fail(ErrCodeApplyFailed, "failed", fmt.Errorf("baseline statement %q: %w", firstLine(statement), err))
 		}
 	}
-	if err := r.insertAppliedOn(ctx, conn, BaselineVersion, baselineName, PhaseExpand, AdoptionChecksum, false); err != nil {
-		rollback = false
-		_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
-		conn.Close()
-		return fail(err)
-	}
+	// Commit the schema WITHOUT the baseline row first: the semantic
+	// verification runs on the pool once the connection is released, and the
+	// baseline row is only recorded after it passes. A crash in between leaves
+	// a business-table database without a baseline, which the next start
+	// adopts through the legacy flow — never a recorded-but-unverified state.
 	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
 		rollback = false
 		conn.Close()
-		return fail(err)
+		return fail(ErrCodeApplyFailed, "failed", err)
 	}
 	rollback = false
 	conn.Close()
-	r.finishAttempt(ctx, attemptID, "success", time.Since(started), "")
 	if r.adoptionReference != nil {
 		if verifyErr := r.verifyAgainstReference(ctx); verifyErr != nil {
-			return Result{}, newError(ErrCodeSchemaVerification, BaselineVersion, verifyErr), true
+			return fail(ErrCodeSchemaVerification, "failed", verifyErr)
 		}
 	}
-	result = Result{Adopted: true, Applied: []Applied{{
-		Version:        BaselineVersion,
-		Name:           baselineName,
-		Phase:          PhaseExpand,
-		Checksum:       AdoptionChecksum,
-		AppliedAt:      r.nowText(),
-		AppliedRelease: r.appRelease,
-	}}}
+	record, err := r.insertAppliedTx(ctx, BaselineVersion, baselineName, PhaseExpand, AdoptionChecksum, false)
+	if err != nil {
+		return fail(ErrCodeApplyFailed, "failed", err)
+	}
+	r.finishAttempt(ctx, attemptID, "success", time.Since(started), "")
+	result = Result{Adopted: true, Applied: []Applied{record}}
 	migrated, err := r.migrateLocked(ctx)
 	if err != nil {
 		return result, err, true

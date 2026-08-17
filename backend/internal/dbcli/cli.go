@@ -250,13 +250,36 @@ func runContract(ctx context.Context, args []string, config server.Config, stdou
 		RequireCluster:   func(ctx context.Context) error { return requireNoLiveInstances(ctx, s) },
 	}
 	if !*dryRun {
-		if *backupReference == "" {
-			return errors.New("executing contract migrations requires --backup-reference <verified backup>")
-		}
 		if !*maintenance {
 			return errors.New("executing contract migrations requires --maintenance to assert drain or maintenance conditions")
 		}
-		fmt.Fprintf(stdout, "backup reference: %s\n", *backupReference)
+		if s.driver == "postgres" {
+			// PostgreSQL backups are external: the operator asserts the
+			// evidence and the reference is recorded with the run.
+			if *backupReference == "" {
+				return errors.New("executing contract migrations on postgres requires --backup-reference <verified external backup>")
+			}
+			fmt.Fprintf(stdout, "backup reference: %s\n", *backupReference)
+		} else {
+			// SQLite evidence is a built-in backup created and verified by
+			// TokenHub itself before anything destructive runs (ADR 0005).
+			store, storeErr := server.OpenStoreWithConfig(config.DatabaseURL, config)
+			if storeErr != nil {
+				return storeErr
+			}
+			record, backupErr := store.CreateSQLiteBackup("tokenhub-db-contract", 30)
+			if backupErr != nil {
+				return fmt.Errorf("create verified backup before contract: %w", backupErr)
+			}
+			fmt.Fprintf(stdout, "backup created and verified: %s\n", record.ID)
+			options.RequireBackup = func(ctx context.Context) error {
+				_, err := store.GetSQLiteBackup(record.ID)
+				return err
+			}
+			if *backupReference != "" {
+				fmt.Fprintln(stdout, "note: --backup-reference ignored on sqlite; an internal verified backup is created instead")
+			}
+		}
 	}
 	result, err := s.runner.ApplyContract(ctx, options)
 	if err != nil {

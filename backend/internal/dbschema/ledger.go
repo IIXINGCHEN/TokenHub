@@ -212,16 +212,7 @@ func (r *Runner) beginAttempt(ctx context.Context, version int64) (int64, error)
 }
 
 func (r *Runner) finishAttempt(ctx context.Context, id int64, outcome string, duration time.Duration, errorCode string) {
-	finishedExpr := "datetime('now')"
-	if r.dialect == DialectPostgres {
-		finishedExpr = "now()::text"
-	}
-	marks := r.placeholders(4)
-	query := fmt.Sprintf("UPDATE migration_attempts SET finished_at = %s, outcome = %s, duration_ms = %s, error_code = %s WHERE id = %s",
-		finishedExpr, marks[0], marks[1], marks[2], marks[3])
-	if _, err := r.db.ExecContext(ctx, query, outcome, duration.Milliseconds(), errorCode, id); err != nil {
-		r.log("dbschema: finish attempt %d: %v", id, err)
-	}
+	r.finishAttemptOn(ctx, r.db, id, outcome, duration, errorCode)
 }
 
 // versionRecorded reports whether the ledger already holds a row for the

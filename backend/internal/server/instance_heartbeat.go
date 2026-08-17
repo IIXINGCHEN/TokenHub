@@ -29,6 +29,16 @@ type InstanceHeartbeat struct {
 	LastSeen   string `json:"last_seen"`
 }
 
+// Heartbeat publication states: off before Start, ok while rows publish,
+// failing when refreshes keep failing. A serving instance that stops
+// publishing must pull itself out of readiness, otherwise contract
+// maintenance would see zero live instances.
+const (
+	heartbeatOff     = int32(0)
+	heartbeatOK      = int32(1)
+	heartbeatFailing = int32(2)
+)
+
 // StartInstanceHeartbeat publishes this instance and refreshes it until the
 // returned stop function removes the row. A non-fatal start keeps the server
 // running without a heartbeat: losing the heartbeat only delays contract
@@ -51,9 +61,17 @@ func (s *GormStore) StartInstanceHeartbeat(release string) (stop func()) {
 			ON CONFLICT (instance_id) DO UPDATE SET release = excluded.release, last_seen = excluded.last_seen`,
 			instanceID, release, now, now).Error
 	}
-	if err := refresh(); err != nil {
-		log.Printf("[tokenhub] failed to publish instance heartbeat: %v", err)
+	publish := func() {
+		if err := refresh(); err != nil {
+			if s.heartbeatState != nil {
+				s.heartbeatState.Store(heartbeatFailing)
+			}
+			log.Printf("[tokenhub] failed to publish instance heartbeat: %v", err)
+		} else if s.heartbeatState != nil {
+			s.heartbeatState.Store(heartbeatOK)
+		}
 	}
+	publish()
 	done := make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(InstanceHeartbeatInterval)
@@ -63,9 +81,7 @@ func (s *GormStore) StartInstanceHeartbeat(release string) (stop func()) {
 			case <-done:
 				return
 			case <-ticker.C:
-				if err := refresh(); err != nil {
-					log.Printf("[tokenhub] failed to refresh instance heartbeat: %v", err)
-				}
+				publish()
 			}
 		}
 	}()
@@ -125,6 +141,15 @@ func (s *GormStore) DatabaseEvolutionStatus(ctx context.Context) DatabaseEvoluti
 	status, err := runner.Status(ctx)
 	if err != nil {
 		return DatabaseEvolutionStatus{Reason: fmt.Sprintf("migration ledger unreadable: %v", err)}
+	}
+	if !status.BaselineRecorded {
+		return DatabaseEvolutionStatus{Reason: "database has no adoption baseline; start the server once to adopt it"}
+	}
+	if s.heartbeatState != nil && s.heartbeatState.Load() == heartbeatFailing {
+		return DatabaseEvolutionStatus{
+			Reason:        "instance heartbeat is not publishing; contract maintenance cannot see this serving instance",
+			SchemaVersion: status.CurrentVersion,
+		}
 	}
 	if status.Dirty {
 		return DatabaseEvolutionStatus{

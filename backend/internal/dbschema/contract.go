@@ -45,10 +45,10 @@ func (r *Runner) PlanContract(ctx context.Context) (ContractPlan, error) {
 	// Contract migrations may only run once the release's own expand
 	// migrations have been applied; executing them against an unexpanded
 	// schema would drop or reshape structures their expands never created.
-	if pending := r.pendingExpands(applied); len(pending) > 0 {
+	if pending := r.pendingByPhase(applied, PhaseExpand); len(pending) > 0 {
 		return ContractPlan{}, newError(ErrCodeExpandPending, 0, fmt.Errorf("%d expand migration(s) still pending; run tokenhub db migrate or restart the server first", len(pending)))
 	}
-	return ContractPlan{Migrations: r.pendingContracts(applied)}, nil
+	return ContractPlan{Migrations: r.pendingByPhase(applied, PhaseContract)}, nil
 }
 
 // ApplyContract executes pending contract migrations after every configured
@@ -60,10 +60,15 @@ func (r *Runner) ApplyContract(ctx context.Context, options ContractOptions) (Re
 		return Result{}, err
 	}
 	plan.DryRun = options.DryRun
-	if err := r.runContractPreconditions(ctx, options); err != nil {
-		return Result{}, err
+	if options.DryRun {
+		// Dry runs only report: no lock, but preconditions still run so
+		// operators see exactly what blocks execution.
+		if err := r.runContractPreconditions(ctx, options); err != nil {
+			return Result{}, err
+		}
+		return Result{}, nil
 	}
-	if options.DryRun || len(plan.Migrations) == 0 {
+	if len(plan.Migrations) == 0 {
 		return Result{}, nil
 	}
 	release, err := r.acquireLock(ctx)
@@ -78,8 +83,14 @@ func (r *Runner) ApplyContract(ctx context.Context, options ContractOptions) (Re
 	if err := r.verifyApplied(applied); err != nil {
 		return Result{}, err
 	}
+	// Preconditions run under the lock, in the same lock domain as server
+	// startup: an instance that begins serving has to pass this lock first,
+	// so the cluster check cannot go stale between preflight and execution.
+	if err := r.runContractPreconditions(ctx, options); err != nil {
+		return Result{}, err
+	}
 	result := Result{}
-	for _, m := range r.pendingContracts(applied) {
+	for _, m := range r.pendingByPhase(applied, PhaseContract) {
 		record, outcome, applyErr := r.applyMigration(ctx, m)
 		if applyErr != nil {
 			return result, applyErr
@@ -110,19 +121,4 @@ func (r *Runner) runContractPreconditions(ctx context.Context, options ContractO
 		}
 	}
 	return nil
-}
-
-func (r *Runner) pendingContracts(applied []Applied) []Migration {
-	appliedSet := make(map[int64]bool, len(applied))
-	for _, row := range applied {
-		appliedSet[row.Version] = true
-	}
-	var pending []Migration
-	for _, m := range r.registry {
-		if appliedSet[m.Version] || m.Phase != PhaseContract || !m.appliesTo(r.dialect) {
-			continue
-		}
-		pending = append(pending, m)
-	}
-	return pending
 }

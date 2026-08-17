@@ -24,9 +24,12 @@ func (r *Runner) verifyAgainstReference(ctx context.Context) error {
 	return nil
 }
 
-// lockName keys the runner's own PostgreSQL advisory lock. It is distinct from
-// the store's startup advisory lock so nesting the two can never self-deadlock.
-const lockName = "tokenhub:dbschema:migrate"
+// lockName keys the runner's PostgreSQL advisory lock. It deliberately
+// matches the store's startup lock: startup runs the runner under external
+// coordination and never takes this lock itself, while maintenance commands
+// (contract, standalone migrate) share one lock domain with server startup so
+// they exclude each other.
+const lockName = "tokenhub:schema-migration"
 
 // Adopt bridges a database that has no adoption baseline: it runs the frozen
 // adoption callback (if any), then records the baseline row. A database that
@@ -140,7 +143,7 @@ func (r *Runner) Migrate(ctx context.Context) (Result, error) {
 	if findApplied(applied, BaselineVersion) == nil {
 		return Result{}, newError(ErrCodeBaselineMissing, BaselineVersion, errNoBaseline)
 	}
-	if len(r.pendingExpands(applied)) == 0 {
+	if len(r.pendingByPhase(applied, PhaseExpand)) == 0 {
 		return Result{}, nil
 	}
 	release, err := r.acquireLock(ctx)
@@ -164,12 +167,28 @@ func (r *Runner) migrateLocked(ctx context.Context) (Result, error) {
 	if findApplied(applied, BaselineVersion) == nil {
 		return Result{}, newError(ErrCodeBaselineMissing, BaselineVersion, errNoBaseline)
 	}
-	pending := r.pendingExpands(applied)
+	pending := r.pendingByPhase(applied, PhaseExpand)
 	if len(pending) == 0 {
 		return Result{}, nil
 	}
+	// Never apply an expand past a still-pending lower contract: the same
+	// state version must not represent two different schemas (the contract's
+	// removal has not happened yet). Contracts only run through maintenance.
+	minPendingContract := int64(0)
+	appliedSet := make(map[int64]bool, len(applied))
+	for _, row := range applied {
+		appliedSet[row.Version] = true
+	}
+	for _, m := range r.registry {
+		if m.Phase == PhaseContract && m.appliesTo(r.dialect) && !appliedSet[m.Version] && (minPendingContract == 0 || m.Version < minPendingContract) {
+			minPendingContract = m.Version
+		}
+	}
 	result := Result{}
 	for _, m := range pending {
+		if minPendingContract != 0 && m.Version > minPendingContract {
+			return result, newError(ErrCodeExpandPending, m.Version, fmt.Errorf("expand version %d is blocked by pending contract version %d; run the contract maintenance step first", m.Version, minPendingContract))
+		}
 		record, outcome, err := r.applyMigration(ctx, m)
 		if err != nil {
 			return result, err
@@ -179,21 +198,6 @@ func (r *Runner) migrateLocked(ctx context.Context) (Result, error) {
 		}
 	}
 	return result, nil
-}
-
-func (r *Runner) pendingExpands(applied []Applied) []Migration {
-	appliedSet := make(map[int64]bool, len(applied))
-	for _, row := range applied {
-		appliedSet[row.Version] = true
-	}
-	var pending []Migration
-	for _, m := range r.registry {
-		if appliedSet[m.Version] || m.Phase != PhaseExpand || !m.appliesTo(r.dialect) {
-			continue
-		}
-		pending = append(pending, m)
-	}
-	return pending
 }
 
 // applyMigration executes one migration and records the attempt. A

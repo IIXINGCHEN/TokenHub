@@ -292,7 +292,17 @@ func (e *BackfillExecutor) RunOnlineBatch(ctx context.Context) ([]OnlineProgress
 		if b.BatchLimit > 0 {
 			limit = b.BatchLimit
 		}
-		remaining, err := b.RunBatch(ctx, e.db, limit)
+		// Renew the lease while the batch runs: a batch longer than the TTL
+		// would otherwise be taken over by another instance while this one is
+		// still writing. Losing the lease cancels the batch context; batches
+		// are expected to honor it.
+		batchCtx, cancelBatch := context.WithCancel(ctx)
+		leaseLost := e.renewLeaseDuringBatch(batchCtx, cancelBatch, b.ID)
+		remaining, err := b.RunBatch(batchCtx, e.db, limit)
+		cancelBatch()
+		if lost := <-leaseLost; lost {
+			return progress, newError(ErrCodeBackfillFailed, 0, fmt.Errorf("backfill %q lost its lease mid-batch", b.ID))
+		}
 		if err != nil {
 			return progress, newError(ErrCodeBackfillFailed, 0, fmt.Errorf("backfill %q: %w", b.ID, err))
 		}
@@ -377,6 +387,34 @@ func (e *BackfillExecutor) recordProgress(ctx context.Context, id string, remain
 		return fmt.Errorf("dbschema: record backfill progress %q: %w", id, err)
 	}
 	return nil
+}
+
+// renewLeaseDuringBatch extends the lease every TTL/3 while a batch runs. It
+// returns a channel receiving true when the lease was lost (renewal failed or
+// another owner took over); the loss also cancels the batch so a
+// well-behaved batch stops writing.
+func (e *BackfillExecutor) renewLeaseDuringBatch(batchCtx context.Context, cancelBatch context.CancelFunc, id string) <-chan bool {
+	lost := make(chan bool, 1)
+	ticker := time.NewTicker(e.leaseTTL / 3)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-batchCtx.Done():
+				// Batch finished or failed while the lease was still held.
+				lost <- false
+				return
+			case <-ticker.C:
+				claimed, err := e.claimLease(context.Background(), id)
+				if err != nil || !claimed {
+					lost <- true
+					cancelBatch()
+					return
+				}
+			}
+		}
+	}()
+	return lost
 }
 
 func (e *BackfillExecutor) nowText() string {

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"tokenhub/backend/internal/guardrails"
@@ -280,7 +281,8 @@ type GormStore struct {
 	cooldownMax          time.Duration
 	sqliteDSN            string
 	backupDir            string
-	dbDriver             string // "sqlite" or "postgres"
+	dbDriver             string        // "sqlite" or "postgres"
+	heartbeatState       *atomic.Int32 // shared across value copies of the store
 	inFlightLeaseTTL     time.Duration
 	clusterLockTTL       time.Duration
 	imageCapabilityRetry time.Duration

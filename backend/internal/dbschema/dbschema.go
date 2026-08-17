@@ -364,21 +364,32 @@ func (r *Runner) Status(ctx context.Context) (Status, error) {
 			}
 		}
 	}
-	for _, m := range r.registry {
-		if appliedSet[m.Version] || !m.appliesTo(r.dialect) {
-			continue
-		}
-		if m.Phase == PhaseContract {
-			status.PendingContract = append(status.PendingContract, m)
-		} else {
-			status.PendingExpand = append(status.PendingExpand, m)
-		}
-	}
+	status.PendingExpand = r.pendingByPhase(applied, PhaseExpand)
+	status.PendingContract = r.pendingByPhase(applied, PhaseContract)
 	return status, nil
 }
 
-// Verify checks ledger integrity without applying anything: checksums of
-// applied versions, unknown applied versions, and dirty state.
+// pendingByPhase returns the registry migrations of the given phase that are
+// not yet applied and apply to the runner's dialect.
+func (r *Runner) pendingByPhase(applied []Applied, phase Phase) []Migration {
+	appliedSet := make(map[int64]bool, len(applied))
+	for _, row := range applied {
+		appliedSet[row.Version] = true
+	}
+	var pending []Migration
+	for _, m := range r.registry {
+		if appliedSet[m.Version] || m.Phase != phase || !m.appliesTo(r.dialect) {
+			continue
+		}
+		pending = append(pending, m)
+	}
+	return pending
+}
+
+// Verify checks ledger integrity without applying anything: the adoption
+// baseline must be present, applied versions must match registry checksums,
+// and no unknown versions or dirty state may exist. An empty ledger is a
+// missing baseline, not a clean one.
 func (r *Runner) Verify(ctx context.Context) error {
 	if err := r.ensureLedger(ctx); err != nil {
 		return err
@@ -386,6 +397,9 @@ func (r *Runner) Verify(ctx context.Context) error {
 	applied, err := r.loadApplied(ctx)
 	if err != nil {
 		return err
+	}
+	if findApplied(applied, BaselineVersion) == nil {
+		return newError(ErrCodeBaselineMissing, BaselineVersion, errNoBaseline)
 	}
 	return r.verifyApplied(applied)
 }

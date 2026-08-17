@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"tokenhub/backend/internal/guardrails"
@@ -212,6 +213,13 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 	}
 
 	legacySchemaFlow := func(context.Context) error {
+		// The frozen legacy flow follows the live model set. Once versioned
+		// migrations exist, running it would apply their model changes ahead
+		// of the migration chain and then re-apply them as migrations; refuse
+		// instead and let the migration-chain design take over.
+		if len(SchemaMigrationRegistry()) > 0 {
+			return fmt.Errorf("legacy adoption is a bridge-release operation; this release carries versioned migrations and requires a database adopted by the bridge release first")
+		}
 		return migrateSchemaObjects(db, driver)
 	}
 	legacyDataBackfills := func() error {
@@ -254,6 +262,7 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 		analyticsDB:          analyticsDB,
 		mu:                   &sync.Mutex{},
 		leaseHeartbeats:      &sync.Map{},
+		heartbeatState:       new(atomic.Int32),
 		modelLabels:          newModelLabelCache(),
 		secretKey:            config.SecretKey,
 		failureThreshold:     defaultInt(config.ResourceFailureThreshold, 3),

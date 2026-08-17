@@ -96,9 +96,10 @@ func TestContractDryRunOnAdoptedDatabase(t *testing.T) {
 	if code != 0 || !strings.Contains(output, "pending contract migrations: 0") || !strings.Contains(output, "dry run") {
 		t.Fatalf("contract dry run: code=%d output=%q", code, output)
 	}
-	// Executing without operator evidence is refused even with nothing pending.
+	// Executing without the maintenance assertion is refused even with
+	// nothing pending; on sqlite the internal backup only happens after it.
 	code, output = runCLI(t, "contract")
-	if code != 1 || !strings.Contains(output, "--backup-reference") {
-		t.Fatalf("contract without evidence: code=%d output=%q", code, output)
+	if code != 1 || !strings.Contains(output, "--maintenance") {
+		t.Fatalf("contract without maintenance assertion: code=%d output=%q", code, output)
 	}
 }

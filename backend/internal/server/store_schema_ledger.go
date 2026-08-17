@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
@@ -52,6 +55,17 @@ func adoptSchemaLedger(ctx context.Context, db *sql.DB, driver, dsn string, lega
 		options = append(options, dbschema.WithFreshBaseline(statements))
 	}
 	options = append(options, dbschema.WithLegacyRecognizer(legacyLooksLikeTokenHub(driver)))
+	// SQLite has no advisory lock; serialize the whole adoption (fresh replay
+	// and legacy flow) across processes through a lock file next to the
+	// database. The BEGIN IMMEDIATE replay covers statement-level races; this
+	// covers the legacy callback, semantic verification, and baseline insert.
+	if driver == "sqlite" {
+		release, lockErr := acquireSQLiteAdoptionLock(dsn)
+		if lockErr != nil {
+			return lockErr
+		}
+		defer release()
+	}
 	runner, err := dbschema.NewRunner(db, dbschema.Dialect(driver), SchemaMigrationRegistry(), options...)
 	if err != nil {
 		return err
@@ -60,10 +74,48 @@ func adoptSchemaLedger(ctx context.Context, db *sql.DB, driver, dsn string, lega
 	return err
 }
 
+// acquireSQLiteAdoptionLock takes an exclusive file lock beside the database
+// file. SQLite deployments are single-host, so a host-level lock fully
+// serializes concurrent first starts.
+func acquireSQLiteAdoptionLock(dsn string) (func(), error) {
+	// In-memory stores need no cross-process lock; check the full DSN before
+	// trimming the query string, because mode=memory lives in the query.
+	if strings.Contains(dsn, "mode=memory") || strings.Contains(dsn, ":memory:") {
+		return func() {}, nil
+	}
+	path := dsn
+	if after, ok := strings.CutPrefix(path, "file:"); ok {
+		path = after
+	}
+	if index := strings.IndexByte(path, '?'); index >= 0 {
+		path = path[:index]
+	}
+	if path == "" {
+		return func() {}, nil
+	}
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		_ = os.MkdirAll(dir, 0o755)
+	}
+	handle, err := os.OpenFile(path+".tokenhub-migrate.lock", os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite adoption lock file: %w", err)
+	}
+	if err := syscall.Flock(int(handle.Fd()), syscall.LOCK_EX); err != nil {
+		_ = handle.Close()
+		return nil, fmt.Errorf("acquire sqlite adoption lock: %w", err)
+	}
+	return func() {
+		_ = syscall.Flock(int(handle.Fd()), syscall.LOCK_UN)
+		_ = handle.Close()
+	}, nil
+}
+
 // legacyLooksLikeTokenHub refuses legacy adoption of databases that hold
 // tables but none from a known TokenHub release: the frozen flow would simply
 // complete an unrelated database and record it as the supported baseline
-// (ADR 0005).
+// (ADR 0005). This any-known-table heuristic is a bridge-release gate; full
+// fingerprints verified against real v0.4.0/v0.5.0 fixtures replace it when
+// the migration chain lands.
 func legacyLooksLikeTokenHub(driver string) func(ctx context.Context, db *sql.DB) error {
 	return func(ctx context.Context, db *sql.DB) error {
 		query := "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('admin_users', 'projects', 'providers', 'request_logs')"
