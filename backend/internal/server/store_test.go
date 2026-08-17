@@ -2,11 +2,14 @@ package server
 
 import (
 	"database/sql"
+	"errors"
 	"math"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 func TestPriceUsageAppliesConfiguredCacheReadPrice(t *testing.T) {
@@ -285,6 +288,54 @@ func TestFinishCallNegativeUsageDoesNotShrinkQuotaCounters(t *testing.T) {
 	wantCost := (1000*2.0 + 100*8.0) / 1_000_000
 	if math.Abs(bucket.CostUSD-wantCost) > 1e-12 {
 		t.Fatalf("day cost = %.12f, want %.12f", bucket.CostUSD, wantCost)
+	}
+}
+
+// TestFinishCallSettlesUsageInTheAdmissionPeriod pins quota settlement to the
+// database clock reading admission took. Deriving the buckets from the local
+// completion clock instead counted a request in one period and charged its
+// tokens to another whenever the two disagreed across a day boundary.
+func TestFinishCallSettlesUsageInTheAdmissionPeriod(t *testing.T) {
+	store := NewMemoryStore()
+	project := store.CreateProject(Project{Name: "Admission Period", Status: StatusActive})
+	key, _, err := store.CreateAPIKey(project.ID, APIKey{
+		Name:    "admission-period",
+		Allowed: []string{"period-chat"},
+		Status:  StatusActive,
+	}, "thk_admission_period")
+	if err != nil {
+		t.Fatal(err)
+	}
+	admittedAt := time.Now().UTC().Add(-48 * time.Hour)
+	store.FinishCall(CallContext{
+		RequestID: "req_admission_period",
+		Project:   project,
+		Key:       key,
+		Model:     Model{Name: "period-chat", Modality: "chat", InputPriceUSDPer1M: 2, OutputPriceUSDPer1M: 8},
+		StartedAt: admittedAt,
+	}, RouteSelection{Provider: Provider{ID: "provider_admission_period"}}, Usage{
+		PromptTokens:     1000,
+		CompletionTokens: 100,
+	}, 200, "", "127.0.0.1", "store-test")
+
+	var admitted QuotaBucket
+	if err := store.db.Where("key_id = ? AND scope = ? AND bucket = ?", key.ID, "day", dayBucket(admittedAt)).First(&admitted).Error; err != nil {
+		t.Fatalf("read the admission day bucket %s: %v", dayBucket(admittedAt), err)
+	}
+	if admitted.TotalTokens != 1100 {
+		t.Fatalf("admission day bucket total tokens = %d, want 1100", admitted.TotalTokens)
+	}
+	var completion QuotaBucket
+	err = store.db.Where("key_id = ? AND scope = ? AND bucket = ?", key.ID, "day", dayBucket(time.Now().UTC())).First(&completion).Error
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("usage settled in the completion day bucket %s: %+v (err %v)", dayBucket(time.Now().UTC()), completion.QuotaCounter, err)
+	}
+	var month QuotaBucket
+	if err := store.db.Where("key_id = ? AND scope = ? AND bucket = ?", key.ID, "month", monthBucket(admittedAt)).First(&month).Error; err != nil {
+		t.Fatalf("read the admission month bucket %s: %v", monthBucket(admittedAt), err)
+	}
+	if month.TotalTokens != 1100 {
+		t.Fatalf("admission month bucket total tokens = %d, want 1100", month.TotalTokens)
 	}
 }
 

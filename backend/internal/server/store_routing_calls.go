@@ -594,11 +594,22 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 		if err := s.reconcileAPIKeyMinuteTokens(tx, call, actualTokens); err != nil {
 			return err
 		}
-		dayCounter, err := s.quotaBucketForUpdate(tx, key.ID, "day", dayBucket(now))
+		// Admission counted this request on the buckets derived from
+		// call.StartedAt, the database clock reading StartCall took. Deriving
+		// them from the completion clock instead would post the tokens and cost
+		// to a different period whenever the two disagree across a day or month
+		// boundary — the request would be counted in one period and charged to
+		// another, leaving the first under-enforced. The response job rollback
+		// already settles against its own admission reading for the same reason.
+		admittedAt := call.StartedAt
+		if admittedAt.IsZero() {
+			admittedAt = now
+		}
+		dayCounter, err := s.quotaBucketForUpdate(tx, key.ID, "day", dayBucket(admittedAt))
 		if err != nil {
 			return err
 		}
-		monthCounter, err := s.quotaBucketForUpdate(tx, key.ID, "month", monthBucket(now))
+		monthCounter, err := s.quotaBucketForUpdate(tx, key.ID, "month", monthBucket(admittedAt))
 		if err != nil {
 			return err
 		}
