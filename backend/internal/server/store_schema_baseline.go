@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	"gorm.io/driver/sqlite"
@@ -53,10 +54,17 @@ func exportSQLiteBaselineStatements(ctx context.Context) ([]string, error) {
 	// flow creates alongside the schema; the baseline must carry it too or
 	// fresh databases fail their first request-log insert. AnalyticsSequence
 	// has only deterministic columns, so the row dumps to a stable INSERT.
-	seedRows, err := sqlDB.QueryContext(ctx,
+	return appendAnalyticsSequenceSeeds(ctx, sqlDB, "sqlite", "0", "1", statements)
+}
+
+// appendAnalyticsSequenceSeeds reads the analytics_sequences seed rows from db
+// and appends a stable INSERT per row to statements. The boolean column is
+// written with the dialect's literals so the dump round-trips exactly.
+func appendAnalyticsSequenceSeeds(ctx context.Context, db *sql.DB, label, falseLiteral, trueLiteral string, statements []string) ([]string, error) {
+	seedRows, err := db.QueryContext(ctx,
 		"SELECT name, last_value, sequence_offset, history_migrated FROM analytics_sequences ORDER BY name")
 	if err != nil {
-		return nil, fmt.Errorf("dump sqlite baseline seeds: %w", err)
+		return nil, fmt.Errorf("dump %s baseline seeds: %w", label, err)
 	}
 	defer seedRows.Close()
 	for seedRows.Next() {
@@ -66,12 +74,12 @@ func exportSQLiteBaselineStatements(ctx context.Context) ([]string, error) {
 		if err := seedRows.Scan(&name, &lastValue, &sequenceOffset, &historyMigrated); err != nil {
 			return nil, err
 		}
-		historyFlag := 0
+		historyFlag := falseLiteral
 		if historyMigrated {
-			historyFlag = 1
+			historyFlag = trueLiteral
 		}
 		statements = append(statements, fmt.Sprintf(
-			"INSERT INTO analytics_sequences (name, last_value, sequence_offset, history_migrated) VALUES ('%s', %d, %d, %d)",
+			"INSERT INTO analytics_sequences (name, last_value, sequence_offset, history_migrated) VALUES ('%s', %d, %d, %s)",
 			name, lastValue, sequenceOffset, historyFlag))
 	}
 	return statements, seedRows.Err()

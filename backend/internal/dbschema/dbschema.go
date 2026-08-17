@@ -126,7 +126,30 @@ type Migration struct {
 	// ChecksumOverride pins the checksum explicitly. It is required for Go
 	// migrations, whose source checksum is produced by the build-time manifest.
 	ChecksumOverride string
+	// LockTimeoutSeconds declares how long this migration may hold the
+	// database lock. Expands keep the short default so startup never blocks
+	// the cluster for long; contracts may declare a longer budget because
+	// they only run inside the maintenance window (ADR 0006).
+	LockTimeoutSeconds int64
+	// StatementBudget bounds the work one migration may perform: an expand
+	// must not rewrite unbounded tables, and a contract may claim a longer
+	// budget only when its maintenance conditions are met (ADR 0006).
+	StatementBudget int64
 }
+
+const (
+	// DefaultExpandLockTimeoutSeconds is the short lock budget every expand
+	// migration carries unless it declares its own (ADR 0006).
+	DefaultExpandLockTimeoutSeconds int64 = 30
+	// DefaultExpandStatementBudget bounds the statements of an expand so it
+	// cannot rewrite unbounded tables (ADR 0006).
+	DefaultExpandStatementBudget int64 = 50
+	// DefaultContractLockTimeoutSeconds is the longer lock budget a contract
+	// may use; contracts only run inside the maintenance window.
+	DefaultContractLockTimeoutSeconds int64 = 600
+	// DefaultContractStatementBudget bounds the work of one contract run.
+	DefaultContractStatementBudget int64 = 200
+)
 
 func (m Migration) transactional() bool { return !m.NonTransactional }
 
@@ -199,6 +222,7 @@ type Runner struct {
 	registry             []Migration
 	lockWait             time.Duration
 	appRelease           string
+	executor             string
 	externalCoordination bool
 	adoptionReference    func(ctx context.Context) (ObjectSet, error)
 	freshBaseline        []string
@@ -217,6 +241,14 @@ func WithLockWait(wait time.Duration) Option {
 // WithAppRelease stamps the release identifier into ledger and attempt rows.
 func WithAppRelease(release string) Option {
 	return func(r *Runner) { r.appRelease = release }
+}
+
+// WithExecutor stamps the executing instance into migration_attempts rows
+// (ADR 0006: the audit records who ran each attempt). Callers that run
+// migrations from a known context — the db maintenance CLI or server startup —
+// should pass a stable identifier such as the host name.
+func WithExecutor(executor string) Option {
+	return func(r *Runner) { r.executor = executor }
 }
 
 // WithLogger receives bounded-wait diagnostics while the runner queues behind
@@ -272,7 +304,7 @@ func NewRunner(db *sql.DB, dialect Dialect, migrations []Migration, opts ...Opti
 	default:
 		return nil, fmt.Errorf("dbschema: unsupported dialect %q", dialect)
 	}
-	registry, err := normalizeRegistry(migrations)
+	registry, err := NormalizeMigrations(migrations)
 	if err != nil {
 		return nil, newError(ErrCodeInvalidRegistry, 0, err)
 	}
@@ -286,10 +318,18 @@ func NewRunner(db *sql.DB, dialect Dialect, migrations []Migration, opts ...Opti
 	for _, opt := range opts {
 		opt(runner)
 	}
+	if runner.executor == "" {
+		runner.executor = "tokenhub"
+	}
 	return runner, nil
 }
 
-func normalizeRegistry(migrations []Migration) ([]Migration, error) {
+// NormalizeMigrations validates and canonicalizes a migration registry:
+// unique positive versions above the baseline, a recognized phase and
+// dialect, exactly one of Statements or Go, and positive lock and statement
+// budgets. Undeclared budgets are filled from the phase defaults so the
+// release manifest always carries concrete values (ADR 0006).
+func NormalizeMigrations(migrations []Migration) ([]Migration, error) {
 	registry := make([]Migration, len(migrations))
 	copy(registry, migrations)
 	sort.Slice(registry, func(i, j int) bool { return registry[i].Version < registry[j].Version })
@@ -332,6 +372,24 @@ func normalizeRegistry(migrations []Migration) ([]Migration, error) {
 		}
 		if m.SafeRetry && !m.NonTransactional {
 			return nil, fmt.Errorf("migration %q: SafeRetry requires NonTransactional", m.Name)
+		}
+		if m.Phase == PhaseContract {
+			if m.LockTimeoutSeconds == 0 {
+				m.LockTimeoutSeconds = DefaultContractLockTimeoutSeconds
+			}
+			if m.StatementBudget == 0 {
+				m.StatementBudget = DefaultContractStatementBudget
+			}
+		} else {
+			if m.LockTimeoutSeconds == 0 {
+				m.LockTimeoutSeconds = DefaultExpandLockTimeoutSeconds
+			}
+			if m.StatementBudget == 0 {
+				m.StatementBudget = DefaultExpandStatementBudget
+			}
+		}
+		if m.LockTimeoutSeconds < 0 || m.StatementBudget < 0 {
+			return nil, fmt.Errorf("migration %q: lock and statement budgets must be non-negative (ADR 0006)", m.Name)
 		}
 	}
 	return registry, nil

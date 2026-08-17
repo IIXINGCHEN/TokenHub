@@ -37,6 +37,7 @@ func adoptSchemaLedger(ctx context.Context, db *sql.DB, driver, dsn string, lega
 		dbschema.WithExternalCoordination(),
 		dbschema.WithLogger(log.Printf),
 		dbschema.WithAdoptionReference(reference),
+		dbschema.WithExecutor(adoptionExecutor()),
 	}
 	var statements []string
 	var err error
@@ -72,6 +73,16 @@ func adoptSchemaLedger(ctx context.Context, db *sql.DB, driver, dsn string, lega
 	}
 	_, err = runner.Adopt(ctx, legacy)
 	return err
+}
+
+// adoptionExecutor names the instance that runs the startup adoption, used to
+// stamp migration_attempts rows (ADR 0006). The host name distinguishes
+// instances on shared databases without leaking identifiers into logs.
+func adoptionExecutor() string {
+	if host, err := os.Hostname(); err == nil && host != "" {
+		return "server:" + host
+	}
+	return "server"
 }
 
 // acquireSQLiteAdoptionLock takes an exclusive file lock beside the database
@@ -184,11 +195,11 @@ func buildSchemaReference(ctx context.Context, driver, dsn string) (dbschema.Obj
 			return dbschema.ObjectSet{}, fmt.Errorf("open postgres schema reference admin handle: %w", err)
 		}
 		defer admin.Close()
-		if _, err := admin.ExecContext(ctx, fmt.Sprintf("CREATE SCHEMA %s", quotePostgresIdent(schemaName))); err != nil {
+		if _, err := admin.ExecContext(ctx, fmt.Sprintf("CREATE SCHEMA %s", dbschema.QuoteIdent(schemaName))); err != nil {
 			return dbschema.ObjectSet{}, fmt.Errorf("create schema reference schema %s (grant CREATE on the database to this role once, e.g. GRANT CREATE ON DATABASE <db> TO <role>): %w", schemaName, err)
 		}
 		defer func() {
-			_, _ = admin.ExecContext(context.Background(), fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", quotePostgresIdent(schemaName)))
+			_, _ = admin.ExecContext(context.Background(), fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", dbschema.QuoteIdent(schemaName)))
 		}()
 		scratchDSN, err := postgresSearchPathDSN(dsn, schemaName)
 		if err != nil {
@@ -210,10 +221,6 @@ func buildSchemaReference(ctx context.Context, driver, dsn string) (dbschema.Obj
 	default:
 		return dbschema.ObjectSet{}, fmt.Errorf("unsupported schema reference driver %q", driver)
 	}
-}
-
-func quotePostgresIdent(name string) string {
-	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
 // postgresSearchPathDSN points a PostgreSQL DSN at the given schema. URL-style

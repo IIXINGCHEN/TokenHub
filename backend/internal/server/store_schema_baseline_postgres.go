@@ -12,6 +12,8 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
+
+	"tokenhub/backend/internal/dbschema"
 )
 
 // exportPostgresBaselineStatements rebuilds the frozen PostgreSQL baseline by
@@ -23,11 +25,11 @@ func exportPostgresBaselineStatements(ctx context.Context, adminDB *sql.DB, data
 	// PostgreSQL folds unquoted identifiers to lowercase; keep the schema
 	// name lowercase so the search_path runtime parameter resolves it.
 	schemaName := "tokenhub_pg_baseline_" + strings.ToLower(NewID(""))
-	if _, err := adminDB.ExecContext(ctx, fmt.Sprintf("CREATE SCHEMA %s", quotePostgresIdent(schemaName))); err != nil {
+	if _, err := adminDB.ExecContext(ctx, fmt.Sprintf("CREATE SCHEMA %s", dbschema.QuoteIdent(schemaName))); err != nil {
 		return nil, fmt.Errorf("create postgres baseline scratch schema: %w", err)
 	}
 	defer func() {
-		_, _ = adminDB.ExecContext(context.Background(), fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", quotePostgresIdent(schemaName)))
+		_, _ = adminDB.ExecContext(context.Background(), fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", dbschema.QuoteIdent(schemaName)))
 	}()
 
 	recorder := &sqlRecorder{}
@@ -45,28 +47,8 @@ func exportPostgresBaselineStatements(ctx context.Context, adminDB *sql.DB, data
 	}
 	statements := recorder.ddlStatements()
 
-	seedRows, err := recording.QueryContext(ctx,
-		"SELECT name, last_value, sequence_offset, history_migrated FROM analytics_sequences ORDER BY name")
+	statements, err = appendAnalyticsSequenceSeeds(ctx, recording, "postgres", "false", "true", statements)
 	if err != nil {
-		return nil, fmt.Errorf("dump postgres baseline seeds: %w", err)
-	}
-	defer seedRows.Close()
-	for seedRows.Next() {
-		var name string
-		var lastValue, sequenceOffset int64
-		var historyMigrated bool
-		if err := seedRows.Scan(&name, &lastValue, &sequenceOffset, &historyMigrated); err != nil {
-			return nil, err
-		}
-		historyFlag := "false"
-		if historyMigrated {
-			historyFlag = "true"
-		}
-		statements = append(statements, fmt.Sprintf(
-			"INSERT INTO analytics_sequences (name, last_value, sequence_offset, history_migrated) VALUES ('%s', %d, %d, %s)",
-			name, lastValue, sequenceOffset, historyFlag))
-	}
-	if err := seedRows.Err(); err != nil {
 		return nil, err
 	}
 	return statements, nil

@@ -12,27 +12,29 @@ import (
 // tables with columns, primary keys, indexes, and triggers. It is produced by
 // Introspect and compared by CompareObjects; raw DDL text is deliberately not
 // part of it because column-order differences would cause false positives.
+// The JSON tags keep committed fixtures (for example the immutable N-1 legacy
+// snapshot) stable across releases.
 type ObjectSet struct {
-	Tables []TableObjects
+	Tables []TableObjects `json:"tables"`
 }
 
 type TableObjects struct {
-	Name      string
-	Columns   []ColumnObjects
-	PKColumns []string
-	Indexes   []IndexObjects
-	Triggers  []string
+	Name      string          `json:"name"`
+	Columns   []ColumnObjects `json:"columns"`
+	PKColumns []string        `json:"pk_columns"`
+	Indexes   []IndexObjects  `json:"indexes"`
+	Triggers  []string        `json:"triggers"`
 }
 
 type ColumnObjects struct {
-	Name     string
-	Type     string
-	Nullable bool
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Nullable bool   `json:"nullable"`
 }
 
 type IndexObjects struct {
-	Columns []string
-	Unique  bool
+	Columns []string `json:"columns"`
+	Unique  bool     `json:"unique"`
 }
 
 // Violation describes one semantic difference between a reference schema and
@@ -75,7 +77,10 @@ func Introspect(ctx context.Context, db *sql.DB, dialect Dialect, schema string)
 	}
 }
 
-func quoteIdent(name string) string {
+// QuoteIdent quotes an identifier for the dialect-neutral introspection
+// queries. Both SQLite PRAGMA and PostgreSQL metadata queries accept double
+// quotes; embedded quotes are doubled per SQL standard.
+func QuoteIdent(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
@@ -113,7 +118,7 @@ func introspectSQLite(ctx context.Context, db *sql.DB) (ObjectSet, error) {
 func introspectSQLiteTable(ctx context.Context, db *sql.DB, table string) (TableObjects, error) {
 	objects := TableObjects{Name: table}
 
-	infoRows, err := db.QueryContext(ctx, "PRAGMA table_info("+quoteIdent(table)+")")
+	infoRows, err := db.QueryContext(ctx, "PRAGMA table_info("+QuoteIdent(table)+")")
 	if err != nil {
 		return TableObjects{}, fmt.Errorf("dbschema: sqlite table_info(%s): %w", table, err)
 	}
@@ -163,7 +168,7 @@ func introspectSQLiteTable(ctx context.Context, db *sql.DB, table string) (Table
 		objects.PKColumns = append(objects.PKColumns, name)
 	}
 
-	indexRows, err := db.QueryContext(ctx, "PRAGMA index_list("+quoteIdent(table)+")")
+	indexRows, err := db.QueryContext(ctx, "PRAGMA index_list("+QuoteIdent(table)+")")
 	if err != nil {
 		return TableObjects{}, fmt.Errorf("dbschema: sqlite index_list(%s): %w", table, err)
 	}
@@ -225,7 +230,7 @@ func introspectSQLiteTable(ctx context.Context, db *sql.DB, table string) (Table
 }
 
 func sqliteIndexColumns(ctx context.Context, db *sql.DB, index string) ([]string, error) {
-	rows, err := db.QueryContext(ctx, "PRAGMA index_info("+quoteIdent(index)+")")
+	rows, err := db.QueryContext(ctx, "PRAGMA index_info("+QuoteIdent(index)+")")
 	if err != nil {
 		return nil, fmt.Errorf("dbschema: sqlite index_info(%s): %w", index, err)
 	}
@@ -342,10 +347,15 @@ func introspectPostgresTable(ctx context.Context, db *sql.DB, schema, table stri
 			"JOIN pg_class i ON i.oid = ix.indexrelid "+
 			"JOIN pg_class t ON t.oid = ix.indrelid "+
 			"JOIN pg_namespace n ON n.oid = t.relnamespace "+
-			"JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey) "+
+			// Preserve the index's declared column order (indkey position)
+			// instead of the table's physical column order: legacy databases
+			// append columns with ALTER TABLE, so the same index would
+			// introspect with a different column order than a fresh schema.
+			"JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord) ON true "+
+			"JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum "+
 			"WHERE n.nspname = "+schemaFilter+" AND t.relname = $"+fmt.Sprint(len(schemaArg)+1)+" AND ix.indisprimary = false "+
 			"AND ix.indisvalid AND ix.indisready "+
-			"ORDER BY i.relname, a.attnum",
+			"ORDER BY i.relname, k.ord",
 		append(schemaArg, table)...)
 	if err != nil {
 		return TableObjects{}, fmt.Errorf("dbschema: postgres indexes(%s): %w", table, err)
@@ -427,6 +437,7 @@ func CompareObjects(reference, actual ObjectSet) []Violation {
 			continue
 		}
 		violations = append(violations, compareColumns(expected, found)...)
+		violations = append(violations, comparePrimaryKey(expected, found)...)
 		violations = append(violations, compareIndexes(expected, found)...)
 		violations = append(violations, compareTriggers(expected, found)...)
 	}
@@ -458,10 +469,17 @@ func compareColumns(expected, actual TableObjects) []Violation {
 			violations = append(violations, Violation{Table: expected.Name, Kind: "column_nullability_mismatch", Expected: fmt.Sprintf("%s nullable=%t", column.Name, column.Nullable), Actual: fmt.Sprintf("%s nullable=%t", found.Name, found.Nullable)})
 		}
 	}
-	if strings.Join(expected.PKColumns, ",") != strings.Join(actual.PKColumns, ",") {
-		violations = append(violations, Violation{Table: expected.Name, Kind: "primary_key_mismatch", Expected: strings.Join(expected.PKColumns, ","), Actual: strings.Join(actual.PKColumns, ",")})
-	}
 	return violations
+}
+
+// comparePrimaryKey reports a mismatch between the expected and actual primary
+// key columns. It is a table-level property, so it lives beside the column and
+// index comparators rather than inside compareColumns.
+func comparePrimaryKey(expected, actual TableObjects) []Violation {
+	if strings.Join(expected.PKColumns, ",") != strings.Join(actual.PKColumns, ",") {
+		return []Violation{{Table: expected.Name, Kind: "primary_key_mismatch", Expected: strings.Join(expected.PKColumns, ","), Actual: strings.Join(actual.PKColumns, ",")}}
+	}
+	return nil
 }
 
 func compareIndexes(expected, actual TableObjects) []Violation {

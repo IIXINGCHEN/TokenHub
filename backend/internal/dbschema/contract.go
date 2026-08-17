@@ -109,8 +109,10 @@ func (r *Runner) runContractPreconditions(ctx context.Context, options ContractO
 	}{
 		{"data_backfills_complete", options.RequireBackfills},
 		{"cluster_compatible", options.RequireCluster},
-		{"backup_evidence", options.RequireBackup},
+		// The maintenance window precedes backup evidence so a refused run
+		// does not produce a backup the operator never asked for.
 		{"maintenance_window", options.RequireWindow},
+		{"backup_evidence", options.RequireBackup},
 	}
 	for _, check := range checks {
 		if check.fn == nil {

@@ -110,6 +110,35 @@ func TestAdoptRecordsBaselineOnFreshDatabase(t *testing.T) {
 	if outcome := lastAttemptOutcome(t, db, BaselineVersion); outcome != "success" {
 		t.Fatalf("expected adoption attempt outcome success, got %q", outcome)
 	}
+	var executor, appRelease string
+	if err := db.QueryRow("SELECT executor, app_release FROM migration_attempts WHERE version = ? ORDER BY id DESC LIMIT 1", BaselineVersion).Scan(&executor, &appRelease); err != nil {
+		t.Fatalf("read attempt executor: %v", err)
+	}
+	if executor != "tokenhub" {
+		t.Fatalf("expected default executor stamped on the attempt, got %q", executor)
+	}
+	if appRelease != "" {
+		t.Fatalf("expected empty app release without WithAppRelease, got %q", appRelease)
+	}
+}
+
+func TestAdoptStampsConfiguredExecutor(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	runner := mustRunner(t, db, nil, WithExecutor("cli:test-host"), WithAppRelease("0.6.0"))
+	if _, err := runner.Adopt(ctx, func(context.Context) error { return nil }); err != nil {
+		t.Fatalf("Adopt: %v", err)
+	}
+	var executor, appRelease string
+	if err := db.QueryRow("SELECT executor, app_release FROM migration_attempts WHERE version = ? ORDER BY id DESC LIMIT 1", BaselineVersion).Scan(&executor, &appRelease); err != nil {
+		t.Fatalf("read attempt executor: %v", err)
+	}
+	if executor != "cli:test-host" {
+		t.Fatalf("expected configured executor on the attempt, got %q", executor)
+	}
+	if appRelease != "0.6.0" {
+		t.Fatalf("expected configured app release on the attempt, got %q", appRelease)
+	}
 }
 
 func TestAdoptVerifiesExistingBaselineWithoutRewriting(t *testing.T) {
@@ -425,5 +454,42 @@ func TestConcurrentMigrateSerializesOnSQLite(t *testing.T) {
 	}
 	if rows != 1 {
 		t.Fatalf("expected exactly one inserted row, got %d", rows)
+	}
+}
+
+func TestNormalizeMigrationsFillsPhaseBudgets(t *testing.T) {
+	registry, err := NormalizeMigrations([]Migration{
+		{Version: 2, Name: "expand", Statements: []string{"CREATE TABLE budget_a (id INTEGER PRIMARY KEY)"}},
+		{Version: 3, Name: "contract", Phase: PhaseContract, Statements: []string{"DROP TABLE budget_a"}},
+	})
+	if err != nil {
+		t.Fatalf("NormalizeMigrations: %v", err)
+	}
+	if len(registry) != 2 {
+		t.Fatalf("expected two normalized migrations, got %d", len(registry))
+	}
+	expand := registry[0]
+	if expand.LockTimeoutSeconds != DefaultExpandLockTimeoutSeconds || expand.StatementBudget != DefaultExpandStatementBudget {
+		t.Fatalf("expand budgets not defaulted to the short values: %+v", expand)
+	}
+	contract := registry[1]
+	if contract.LockTimeoutSeconds != DefaultContractLockTimeoutSeconds || contract.StatementBudget != DefaultContractStatementBudget {
+		t.Fatalf("contract budgets not defaulted to the maintenance values: %+v", contract)
+	}
+
+	explicit, err := NormalizeMigrations([]Migration{
+		{Version: 2, Name: "big-contract", Phase: PhaseContract, Statements: []string{"DROP TABLE budget_a"}, LockTimeoutSeconds: 1200, StatementBudget: 500},
+	})
+	if err != nil {
+		t.Fatalf("NormalizeMigrations with explicit budgets: %v", err)
+	}
+	if got := explicit[0]; got.LockTimeoutSeconds != 1200 || got.StatementBudget != 500 {
+		t.Fatalf("explicit budgets were not preserved: %+v", got)
+	}
+
+	if _, err := NormalizeMigrations([]Migration{
+		{Version: 2, Name: "negative-budget", Statements: []string{"CREATE TABLE x (id INTEGER PRIMARY KEY)"}, StatementBudget: -1},
+	}); err == nil {
+		t.Fatal("expected negative statement budget to be rejected")
 	}
 }

@@ -11,16 +11,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"strings"
+	"os"
 	"time"
 
 	"tokenhub/backend/internal/dbschema"
 	"tokenhub/backend/internal/server"
 )
-
-// heartbeatTTL matches the instance heartbeat published by the server; live
-// heartbeats newer than this window block contract execution.
-const heartbeatTTL = 90 * time.Second
 
 // AppRelease stamps the executing release into ledger rows; the binary sets
 // it from its build version.
@@ -34,18 +30,28 @@ type session struct {
 	close  func()
 }
 
-func openSession(databaseURL, appRelease string) (*session, error) {
+func openSession(databaseURL string) (*session, error) {
 	driver, db, err := server.OpenRawDatabase(databaseURL)
 	if err != nil {
 		return nil, err
 	}
 	runner, err := dbschema.NewRunner(db, dbschema.Dialect(driver), server.SchemaMigrationRegistry(),
-		dbschema.WithAppRelease(AppRelease))
+		dbschema.WithAppRelease(AppRelease),
+		dbschema.WithExecutor(cliExecutor()))
 	if err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return &session{driver: driver, db: db, runner: runner, close: func() { _ = db.Close() }}, nil
+}
+
+// cliExecutor names the maintenance invocation that runs migrations, stamped
+// into migration_attempts rows (ADR 0006).
+func cliExecutor() string {
+	if host, err := os.Hostname(); err == nil && host != "" {
+		return "cli:" + host
+	}
+	return "cli"
 }
 
 // Run executes one `tokenhub db <command>` invocation and returns the process
@@ -65,9 +71,9 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	case "migrate":
 		err = runMigrate(ctx, config, stdout)
 	case "repair":
-		err = runRepair(ctx, args[1:], config, stdout)
+		err = runRepair(ctx, args[1:], config, stdout, stderr)
 	case "contract":
-		err = runContract(ctx, args[1:], config, stdout)
+		err = runContract(ctx, args[1:], config, stdout, stderr)
 	case "help", "-h", "--help":
 		usage(stdout)
 		return 0
@@ -84,7 +90,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 }
 
 func runStatus(ctx context.Context, config server.Config, stdout io.Writer) error {
-	s, err := openSession(config.DatabaseURL, config.AppVersion)
+	s, err := openSession(config.DatabaseURL)
 	if err != nil {
 		return err
 	}
@@ -155,7 +161,7 @@ func printHeartbeatStatus(ctx context.Context, db *sql.DB, stdout io.Writer) err
 }
 
 func runVerify(ctx context.Context, config server.Config, stdout io.Writer) error {
-	s, err := openSession(config.DatabaseURL, config.AppVersion)
+	s, err := openSession(config.DatabaseURL)
 	if err != nil {
 		return err
 	}
@@ -173,7 +179,7 @@ func runVerify(ctx context.Context, config server.Config, stdout io.Writer) erro
 }
 
 func runMigrate(ctx context.Context, config server.Config, stdout io.Writer) error {
-	s, err := openSession(config.DatabaseURL, config.AppVersion)
+	s, err := openSession(config.DatabaseURL)
 	if err != nil {
 		return err
 	}
@@ -196,8 +202,9 @@ func runMigrate(ctx context.Context, config server.Config, stdout io.Writer) err
 	return nil
 }
 
-func runRepair(ctx context.Context, args []string, config server.Config, stdout io.Writer) error {
+func runRepair(ctx context.Context, args []string, config server.Config, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("repair", flag.ContinueOnError)
+	flags.SetOutput(stderr)
 	versionFlag := flags.Int64("version", 0, "dirty migration version to repair")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -205,7 +212,7 @@ func runRepair(ctx context.Context, args []string, config server.Config, stdout 
 	if *versionFlag <= 0 {
 		return errors.New("repair requires --version <n>")
 	}
-	s, err := openSession(config.DatabaseURL, config.AppVersion)
+	s, err := openSession(config.DatabaseURL)
 	if err != nil {
 		return err
 	}
@@ -223,15 +230,16 @@ func runRepair(ctx context.Context, args []string, config server.Config, stdout 
 	return nil
 }
 
-func runContract(ctx context.Context, args []string, config server.Config, stdout io.Writer) error {
+func runContract(ctx context.Context, args []string, config server.Config, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("contract", flag.ContinueOnError)
+	flags.SetOutput(stderr)
 	dryRun := flags.Bool("dry-run", false, "verify preconditions and report the plan without executing")
 	backupReference := flags.String("backup-reference", "", "operator-verified backup reference (required to execute)")
 	maintenance := flags.Bool("maintenance", false, "assert drain or maintenance conditions are met (required to execute)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	s, err := openSession(config.DatabaseURL, config.AppVersion)
+	s, err := openSession(config.DatabaseURL)
 	if err != nil {
 		return err
 	}
@@ -250,8 +258,18 @@ func runContract(ctx context.Context, args []string, config server.Config, stdou
 		RequireCluster:   func(ctx context.Context) error { return requireNoLiveInstances(ctx, s) },
 	}
 	if !*dryRun {
+		// The operator-evidence checks below fail fast in the CLI so an
+		// invocation is refused even when nothing is pending; the same
+		// assertions are wired as runner preconditions so direct runner
+		// callers get identical enforcement.
 		if !*maintenance {
 			return errors.New("executing contract migrations requires --maintenance to assert drain or maintenance conditions")
+		}
+		options.RequireWindow = func(ctx context.Context) error {
+			if !*maintenance {
+				return errors.New("executing contract migrations requires --maintenance to assert drain or maintenance conditions")
+			}
+			return nil
 		}
 		if s.driver == "postgres" {
 			// PostgreSQL backups are external: the operator asserts the
@@ -260,6 +278,12 @@ func runContract(ctx context.Context, args []string, config server.Config, stdou
 				return errors.New("executing contract migrations on postgres requires --backup-reference <verified external backup>")
 			}
 			fmt.Fprintf(stdout, "backup reference: %s\n", *backupReference)
+			options.RequireBackup = func(ctx context.Context) error {
+				if *backupReference == "" {
+					return errors.New("executing contract migrations on postgres requires --backup-reference <verified external backup>")
+				}
+				return nil
+			}
 		} else {
 			// SQLite evidence is a built-in backup created and verified by
 			// TokenHub itself before anything destructive runs (ADR 0005).
@@ -272,12 +296,12 @@ func runContract(ctx context.Context, args []string, config server.Config, stdou
 				return fmt.Errorf("create verified backup before contract: %w", backupErr)
 			}
 			fmt.Fprintf(stdout, "backup created and verified: %s\n", record.ID)
+			if *backupReference != "" {
+				fmt.Fprintln(stdout, "note: --backup-reference ignored on sqlite; an internal verified backup is created instead")
+			}
 			options.RequireBackup = func(ctx context.Context) error {
 				_, err := store.GetSQLiteBackup(record.ID)
 				return err
-			}
-			if *backupReference != "" {
-				fmt.Fprintln(stdout, "note: --backup-reference ignored on sqlite; an internal verified backup is created instead")
 			}
 		}
 	}
@@ -325,18 +349,21 @@ func requireBackfillsComplete(ctx context.Context, s *session) error {
 // table also refuses: without it the preflight cannot prove that no instance
 // is serving, and a server whose heartbeat publication failed keeps running.
 func requireNoLiveInstances(ctx context.Context, s *session) error {
+	exists, err := heartbeatTableExists(ctx, s)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return errors.New("instance heartbeat table is missing; cannot verify that no instance is serving — start the server once before contracting")
+	}
 	mark := "?"
 	if s.driver == "postgres" {
 		mark = "$1"
 	}
 	var count int
-	cutoff := time.Now().UTC().Add(-heartbeatTTL).Format(time.RFC3339)
-	err := s.db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM instance_heartbeats WHERE last_seen > "+mark, cutoff).Scan(&count)
-	if err != nil {
-		if missingHeartbeatTable(err) {
-			return errors.New("instance heartbeat table is missing; cannot verify that no instance is serving — start the server once before contracting")
-		}
+	cutoff := time.Now().UTC().Add(-server.InstanceHeartbeatTTL).Format(time.RFC3339)
+	if err := s.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM instance_heartbeats WHERE last_seen > "+mark, cutoff).Scan(&count); err != nil {
 		return err
 	}
 	if count > 0 {
@@ -345,9 +372,19 @@ func requireNoLiveInstances(ctx context.Context, s *session) error {
 	return nil
 }
 
-func missingHeartbeatTable(err error) bool {
-	message := err.Error()
-	return strings.Contains(message, "no such table") || strings.Contains(message, "does not exist")
+// heartbeatTableExists reports whether the instance_heartbeats table exists,
+// reading the dialect's catalog instead of parsing driver error text.
+func heartbeatTableExists(ctx context.Context, s *session) (bool, error) {
+	if s.driver == "postgres" {
+		var exists bool
+		err := s.db.QueryRowContext(ctx,
+			"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'instance_heartbeats')").Scan(&exists)
+		return exists, err
+	}
+	var exists bool
+	err := s.db.QueryRowContext(ctx,
+		"SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'instance_heartbeats')").Scan(&exists)
+	return exists, err
 }
 
 func usage(w io.Writer) {

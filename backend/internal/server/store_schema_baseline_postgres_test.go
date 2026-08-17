@@ -38,11 +38,11 @@ func openPostgresAdmin(t *testing.T) (*sql.DB, string) {
 func createPostgresSchema(t *testing.T, admin *sql.DB, prefix string) string {
 	t.Helper()
 	schemaName := prefix + fmt.Sprintf("%d", time.Now().UnixNano())
-	if _, err := admin.Exec(fmt.Sprintf("CREATE SCHEMA %s", quotePostgresIdent(schemaName))); err != nil {
+	if _, err := admin.Exec(fmt.Sprintf("CREATE SCHEMA %s", dbschema.QuoteIdent(schemaName))); err != nil {
 		t.Fatalf("create schema %s: %v", schemaName, err)
 	}
 	t.Cleanup(func() {
-		_, _ = admin.Exec(fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", quotePostgresIdent(schemaName)))
+		_, _ = admin.Exec(fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", dbschema.QuoteIdent(schemaName)))
 	})
 	return schemaName
 }

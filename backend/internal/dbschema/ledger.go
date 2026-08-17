@@ -25,6 +25,7 @@ func (r *Runner) ensureLedger(ctx context.Context) error {
 			id ` + r.autoIncrementType() + `,
 			version ` + r.integerType() + ` NOT NULL,
 			app_release TEXT NOT NULL DEFAULT '',
+			executor TEXT NOT NULL DEFAULT '',
 			started_at TEXT NOT NULL DEFAULT '',
 			finished_at TEXT,
 			outcome TEXT NOT NULL DEFAULT '',
@@ -191,16 +192,16 @@ func (r *Runner) beginAttempt(ctx context.Context, version int64) (int64, error)
 	if r.dialect == DialectPostgres {
 		var id int64
 		err := r.db.QueryRowContext(ctx,
-			"INSERT INTO migration_attempts (version, app_release, started_at) VALUES ($1, $2, now()::text) RETURNING id",
-			version, r.appRelease).Scan(&id)
+			"INSERT INTO migration_attempts (version, app_release, executor, started_at) VALUES ($1, $2, $3, now()::text) RETURNING id",
+			version, r.appRelease, r.executor).Scan(&id)
 		if err != nil {
 			return 0, fmt.Errorf("dbschema: record attempt: %w", err)
 		}
 		return id, nil
 	}
 	result, err := r.db.ExecContext(ctx,
-		"INSERT INTO migration_attempts (version, app_release, started_at) VALUES (?, ?, ?)",
-		version, r.appRelease, r.nowText())
+		"INSERT INTO migration_attempts (version, app_release, executor, started_at) VALUES (?, ?, ?, ?)",
+		version, r.appRelease, r.executor, r.nowText())
 	if err != nil {
 		return 0, fmt.Errorf("dbschema: record attempt: %w", err)
 	}

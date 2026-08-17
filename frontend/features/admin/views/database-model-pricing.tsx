@@ -1,7 +1,7 @@
 import { Activity, AlertCircle, Check, Database, Server, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type ApiContext, type DatabaseStatus, type Model, type SchemaEvolutionStatus } from "../core/types";
-import { tx } from "../i18n/runtime";
+import { tx, formatTranslationTemplate } from "../i18n/runtime";
 import { adminFetch, isAuthExpiredError } from "../resources/payloads";
 import { DataSection } from "../shared/ui";
 
@@ -205,7 +205,10 @@ export function DatabaseStatusView({ api }: { api: ApiContext; isDark: boolean }
               </span>
               {schema.compatibility && (
                 <span className="database-status-note">
-                  {tx("兼容范围")} {schema.compatibility.min_compatible} – {schema.compatibility.max_compatible}
+                  {formatTranslationTemplate(tx("兼容范围 {min} – {max}"), {
+                    min: String(schema.compatibility.min_compatible),
+                    max: String(schema.compatibility.max_compatible),
+                  })}
                 </span>
               )}
             </div>
