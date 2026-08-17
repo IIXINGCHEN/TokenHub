@@ -104,6 +104,7 @@ type versionService struct {
 	deploymentType   string
 	managedUpdates   bool
 	installRoot      string
+	databaseURL      string
 	now              func() time.Time
 	downloadClient   *http.Client
 	validateAssetURL func(string) error
@@ -144,6 +145,7 @@ func newVersionService(config Config) *versionService {
 		deploymentType:   deploymentType,
 		managedUpdates:   config.ManagedUpdates,
 		installRoot:      filepath.Clean(strings.TrimSpace(config.InstallRoot)),
+		databaseURL:      strings.TrimSpace(config.DatabaseURL),
 		now:              time.Now,
 		operation:        make(chan struct{}, 1),
 		downloadClient:   newNativeDownloadClient(),

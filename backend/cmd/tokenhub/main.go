@@ -40,9 +40,25 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// ADR 0005: after a managed upgrade, the first boot of the target release
+	// runs the auto-rollback guard before any schema flow — a crashed boot
+	// re-activates the previous release once, breaking a crash loop before the
+	// new release touches the database.
+	guardCtx, cancelGuard := context.WithTimeout(context.Background(), 60*time.Second)
+	if err := server.RunStartupGuard(guardCtx, config); err != nil {
+		cancelGuard()
+		log.Fatalf("startup guard failed: %v", err)
+	}
+	cancelGuard()
+
 	store, err := server.OpenStoreWithConfig(config.DatabaseURL, config)
 	if err != nil {
 		log.Fatal(err)
+	}
+	// The target release completed its database schema flow; settle the
+	// pending upgrade so a later boot never auto-rolls back a healthy release.
+	if err := server.RecordStartupGuardSuccess(config); err != nil {
+		log.Fatalf("record startup guard success: %v", err)
 	}
 	if err := server.RunStartupBootstrap(context.Background(), store, config); err != nil {
 		log.Fatal(err)
