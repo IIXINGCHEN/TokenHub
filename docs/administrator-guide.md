@@ -308,6 +308,8 @@ Each result stores the complete rule snapshot, rule version and hash, input hash
 
 The relevant endpoints are `GET/POST /api/admin/billing/reconciliation-rules`, `GET/PATCH /api/admin/billing/reconciliation-rules/{id}`, `POST /api/admin/billing/reconciliation-rules/{id}/run`, `GET /api/admin/billing/reconciliations`, `GET /api/admin/billing/reconciliations/{id}`, and the `{id}/lock`, `{id}/recalculate`, and `{id}/export` actions. These endpoints are restricted to platform administrators.
 
+The `audit_retention` gateway setting accepts only `Nd` values from `1d` through `3650d`. Once per UTC hour, the cluster deletes request and response payload bodies older than the configured period in bounded batches. Request log metadata, usage analytics, administrator audit events, and alert events are not deleted by this setting.
+
 ## Security Checklist
 
 | Control | Requirement |

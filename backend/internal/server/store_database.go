@@ -229,7 +229,13 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 		if err := backfillRequestLogCommitSequence(db, driver); err != nil {
 			return err
 		}
+		if err := ensureRequestPayloadRetentionIndex(db, driver); err != nil {
+			return err
+		}
 		if err := backfillTeamRelationships(db); err != nil {
+			return err
+		}
+		if err := backfillUsageRecordAttributionNormalization(db); err != nil {
 			return err
 		}
 		if err := backfillRequestLogAttribution(db, driver); err != nil {
@@ -263,6 +269,7 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 		mu:                   &sync.Mutex{},
 		leaseHeartbeats:      &sync.Map{},
 		heartbeatState:       new(atomic.Int32),
+		lastUsed:             newLastUsedThrottle(),
 		modelLabels:          newModelLabelCache(),
 		secretKey:            config.SecretKey,
 		failureThreshold:     defaultInt(config.ResourceFailureThreshold, 3),
@@ -509,6 +516,84 @@ UPDATE request_logs
 	})
 }
 
+const (
+	usageAttributionNormalizationTask     = "schema:normalize-usage-attribution"
+	usageAttributionNormalizationRevision = 1
+	usageAttributionNormalizationBatch    = 200
+)
+
+type usageAttributionNormalizationRecord struct {
+	ID               string
+	AttributedUserID string
+}
+
+func backfillUsageRecordAttributionNormalization(db *gorm.DB) error {
+	var state ClusterTaskState
+	err := db.First(&state, "name = ?", usageAttributionNormalizationTask).Error
+	if err == nil && state.Revision >= usageAttributionNormalizationRevision {
+		return nil
+	}
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+
+	cursor := ""
+	for {
+		var records []usageAttributionNormalizationRecord
+		query := db.Table("usage_records").Select("id", "attributed_user_id").Order("id ASC").Limit(usageAttributionNormalizationBatch)
+		if cursor != "" {
+			query = query.Where("id > ?", cursor)
+		}
+		if err := query.Scan(&records).Error; err != nil {
+			return fmt.Errorf("scan usage attribution normalization batch: %w", err)
+		}
+		if len(records) == 0 {
+			break
+		}
+		cursor = records[len(records)-1].ID
+		if err := normalizeUsageRecordAttributionBatch(db, records); err != nil {
+			return err
+		}
+		if len(records) < usageAttributionNormalizationBatch {
+			break
+		}
+	}
+
+	state = ClusterTaskState{
+		Name:        usageAttributionNormalizationTask,
+		Revision:    usageAttributionNormalizationRevision,
+		CompletedAt: time.Now().UTC(),
+	}
+	if err := db.Clauses(clause.OnConflict{UpdateAll: true}).Create(&state).Error; err != nil {
+		return fmt.Errorf("record usage attribution normalization: %w", err)
+	}
+	return nil
+}
+
+func normalizeUsageRecordAttributionBatch(db *gorm.DB, records []usageAttributionNormalizationRecord) error {
+	caseParts := make([]string, 0, len(records))
+	caseArgs := make([]any, 0, len(records)*2)
+	ids := make([]string, 0, len(records))
+	for _, record := range records {
+		normalized := strings.TrimSpace(record.AttributedUserID)
+		if normalized == record.AttributedUserID {
+			continue
+		}
+		caseParts = append(caseParts, "WHEN ? THEN ?")
+		caseArgs = append(caseArgs, record.ID, normalized)
+		ids = append(ids, record.ID)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	expression := "CASE id " + strings.Join(caseParts, " ") + " ELSE attributed_user_id END"
+	if err := db.Model(&UsageRecord{}).Where("id IN ?", ids).
+		UpdateColumn("attributed_user_id", gorm.Expr(expression, caseArgs...)).Error; err != nil {
+		return fmt.Errorf("normalize usage attribution batch: %w", err)
+	}
+	return nil
+}
+
 func backfillRequestLogAttribution(db *gorm.DB, driver string) error {
 	emptyAttribution := "COALESCE(attributed_user_id, '') = ''"
 	type attributionSource struct {
@@ -729,6 +814,20 @@ func migrateSchemaObjects(db *gorm.DB, driver string) error {
 		return err
 	}
 	return ensureRequestLogCommitSequence(db, driver)
+}
+
+// withReadSnapshot runs a compound read against one consistent database
+// snapshot. PostgreSQL's default read-committed isolation can observe a new
+// snapshot for each statement, so explicitly pin multi-query reads there.
+// SQLite already pins reads for the lifetime of a transaction.
+func (s *GormStore) withReadSnapshot(read func(*gorm.DB) error) error {
+	if s.dbDriver == "postgres" {
+		return s.db.Transaction(read, &sql.TxOptions{
+			Isolation: sql.LevelRepeatableRead,
+			ReadOnly:  true,
+		})
+	}
+	return s.db.Transaction(read)
 }
 
 func runSchemaMigrationLocked(sqlDB *sql.DB, driver string, migrate func() error) error {

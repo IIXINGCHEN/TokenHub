@@ -151,10 +151,11 @@ Anthropic と Gemini では、複数ステップのツール呼び出しにお�
 | --- | --- |
 | `message.reasoning_content` | Anthropic の `thinking` テキスト、Gemini の thought パート、Codex の推論サマリー |
 | `message.reasoning_signature` | Anthropic の `thinking.signature`、Codex の暗号化推論 |
+| `message.reasoning_details` | ツール呼び出し ID に紐づく Codex の暗号化推論 |
 | `message.redacted_reasoning_content` | Anthropic の `redacted_thinking.data` |
 | `message.tool_calls[].thought_signature` | Gemini の `thoughtSignature` |
 
-次のリクエストの assistant メッセージでこれらのフィールドをそのまま返すと、推論の連続性が保たれます。これらを無視するクライアントでも動作します。TokenHub はプロバイダーが拒否する署名を送り返すのではなく、推論ブロックを省略します。署名には発行元プロバイダーの識別子が付与され、別のプロバイダーへ送られることはありません。
+次のリクエストの assistant メッセージでこれらのフィールドをそのまま返すと、推論の連続性が保たれます。`reasoning_details` では項目全体と `id` を維持してください。TokenHub は、その ID が同じ assistant メッセージ内のツール呼び出しと一致する場合にのみ受け付けます。これらを無視するクライアントでも動作します。TokenHub はプロバイダーが拒否する署名を送り返すのではなく、推論ブロックを省略します。署名には発行元プロバイダーの識別子が付与され、別のプロバイダーへ送られることはありません。
 
 ## Anthropic Messages と Claude Code
 

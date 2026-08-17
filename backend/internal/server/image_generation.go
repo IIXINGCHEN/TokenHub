@@ -508,6 +508,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			return err
 		}
 	}
+	if s.payloadRetention != nil {
+		if err := s.payloadRetention.Shutdown(ctx); err != nil {
+			return err
+		}
+	}
 	s.imageWorkerStop.Do(func() {
 		s.imageCancel()
 	})

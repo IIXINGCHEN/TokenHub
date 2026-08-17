@@ -151,10 +151,11 @@ Anthropic 与 Gemini 要求在多轮工具调用的下一轮中，原样回传�
 | --- | --- |
 | `message.reasoning_content` | Anthropic `thinking` 文本、Gemini thought 片段、Codex 推理摘要 |
 | `message.reasoning_signature` | Anthropic `thinking.signature`、Codex 加密推理内容 |
+| `message.reasoning_details` | 与工具调用 ID 绑定的 Codex 加密推理内容 |
 | `message.redacted_reasoning_content` | Anthropic `redacted_thinking.data` |
 | `message.tool_calls[].thought_signature` | Gemini `thoughtSignature` |
 
-在后续请求的 assistant 消息中回传这些字段即可保持推理连续性。忽略这些字段的客户端同样可用：TokenHub 会省略推理块，而不会回传供应商将拒绝的签名。签名带有签发供应商的标记，绝不会被回传给其他供应商。
+在后续请求的 assistant 消息中回传这些字段即可保持推理连续性。对于 `reasoning_details`，必须完整保留条目及其 `id`；只有该 ID 与同一 assistant 消息中的工具调用匹配时，TokenHub 才会接受。忽略这些字段的客户端同样可用：TokenHub 会省略推理块，而不会回传供应商将拒绝的签名。签名带有签发供应商的标记，绝不会被回传给其他供应商。
 
 ## Anthropic Messages 与 Claude Code
 

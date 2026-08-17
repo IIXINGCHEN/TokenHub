@@ -127,6 +127,7 @@ type Store interface {
 	CreateAPIKey(projectID string, key APIKey, rawSecret string) (APIKey, string, error)
 	ListProjectKeys(projectID string) []APIKey
 	ListAPIKeys() []APIKey
+	GetAPIKey(id string) (APIKey, bool)
 	UpdateAPIKey(id string, patch APIKey) (APIKey, error)
 	RotateAPIKey(id string, graceUntil *time.Time) (APIKey, string, error)
 	DeleteAPIKey(id string) error
@@ -200,6 +201,7 @@ type Store interface {
 	ListImageAssets(jobID string) []ImageAsset
 	GetImageAsset(id string) (ImageAsset, bool)
 	ListUsageRecords() []UsageRecord
+	QueryUsageSummary(ctx context.Context, query UsageSummaryQuery) (UsageSummary, error)
 	CreateAnalyticsCredential(credential AnalyticsCredential, rawSecret string) (AnalyticsCredential, string, error)
 	ListAnalyticsCredentials() []AnalyticsCredential
 	RevokeAnalyticsCredential(id string) (AnalyticsCredential, error)
@@ -224,6 +226,7 @@ type Store interface {
 	CreateRoutingPolicy(resource AdminResource) (AdminResource, error)
 	ListResources(kind string) []AdminResource
 	ListResourcesChecked(kind string) ([]AdminResource, error)
+	ListResourcesContext(ctx context.Context, kind string) ([]AdminResource, error)
 	UpdateResource(kind string, id string, patch AdminResource) (AdminResource, error)
 	DeleteResource(kind string, id string) error
 	DeleteTeam(id string) error
@@ -256,6 +259,8 @@ type Store interface {
 	RefreshProviderResourceCredentials(ctx context.Context, resourceID string, force bool) (ProviderResourceCredentials, error)
 	GetAdapterSessionBinding(ctx context.Context, adapterType string, providerID string, affinityKeyHash string) (AdapterSessionBinding, bool, error)
 	CommitAdapterSessionBinding(ctx context.Context, binding AdapterSessionBinding, expectedGeneration int64) (AdapterSessionBinding, bool, error)
+	DeleteRequestPayloadLogsBefore(ctx context.Context, cutoff time.Time, batchSize int) (int64, error)
+	RunClusterTask(ctx context.Context, name string, revision int64, fn func(context.Context) error) error
 	RunClusterOperation(ctx context.Context, name string, fn func(context.Context) error) error
 	SaveProviderAccountOAuthSession(session providerAccountOAuthSession) error
 	GetProviderAccountOAuthSessionByState(state string) (providerAccountOAuthSession, bool, error)
@@ -273,6 +278,7 @@ type GormStore struct {
 	analyticsDB          *gorm.DB
 	mu                   *sync.Mutex
 	leaseHeartbeats      *sync.Map
+	lastUsed             *lastUsedThrottle
 	modelLabels          *modelLabelCache
 	secretKey            string
 	metrics              *GatewayMetrics

@@ -151,10 +151,11 @@ Anthropic and Gemini require the opaque signature attached to a reasoning step t
 | --- | --- |
 | `message.reasoning_content` | Anthropic `thinking` text, Gemini thought parts, Codex reasoning summaries |
 | `message.reasoning_signature` | Anthropic `thinking.signature`, Codex encrypted reasoning |
+| `message.reasoning_details` | Codex encrypted reasoning bound to a tool call ID |
 | `message.redacted_reasoning_content` | Anthropic `redacted_thinking.data` |
 | `message.tool_calls[].thought_signature` | Gemini `thoughtSignature` |
 
-Echo these fields on the assistant message of the following request to preserve reasoning continuity. Clients that ignore them still work: TokenHub omits the reasoning block rather than replaying a signature the provider would reject. Signatures are tagged with the provider that issued them and are never replayed to a different provider.
+Echo these fields on the assistant message of the following request to preserve reasoning continuity. For `reasoning_details`, preserve the complete item and its `id`; TokenHub accepts it only when that ID matches a tool call in the same assistant message. Clients that ignore these fields still work: TokenHub omits the reasoning block rather than replaying a signature the provider would reject. Signatures are tagged with the provider that issued them and are never replayed to a different provider.
 
 ## Anthropic Messages and Claude Code
 
