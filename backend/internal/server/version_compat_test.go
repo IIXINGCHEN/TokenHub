@@ -26,6 +26,9 @@ func TestRollbackCompatibilityPreflight(t *testing.T) {
 	if verdict := server.rollbackCompatibility(ctx, "0.4.0"); verdict.Compatibility != rollbackCompatible {
 		t.Fatalf("expected canonicalization of 0.4.0, got %+v", verdict)
 	}
+	if verdict := server.rollbackCompatibility(ctx, "0.5.0"); verdict.Compatibility != rollbackCompatible {
+		t.Fatalf("expected v0.5.0 compatible on baseline database (fixture-verified), got %+v", verdict)
+	}
 	unknown := server.rollbackCompatibility(ctx, "0.3.0")
 	if unknown.Compatibility != rollbackUnknown || !strings.Contains(unknown.Reason, "no verified record") {
 		t.Fatalf("expected unknown compatibility for 0.3.0, got %+v", unknown)

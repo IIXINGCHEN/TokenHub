@@ -32,10 +32,12 @@ func CurrentCompatibilityManifest() CompatibilityManifest {
 // legacyReleaseCompatibility is the bridge release's one-time record of
 // releases that predate the migration ledger. Each entry's range is verified
 // with the real release binary against databases created and extended by the
-// frozen schema flow. Releases without an entry have unknown compatibility
+// frozen schema flow (ADR 0005: legacy adoption is validated with real v0.4.0
+// and v0.5.0 fixtures). Releases without an entry have unknown compatibility
 // and must not be activated through a managed rollback.
 var legacyReleaseCompatibility = map[string]CompatibilityManifest{
 	"0.4.0": {TargetVersion: 0, MinCompatible: 0, MaxCompatible: dbschema.BaselineVersion},
+	"0.5.0": {TargetVersion: 0, MinCompatible: 0, MaxCompatible: dbschema.BaselineVersion},
 }
 
 // Rollback compatibility verdicts exposed to the admin surface.
