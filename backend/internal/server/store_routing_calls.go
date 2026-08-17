@@ -480,6 +480,7 @@ func (s *GormStore) consumeAPIKeyMinuteRequest(tx *gorm.DB, keyID string, limits
 		return QuotaCounter{}, apiKeyRateLimitError(
 			"api_key_rpm_exceeded",
 			"API key requests per minute limit exceeded",
+			scopes.RPM,
 			limits,
 			bucket.QuotaCounter,
 			now,
@@ -491,6 +492,7 @@ func (s *GormStore) consumeAPIKeyMinuteRequest(tx *gorm.DB, keyID string, limits
 		return QuotaCounter{}, apiKeyRateLimitError(
 			"api_key_tpm_exceeded",
 			"API key tokens per minute limit exceeded",
+			scopes.TPM,
 			limits,
 			bucket.QuotaCounter,
 			now,
@@ -508,11 +510,12 @@ func (s *GormStore) consumeAPIKeyMinuteRequest(tx *gorm.DB, keyID string, limits
 	return bucket.QuotaCounter, nil
 }
 
-func apiKeyRateLimitError(code string, message string, limits QuotaLimits, counter QuotaCounter, now time.Time) error {
+func apiKeyRateLimitError(code string, message string, scope string, limits QuotaLimits, counter QuotaCounter, now time.Time) error {
 	return &HTTPError{
 		Status:  http.StatusTooManyRequests,
 		Code:    code,
 		Message: message,
+		Details: map[string]string{"scope": normalizedQuotaPolicyScope(scope)},
 		Headers: apiKeyRateLimitHeaders(limits, counter, now, true),
 	}
 }
@@ -542,6 +545,53 @@ func apiKeyRateLimitHeaders(limits QuotaLimits, counter QuotaCounter, now time.T
 	return headers
 }
 
+func combinedRateLimitHeaders(primaryLimits QuotaLimits, primaryCounter QuotaCounter, secondaryLimits QuotaLimits, secondaryCounter QuotaCounter, now time.Time, retry bool) map[string]string {
+	requestLimit := strictInt64(primaryLimits.RateLimitRPM, secondaryLimits.RateLimitRPM)
+	tokenLimit := strictInt64(primaryLimits.TokenLimitTPM, secondaryLimits.TokenLimitTPM)
+	if requestLimit <= 0 && tokenLimit <= 0 {
+		return nil
+	}
+	resetSeconds := int64(now.Truncate(time.Minute).Add(time.Minute).Sub(now).Seconds())
+	if resetSeconds < 1 {
+		resetSeconds = 1
+	}
+	headers := map[string]string{}
+	if requestLimit > 0 {
+		remaining := combinedMinuteRemaining(primaryLimits.RateLimitRPM, primaryCounter.Requests, secondaryLimits.RateLimitRPM, secondaryCounter.Requests)
+		headers["X-RateLimit-Limit-Requests"] = strconv.FormatInt(requestLimit, 10)
+		headers["X-RateLimit-Remaining-Requests"] = strconv.FormatInt(remaining, 10)
+		headers["X-RateLimit-Reset-Requests"] = strconv.FormatInt(resetSeconds, 10)
+	}
+	if tokenLimit > 0 {
+		remaining := combinedMinuteRemaining(primaryLimits.TokenLimitTPM, primaryCounter.TotalTokens, secondaryLimits.TokenLimitTPM, secondaryCounter.TotalTokens)
+		headers["X-RateLimit-Limit-Tokens"] = strconv.FormatInt(tokenLimit, 10)
+		headers["X-RateLimit-Remaining-Tokens"] = strconv.FormatInt(remaining, 10)
+		headers["X-RateLimit-Reset-Tokens"] = strconv.FormatInt(resetSeconds, 10)
+	}
+	if retry {
+		headers["Retry-After"] = strconv.FormatInt(resetSeconds, 10)
+	}
+	return headers
+}
+
+func combinedMinuteRemaining(primaryLimit int64, primaryUsed int64, secondaryLimit int64, secondaryUsed int64) int64 {
+	remaining := int64(-1)
+	for _, item := range [][2]int64{{primaryLimit, primaryUsed}, {secondaryLimit, secondaryUsed}} {
+		value, used := item[0], item[1]
+		if value <= 0 {
+			continue
+		}
+		candidate := maxInt64(value-maxInt64(used, 0), 0)
+		if remaining < 0 || candidate < remaining {
+			remaining = candidate
+		}
+	}
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
 func (s *GormStore) FinishCall(call CallContext, route RouteSelection, usage Usage, statusCode int, errorCode string, clientIP string, userAgent string) {
 	// Measured here rather than inside the deferred observation, so latency reflects
 	// what the client waited for and excludes the persistence time that follows.
@@ -549,7 +599,7 @@ func (s *GormStore) FinishCall(call CallContext, route RouteSelection, usage Usa
 	// same value is threaded into the transaction below so the persisted latency
 	// and the reported metric describe the same interval.
 	elapsed := call.elapsed()
-	_ = s.stopInFlightLeaseHeartbeat(call.RequestID)
+	_ = s.stopRequestConcurrencyHeartbeats(call.RequestID)
 	// priceUsage is pure, so it runs before the transaction and its result is final here.
 	usage = priceUsage(call.Model, usage)
 	usage.ProviderCostUSD = s.providerCostUSD(route, usage)
@@ -564,13 +614,25 @@ func (s *GormStore) FinishCall(call CallContext, route RouteSelection, usage Usa
 	})
 	if err != nil {
 		log.Printf("[tokenhub] failed to finish call request=%s: %v", call.RequestID, err)
-		if releaseErr := s.db.Delete(&InFlightLease{}, "id = ?", call.RequestID).Error; releaseErr != nil {
-			log.Printf("[tokenhub] failed to release API key concurrency lease request=%s: %v", call.RequestID, releaseErr)
+		if releaseErr := s.deleteRequestConcurrencyLeases(s.db, call.RequestID); releaseErr != nil {
+			log.Printf("[tokenhub] failed to release request concurrency leases request=%s: %v", call.RequestID, releaseErr)
 		}
 	}
 }
 
 func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route RouteSelection, usage Usage, statusCode int, errorCode string, clientIP string, userAgent string, now time.Time, elapsed time.Duration) error {
+	if call.RequestID != "" {
+		if err := s.lockScopeForUpdate(tx, "request_settlement", call.RequestID); err != nil {
+			return err
+		}
+		var existing int64
+		if err := tx.Model(&RequestLog{}).Where("request_id = ?", call.RequestID).Count(&existing).Error; err != nil {
+			return err
+		}
+		if existing > 0 {
+			return s.deleteRequestConcurrencyLeases(tx, call.RequestID)
+		}
+	}
 	if call.Key.ID != "" {
 		if err := s.lockScopeForUpdate(tx, "api_key", call.Key.ID); err != nil {
 			return err
@@ -578,6 +640,11 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 	}
 	if call.Project.ID != "" {
 		if err := s.lockScopeForSharedRead(tx, "project", call.Project.ID); err != nil {
+			return err
+		}
+	}
+	if call.UserQuotaEnabled {
+		if err := s.lockScopeForUpdate(tx, "user_quota", call.UserQuotaID); err != nil {
 			return err
 		}
 	}
@@ -593,6 +660,11 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 		}
 		if err := s.reconcileAPIKeyMinuteTokens(tx, call, actualTokens); err != nil {
 			return err
+		}
+		if call.UserQuotaEnabled {
+			if err := s.reconcileQuotaMinuteTokens(tx, call.UserQuotaID, call.UserTokenLimitBucket, call.ReservedTokens, actualTokens); err != nil {
+				return err
+			}
 		}
 		dayCounter, err := s.quotaBucketForUpdate(tx, key.ID, "day", dayBucket(now))
 		if err != nil {
@@ -612,6 +684,35 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 		}
 		if err := raiseQuotaAlerts(tx, key, &dayCounter.QuotaCounter, &monthCounter.QuotaCounter); err != nil {
 			return err
+		}
+		if call.UserQuotaEnabled {
+			settlementAt := call.StartedAt
+			if settlementAt.IsZero() {
+				settlementAt = now
+			}
+			userDayCounter, err := s.quotaBucketForUpdate(tx, call.UserQuotaID, "day", dayBucket(settlementAt))
+			if err != nil {
+				return err
+			}
+			userMonthCounter, err := s.quotaBucketForUpdate(tx, call.UserQuotaID, "month", monthBucket(settlementAt))
+			if err != nil {
+				return err
+			}
+			quotaUsage := usage
+			quotaUsage.TotalTokens = actualTokens
+			refundQuotaReservation(&userDayCounter.QuotaCounter, call.ReservedTokens)
+			refundQuotaReservation(&userMonthCounter.QuotaCounter, call.ReservedTokens)
+			addUsage(&userDayCounter.QuotaCounter, quotaUsage)
+			addUsage(&userMonthCounter.QuotaCounter, quotaUsage)
+			if err := tx.Save(&userDayCounter).Error; err != nil {
+				return err
+			}
+			if err := tx.Save(&userMonthCounter).Error; err != nil {
+				return err
+			}
+			if err := raiseUserQuotaAlerts(tx, call.Project.ID, &userDayCounter.QuotaCounter, &userMonthCounter.QuotaCounter, call.UserQuotaLimits); err != nil {
+				return err
+			}
 		}
 	}
 	if usage.TotalTokens > 0 || usage.CostUSD > 0 {
@@ -687,19 +788,23 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 			return err
 		}
 	}
-	return tx.Delete(&InFlightLease{}, "id = ?", call.RequestID).Error
+	return s.deleteRequestConcurrencyLeases(tx, call.RequestID)
 }
 
 func (s *GormStore) reconcileAPIKeyMinuteTokens(tx *gorm.DB, call CallContext, actualTokens int64) error {
-	if call.TokenLimitBucket == "" || call.ReservedTokens == 0 && actualTokens == 0 {
+	return s.reconcileQuotaMinuteTokens(tx, call.Key.ID, call.TokenLimitBucket, call.ReservedTokens, actualTokens)
+}
+
+func (s *GormStore) reconcileQuotaMinuteTokens(tx *gorm.DB, bucketID string, bucketName string, reservedTokens int64, actualTokens int64) error {
+	if bucketName == "" || reservedTokens == 0 && actualTokens == 0 {
 		return nil
 	}
-	bucket, err := s.quotaBucketForUpdate(tx, call.Key.ID, "minute", call.TokenLimitBucket)
+	bucket, err := s.quotaBucketForUpdate(tx, bucketID, "minute", bucketName)
 	if err != nil {
 		return err
 	}
 	actualTokens = maxInt64(actualTokens, 0)
-	reservedTokens := maxInt64(call.ReservedTokens, 0)
+	reservedTokens = maxInt64(reservedTokens, 0)
 	if actualTokens >= reservedTokens {
 		bucket.TotalTokens = saturatingAddNonNegative(bucket.TotalTokens, actualTokens-reservedTokens)
 	} else {
@@ -976,7 +1081,7 @@ func (s *GormStore) FailUnfinishedImageJobs(code string, message string) ([]Imag
 			if strings.TrimSpace(job.RequestID) == "" {
 				continue
 			}
-			if err := tx.Delete(&InFlightLease{}, "id = ?", job.RequestID).Error; err != nil {
+			if err := s.deleteRequestConcurrencyLeases(tx, job.RequestID); err != nil {
 				return err
 			}
 			var count int64
@@ -1026,7 +1131,7 @@ func (s *GormStore) UpdateImageJob(job ImageJob, revisedPrompt string) error {
 
 func (s *GormStore) CompleteImageJob(call CallContext, job ImageJob, revisedPrompt string, asset ImageAsset, route RouteSelection, usage Usage, clientIP string, userAgent string) error {
 	elapsed := call.elapsed()
-	_ = s.stopInFlightLeaseHeartbeat(call.RequestID)
+	_ = s.stopRequestConcurrencyHeartbeats(call.RequestID)
 	usage = priceUsage(call.Model, usage)
 	usage.ProviderCostUSD = s.providerCostUSD(route, usage)
 
@@ -1082,8 +1187,8 @@ func (s *GormStore) CompleteImageJob(call CallContext, job ImageJob, revisedProm
 		})
 	}()
 	if err != nil {
-		if releaseErr := s.db.Delete(&InFlightLease{}, "id = ?", call.RequestID).Error; releaseErr != nil {
-			log.Printf("[tokenhub] failed to release API key concurrency lease request=%s: %v", call.RequestID, releaseErr)
+		if releaseErr := s.deleteRequestConcurrencyLeases(s.db, call.RequestID); releaseErr != nil {
+			log.Printf("[tokenhub] failed to release request concurrency leases request=%s: %v", call.RequestID, releaseErr)
 		}
 	} else {
 		// The route and resource marks used to run inside the completion

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -370,10 +371,13 @@ func (s *GormStore) AdmitResponseJob(ctx context.Context, id string, owner strin
 		return tx.Model(&ResponseJob{}).
 			Where("id = ? AND status = ? AND phase = ? AND lease_owner = ? AND lease_epoch = ? AND request_id = ?", id, responseJobStatusRunning, responseJobPhaseAdmitted, owner, epoch, requestID).
 			Updates(map[string]any{
-				"token_limit_bucket":  admission.call.TokenLimitBucket,
-				"minute_request_held": admission.call.MinuteRequestHeld,
-				"reserved_tokens":     admission.call.ReservedTokens,
-				"admitted_at":         admission.call.StartedAt,
+				"token_limit_bucket":       admission.call.TokenLimitBucket,
+				"minute_request_held":      admission.call.MinuteRequestHeld,
+				"user_token_limit_bucket":  admission.call.UserTokenLimitBucket,
+				"reserved_tokens":          admission.call.ReservedTokens,
+				"admitted_at":              admission.call.StartedAt,
+				"user_quota_enabled":       admission.call.UserQuotaEnabled,
+				"user_minute_request_held": admission.call.UserMinuteRequestHeld,
 			}).Error
 	})
 	s.mu.Unlock()
@@ -386,12 +390,15 @@ func (s *GormStore) AdmitResponseJob(ctx context.Context, id string, owner strin
 	return s.startAdmittedCallHeartbeat(ctx, admission), true, nil
 }
 
-// ReleaseResponseJobAdmission stops the process-local heartbeat and releases
-// the API-key concurrency slot. It deliberately does not reconcile quota or
-// write a RequestLog; the fenced job finalizer or recovery transaction owns the
-// single durable settlement.
+// ReleaseResponseJobAdmission stops the process-local heartbeats and releases
+// the API-key and user concurrency slots. It deliberately does not reconcile
+// quota or write a RequestLog; the fenced job finalizer or recovery transaction
+// owns the single durable settlement.
 func (s *GormStore) ReleaseResponseJobAdmission(requestID string) {
-	s.ReleaseProviderResourceCapacity("response_job", requestID)
+	_ = s.stopRequestConcurrencyHeartbeats(requestID)
+	if err := s.deleteRequestConcurrencyLeases(s.db, requestID); err != nil {
+		log.Printf("[tokenhub] failed to release response job concurrency leases request=%s: %v", requestID, err)
+	}
 }
 
 // ShutdownResponseJob atomically hands a running job back to the durable queue
@@ -425,18 +432,21 @@ func (s *GormStore) ShutdownResponseJob(id string, owner string, epoch int64, re
 			result := tx.Model(&ResponseJob{}).
 				Where("id = ? AND status = ? AND lease_owner = ? AND lease_epoch = ? AND cancel_requested_at IS NOT NULL", id, responseJobStatusRunning, owner, epoch).
 				Updates(map[string]any{
-					"status":              responseJobStatusCancelled,
-					"error_code":          "response_cancelled_worker_lost",
-					"error_message":       "Response cancellation was retained while the server stopped",
-					"token_limit_bucket":  "",
-					"minute_request_held": false,
-					"reserved_tokens":     0,
-					"admitted_at":         nil,
-					"lease_owner":         "",
-					"lease_expires_at":    nil,
-					"completed_at":        now,
-					"expires_at":          expiresAt,
-					"updated_at":          now,
+					"status":                   responseJobStatusCancelled,
+					"error_code":               "response_cancelled_worker_lost",
+					"error_message":            "Response cancellation was retained while the server stopped",
+					"token_limit_bucket":       "",
+					"minute_request_held":      false,
+					"user_quota_enabled":       false,
+					"user_minute_request_held": false,
+					"user_token_limit_bucket":  "",
+					"reserved_tokens":          0,
+					"admitted_at":              nil,
+					"lease_owner":              "",
+					"lease_expires_at":         nil,
+					"completed_at":             now,
+					"expires_at":               expiresAt,
+					"updated_at":               now,
 				})
 			if result.Error != nil || result.RowsAffected != 1 {
 				return result.Error
@@ -445,7 +455,7 @@ func (s *GormStore) ShutdownResponseJob(id string, owner string, epoch int64, re
 				return err
 			}
 			if job.RequestID != "" {
-				if err := tx.Delete(&InFlightLease{}, "id = ?", job.RequestID).Error; err != nil {
+				if err := s.deleteRequestConcurrencyLeases(tx, job.RequestID); err != nil {
 					return err
 				}
 			}
@@ -464,24 +474,27 @@ func (s *GormStore) ShutdownResponseJob(id string, owner string, epoch int64, re
 			result := tx.Model(&ResponseJob{}).
 				Where("id = ? AND status = ? AND phase = ? AND lease_owner = ? AND lease_epoch = ?", id, responseJobStatusRunning, responseJobPhaseDispatched, owner, epoch).
 				Updates(map[string]any{
-					"status":              responseJobStatusFailed,
-					"error_code":          "response_execution_lost",
-					"error_message":       "Server stopped after provider dispatch; the request was not retried",
-					"token_limit_bucket":  "",
-					"minute_request_held": false,
-					"reserved_tokens":     0,
-					"admitted_at":         nil,
-					"lease_owner":         "",
-					"lease_expires_at":    nil,
-					"completed_at":        now,
-					"expires_at":          expiresAt,
-					"updated_at":          now,
+					"status":                   responseJobStatusFailed,
+					"error_code":               "response_execution_lost",
+					"error_message":            "Server stopped after provider dispatch; the request was not retried",
+					"token_limit_bucket":       "",
+					"minute_request_held":      false,
+					"user_quota_enabled":       false,
+					"user_minute_request_held": false,
+					"user_token_limit_bucket":  "",
+					"reserved_tokens":          0,
+					"admitted_at":              nil,
+					"lease_owner":              "",
+					"lease_expires_at":         nil,
+					"completed_at":             now,
+					"expires_at":               expiresAt,
+					"updated_at":               now,
 				})
 			if result.Error != nil || result.RowsAffected != 1 {
 				return result.Error
 			}
 			if job.RequestID != "" {
-				if err := tx.Delete(&InFlightLease{}, "id = ?", job.RequestID).Error; err != nil {
+				if err := s.deleteRequestConcurrencyLeases(tx, job.RequestID); err != nil {
 					return err
 				}
 			}
@@ -506,17 +519,20 @@ func (s *GormStore) ShutdownResponseJob(id string, owner string, epoch int64, re
 		result := tx.Model(&ResponseJob{}).
 			Where("id = ? AND status = ? AND phase = ? AND lease_owner = ? AND lease_epoch = ?", id, responseJobStatusRunning, job.Phase, owner, epoch).
 			Updates(map[string]any{
-				"status":              responseJobStatusQueued,
-				"phase":               responseJobPhaseQueued,
-				"request_id":          "",
-				"token_limit_bucket":  "",
-				"minute_request_held": false,
-				"reserved_tokens":     0,
-				"admitted_at":         nil,
-				"lease_owner":         "",
-				"lease_expires_at":    nil,
-				"started_at":          nil,
-				"updated_at":          now,
+				"status":                   responseJobStatusQueued,
+				"phase":                    responseJobPhaseQueued,
+				"request_id":               "",
+				"token_limit_bucket":       "",
+				"minute_request_held":      false,
+				"user_quota_enabled":       false,
+				"user_minute_request_held": false,
+				"user_token_limit_bucket":  "",
+				"reserved_tokens":          0,
+				"admitted_at":              nil,
+				"lease_owner":              "",
+				"lease_expires_at":         nil,
+				"started_at":               nil,
+				"updated_at":               now,
 			})
 		if result.Error != nil || result.RowsAffected != 1 {
 			return result.Error
@@ -562,6 +578,27 @@ func (s *GormStore) rollbackResponseJobAdmission(tx *gorm.DB, job ResponseJob) e
 	}, 0); err != nil {
 		return err
 	}
+	userQuotaID := userQuotaBucketKey(job.AttributedUserID)
+	if job.UserQuotaEnabled {
+		if err := s.lockScopeForUpdate(tx, "user_quota", userQuotaID); err != nil {
+			return err
+		}
+		if job.UserMinuteRequestHeld {
+			userMinuteBucket, err := s.quotaBucketForUpdate(tx, userQuotaID, "minute", minuteBucket(*job.AdmittedAt))
+			if err != nil {
+				return err
+			}
+			if userMinuteBucket.Requests > 0 {
+				userMinuteBucket.Requests--
+			}
+			if err := tx.Save(&userMinuteBucket).Error; err != nil {
+				return err
+			}
+		}
+		if err := s.reconcileQuotaMinuteTokens(tx, userQuotaID, job.UserTokenLimitBucket, job.ReservedTokens, 0); err != nil {
+			return err
+		}
+	}
 	for _, period := range []struct {
 		scope  string
 		bucket string
@@ -579,8 +616,21 @@ func (s *GormStore) rollbackResponseJobAdmission(tx *gorm.DB, job ResponseJob) e
 		if err := tx.Save(&bucket).Error; err != nil {
 			return err
 		}
+		if job.UserQuotaEnabled {
+			userBucket, err := s.quotaBucketForUpdate(tx, userQuotaID, period.scope, period.bucket)
+			if err != nil {
+				return err
+			}
+			if userBucket.Requests > 0 {
+				userBucket.Requests--
+			}
+			refundQuotaReservation(&userBucket.QuotaCounter, job.ReservedTokens)
+			if err := tx.Save(&userBucket).Error; err != nil {
+				return err
+			}
+		}
 	}
-	return tx.Delete(&InFlightLease{}, "id = ?", job.RequestID).Error
+	return s.deleteRequestConcurrencyLeases(tx, job.RequestID)
 }
 
 func (s *GormStore) MarkResponseJobPhase(id string, owner string, epoch int64, phase string, requestID string) (bool, error) {
@@ -691,7 +741,7 @@ func (s *GormStore) FinalizeResponseJob(call CallContext, id string, owner strin
 		return ResponseJob{}, false, err
 	}
 	elapsed := call.elapsed()
-	_ = s.stopInFlightLeaseHeartbeat(call.RequestID)
+	_ = s.stopRequestConcurrencyHeartbeats(call.RequestID)
 	usage = priceUsage(call.Model, usage)
 	usage.ProviderCostUSD = s.providerCostUSD(route, usage)
 
@@ -723,24 +773,27 @@ func (s *GormStore) FinalizeResponseJob(call CallContext, id string, owner strin
 			}
 			upstreamResponseID := responseIDFromJSON(resultJSON)
 			updates := map[string]any{
-				"status":               status,
-				"result_ciphertext":    resultCiphertext,
-				"provider_id":          route.Provider.ID,
-				"provider_resource_id": routeResourceID(route),
-				"provider_model":       route.ProviderModel,
-				"upstream_request_id":  usage.UpstreamRequestID,
-				"upstream_response_id": upstreamResponseID,
-				"error_code":           errorCode,
-				"error_message":        errorMessage,
-				"token_limit_bucket":   "",
-				"minute_request_held":  false,
-				"reserved_tokens":      0,
-				"admitted_at":          nil,
-				"lease_owner":          "",
-				"lease_expires_at":     nil,
-				"completed_at":         now,
-				"expires_at":           expiresAt,
-				"updated_at":           now,
+				"status":                   status,
+				"result_ciphertext":        resultCiphertext,
+				"provider_id":              route.Provider.ID,
+				"provider_resource_id":     routeResourceID(route),
+				"provider_model":           route.ProviderModel,
+				"upstream_request_id":      usage.UpstreamRequestID,
+				"upstream_response_id":     upstreamResponseID,
+				"error_code":               errorCode,
+				"error_message":            errorMessage,
+				"token_limit_bucket":       "",
+				"minute_request_held":      false,
+				"user_quota_enabled":       false,
+				"user_minute_request_held": false,
+				"user_token_limit_bucket":  "",
+				"reserved_tokens":          0,
+				"admitted_at":              nil,
+				"lease_owner":              "",
+				"lease_expires_at":         nil,
+				"completed_at":             now,
+				"expires_at":               expiresAt,
+				"updated_at":               now,
 			}
 			if call.RequestID != "" {
 				updates["request_id"] = call.RequestID
@@ -845,14 +898,44 @@ func recordLostResponseJobRequest(tx *gorm.DB, job ResponseJob, statusCode int, 
 }
 
 func (s *GormStore) refundUndispatchedResponseJobReservation(tx *gorm.DB, job ResponseJob) error {
-	if job.Phase != responseJobPhaseAdmitted || job.TokenLimitBucket == "" || job.ReservedTokens <= 0 {
+	if job.Phase != responseJobPhaseAdmitted || job.ReservedTokens <= 0 {
 		return nil
 	}
-	return s.reconcileAPIKeyMinuteTokens(tx, CallContext{
+	if err := s.reconcileAPIKeyMinuteTokens(tx, CallContext{
 		Key:              APIKey{ID: job.APIKeyID},
 		TokenLimitBucket: job.TokenLimitBucket,
 		ReservedTokens:   job.ReservedTokens,
-	}, 0)
+	}, 0); err != nil {
+		return err
+	}
+	if job.UserQuotaEnabled {
+		userQuotaID := userQuotaBucketKey(job.AttributedUserID)
+		if err := s.lockScopeForUpdate(tx, "user_quota", userQuotaID); err != nil {
+			return err
+		}
+		if err := s.reconcileQuotaMinuteTokens(tx, userQuotaID, job.UserTokenLimitBucket, job.ReservedTokens, 0); err != nil {
+			return err
+		}
+		if job.AdmittedAt != nil {
+			for _, period := range []struct {
+				scope  string
+				bucket string
+			}{
+				{scope: "day", bucket: dayBucket(*job.AdmittedAt)},
+				{scope: "month", bucket: monthBucket(*job.AdmittedAt)},
+			} {
+				counter, err := s.quotaBucketForUpdate(tx, userQuotaID, period.scope, period.bucket)
+				if err != nil {
+					return err
+				}
+				refundQuotaReservation(&counter.QuotaCounter, job.ReservedTokens)
+				if err := tx.Save(&counter).Error; err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (s *GormStore) RecoverResponseJobs(resultTTL time.Duration) (int64, int64, int64, error) {
@@ -880,18 +963,21 @@ func (s *GormStore) RecoverResponseJobs(resultTTL time.Duration) (int64, int64, 
 				result := tx.Model(&ResponseJob{}).
 					Where("id = ? AND status = ? AND lease_epoch = ? AND lease_expires_at IS NOT NULL AND lease_expires_at <= ? AND cancel_requested_at IS NOT NULL", job.ID, responseJobStatusRunning, job.LeaseEpoch, now).
 					Updates(map[string]any{
-						"status":              responseJobStatusCancelled,
-						"error_code":          "response_cancelled_worker_lost",
-						"error_message":       "Response cancellation was retained after worker ownership was lost",
-						"token_limit_bucket":  "",
-						"minute_request_held": false,
-						"reserved_tokens":     0,
-						"admitted_at":         nil,
-						"lease_owner":         "",
-						"lease_expires_at":    nil,
-						"completed_at":        now,
-						"expires_at":          expiresAt,
-						"updated_at":          now,
+						"status":                   responseJobStatusCancelled,
+						"error_code":               "response_cancelled_worker_lost",
+						"error_message":            "Response cancellation was retained after worker ownership was lost",
+						"token_limit_bucket":       "",
+						"minute_request_held":      false,
+						"user_quota_enabled":       false,
+						"user_minute_request_held": false,
+						"user_token_limit_bucket":  "",
+						"reserved_tokens":          0,
+						"admitted_at":              nil,
+						"lease_owner":              "",
+						"lease_expires_at":         nil,
+						"completed_at":             now,
+						"expires_at":               expiresAt,
+						"updated_at":               now,
 					})
 				if result.Error != nil {
 					return result.Error
@@ -902,7 +988,7 @@ func (s *GormStore) RecoverResponseJobs(resultTTL time.Duration) (int64, int64, 
 						return err
 					}
 					if job.RequestID != "" {
-						if err := tx.Delete(&InFlightLease{}, "id = ?", job.RequestID).Error; err != nil {
+						if err := s.deleteRequestConcurrencyLeases(tx, job.RequestID); err != nil {
 							return err
 						}
 					}
@@ -921,17 +1007,20 @@ func (s *GormStore) RecoverResponseJobs(resultTTL time.Duration) (int64, int64, 
 				result := tx.Model(&ResponseJob{}).
 					Where("id = ? AND status = ? AND lease_epoch = ? AND phase = ? AND request_id = ? AND lease_expires_at IS NOT NULL AND lease_expires_at <= ? AND cancel_requested_at IS NULL", job.ID, responseJobStatusRunning, job.LeaseEpoch, job.Phase, job.RequestID, now).
 					Updates(map[string]any{
-						"status":              responseJobStatusQueued,
-						"phase":               responseJobPhaseQueued,
-						"request_id":          "",
-						"token_limit_bucket":  "",
-						"minute_request_held": false,
-						"reserved_tokens":     0,
-						"admitted_at":         nil,
-						"lease_owner":         "",
-						"lease_expires_at":    nil,
-						"started_at":          nil,
-						"updated_at":          now,
+						"status":                   responseJobStatusQueued,
+						"phase":                    responseJobPhaseQueued,
+						"request_id":               "",
+						"token_limit_bucket":       "",
+						"minute_request_held":      false,
+						"user_quota_enabled":       false,
+						"user_minute_request_held": false,
+						"user_token_limit_bucket":  "",
+						"reserved_tokens":          0,
+						"admitted_at":              nil,
+						"lease_owner":              "",
+						"lease_expires_at":         nil,
+						"started_at":               nil,
+						"updated_at":               now,
 					})
 				if result.Error != nil {
 					return result.Error
@@ -953,18 +1042,21 @@ func (s *GormStore) RecoverResponseJobs(resultTTL time.Duration) (int64, int64, 
 			result := tx.Model(&ResponseJob{}).
 				Where("id = ? AND status = ? AND lease_epoch = ? AND phase = ? AND request_id = ? AND lease_expires_at IS NOT NULL AND lease_expires_at <= ? AND cancel_requested_at IS NULL", job.ID, responseJobStatusRunning, job.LeaseEpoch, job.Phase, job.RequestID, now).
 				Updates(map[string]any{
-					"status":              responseJobStatusFailed,
-					"error_code":          "response_execution_lost",
-					"error_message":       "Worker ownership was lost after admission; the request was not retried",
-					"token_limit_bucket":  "",
-					"minute_request_held": false,
-					"reserved_tokens":     0,
-					"admitted_at":         nil,
-					"lease_owner":         "",
-					"lease_expires_at":    nil,
-					"completed_at":        now,
-					"expires_at":          expiresAt,
-					"updated_at":          now,
+					"status":                   responseJobStatusFailed,
+					"error_code":               "response_execution_lost",
+					"error_message":            "Worker ownership was lost after admission; the request was not retried",
+					"token_limit_bucket":       "",
+					"minute_request_held":      false,
+					"user_quota_enabled":       false,
+					"user_minute_request_held": false,
+					"user_token_limit_bucket":  "",
+					"reserved_tokens":          0,
+					"admitted_at":              nil,
+					"lease_owner":              "",
+					"lease_expires_at":         nil,
+					"completed_at":             now,
+					"expires_at":               expiresAt,
+					"updated_at":               now,
 				})
 			if result.Error != nil {
 				return result.Error
@@ -975,7 +1067,7 @@ func (s *GormStore) RecoverResponseJobs(resultTTL time.Duration) (int64, int64, 
 					return err
 				}
 				if job.RequestID != "" {
-					if err := tx.Delete(&InFlightLease{}, "id = ?", job.RequestID).Error; err != nil {
+					if err := s.deleteRequestConcurrencyLeases(tx, job.RequestID); err != nil {
 						return err
 					}
 				}

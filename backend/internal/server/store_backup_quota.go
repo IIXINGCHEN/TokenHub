@@ -408,6 +408,106 @@ func (s *GormStore) quotaBucketForUpdate(tx *gorm.DB, keyID, scope, bucket strin
 	return item, nil
 }
 
+func userQuotaBucketKey(userID string) string {
+	return "user:" + strings.TrimSpace(userID)
+}
+
+func userIDFromQuotaBucketKey(bucketID string) string {
+	return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(bucketID), "user:"))
+}
+
+func (s *GormStore) GetQuotaPolicyUsage(scope string, scopeID string) (QuotaPolicyUsage, bool, error) {
+	scope = strings.ToLower(strings.TrimSpace(scope))
+	scopeID = strings.TrimSpace(scopeID)
+	bucketID := ""
+	switch scope {
+	case "user":
+		bucketID = userQuotaBucketKey(scopeID)
+	case "api_key", "key":
+		bucketID = scopeID
+	default:
+		return QuotaPolicyUsage{}, false, nil
+	}
+	if scopeID == "" {
+		return QuotaPolicyUsage{}, false, nil
+	}
+	now, err := s.databaseNow(s.db)
+	if err != nil {
+		return QuotaPolicyUsage{}, false, err
+	}
+	usage := QuotaPolicyUsage{}
+	for _, period := range []struct {
+		scope   string
+		bucket  string
+		counter *QuotaCounter
+	}{
+		{scope: "day", bucket: dayBucket(now), counter: &usage.Daily},
+		{scope: "month", bucket: monthBucket(now), counter: &usage.Monthly},
+	} {
+		var item QuotaBucket
+		err := s.db.First(&item, "key_id = ? AND scope = ? AND bucket = ?", bucketID, period.scope, period.bucket).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return QuotaPolicyUsage{}, false, err
+		}
+		if err == nil {
+			*period.counter = item.QuotaCounter
+		}
+		if scope == "user" {
+			aggregated, err := s.aggregateUserQuotaCounter(s.db, scopeID, period.scope, period.bucket)
+			if err != nil {
+				return QuotaPolicyUsage{}, false, err
+			}
+			mergeQuotaCounterMax(period.counter, aggregated)
+		}
+	}
+	return usage, true, nil
+}
+
+func (s *GormStore) aggregateUserQuotaCounter(tx *gorm.DB, userID string, scope string, bucket string) (QuotaCounter, error) {
+	var aggregate QuotaCounter
+	creatorExpression := apiKeyCreatorExpression(s.dbDriver)
+	attributionExpression := "COALESCE(NULLIF(TRIM(ak.owner_user_id), ''), NULLIF(TRIM(" + creatorExpression + "), ''), NULLIF(TRIM(p.owner_user_id), ''))"
+	err := tx.Table("quota_buckets AS qb").
+		Select("COALESCE(SUM(qb.requests), 0) AS requests, COALESCE(SUM(qb.prompt_tokens), 0) AS prompt_tokens, COALESCE(SUM(qb.completion_tokens), 0) AS completion_tokens, COALESCE(SUM(qb.total_tokens), 0) AS total_tokens, COALESCE(SUM(qb.cost_usd), 0) AS cost_usd").
+		Joins("JOIN api_keys AS ak ON ak.id = qb.key_id").
+		Joins("JOIN projects AS p ON p.id = ak.project_id").
+		Where("qb.scope = ? AND qb.bucket = ?", scope, bucket).
+		Where(attributionExpression+" = ?", strings.TrimSpace(userID)).
+		Scan(&aggregate).Error
+	return aggregate, err
+}
+
+func mergeQuotaCounterMax(target *QuotaCounter, source QuotaCounter) {
+	if source.Requests > target.Requests {
+		target.Requests = source.Requests
+	}
+	if source.PromptTokens > target.PromptTokens {
+		target.PromptTokens = source.PromptTokens
+	}
+	if source.CompletionTokens > target.CompletionTokens {
+		target.CompletionTokens = source.CompletionTokens
+	}
+	if source.TotalTokens > target.TotalTokens {
+		target.TotalTokens = source.TotalTokens
+	}
+	if source.CostUSD > target.CostUSD {
+		target.CostUSD = source.CostUSD
+	}
+}
+
+func quotaExceededError(scope string) *HTTPError {
+	return scopedHTTPError(ErrQuotaExceeded, scope)
+}
+
+func scopedHTTPError(base *HTTPError, scope string) *HTTPError {
+	return &HTTPError{
+		Status:  base.Status,
+		Code:    base.Code,
+		Message: base.Message,
+		Details: map[string]string{"scope": normalizedQuotaPolicyScope(scope)},
+	}
+}
+
 func priceUsage(model Model, usage Usage) Usage {
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = saturatingAddNonNegative(usage.PromptTokens, usage.CompletionTokens)
@@ -506,19 +606,68 @@ func raiseQuotaAlerts(tx *gorm.DB, key APIKey, dayCounter, monthCounter *QuotaCo
 	return nil
 }
 
-type MinuteLimitScopes struct {
-	RPM string
-	TPM string
+func raiseUserQuotaAlerts(tx *gorm.DB, resourceID string, dayCounter, monthCounter *QuotaCounter, limits QuotaLimits) error {
+	checks := []struct {
+		limit   float64
+		current float64
+		code    string
+		message string
+	}{
+		{float64(limits.DailyTokens), float64(dayCounter.TotalTokens), "daily_tokens_near_limit", "Daily token quota is near or above limit"},
+		{float64(limits.MonthlyTokens), float64(monthCounter.TotalTokens), "monthly_tokens_near_limit", "Monthly token quota is near or above limit"},
+		{limits.DailyCostUSD, dayCounter.CostUSD, "daily_cost_near_limit", "Daily cost quota is near or above limit"},
+		{limits.MonthlyCostUSD, monthCounter.CostUSD, "monthly_cost_near_limit", "Monthly cost quota is near or above limit"},
+	}
+	for _, check := range checks {
+		if check.limit <= 0 || check.current < check.limit {
+			continue
+		}
+		if err := tx.Create(&AlertEvent{
+			ID:         NewID("alt"),
+			ScopeType:  "user",
+			ScopeID:    "aggregate",
+			Severity:   "warning",
+			Code:       check.code,
+			Message:    check.message,
+			ResourceID: resourceID,
+			CreatedAt:  time.Now().UTC(),
+		}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func quotaPolicyLimits(tx *gorm.DB, project Project, key APIKey) (QuotaLimits, MinuteLimitScopes, error) {
+type MinuteLimitScopes struct {
+	RPM             string
+	TPM             string
+	DailyRequests   string
+	MonthlyRequests string
+	DailyTokens     string
+	MonthlyTokens   string
+	DailyCostUSD    string
+	MonthlyCostUSD  string
+}
+
+type UserQuotaPolicy struct {
+	UserID string
+	Limits QuotaLimits
+}
+
+func (p UserQuotaPolicy) Enabled() bool {
+	return strings.TrimSpace(p.UserID) != "" && p.Limits != (QuotaLimits{})
+}
+
+func quotaPolicyLimits(tx *gorm.DB, project Project, key APIKey) (QuotaLimits, MinuteLimitScopes, UserQuotaPolicy, error) {
 	var resources []AdminResource
 	if err := tx.Where("kind = ? AND status = ?", "quota-policies", StatusActive).
 		Order("created_at asc, id asc").Find(&resources).Error; err != nil {
-		return QuotaLimits{}, MinuteLimitScopes{}, err
+		return QuotaLimits{}, MinuteLimitScopes{}, UserQuotaPolicy{}, err
 	}
 	var limits QuotaLimits
 	var scopes MinuteLimitScopes
+	var userPolicy UserQuotaPolicy
+	attributedUserID := usageAttributionUserID(key, project)
 	for _, resource := range resources {
 		scope := strings.ToLower(strings.TrimSpace(stringField(resource.Fields, "scope")))
 		if scope == "" {
@@ -539,15 +688,74 @@ func quotaPolicyLimits(tx *gorm.DB, project Project, key APIKey) (QuotaLimits, M
 			MonthlyCostUSD:  float64Field(resource.Fields, "monthly_cost_usd"),
 			MaxConcurrency:  int64Field(resource.Fields, "max_concurrency"),
 		}
-		if strictLimitChanged(limits.RateLimitRPM, candidate.RateLimitRPM) {
-			scopes.RPM = normalizedQuotaPolicyScope(scope)
+		if scope == "user" {
+			if scopeID == attributedUserID {
+				userPolicy.UserID = attributedUserID
+				userPolicy.Limits = mergeQuotaLimits(userPolicy.Limits, candidate)
+			}
+			// User-scoped limits are enforced against the aggregate user buckets
+			// below. They must not also become per-key limits.
+			continue
 		}
-		if strictLimitChanged(limits.TokenLimitTPM, candidate.TokenLimitTPM) {
-			scopes.TPM = normalizedQuotaPolicyScope(scope)
-		}
+		updateQuotaLimitScopes(&scopes, limits, candidate, scope)
 		limits = mergeQuotaLimits(limits, candidate)
 	}
-	return limits, scopes, nil
+	return limits, scopes, userPolicy, nil
+}
+
+func updateQuotaLimitScopes(scopes *MinuteLimitScopes, current QuotaLimits, candidate QuotaLimits, scope string) {
+	normalizedScope := normalizedQuotaPolicyScope(scope)
+	if strictLimitChanged(current.RateLimitRPM, candidate.RateLimitRPM) {
+		scopes.RPM = normalizedScope
+	}
+	if strictLimitChanged(current.TokenLimitTPM, candidate.TokenLimitTPM) {
+		scopes.TPM = normalizedScope
+	}
+	if strictLimitChanged(current.DailyRequests, candidate.DailyRequests) {
+		scopes.DailyRequests = normalizedScope
+	}
+	if strictLimitChanged(current.MonthlyRequests, candidate.MonthlyRequests) {
+		scopes.MonthlyRequests = normalizedScope
+	}
+	if strictLimitChanged(current.DailyTokens, candidate.DailyTokens) {
+		scopes.DailyTokens = normalizedScope
+	}
+	if strictLimitChanged(current.MonthlyTokens, candidate.MonthlyTokens) {
+		scopes.MonthlyTokens = normalizedScope
+	}
+	if current.DailyCostUSD <= 0 && candidate.DailyCostUSD > 0 || candidate.DailyCostUSD > 0 && candidate.DailyCostUSD < current.DailyCostUSD {
+		scopes.DailyCostUSD = normalizedScope
+	}
+	if current.MonthlyCostUSD <= 0 && candidate.MonthlyCostUSD > 0 || candidate.MonthlyCostUSD > 0 && candidate.MonthlyCostUSD < current.MonthlyCostUSD {
+		scopes.MonthlyCostUSD = normalizedScope
+	}
+}
+
+func fillMissingKeyQuotaLimitScopes(scopes *MinuteLimitScopes, limits QuotaLimits) {
+	if limits.RateLimitRPM > 0 && scopes.RPM == "" {
+		scopes.RPM = "api_key"
+	}
+	if limits.TokenLimitTPM > 0 && scopes.TPM == "" {
+		scopes.TPM = "api_key"
+	}
+	if limits.DailyRequests > 0 && scopes.DailyRequests == "" {
+		scopes.DailyRequests = "api_key"
+	}
+	if limits.MonthlyRequests > 0 && scopes.MonthlyRequests == "" {
+		scopes.MonthlyRequests = "api_key"
+	}
+	if limits.DailyTokens > 0 && scopes.DailyTokens == "" {
+		scopes.DailyTokens = "api_key"
+	}
+	if limits.MonthlyTokens > 0 && scopes.MonthlyTokens == "" {
+		scopes.MonthlyTokens = "api_key"
+	}
+	if limits.DailyCostUSD > 0 && scopes.DailyCostUSD == "" {
+		scopes.DailyCostUSD = "api_key"
+	}
+	if limits.MonthlyCostUSD > 0 && scopes.MonthlyCostUSD == "" {
+		scopes.MonthlyCostUSD = "api_key"
+	}
 }
 
 func validateQuotaPolicyMinuteLimits(fields map[string]any) error {
@@ -594,6 +802,8 @@ func normalizedQuotaPolicyScope(scope string) string {
 		return "team"
 	case "api_key", "key":
 		return "api_key"
+	case "user":
+		return "user"
 	default:
 		return "global"
 	}
@@ -610,6 +820,8 @@ func quotaPolicyApplies(scope string, scopeID string, project Project, key APIKe
 		return scopeID == "" || scopeID == key.ID
 	case "team":
 		return scopeID == "" || scopeID == project.TeamID
+	case "user":
+		return scopeID != "" && scopeID == usageAttributionUserID(key, project)
 	default:
 		return false
 	}

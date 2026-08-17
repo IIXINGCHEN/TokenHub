@@ -66,7 +66,17 @@ Each API Key can have optional requests-per-minute (RPM) and tokens-per-minute (
 
 RPM is consumed before a Provider is invoked. TPM is reserved at the same point from the request's estimated input and maximum output; text requests without an explicit maximum reserve 4,096 output tokens. After the request finishes, the reservation is settled to the Provider's reported total tokens, or to prompt plus completion tokens when a total is unavailable. Cached and reasoning tokens are already included in those totals and are not added again. Failed or interrupted requests return the unused reservation.
 
-An exceeded limit returns HTTP 429 with `api_key_rpm_exceeded` or `api_key_tpm_exceeded`, plus `Retry-After` and the relevant `X-RateLimit-Limit-*`, `X-RateLimit-Remaining-*`, and `X-RateLimit-Reset-*` headers. Minute buckets are database-backed and shared across TokenHub instances on both SQLite and PostgreSQL. Metrics expose only a short hashed Key reference, never the complete API Key.
+An exceeded limit returns HTTP 429 with `api_key_rpm_exceeded` or `api_key_tpm_exceeded`, plus `Retry-After` and the relevant `X-RateLimit-Limit-*`, `X-RateLimit-Remaining-*`, and `X-RateLimit-Reset-*` headers. Minute buckets are database-backed. PostgreSQL shares enforcement across TokenHub instances; SQLite retains its supported single-backend behavior. Metrics expose only a short hashed Key reference, never the complete API Key.
+
+## Aggregate User Quotas
+
+Platform administrators configure aggregate user limits under **Cost Governance > Quota Policies** by selecting `user` as the scope and an active administrator user ID as `scope_id`. The user selector lists available users, and the policy table shows current daily and monthly consumption. User policies support the complete quota surface: RPM, TPM, daily and monthly requests, tokens and cost, plus maximum concurrency.
+
+TokenHub resolves the attributed user with the same order used for usage accounting: API Key `owner_user_id`, then legacy Key metadata `created_by`, then Project `owner_user_id`. Every Key attributed to that user consumes the same user buckets, including Keys in different Projects. Rotating, revoking, deleting, or replacing a Key does not reset those counters because the buckets are owned by the user rather than the Key.
+
+User limits are enforced alongside the applicable API Key, Project, Team, and global limits. Positive limits keep the existing strictest-value behavior, while user counters remain aggregate rather than becoming a per-Key allowance. User maximum concurrency is held in addition to the effective Key-scoped concurrency lease, so neither constraint can bypass the other.
+
+Admission reserves user requests and estimated tokens before any Provider call. The shared settlement transaction reconciles the reservation to actual metered usage and uses the request ID as its durable idempotency marker for buffered, streaming, image, and background Responses calls. Background jobs persist their reservation state so cancellation, restart recovery, and stale workers cannot settle it twice. PostgreSQL uses transaction-scoped advisory locks and row locks across replicas; SQLite uses its single-backend transaction serialization. A blocked request returns HTTP 429 before Provider invocation with `details.scope` set to `user`. Audit payloads, alerts, and metrics retain that bounded scope without exposing the user ID or any API Key secret.
 
 ## Provider Catalog Availability
 

@@ -66,7 +66,17 @@ TokenHub 会向演练场输出统一的 SSE 事件格式。所选上游支持流
 
 RPM 在调用 Provider 前扣减。TPM 同时按请求的预估输入量和最大输出量进行预留；文本请求未显式指定最大输出时，会预留 4,096 个输出 Token。请求结束后，系统按 Provider 返回的总 Token 数结算；若无总数，则使用提示词与补全 Token 之和。缓存与推理 Token 已包含在这些总数中，不会重复累加。失败或中断的请求会返还未使用的预留量。
 
-超过限制时返回 HTTP 429，错误码为 `api_key_rpm_exceeded` 或 `api_key_tpm_exceeded`，并附带 `Retry-After` 以及对应的 `X-RateLimit-Limit-*`、`X-RateLimit-Remaining-*` 和 `X-RateLimit-Reset-*` 响应头。分钟桶保存在数据库中，在 SQLite 和 PostgreSQL 上都会由多个 TokenHub 实例共享。指标只暴露短哈希形式的 Key 引用，绝不会包含完整 API Key。
+超过限制时返回 HTTP 429，错误码为 `api_key_rpm_exceeded` 或 `api_key_tpm_exceeded`，并附带 `Retry-After` 以及对应的 `X-RateLimit-Limit-*`、`X-RateLimit-Remaining-*` 和 `X-RateLimit-Reset-*` 响应头。分钟桶保存在数据库中；PostgreSQL 会在多个 TokenHub 实例之间共享强制状态，SQLite 保持其受支持的单后端运行方式。指标只暴露短哈希形式的 Key 引用，绝不会包含完整 API Key。
+
+## 用户聚合额度
+
+平台管理员可在「成本治理 > 额度策略」中选择 `user` 作用域，并把有效的后台用户 ID 填入 `scope_id`，以配置用户聚合限额。用户选择器会列出可用用户，策略表会显示当前日用量和月用量。用户策略支持完整额度字段：RPM、TPM、日/月请求数、日/月 Token、日/月成本和最大并发。
+
+TokenHub 使用与用量统计相同的归属顺序解析用户：先取 API Key 的 `owner_user_id`，再取旧 Key 元数据中的 `created_by`，最后取项目的 `owner_user_id`。归属于同一用户的所有 Key 都会消耗同一组用户桶，包括不同项目中的 Key。轮换、吊销、删除或替换 Key 不会重置这些计数，因为桶归属于用户而不是 Key。
+
+用户限额会与适用的 API Key、项目、团队和全局限额同时执行。所有正数限额继续使用现有的最严格值规则，但用户计数始终是跨 Key 聚合，而不是为每个 Key 单独发放额度。用户最大并发租约会与有效的 Key 级并发租约同时持有，因此任一约束都不能绕过另一个约束。
+
+系统会在调用任何 Provider 前预留用户请求数和预估 Token。共享结算事务会把预留量对账为实际计量用量，并以请求 ID 作为持久化幂等标记，覆盖普通、流式、图片和后台 Responses 调用。后台任务会持久化预留状态，使取消、重启恢复和过期 worker 无法重复结算。PostgreSQL 使用事务级 advisory lock 与行锁在多个副本间协调；SQLite 使用单后端事务串行化。被阻止的请求会在调用 Provider 前返回 HTTP 429，并把 `details.scope` 设为 `user`。审计载荷、告警和指标只保留这一有限作用域，不暴露用户 ID 或任何 API Key 密钥。
 
 ## Provider 目录可用性
 
