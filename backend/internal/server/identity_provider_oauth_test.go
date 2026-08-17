@@ -94,7 +94,10 @@ func TestDingTalkIdentityProviderLoginProtocol(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.CreateResource("identity-providers", provider)
-	app := NewWithConfig(store, Config{AdminToken: "dev_admin_token", SecretKey: "test-secret"}).Handler()
+	app := NewWithConfig(store, Config{
+		AdminToken: "dev_admin_token", SecretKey: "test-secret",
+		CORSAllowedOrigins: []string{"http://localhost:3000"},
+	}).Handler()
 	startReq := httptest.NewRequest(http.MethodGet, adminOAuthStartURLForTest(t, "/api/admin/auth/oauth/start?id=idp_dingtalk&return_url=http%3A%2F%2Flocalhost%3A3000%2Foverview"), nil)
 	startReq.Host = "localhost:8080"
 	startResp := httptest.NewRecorder()

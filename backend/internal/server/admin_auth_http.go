@@ -545,11 +545,11 @@ func isAllowedOAuthReturnOrigin(target *url.URL, config Config, r *http.Request)
 	if origin, valid := normalizedOAuthOrigin(config.PublicBaseURL, false); valid && targetOrigin == origin {
 		return true
 	}
-	requestOrigin, valid := requestOAuthOrigin(r)
-	if valid && targetOrigin == requestOrigin {
-		return true
+	if isOAuthLoopbackHost(target.Hostname()) {
+		return false
 	}
-	return valid && isOAuthLoopbackHost(target.Hostname()) && isOAuthLoopbackHost(requestHostName(r.Host))
+	requestOrigin, valid := requestOAuthOrigin(r)
+	return valid && targetOrigin == requestOrigin
 }
 
 func normalizedOAuthOrigin(raw string, requireOriginOnly bool) (string, bool) {
@@ -584,15 +584,6 @@ func requestOAuthOrigin(r *http.Request) (string, bool) {
 		scheme = "https"
 	}
 	return normalizedOAuthOrigin(scheme+"://"+r.Host, true)
-}
-
-func requestHostName(host string) string {
-	parsed, err := url.Parse("http://" + host)
-	if err != nil {
-		return ""
-	}
-	return parsed.Hostname()
-
 }
 
 func isOAuthLoopbackHost(host string) bool {

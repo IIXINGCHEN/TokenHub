@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"crypto/tls"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,6 +13,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mattn/go-sqlite3"
+	gormsqlite "gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 type adminOAuthTestSession struct {
@@ -254,8 +259,49 @@ func TestSafeOAuthReturnURLIgnoresOriginAndReferer(t *testing.T) {
 	}
 
 	loopbackRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/api/admin/auth/oauth/start", nil)
-	if got := server.safeOAuthReturnURL("http://localhost:3000/overview", loopbackRequest); got != "http://localhost:3000/overview" {
-		t.Fatalf("loopback development return URL should remain compatible: %q", got)
+	if got := server.safeOAuthReturnURL("http://localhost:3000/settings", loopbackRequest); got != "http://127.0.0.1:8080/overview" {
+		t.Fatalf("unconfigured loopback return URL = %q", got)
+	}
+}
+
+func TestOAuthLoopbackReturnURLRequiresExactConfiguredOrigin(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/api/admin/auth/oauth/start", nil)
+	unconfigured := NewWithConfig(NewMemoryStore(), Config{})
+	t.Cleanup(func() { _ = unconfigured.Shutdown(t.Context()) })
+	for _, candidate := range []string{
+		"http://127.0.0.1:8080/settings",
+		"http://localhost:3000/settings",
+		"https://localhost:3000/settings",
+		"http://[::1]:3000/settings",
+	} {
+		if got := unconfigured.safeOAuthReturnURL(candidate, request); got != "http://127.0.0.1:8080/overview" {
+			t.Fatalf("unconfigured loopback return URL %q was accepted: %q", candidate, got)
+		}
+	}
+
+	corsConfigured := NewWithConfig(NewMemoryStore(), Config{CORSAllowedOrigins: []string{"http://localhost:3000"}})
+	t.Cleanup(func() { _ = corsConfigured.Shutdown(t.Context()) })
+	if got := corsConfigured.safeOAuthReturnURL("http://localhost:3000/settings?tab=sso", request); got != "http://localhost:3000/settings?tab=sso" {
+		t.Fatalf("configured loopback CORS origin was rejected: %q", got)
+	}
+	for _, candidate := range []string{
+		"http://localhost:3001/settings",
+		"https://localhost:3000/settings",
+		"http://127.0.0.1:3000/settings",
+		"http://[::1]:3000/settings",
+	} {
+		if got := corsConfigured.safeOAuthReturnURL(candidate, request); got != "http://localhost:3000/overview" {
+			t.Fatalf("loopback return URL %q bypassed configured CORS origin: %q", candidate, got)
+		}
+	}
+
+	publicConfigured := NewWithConfig(NewMemoryStore(), Config{PublicBaseURL: "http://127.0.0.1:4000/base"})
+	t.Cleanup(func() { _ = publicConfigured.Shutdown(t.Context()) })
+	if got := publicConfigured.safeOAuthReturnURL("http://127.0.0.1:4000/settings", request); got != "http://127.0.0.1:4000/settings" {
+		t.Fatalf("configured loopback public origin was rejected: %q", got)
+	}
+	if got := publicConfigured.safeOAuthReturnURL("http://localhost:4000/settings", request); got != "http://127.0.0.1:4000/overview" {
+		t.Fatalf("loopback host alias bypassed configured public origin: %q", got)
 	}
 }
 
@@ -501,28 +547,165 @@ func TestAdminOAuthFlowPersistsAcrossInstances(t *testing.T) {
 		}
 		t.Cleanup(func() { _ = sqlDB.Close() })
 	}
+	assertAdminOAuthFlowUsesDatabaseClockAcrossInstances(t, storeA, storeB)
+	assertAdminOAuthExchangeUsesDatabaseClockAcrossInstances(t, storeA, storeB)
+}
+
+func TestAdminOAuthPersistentRecordConsumptionUsesDatabaseClock(t *testing.T) {
+	databaseTime := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	storeA, storeB := openAdminOAuthClockSkewSQLiteStores(t, databaseTime)
 	flow := adminOAuthFlow{
-		State: "cross-instance-state", BrowserNonce: "cross-instance-browser", Source: "198.51.100.10", ProviderID: "idp_shared",
+		State: "database-clock-flow", BrowserNonce: "database-clock-browser", ProviderID: "idp_database_clock",
 		ReturnURL: "https://tokenhub.example/overview", RedirectURI: "https://tokenhub.example/api/admin/auth/oauth/callback",
 		CodeChallenge: testAdminOAuthCodeChallenge(t),
 	}
-	if err := storeA.SaveAdminOAuthFlow(flow); err != nil {
+	flowRecord := adminOAuthFlowRecord{
+		ID:               NewID("oauth_flow"),
+		StateHash:        HashSecret(flow.State),
+		BrowserNonceHash: HashSecret(flow.BrowserNonce),
+		ProviderID:       flow.ProviderID,
+		ReturnURL:        flow.ReturnURL,
+		RedirectURI:      flow.RedirectURI,
+		CodeChallenge:    flow.CodeChallenge,
+		CreatedAt:        databaseTime.Add(-30 * time.Second),
+		ExpiresAt:        databaseTime.Add(30 * time.Second),
+	}
+	if err := storeA.db.Create(&flowRecord).Error; err != nil {
 		t.Fatal(err)
 	}
 	consumed, ok, err := storeB.ConsumeAdminOAuthFlow(flow.State, flow.BrowserNonce)
 	if err != nil || !ok || consumed.ProviderID != flow.ProviderID {
-		t.Fatalf("second instance did not consume OAuth flow: flow=%+v ok=%v err=%v", consumed, ok, err)
+		t.Fatalf("database-active OAuth flow was rejected by application clock skew: flow=%+v ok=%v err=%v", consumed, ok, err)
+	}
+
+	exchange := adminOAuthExchangeRecord{
+		ID:            NewID("oauth_exchange"),
+		CodeHash:      HashSecret("database-clock-consume-code"),
+		CodeChallenge: testAdminOAuthCodeChallenge(t),
+		UserID:        "usr_database_clock",
+		CreatedAt:     databaseTime.Add(-30 * time.Second),
+		ExpiresAt:     databaseTime.Add(30 * time.Second),
+	}
+	if err := storeA.db.Create(&exchange).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	exchangeConsumed, exchangeOK, err := storeB.ConsumeAdminOAuthExchange("database-clock-consume-code", testAdminOAuthCodeVerifier)
+	if err != nil || !exchangeOK || exchangeConsumed.UserID != exchange.UserID {
+		t.Fatalf("database-active OAuth exchange was rejected by application clock skew: exchange=%+v ok=%v err=%v", exchangeConsumed, exchangeOK, err)
+	}
+}
+
+func assertAdminOAuthFlowUsesDatabaseClockAcrossInstances(t *testing.T, storeA *GormStore, storeB *GormStore) {
+	t.Helper()
+	databaseBefore, err := storeA.databaseNow(storeA.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flow := adminOAuthFlow{
+		State: NewID("cross-instance-state"), BrowserNonce: NewID("cross-instance-browser"), Source: "198.51.100.10", ProviderID: "idp_shared",
+		ReturnURL: "https://tokenhub.example/overview", RedirectURI: "https://tokenhub.example/api/admin/auth/oauth/callback",
+		CodeChallenge: testAdminOAuthCodeChallenge(t), CreatedAt: databaseBefore.Add(-24 * time.Hour),
+	}
+	if err := storeA.SaveAdminOAuthFlow(flow); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = storeA.db.Where("state_hash = ?", HashSecret(flow.State)).Delete(&adminOAuthFlowRecord{}).Error
+	})
+	databaseAfter, err := storeA.databaseNow(storeA.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted adminOAuthFlowRecord
+	if err := storeA.db.First(&persisted, "state_hash = ?", HashSecret(flow.State)).Error; err != nil {
+		t.Fatal(err)
+	}
+	if persisted.CreatedAt.Before(databaseBefore) || persisted.CreatedAt.After(databaseAfter) {
+		t.Fatalf("OAuth flow creation used application clock: created_at=%s database_window=[%s,%s]", persisted.CreatedAt, databaseBefore, databaseAfter)
+	}
+	if persisted.ExpiresAt.Sub(persisted.CreatedAt) != adminOAuthFlowTTL {
+		t.Fatalf("OAuth flow TTL = %s, want %s", persisted.ExpiresAt.Sub(persisted.CreatedAt), adminOAuthFlowTTL)
+	}
+
+	consumed, ok, err := storeB.ConsumeAdminOAuthFlow(flow.State, flow.BrowserNonce)
+	if err != nil || !ok || consumed.ProviderID != flow.ProviderID {
+		t.Fatalf("second instance did not consume database-timed OAuth flow: flow=%+v ok=%v err=%v", consumed, ok, err)
 	}
 	if _, ok, err := storeA.ConsumeAdminOAuthFlow(flow.State, flow.BrowserNonce); err != nil || ok {
 		t.Fatalf("first instance replay result: ok=%v err=%v", ok, err)
 	}
-	exchange := adminOAuthExchange{Code: "cross-instance-code", CodeChallenge: flow.CodeChallenge, UserID: "usr_shared"}
+}
+
+func assertAdminOAuthExchangeUsesDatabaseClockAcrossInstances(t *testing.T, storeA *GormStore, storeB *GormStore) {
+	t.Helper()
+	databaseBefore, err := storeA.databaseNow(storeA.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exchange := adminOAuthExchange{
+		Code:          NewID("cross-instance-code"),
+		CodeChallenge: testAdminOAuthCodeChallenge(t),
+		UserID:        NewID("usr_shared"),
+		CreatedAt:     databaseBefore.Add(-24 * time.Hour),
+	}
 	if err := storeA.SaveAdminOAuthExchange(exchange); err != nil {
 		t.Fatal(err)
 	}
-	if consumed, ok, err := storeB.ConsumeAdminOAuthExchange(exchange.Code, testAdminOAuthCodeVerifier); err != nil || !ok || consumed.UserID != exchange.UserID {
-		t.Fatalf("second instance did not consume OAuth exchange: exchange=%+v ok=%v err=%v", consumed, ok, err)
+	t.Cleanup(func() {
+		_ = storeA.db.Where("code_hash = ?", HashSecret(exchange.Code)).Delete(&adminOAuthExchangeRecord{}).Error
+	})
+	databaseAfter, err := storeA.databaseNow(storeA.db)
+	if err != nil {
+		t.Fatal(err)
 	}
+	var persisted adminOAuthExchangeRecord
+	if err := storeA.db.First(&persisted, "code_hash = ?", HashSecret(exchange.Code)).Error; err != nil {
+		t.Fatal(err)
+	}
+	if persisted.CreatedAt.Before(databaseBefore) || persisted.CreatedAt.After(databaseAfter) {
+		t.Fatalf("OAuth exchange creation used application clock: created_at=%s database_window=[%s,%s]", persisted.CreatedAt, databaseBefore, databaseAfter)
+	}
+	if persisted.ExpiresAt.Sub(persisted.CreatedAt) != adminOAuthExchangeTTL {
+		t.Fatalf("OAuth exchange TTL = %s, want %s", persisted.ExpiresAt.Sub(persisted.CreatedAt), adminOAuthExchangeTTL)
+	}
+
+	consumed, ok, err := storeB.ConsumeAdminOAuthExchange(exchange.Code, testAdminOAuthCodeVerifier)
+	if err != nil || !ok || consumed.UserID != exchange.UserID {
+		t.Fatalf("second instance did not consume database-timed OAuth exchange: exchange=%+v ok=%v err=%v", consumed, ok, err)
+	}
+}
+
+func openAdminOAuthClockSkewSQLiteStores(t *testing.T, databaseTime time.Time) (*GormStore, *GormStore) {
+	t.Helper()
+	driverName := NewID("sqlite_oauth_clock")
+	julianDay := float64(databaseTime.UnixNano())/float64(time.Second)/(24*60*60) + 2440587.5
+	sql.Register(driverName, &sqlite3.SQLiteDriver{ConnectHook: func(connection *sqlite3.SQLiteConn) error {
+		return connection.RegisterFunc("julianday", func(value string) (float64, error) {
+			if value != "now" {
+				return 0, fmt.Errorf("unsupported julianday argument %q", value)
+			}
+			return julianDay, nil
+		}, true)
+	}})
+	databasePath := filepath.Join(t.TempDir(), "oauth-exchange-clock.db")
+	openStore := func() *GormStore {
+		database, err := gorm.Open(gormsqlite.New(gormsqlite.Config{DriverName: driverName, DSN: databasePath}), &gorm.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := database.AutoMigrate(&adminOAuthFlowRecord{}, &adminOAuthExchangeRecord{}); err != nil {
+			t.Fatal(err)
+		}
+		sqlDB, err := database.DB()
+		if err != nil {
+			t.Fatal(err)
+		}
+		sqlDB.SetMaxOpenConns(1)
+		t.Cleanup(func() { _ = sqlDB.Close() })
+		return &GormStore{db: database, dbDriver: "sqlite"}
+	}
+	return openStore(), openStore()
 }
 
 func TestAdminOAuthStartBoundsPendingFlowsPerSourceAndProvider(t *testing.T) {

@@ -75,6 +75,10 @@ func TestMultiInstancePostgresE2E(t *testing.T) {
 	t.Run("OAuth state and refresh coordination survive replica changes", func(t *testing.T) {
 		testSharedOAuthAndRefresh(t, storeA, storeB, config)
 	})
+	t.Run("admin OAuth records use the shared database clock", func(t *testing.T) {
+		assertAdminOAuthFlowUsesDatabaseClockAcrossInstances(t, storeA, storeB)
+		assertAdminOAuthExchangeUsesDatabaseClockAcrossInstances(t, storeA, storeB)
+	})
 	t.Run("startup task revision runs once", func(t *testing.T) {
 		testClusterTaskRunsOnce(t, storeA, storeB)
 	})

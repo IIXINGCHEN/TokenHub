@@ -170,7 +170,10 @@ func TestAdminOAuthLoginCreatesSession(t *testing.T) {
 			"team_claim":     "department",
 		},
 	})
-	app := NewWithConfig(store, Config{AdminToken: "dev_admin_token", SecretKey: "test-secret"}).Handler()
+	app := NewWithConfig(store, Config{
+		AdminToken: "dev_admin_token", SecretKey: "test-secret",
+		CORSAllowedOrigins: []string{"http://localhost:3001"},
+	}).Handler()
 
 	startReq := httptest.NewRequest(http.MethodGet, adminOAuthStartURLForTest(t, "/api/admin/auth/oauth/start?id=idp_gitlab&return_url=http%3A%2F%2Flocalhost%3A3001%2Foverview"), nil)
 	startReq.Host = "127.0.0.1:8080"

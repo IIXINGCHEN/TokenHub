@@ -99,10 +99,6 @@ func (s *GormStore) saveAdminOAuthFlow(flow adminOAuthFlow, limits adminOAuthFlo
 	if err != nil {
 		return err
 	}
-	now := time.Now().UTC()
-	if flow.CreatedAt.IsZero() {
-		flow.CreatedAt = now
-	}
 	record := adminOAuthFlowRecord{
 		ID:               NewID("oauth_flow"),
 		StateHash:        HashSecret(flow.State),
@@ -113,8 +109,6 @@ func (s *GormStore) saveAdminOAuthFlow(flow adminOAuthFlow, limits adminOAuthFlo
 		RedirectURI:      flow.RedirectURI,
 		CodeChallenge:    flow.CodeChallenge,
 		CookieSecure:     flow.CookieSecure,
-		CreatedAt:        flow.CreatedAt,
-		ExpiresAt:        flow.CreatedAt.Add(adminOAuthFlowTTL),
 	}
 	var admissionErr error
 	err = s.db.Transaction(func(tx *gorm.DB) error {
@@ -125,6 +119,8 @@ func (s *GormStore) saveAdminOAuthFlow(flow adminOAuthFlow, limits adminOAuthFlo
 		if err != nil {
 			return err
 		}
+		record.CreatedAt = databaseNow
+		record.ExpiresAt = databaseNow.Add(adminOAuthFlowTTL)
 		if err := tx.Where("expires_at <= ?", databaseNow).Delete(&adminOAuthFlowRecord{}).Error; err != nil {
 			return err
 		}
@@ -232,8 +228,11 @@ func (s *GormStore) ConsumeAdminOAuthFlow(state string, browserNonce string) (ad
 		if s.dbDriver == "postgres" {
 			query = query.Clauses(clause.Locking{Strength: "UPDATE"})
 		}
-		now := time.Now().UTC()
-		if err := query.First(&record, "state_hash = ? AND browser_nonce_hash = ? AND expires_at > ?", stateHash, browserNonceHash, now).Error; err != nil {
+		databaseNow, err := s.databaseNow(tx)
+		if err != nil {
+			return err
+		}
+		if err := query.First(&record, "state_hash = ? AND browser_nonce_hash = ? AND expires_at > ?", stateHash, browserNonceHash, databaseNow).Error; err != nil {
 			return err
 		}
 		result := tx.Where("id = ? AND state_hash = ? AND browser_nonce_hash = ?", record.ID, stateHash, browserNonceHash).Delete(&adminOAuthFlowRecord{})
@@ -268,20 +267,24 @@ func (s *GormStore) SaveAdminOAuthExchange(exchange adminOAuthExchange) error {
 	if strings.TrimSpace(exchange.Code) == "" || !validAdminOAuthCodeChallenge(exchange.CodeChallenge) || strings.TrimSpace(exchange.UserID) == "" {
 		return fmt.Errorf("admin OAuth exchange is incomplete")
 	}
-	now := time.Now().UTC()
-	if exchange.CreatedAt.IsZero() {
-		exchange.CreatedAt = now
-	}
 	record := adminOAuthExchangeRecord{
 		ID:            NewID("oauth_exchange"),
 		CodeHash:      HashSecret(exchange.Code),
 		CodeChallenge: exchange.CodeChallenge,
 		UserID:        exchange.UserID,
-		CreatedAt:     exchange.CreatedAt,
-		ExpiresAt:     exchange.CreatedAt.Add(adminOAuthExchangeTTL),
 	}
-	_ = s.db.Where("expires_at <= ?", now).Delete(&adminOAuthExchangeRecord{}).Error
-	return s.db.Create(&record).Error
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		databaseNow, err := s.databaseNow(tx)
+		if err != nil {
+			return err
+		}
+		record.CreatedAt = databaseNow
+		record.ExpiresAt = databaseNow.Add(adminOAuthExchangeTTL)
+		if err := tx.Where("expires_at <= ?", databaseNow).Delete(&adminOAuthExchangeRecord{}).Error; err != nil {
+			return err
+		}
+		return tx.Create(&record).Error
+	})
 }
 
 func (s *GormStore) ConsumeAdminOAuthExchange(code string, codeVerifier string) (adminOAuthExchange, bool, error) {
@@ -301,8 +304,11 @@ func (s *GormStore) ConsumeAdminOAuthExchange(code string, codeVerifier string) 
 		if s.dbDriver == "postgres" {
 			query = query.Clauses(clause.Locking{Strength: "UPDATE"})
 		}
-		now := time.Now().UTC()
-		if err := query.First(&record, "code_hash = ? AND code_challenge = ? AND expires_at > ?", codeHash, codeChallenge, now).Error; err != nil {
+		databaseNow, err := s.databaseNow(tx)
+		if err != nil {
+			return err
+		}
+		if err := query.First(&record, "code_hash = ? AND code_challenge = ? AND expires_at > ?", codeHash, codeChallenge, databaseNow).Error; err != nil {
 			return err
 		}
 		result := tx.Where("id = ? AND code_hash = ? AND code_challenge = ?", record.ID, codeHash, codeChallenge).Delete(&adminOAuthExchangeRecord{})
