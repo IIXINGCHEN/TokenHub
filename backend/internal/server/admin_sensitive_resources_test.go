@@ -74,7 +74,7 @@ func TestSensitiveAdminResourceResponsesAndAuditSnapshotsAreRedacted(t *testing.
 		"fields": map[string]any{
 			"provider_type": "oauth2",
 			"client_id":     "identity-client-id",
-			"client_secret": providerHeaderMask,
+			"client_secret": adminResourceSecretASCIIMask,
 		},
 	}, "sensitive-resource-admin")
 	if identityPatch.Code != http.StatusOK {
@@ -110,6 +110,19 @@ func TestSensitiveAdminResourceResponsesAndAuditSnapshotsAreRedacted(t *testing.
 		t.Fatalf("list audit events = %d: %s", auditResponse.Code, auditResponse.Body)
 	}
 	assertNoSecretValues(t, auditResponse.Body, mergeSecretMaps(identitySecrets, notificationSecrets))
+}
+
+func TestAdminResourceSecretPlaceholderContract(t *testing.T) {
+	for _, value := range []any{"", adminResourceSecretASCIIMask, providerHeaderMask, "[redacted]"} {
+		if !isAdminResourceSecretPlaceholder(value) {
+			t.Errorf("documented placeholder %q was rejected", value)
+		}
+	}
+	for _, value := range []any{"replacement-secret", nil, 8} {
+		if isAdminResourceSecretPlaceholder(value) {
+			t.Errorf("credential value %v was treated as a placeholder", value)
+		}
+	}
 }
 
 func TestAdminAuditSnapshotRedactsExactCredentialKeysWithoutMaskingTokenMetrics(t *testing.T) {

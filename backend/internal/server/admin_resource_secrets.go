@@ -2,6 +2,8 @@ package server
 
 import "strings"
 
+const adminResourceSecretASCIIMask = "********"
+
 var sensitiveAdminResourceFields = map[string]map[string]bool{
 	"identity-providers": {
 		"client_secret": true,
@@ -190,7 +192,7 @@ func isAdminResourceSecretPlaceholder(value any) bool {
 		return false
 	}
 	text = strings.TrimSpace(text)
-	return text == "" || text == providerHeaderMask || text == "[redacted]"
+	return text == "" || text == adminResourceSecretASCIIMask || text == providerHeaderMask || text == "[redacted]"
 }
 
 func adminResourceSecretConfigured(value any) bool {

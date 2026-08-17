@@ -329,7 +329,7 @@ Token 用量与成本只挂在 generation span 上，绝不挂在根 span 上。
 
 身份源 Client Secret 与通知渠道敏感字段（包括 Webhook URL、SMTP 密码、Bot Token、签名密钥和 Access Token）在管理 API 响应和 CSV 导出中始终以掩码展示，并在审计快照中脱敏。告警投递输出不会暴露包含凭据的完整 URL：URL 目标只保留 scheme 和 host，路径、query 以及错误文本中匹配到的凭据都会被掩码；该规则同样覆盖告警投递 CSV 导出和投递审计快照。
 
-更新身份源或通知渠道时，空字符串、掩码 `••••••••` 或 `[redacted]` 都表示“保留已存储的 Secret”。只有发送 JSON `null` 才会显式清空 Secret。清空通知渠道 Secret 时，还会一并删除相关别名，例如 `url` / `webhook_url`、`smtp_password` / `password`，以及当前渠道对应的 Token 或 Secret 别名。只有平台管理员可以新增、修改或删除身份源；安全管理员只能读取已掩码的配置。
+更新身份源或通知渠道时，空字符串、掩码 `********`、`••••••••` 或 `[redacted]` 都表示“保留已存储的 Secret”。只有发送 JSON `null` 才会显式清空 Secret。清空通知渠道 Secret 时，还会一并删除相关别名，例如 `url` / `webhook_url`、`smtp_password` / `password`，以及当前渠道对应的 Token 或 Secret 别名。只有平台管理员可以新增、修改或删除身份源；安全管理员只能读取已掩码的配置。
 
 | 平台 | 应用侧必填配置 | TokenHub 处理方式 |
 | --- | --- | --- |
