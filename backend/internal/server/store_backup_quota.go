@@ -409,6 +409,14 @@ func (s *GormStore) quotaBucketForUpdate(tx *gorm.DB, keyID, scope, bucket strin
 }
 
 func priceUsage(model Model, usage Usage) Usage {
+	// Upstream-reported usage is untrusted: the provider parsers preserve the
+	// sign of whatever the upstream sent, and a negative count would flow into
+	// addUsage and shrink the day/month quota counters, letting a key keep
+	// spending past its configured limits. Clamping PromptTokens first also
+	// keeps the CachedInputTokens clamp below from going negative again.
+	usage.PromptTokens = maxInt64(usage.PromptTokens, 0)
+	usage.CompletionTokens = maxInt64(usage.CompletionTokens, 0)
+	usage.TotalTokens = maxInt64(usage.TotalTokens, 0)
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = saturatingAddNonNegative(usage.PromptTokens, usage.CompletionTokens)
 	}
