@@ -68,7 +68,8 @@ func TestDingTalkIdentityProviderLoginProtocol(t *testing.T) {
 		},
 	}
 
-	authorizeTarget, err := buildIdentityProviderAuthorizeURL(provider, "https://tokenhub.example.test/api/admin/auth/oauth/callback", "signed-state")
+	authorizeChallenge := testAdminOAuthCodeChallenge(t)
+	authorizeTarget, err := buildIdentityProviderAuthorizeURL(provider, "https://tokenhub.example.test/api/admin/auth/oauth/callback", "signed-state", authorizeChallenge)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +79,8 @@ func TestDingTalkIdentityProviderLoginProtocol(t *testing.T) {
 	}
 	query := parsedAuthorizeTarget.Query()
 	if query.Get("client_id") != "ding-app-key" || query.Get("response_type") != "code" ||
-		query.Get("scope") != "openid" || query.Get("state") != "signed-state" || query.Get("prompt") != "consent" {
+		query.Get("scope") != "openid" || query.Get("state") != "signed-state" || query.Get("prompt") != "consent" ||
+		query.Get("code_challenge") != authorizeChallenge || query.Get("code_challenge_method") != "S256" {
 		t.Fatalf("unexpected authorize query: %s", parsedAuthorizeTarget.RawQuery)
 	}
 
@@ -188,7 +190,8 @@ func TestFeishuIdentityProviderLoginProtocol(t *testing.T) {
 		},
 	}
 
-	authorizeTarget, err := buildIdentityProviderAuthorizeURL(provider, "https://tokenhub.example.test/api/admin/auth/oauth/callback", "signed-state")
+	authorizeChallenge := testAdminOAuthCodeChallenge(t)
+	authorizeTarget, err := buildIdentityProviderAuthorizeURL(provider, "https://tokenhub.example.test/api/admin/auth/oauth/callback", "signed-state", authorizeChallenge)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,12 +202,13 @@ func TestFeishuIdentityProviderLoginProtocol(t *testing.T) {
 	query := parsedAuthorizeTarget.Query()
 	if query.Get("app_id") != "feishu-app-id" || query.Get("redirect_uri") == "" || query.Get("state") != "signed-state" ||
 		query.Get("scope") != "contact:user.base:readonly" ||
-		query.Has("client_id") || query.Has("response_type") {
+		query.Has("client_id") || query.Has("response_type") ||
+		query.Get("code_challenge") != authorizeChallenge || query.Get("code_challenge_method") != "S256" {
 		t.Fatalf("unexpected authorize query: %s", parsedAuthorizeTarget.RawQuery)
 	}
 
 	server := New(NewMemoryStore())
-	token, err := server.exchangeOAuthCode(context.Background(), provider, "feishu-code", "https://tokenhub.example.test/api/admin/auth/oauth/callback")
+	token, err := server.exchangeOAuthCode(context.Background(), provider, "feishu-code", "https://tokenhub.example.test/api/admin/auth/oauth/callback", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +273,8 @@ func TestWeComIdentityProviderLoginProtocol(t *testing.T) {
 		},
 	}
 
-	authorizeTarget, err := buildIdentityProviderAuthorizeURL(provider, "https://tokenhub.example.test/api/admin/auth/oauth/callback", "signed-state")
+	authorizeChallenge := testAdminOAuthCodeChallenge(t)
+	authorizeTarget, err := buildIdentityProviderAuthorizeURL(provider, "https://tokenhub.example.test/api/admin/auth/oauth/callback", "signed-state", authorizeChallenge)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,12 +284,13 @@ func TestWeComIdentityProviderLoginProtocol(t *testing.T) {
 	}
 	query := parsedAuthorizeTarget.Query()
 	if query.Get("login_type") != "CorpApp" || query.Get("appid") != "ww-corp-id" || query.Get("agentid") != "1000002" ||
-		query.Get("redirect_uri") == "" || query.Get("state") != "signed-state" || query.Has("client_id") || query.Has("scope") {
+		query.Get("redirect_uri") == "" || query.Get("state") != "signed-state" || query.Has("client_id") || query.Has("scope") ||
+		query.Get("code_challenge") != authorizeChallenge || query.Get("code_challenge_method") != "S256" {
 		t.Fatalf("unexpected authorize query: %s", parsedAuthorizeTarget.RawQuery)
 	}
 
 	server := New(NewMemoryStore())
-	token, err := server.exchangeOAuthCode(context.Background(), provider, "wecom-code", "https://tokenhub.example.test/api/admin/auth/oauth/callback")
+	token, err := server.exchangeOAuthCode(context.Background(), provider, "wecom-code", "https://tokenhub.example.test/api/admin/auth/oauth/callback", "")
 	if err != nil {
 		t.Fatal(err)
 	}

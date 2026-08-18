@@ -491,6 +491,100 @@ func TestAdminOAuthTokenExchangeErrorsDoNotLeakIntoRedirects(t *testing.T) {
 	}
 }
 
+func TestAdminOAuthAuthorizationIsPKCEBoundToIdentityProvider(t *testing.T) {
+	var tokenForm url.Values
+	providerAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			if err := r.ParseForm(); err != nil {
+				t.Fatal(err)
+			}
+			tokenForm = r.PostForm
+			w.Header().Set("content-type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"provider-access-token","token_type":"Bearer","expires_in":3600}`))
+		case "/userinfo":
+			if r.Header.Get("authorization") != "Bearer provider-access-token" {
+				t.Fatalf("unexpected userinfo authorization header: %q", r.Header.Get("authorization"))
+			}
+			w.Header().Set("content-type", "application/json")
+			_, _ = w.Write([]byte(`{"sub":"pkce-bound-subject","preferred_username":"pkce-user","name":"PKCE User","email":"pkce-user@example.test","email_verified":true}`))
+		default:
+			t.Fatalf("unexpected provider API path: %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(providerAPI.Close)
+
+	store := NewMemoryStore()
+	store.CreateResource("identity-providers", AdminResource{
+		ID: "idp_pkce_bound", Name: "PKCE Bound IdP", Status: StatusActive,
+		Fields: map[string]any{
+			"provider_type": "oauth2", "client_id": "client", "client_secret": "secret",
+			"authorize_url":  "https://idp.example/authorize",
+			"token_url":      providerAPI.URL + "/token",
+			"userinfo_url":   providerAPI.URL + "/userinfo",
+			"redirect_uri":   "https://tokenhub.example/api/admin/auth/oauth/callback",
+			"username_claim": "preferred_username", "email_claim": "email",
+		},
+	})
+	app := NewWithConfig(store, Config{PublicBaseURL: "https://tokenhub.example", SecretKey: "test-secret"}).Handler()
+
+	startResponse := httptest.NewRecorder()
+	app.ServeHTTP(startResponse, httptest.NewRequest(http.MethodGet, adminOAuthStartURLForTest(t, "https://tokenhub.example/api/admin/auth/oauth/start?id=idp_pkce_bound"), nil))
+	if startResponse.Code != http.StatusFound {
+		t.Fatalf("OAuth start failed: status=%d body=%s", startResponse.Code, startResponse.Body.String())
+	}
+	authorizeTarget, err := url.Parse(startResponse.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerChallenge := authorizeTarget.Query().Get("code_challenge")
+	if !validAdminOAuthCodeChallenge(providerChallenge) {
+		t.Fatalf("authorize redirect is missing a valid S256 code challenge: %s", authorizeTarget.String())
+	}
+	if authorizeTarget.Query().Get("code_challenge_method") != "S256" {
+		t.Fatalf("authorize redirect must declare code_challenge_method=S256: %s", authorizeTarget.String())
+	}
+	if providerChallenge == testAdminOAuthCodeChallenge(t) {
+		t.Fatalf("identity provider challenge must be independent of the console PKCE challenge: %s", authorizeTarget.String())
+	}
+	stateCookie := requireResponseCookieWithPrefix(t, startResponse, adminOAuthStateCookiePrefix)
+
+	callbackRequest := httptest.NewRequest(http.MethodGet, "https://tokenhub.example/api/admin/auth/oauth/callback?code=provider-authorization-code&state="+url.QueryEscape(authorizeTarget.Query().Get("state")), nil)
+	callbackRequest.AddCookie(stateCookie)
+	callbackResponse := httptest.NewRecorder()
+	app.ServeHTTP(callbackResponse, callbackRequest)
+	if callbackResponse.Code != http.StatusFound {
+		t.Fatalf("OAuth callback failed: status=%d body=%s", callbackResponse.Code, callbackResponse.Body.String())
+	}
+	if tokenForm == nil {
+		t.Fatal("identity provider token endpoint was not called")
+	}
+	if tokenForm.Get("code_verifier") == "" {
+		t.Fatalf("token exchange omitted the PKCE code verifier: %v", tokenForm)
+	}
+	derivedChallenge, ok := adminOAuthCodeChallenge(tokenForm.Get("code_verifier"))
+	if !ok || derivedChallenge != providerChallenge {
+		t.Fatalf("token exchange verifier does not match the authorize challenge: verifier=%q challenge=%q", tokenForm.Get("code_verifier"), providerChallenge)
+	}
+	if tokenForm.Get("grant_type") != "authorization_code" || tokenForm.Get("code") != "provider-authorization-code" ||
+		tokenForm.Get("redirect_uri") != "https://tokenhub.example/api/admin/auth/oauth/callback" {
+		t.Fatalf("unexpected token exchange form: %v", tokenForm)
+	}
+
+	callbackLocation, err := url.Parse(callbackResponse.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fragment, err := url.ParseQuery(callbackLocation.Fragment)
+	if err != nil || fragment.Get("oauth_code") == "" {
+		t.Fatalf("callback did not return an exchange code in the fragment: %s", callbackLocation.String())
+	}
+	session := exchangeAdminOAuthCodeForTest(t, app, fragment.Get("oauth_code"), testAdminOAuthCodeVerifier)
+	if session.User.Email != "pkce-user@example.test" {
+		t.Fatalf("unexpected provisioned administrator: %+v", session.User)
+	}
+}
+
 func TestAdminOAuthExchangeIsPKCEBoundAndSingleUse(t *testing.T) {
 	store := NewMemoryStore()
 	user, err := store.CreateAdminUser(AdminUser{
@@ -605,7 +699,7 @@ func assertAdminOAuthFlowUsesDatabaseClockAcrossInstances(t *testing.T, storeA *
 	flow := adminOAuthFlow{
 		State: NewID("cross-instance-state"), BrowserNonce: NewID("cross-instance-browser"), Source: "198.51.100.10", ProviderID: "idp_shared",
 		ReturnURL: "https://tokenhub.example/overview", RedirectURI: "https://tokenhub.example/api/admin/auth/oauth/callback",
-		CodeChallenge: testAdminOAuthCodeChallenge(t), CreatedAt: databaseBefore.Add(-24 * time.Hour),
+		CodeChallenge: testAdminOAuthCodeChallenge(t), ProviderCodeVerifier: testAdminOAuthCodeVerifier, CreatedAt: databaseBefore.Add(-24 * time.Hour),
 	}
 	if err := storeA.SaveAdminOAuthFlow(flow); err != nil {
 		t.Fatal(err)

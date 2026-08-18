@@ -55,10 +55,10 @@ func identityProviderPlatformConfigurationComplete(provider AdminResource) bool 
 	}
 }
 
-func buildIdentityProviderAuthorizeURL(provider AdminResource, redirectURI string, state string) (string, error) {
+func buildIdentityProviderAuthorizeURL(provider AdminResource, redirectURI string, state string, codeChallenge string) (string, error) {
 	authorizeURL := strings.TrimSpace(stringField(provider.Fields, "authorize_url"))
 	clientID := strings.TrimSpace(stringField(provider.Fields, "client_id"))
-	target, err := buildOAuthAuthorizeURL(authorizeURL, clientID, redirectURI, identityProviderScopes(provider), state)
+	target, err := buildOAuthAuthorizeURL(authorizeURL, clientID, redirectURI, identityProviderScopes(provider), state, codeChallenge)
 	if err != nil {
 		return "", err
 	}

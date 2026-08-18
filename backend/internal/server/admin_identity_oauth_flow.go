@@ -40,29 +40,31 @@ var defaultAdminOAuthFlowLimits = adminOAuthFlowLimits{
 }
 
 type adminOAuthFlow struct {
-	State         string
-	BrowserNonce  string
-	Source        string
-	ProviderID    string
-	ReturnURL     string
-	RedirectURI   string
-	CodeChallenge string
-	CookieSecure  bool
-	CreatedAt     time.Time
+	State                string
+	BrowserNonce         string
+	Source               string
+	ProviderID           string
+	ReturnURL            string
+	RedirectURI          string
+	CodeChallenge        string
+	ProviderCodeVerifier string
+	CookieSecure         bool
+	CreatedAt            time.Time
 }
 
 type adminOAuthFlowRecord struct {
-	ID               string `gorm:"primaryKey"`
-	StateHash        string `gorm:"uniqueIndex"`
-	BrowserNonceHash string
-	ClientScopeHash  string `gorm:"index:idx_admin_oauth_flow_scope_expiry,priority:1;index:idx_admin_oauth_flow_scope_provider_expiry,priority:1"`
-	ProviderID       string `gorm:"index:idx_admin_oauth_flow_scope_provider_expiry,priority:2"`
-	ReturnURL        string
-	RedirectURI      string
-	CodeChallenge    string
-	CookieSecure     bool
-	CreatedAt        time.Time
-	ExpiresAt        time.Time `gorm:"index;index:idx_admin_oauth_flow_scope_expiry,priority:2;index:idx_admin_oauth_flow_scope_provider_expiry,priority:3"`
+	ID                   string `gorm:"primaryKey"`
+	StateHash            string `gorm:"uniqueIndex"`
+	BrowserNonceHash     string
+	ClientScopeHash      string `gorm:"index:idx_admin_oauth_flow_scope_expiry,priority:1;index:idx_admin_oauth_flow_scope_provider_expiry,priority:1"`
+	ProviderID           string `gorm:"index:idx_admin_oauth_flow_scope_provider_expiry,priority:2"`
+	ReturnURL            string
+	RedirectURI          string
+	CodeChallenge        string
+	ProviderCodeVerifier string
+	CookieSecure         bool
+	CreatedAt            time.Time
+	ExpiresAt            time.Time `gorm:"index;index:idx_admin_oauth_flow_scope_expiry,priority:2;index:idx_admin_oauth_flow_scope_provider_expiry,priority:3"`
 }
 
 type adminOAuthExchange struct {
@@ -85,7 +87,8 @@ func (s *GormStore) SaveAdminOAuthFlow(flow adminOAuthFlow) error {
 	if strings.TrimSpace(flow.State) == "" || strings.TrimSpace(flow.BrowserNonce) == "" ||
 		strings.TrimSpace(flow.Source) == "" ||
 		strings.TrimSpace(flow.ProviderID) == "" || strings.TrimSpace(flow.ReturnURL) == "" ||
-		strings.TrimSpace(flow.RedirectURI) == "" || !validAdminOAuthCodeChallenge(flow.CodeChallenge) {
+		strings.TrimSpace(flow.RedirectURI) == "" || !validAdminOAuthCodeChallenge(flow.CodeChallenge) ||
+		!validAdminOAuthCodeVerifier(flow.ProviderCodeVerifier) {
 		return fmt.Errorf("admin OAuth flow is incomplete")
 	}
 	return s.saveAdminOAuthFlow(flow, defaultAdminOAuthFlowLimits)
@@ -100,15 +103,16 @@ func (s *GormStore) saveAdminOAuthFlow(flow adminOAuthFlow, limits adminOAuthFlo
 		return err
 	}
 	record := adminOAuthFlowRecord{
-		ID:               NewID("oauth_flow"),
-		StateHash:        HashSecret(flow.State),
-		BrowserNonceHash: HashSecret(flow.BrowserNonce),
-		ClientScopeHash:  clientScopeHash,
-		ProviderID:       flow.ProviderID,
-		ReturnURL:        flow.ReturnURL,
-		RedirectURI:      flow.RedirectURI,
-		CodeChallenge:    flow.CodeChallenge,
-		CookieSecure:     flow.CookieSecure,
+		ID:                   NewID("oauth_flow"),
+		StateHash:            HashSecret(flow.State),
+		BrowserNonceHash:     HashSecret(flow.BrowserNonce),
+		ClientScopeHash:      clientScopeHash,
+		ProviderID:           flow.ProviderID,
+		ReturnURL:            flow.ReturnURL,
+		RedirectURI:          flow.RedirectURI,
+		CodeChallenge:        flow.CodeChallenge,
+		ProviderCodeVerifier: flow.ProviderCodeVerifier,
+		CookieSecure:         flow.CookieSecure,
 	}
 	var admissionErr error
 	err = s.db.Transaction(func(tx *gorm.DB) error {
@@ -252,14 +256,15 @@ func (s *GormStore) ConsumeAdminOAuthFlow(state string, browserNonce string) (ad
 		return adminOAuthFlow{}, false, err
 	}
 	return adminOAuthFlow{
-		State:         state,
-		BrowserNonce:  browserNonce,
-		ProviderID:    record.ProviderID,
-		ReturnURL:     record.ReturnURL,
-		RedirectURI:   record.RedirectURI,
-		CodeChallenge: record.CodeChallenge,
-		CookieSecure:  record.CookieSecure,
-		CreatedAt:     record.CreatedAt,
+		State:                state,
+		BrowserNonce:         browserNonce,
+		ProviderID:           record.ProviderID,
+		ReturnURL:            record.ReturnURL,
+		RedirectURI:          record.RedirectURI,
+		CodeChallenge:        record.CodeChallenge,
+		ProviderCodeVerifier: record.ProviderCodeVerifier,
+		CookieSecure:         record.CookieSecure,
+		CreatedAt:            record.CreatedAt,
 	}, consumed, nil
 }
 
@@ -366,6 +371,26 @@ func validAdminOAuthCodeChallenge(codeChallenge string) bool {
 	}
 	decoded, err := base64.RawURLEncoding.DecodeString(codeChallenge)
 	return err == nil && len(decoded) == sha256.Size
+}
+
+func validAdminOAuthCodeVerifier(codeVerifier string) bool {
+	_, ok := adminOAuthCodeChallenge(strings.TrimSpace(codeVerifier))
+	return ok
+}
+
+// newAdminOAuthProviderPKCE creates the backend-owned PKCE pair that binds the
+// identity-provider authorization code to this server: the challenge travels in
+// the authorize redirect and the verifier is presented at the token endpoint.
+func newAdminOAuthProviderPKCE() (string, string, error) {
+	codeVerifier, err := randomHex(32)
+	if err != nil {
+		return "", "", err
+	}
+	codeChallenge, ok := adminOAuthCodeChallenge(codeVerifier)
+	if !ok {
+		return "", "", fmt.Errorf("generated OAuth code verifier is invalid")
+	}
+	return codeVerifier, codeChallenge, nil
 }
 
 func adminOAuthCodeChallenge(codeVerifier string) (string, bool) {

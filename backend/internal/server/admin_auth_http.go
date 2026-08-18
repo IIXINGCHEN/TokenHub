@@ -133,6 +133,11 @@ func (s *Server) handleAdminOAuthStart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
+	providerCodeVerifier, providerCodeChallenge, err := newAdminOAuthProviderPKCE()
+	if err != nil {
+		writeError(w, r, NewHTTPError(500, "oauth_start_failed", "OAuth start failed"))
+		return
+	}
 	redirectURI, err := s.identityProviderRedirectURI(provider, r)
 	if err != nil {
 		writeError(w, r, err)
@@ -149,7 +154,7 @@ func (s *Server) handleAdminOAuthStart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	target, err := buildIdentityProviderAuthorizeURL(provider, redirectURI, state)
+	target, err := buildIdentityProviderAuthorizeURL(provider, redirectURI, state, providerCodeChallenge)
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -157,15 +162,16 @@ func (s *Server) handleAdminOAuthStart(w http.ResponseWriter, r *http.Request) {
 	redirectTarget, _ := url.Parse(redirectURI)
 	cookieSecure := redirectTarget != nil && strings.EqualFold(redirectTarget.Scheme, "https")
 	if err := s.store.SaveAdminOAuthFlow(adminOAuthFlow{
-		State:         state,
-		BrowserNonce:  browserNonce,
-		Source:        s.clientIP(r),
-		ProviderID:    provider.ID,
-		ReturnURL:     returnURL,
-		RedirectURI:   redirectURI,
-		CodeChallenge: codeChallenge,
-		CookieSecure:  cookieSecure,
-		CreatedAt:     time.Now().UTC(),
+		State:                state,
+		BrowserNonce:         browserNonce,
+		Source:               s.clientIP(r),
+		ProviderID:           provider.ID,
+		ReturnURL:            returnURL,
+		RedirectURI:          redirectURI,
+		CodeChallenge:        codeChallenge,
+		ProviderCodeVerifier: providerCodeVerifier,
+		CookieSecure:         cookieSecure,
+		CreatedAt:            time.Now().UTC(),
 	}); err != nil {
 		writeError(w, r, err)
 		return
@@ -208,7 +214,7 @@ func (s *Server) handleAdminOAuthCallback(w http.ResponseWriter, r *http.Request
 		http.Redirect(w, r, oauthRedirectWithError(flow.ReturnURL, "identity_provider_not_found"), http.StatusFound)
 		return
 	}
-	token, err := s.exchangeOAuthCode(r.Context(), provider, code, flow.RedirectURI)
+	token, err := s.exchangeOAuthCode(r.Context(), provider, code, flow.RedirectURI, flow.ProviderCodeVerifier)
 	if err != nil {
 		httpErr := AsHTTPError(err)
 		log.Printf("oauth token exchange failed provider_id=%s redirect_uri=%s error_code=%s status=%d", provider.ID, flow.RedirectURI, httpErr.Code, httpErr.Status)
@@ -415,7 +421,7 @@ func identityProviderTypeLabel(providerType string) string {
 	}
 }
 
-func buildOAuthAuthorizeURL(authorizeURL string, clientID string, redirectURI string, scope string, state string) (string, error) {
+func buildOAuthAuthorizeURL(authorizeURL string, clientID string, redirectURI string, scope string, state string, codeChallenge string) (string, error) {
 	target, err := url.Parse(authorizeURL)
 	if err != nil || target.Scheme == "" || target.Host == "" {
 		return "", NewHTTPError(400, "invalid_authorize_url", "Authorize URL is invalid")
@@ -428,6 +434,10 @@ func buildOAuthAuthorizeURL(authorizeURL string, clientID string, redirectURI st
 		query.Set("scope", scope)
 	}
 	query.Set("state", state)
+	if strings.TrimSpace(codeChallenge) != "" {
+		query.Set("code_challenge", codeChallenge)
+		query.Set("code_challenge_method", "S256")
+	}
 	target.RawQuery = query.Encode()
 	return target.String(), nil
 }
@@ -595,7 +605,7 @@ func isOAuthLoopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func (s *Server) exchangeOAuthCode(ctx context.Context, provider AdminResource, code string, redirectURI string) (oauthTokenResponse, error) {
+func (s *Server) exchangeOAuthCode(ctx context.Context, provider AdminResource, code string, redirectURI string, codeVerifier string) (oauthTokenResponse, error) {
 	if token, handled, err := exchangeConfiguredIdentityProviderOAuthCode(ctx, provider, code, redirectURI); handled {
 		return token, err
 	}
@@ -613,6 +623,9 @@ func (s *Server) exchangeOAuthCode(ctx context.Context, provider AdminResource, 
 	if clientSecret != "" {
 		form.Set("client_secret", clientSecret)
 	}
+	if codeVerifier != "" {
+		form.Set("code_verifier", codeVerifier)
+	}
 	token, detail, err := requestOAuthToken(ctx, tokenURL, form, "", "")
 	if err == nil {
 		if strings.TrimSpace(token.AccessToken) == "" {
@@ -628,6 +641,9 @@ func (s *Server) exchangeOAuthCode(ctx context.Context, provider AdminResource, 
 	basicForm.Set("grant_type", "authorization_code")
 	basicForm.Set("code", code)
 	basicForm.Set("redirect_uri", redirectURI)
+	if codeVerifier != "" {
+		basicForm.Set("code_verifier", codeVerifier)
+	}
 	token, _, err = requestOAuthToken(ctx, tokenURL, basicForm, clientID, clientSecret)
 	if err != nil {
 		return oauthTokenResponse{}, err
