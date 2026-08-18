@@ -189,8 +189,8 @@ func (r *Runner) adoptFreshSQLite(ctx context.Context) (result Result, err error
 // the single-connection-pool-safe variant of beginAttempt.
 func (r *Runner) beginAttemptOn(ctx context.Context, db Execer, version int64) (int64, error) {
 	result, err := db.ExecContext(ctx,
-		"INSERT INTO migration_attempts (version, app_release, started_at) VALUES (?, ?, ?)",
-		version, r.appRelease, r.nowText())
+		"INSERT INTO migration_attempts (version, app_release, executor, started_at) VALUES (?, ?, ?, ?)",
+		version, r.appRelease, r.executor, r.nowText())
 	if err != nil {
 		return 0, fmt.Errorf("dbschema: record attempt: %w", err)
 	}

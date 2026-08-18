@@ -55,13 +55,15 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	// The target release completed its database schema flow; settle the
-	// pending upgrade so a later boot never auto-rolls back a healthy release.
-	if err := server.RecordStartupGuardSuccess(config); err != nil {
-		log.Fatalf("record startup guard success: %v", err)
-	}
 	if err := server.RunStartupBootstrap(context.Background(), store, config); err != nil {
 		log.Fatal(err)
+	}
+	// The target release completed both the schema flow and the startup
+	// bootstrap; settle the pending upgrade so a later boot never auto-rolls
+	// back a healthy release. Settling only after bootstrap keeps the
+	// one-shot rollback armed for boots that fail before serving.
+	if err := server.RecordStartupGuardSuccess(config); err != nil {
+		log.Fatalf("record startup guard success: %v", err)
 	}
 
 	app := server.NewWithConfig(store, config)

@@ -243,6 +243,7 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 		}
 		return backfillRoutingPolicyBindingKeys(db)
 	}
+	var instanceHeartbeatID string
 	if err := runSchemaMigrationLocked(sqlDB, driver, func() error {
 		if err := adoptSchemaLedger(context.Background(), sqlDB, driver, dsn, legacySchemaFlow); err != nil {
 			return err
@@ -251,7 +252,22 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 		// data backfills (ADR 0007); they are idempotent, and legacy-shaped
 		// data can appear after adoption through backup restores or an older
 		// release writing to the same database.
-		return legacyDataBackfills()
+		if err := legacyDataBackfills(); err != nil {
+			return err
+		}
+		// Publish the instance heartbeat before the schema lock is released:
+		// once the lock drops, `tokenhub db contract` may acquire it, and its
+		// no-live-instances preflight must not mistake this booting instance
+		// for a drained cluster. A failed publish stays non-fatal, matching
+		// StartInstanceHeartbeat: readiness gates the instance until the
+		// refresher publishes successfully.
+		id, err := publishInitialInstanceHeartbeat(db, config.AppVersion)
+		if err != nil {
+			log.Printf("[tokenhub] failed to publish initial instance heartbeat under the schema lock: %v", err)
+			return nil
+		}
+		instanceHeartbeatID = id
+		return nil
 	}); err != nil {
 		return nil, err
 	}
@@ -269,6 +285,7 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 		mu:                   &sync.Mutex{},
 		leaseHeartbeats:      &sync.Map{},
 		heartbeatState:       new(atomic.Int32),
+		instanceHeartbeatID:  instanceHeartbeatID,
 		lastUsed:             newLastUsedThrottle(),
 		modelLabels:          newModelLabelCache(),
 		secretKey:            config.SecretKey,

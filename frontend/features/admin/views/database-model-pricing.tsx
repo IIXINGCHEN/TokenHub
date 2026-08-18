@@ -5,6 +5,32 @@ import { tx, formatTranslationTemplate } from "../i18n/runtime";
 import { adminFetch, isAuthExpiredError } from "../resources/payloads";
 import { DataSection } from "../shared/ui";
 
+// Maps the backend's stable readiness reason codes to complete translated
+// templates; an unknown or absent code falls back to the English diagnostic
+// reason the backend reports.
+function evolutionReasonText(schema: SchemaEvolutionStatus): string {
+  switch (schema.reason_code) {
+    case "baseline_missing":
+      return tx("数据库尚未记录采纳基线；请先启动一次服务器完成采纳");
+    case "heartbeat_failing":
+      return tx("实例心跳未发布；contract 维护无法发现该实例");
+    case "dirty_migration":
+      return formatTranslationTemplate(tx("版本 {version} 的迁移处于脏状态，需要修复"), {
+        version: String(schema.dirty_version ?? schema.schema_version),
+      });
+    case "ledger_verification_failed":
+      return tx("迁移账本校验失败");
+    case "expand_pending":
+      return tx("存在待执行的 expand 迁移；请运行 tokenhub db migrate 或重启服务器");
+    case "blocking_backfills_pending":
+      return formatTranslationTemplate(tx("阻塞型数据回填未完成：{ids}"), {
+        ids: (schema.blocking_backfills_pending ?? []).join(", "),
+      });
+    default:
+      return schema.reason ?? "";
+  }
+}
+
 export function DatabaseStatusView({ api }: { api: ApiContext; isDark: boolean }) {
   const [status, setStatus] = useState<DatabaseStatus | null>(null);
   const [schema, setSchema] = useState<SchemaEvolutionStatus | null>(null);
@@ -201,7 +227,9 @@ export function DatabaseStatusView({ api }: { api: ApiContext; isDark: boolean }
                 {schema.ready ? tx("就绪") : tx("未就绪")}
               </span>
               <span className="database-status-card-value">
-                {tx("数据库状态版本")} {schema.schema_version}
+                {formatTranslationTemplate(tx("数据库状态版本 {version}"), {
+                  version: String(schema.schema_version),
+                })}
               </span>
               {schema.compatibility && (
                 <span className="database-status-note">
@@ -213,17 +241,25 @@ export function DatabaseStatusView({ api }: { api: ApiContext; isDark: boolean }
               )}
             </div>
             {!schema.ready && schema.reason && (
-              <div className="database-status-note" role="alert">{schema.reason}</div>
+              <div className="database-status-note" role="alert">{evolutionReasonText(schema)}</div>
             )}
             <div className="database-status-note">
-              {tx("待执行迁移")}: {(schema.pending_expand?.length ?? 0) + (schema.pending_contract?.length ?? 0)}
+              {formatTranslationTemplate(tx("待执行迁移：{count}"), {
+                count: String((schema.pending_expand?.length ?? 0) + (schema.pending_contract?.length ?? 0)),
+              })}
             </div>
             <div className="database-status-note">
-              {tx("数据回填")}: {schema.backfills?.length ?? 0}
+              {formatTranslationTemplate(tx("数据回填：{count}"), {
+                count: String(schema.backfills?.length ?? 0),
+              })}
             </div>
             {schema.instances && schema.instances.length > 0 && (
               <div className="database-status-note">
-                {tx("在线实例")}: {schema.instances.map((instance) => `${instance.instance_id} (${instance.release})`).join(", ")}
+                {formatTranslationTemplate(tx("在线实例：{instances}"), {
+                  instances: schema.instances
+                    .map((instance) => `${instance.instance_id} (${instance.release})`)
+                    .join(", "),
+                })}
               </div>
             )}
           </div>

@@ -9,17 +9,22 @@ import (
 // TestFixturesParseAndSelfConsistent guards the committed immutable N-1
 // legacy fixtures: they must parse as ObjectSet and be internally consistent
 // (comparing the fixture against itself yields no violations). The fixtures
-// themselves are regenerated with the real v0.4.0 release binary:
+// themselves are regenerated with the real release binaries:
 //
-//	cd backend && go run ./cmd/n1check -dump internal/dbschema/fixtures/n1-legacy-v040-<dialect>.json <v0.4.0-db-url>
+//	cd backend && go run ./cmd/n1check -dump internal/dbschema/fixtures/n1-legacy-<name>-<dialect>.json <release-db-url>
 func TestFixturesParseAndSelfConsistent(t *testing.T) {
-	for _, driver := range []string{"sqlite", "postgres"} {
-		fixture, err := loadFixture(driver)
+	fixtures := []struct{ name, driver string }{
+		{"v040", "sqlite"},
+		{"v040", "postgres"},
+		{"v050", "sqlite"},
+	}
+	for _, item := range fixtures {
+		fixture, err := loadFixture(item.name, item.driver)
 		if err != nil {
-			t.Fatalf("load %s fixture: %v", driver, err)
+			t.Fatalf("load %s %s fixture: %v", item.name, item.driver, err)
 		}
 		if len(fixture.Tables) == 0 {
-			t.Fatalf("%s fixture holds no tables", driver)
+			t.Fatalf("%s %s fixture holds no tables", item.name, item.driver)
 		}
 		foundRequestLogs := false
 		for _, table := range fixture.Tables {
@@ -27,14 +32,14 @@ func TestFixturesParseAndSelfConsistent(t *testing.T) {
 				foundRequestLogs = true
 			}
 			if len(table.Columns) == 0 {
-				t.Fatalf("%s fixture table %q has no columns", driver, table.Name)
+				t.Fatalf("%s %s fixture table %q has no columns", item.name, item.driver, table.Name)
 			}
 		}
 		if !foundRequestLogs {
-			t.Fatalf("%s fixture is missing the request_logs table", driver)
+			t.Fatalf("%s %s fixture is missing the request_logs table", item.name, item.driver)
 		}
 		if violations := dbschema.CompareObjects(fixture, fixture); len(violations) > 0 {
-			t.Fatalf("%s fixture is not self-consistent: %s", driver, dbschema.FormatViolations(violations))
+			t.Fatalf("%s %s fixture is not self-consistent: %s", item.name, item.driver, dbschema.FormatViolations(violations))
 		}
 	}
 }

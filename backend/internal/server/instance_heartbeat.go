@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"gorm.io/gorm"
+
 	"tokenhub/backend/internal/dbschema"
 )
 
@@ -39,27 +41,54 @@ const (
 	heartbeatFailing = int32(2)
 )
 
+const instanceHeartbeatTableDDL = `CREATE TABLE IF NOT EXISTS instance_heartbeats (
+	instance_id TEXT PRIMARY KEY,
+	release TEXT NOT NULL,
+	started_at TEXT NOT NULL,
+	last_seen TEXT NOT NULL
+)`
+
+// upsertInstanceHeartbeat publishes or refreshes one instance row.
+func upsertInstanceHeartbeat(db *gorm.DB, instanceID, release string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	return db.Exec(`INSERT INTO instance_heartbeats (instance_id, release, started_at, last_seen)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT (instance_id) DO UPDATE SET release = excluded.release, last_seen = excluded.last_seen`,
+		instanceID, release, now, now).Error
+}
+
+// publishInitialInstanceHeartbeat creates the heartbeat table and publishes
+// the first row for this instance. OpenStoreWithConfig calls it while the
+// schema migration lock is still held: once that lock is released, a
+// `tokenhub db contract` preflight must never observe a serving boot-in-progress
+// as zero live instances. The returned ID is kept on the store so
+// StartInstanceHeartbeat refreshes this row instead of adding another one.
+func publishInitialInstanceHeartbeat(db *gorm.DB, release string) (string, error) {
+	if err := db.Exec(instanceHeartbeatTableDDL).Error; err != nil {
+		return "", err
+	}
+	instanceID := NewID("instance")
+	if err := upsertInstanceHeartbeat(db, instanceID, release); err != nil {
+		return "", err
+	}
+	return instanceID, nil
+}
+
 // StartInstanceHeartbeat publishes this instance and refreshes it until the
 // returned stop function removes the row. A non-fatal start keeps the server
 // running without a heartbeat: losing the heartbeat only delays contract
 // maintenance, it never blocks serving.
 func (s *GormStore) StartInstanceHeartbeat(release string) (stop func()) {
-	instanceID := NewID("instance")
-	if err := s.db.Exec(`CREATE TABLE IF NOT EXISTS instance_heartbeats (
-		instance_id TEXT PRIMARY KEY,
-		release TEXT NOT NULL,
-		started_at TEXT NOT NULL,
-		last_seen TEXT NOT NULL
-	)`).Error; err != nil {
+	instanceID := s.instanceHeartbeatID
+	if instanceID == "" {
+		instanceID = NewID("instance")
+	}
+	if err := s.db.Exec(instanceHeartbeatTableDDL).Error; err != nil {
 		log.Printf("[tokenhub] failed to create instance heartbeat table: %v", err)
 		return func() {}
 	}
 	refresh := func() error {
-		now := time.Now().UTC().Format(time.RFC3339)
-		return s.db.Exec(`INSERT INTO instance_heartbeats (instance_id, release, started_at, last_seen)
-			VALUES (?, ?, ?, ?)
-			ON CONFLICT (instance_id) DO UPDATE SET release = excluded.release, last_seen = excluded.last_seen`,
-			instanceID, release, now, now).Error
+		return upsertInstanceHeartbeat(s.db, instanceID, release)
 	}
 	publish := func() {
 		if err := refresh(); err != nil {
@@ -122,8 +151,11 @@ func (s *GormStore) ListInstanceHeartbeats(ctx context.Context) ([]InstanceHeart
 // serving: the migration ledger verifies (no dirty migration, no checksum or
 // unknown-version drift) and every registered blocking data backfill is
 // complete. Pending online backfills never affect readiness (ADR 0007).
+// ReasonCode is the stable machine identifier of the failure for localized
+// status surfaces; Reason stays the English diagnostic for logs.
 type DatabaseEvolutionStatus struct {
 	Ready                    bool
+	ReasonCode               string
 	Reason                   string
 	SchemaVersion            int64
 	BlockingBackfillsPending []string
@@ -132,39 +164,43 @@ type DatabaseEvolutionStatus struct {
 func (s *GormStore) DatabaseEvolutionStatus(ctx context.Context) DatabaseEvolutionStatus {
 	sqlDB, err := s.db.DB()
 	if err != nil {
-		return DatabaseEvolutionStatus{Reason: fmt.Sprintf("database handle unavailable: %v", err)}
+		return DatabaseEvolutionStatus{ReasonCode: "handle_unavailable", Reason: fmt.Sprintf("database handle unavailable: %v", err)}
 	}
 	runner, err := dbschema.NewRunner(sqlDB, dbschema.Dialect(s.dbDriver), SchemaMigrationRegistry())
 	if err != nil {
-		return DatabaseEvolutionStatus{Reason: fmt.Sprintf("migration runner: %v", err)}
+		return DatabaseEvolutionStatus{ReasonCode: "runner_error", Reason: fmt.Sprintf("migration runner: %v", err)}
 	}
 	status, err := runner.Status(ctx)
 	if err != nil {
-		return DatabaseEvolutionStatus{Reason: fmt.Sprintf("migration ledger unreadable: %v", err)}
+		return DatabaseEvolutionStatus{ReasonCode: "ledger_unreadable", Reason: fmt.Sprintf("migration ledger unreadable: %v", err)}
 	}
 	if !status.BaselineRecorded {
-		return DatabaseEvolutionStatus{Reason: "database has no adoption baseline; start the server once to adopt it"}
+		return DatabaseEvolutionStatus{ReasonCode: "baseline_missing", Reason: "database has no adoption baseline; start the server once to adopt it"}
 	}
 	if s.heartbeatState != nil && s.heartbeatState.Load() == heartbeatFailing {
 		return DatabaseEvolutionStatus{
+			ReasonCode:    "heartbeat_failing",
 			Reason:        "instance heartbeat is not publishing; contract maintenance cannot see this serving instance",
 			SchemaVersion: status.CurrentVersion,
 		}
 	}
 	if status.Dirty {
 		return DatabaseEvolutionStatus{
+			ReasonCode:    "dirty_migration",
 			Reason:        fmt.Sprintf("dirty schema migration at version %d; repair required", status.DirtyVersion),
 			SchemaVersion: status.CurrentVersion,
 		}
 	}
 	if err := runner.Verify(ctx); err != nil {
 		return DatabaseEvolutionStatus{
+			ReasonCode:    "ledger_verification_failed",
 			Reason:        fmt.Sprintf("migration ledger verification failed: %v", err),
 			SchemaVersion: status.CurrentVersion,
 		}
 	}
 	if len(status.PendingExpand) > 0 {
 		return DatabaseEvolutionStatus{
+			ReasonCode:    "expand_pending",
 			Reason:        fmt.Sprintf("%d expand migration(s) pending; run tokenhub db migrate or restart the server", len(status.PendingExpand)),
 			SchemaVersion: status.CurrentVersion,
 		}
@@ -172,12 +208,14 @@ func (s *GormStore) DatabaseEvolutionStatus(ctx context.Context) DatabaseEvoluti
 	pending, err := pendingBlockingBackfills(ctx, sqlDB, s.dbDriver)
 	if err != nil {
 		return DatabaseEvolutionStatus{
+			ReasonCode:    "backfill_ledger_unreadable",
 			Reason:        fmt.Sprintf("data backfill ledger unreadable: %v", err),
 			SchemaVersion: status.CurrentVersion,
 		}
 	}
 	if len(pending) > 0 {
 		return DatabaseEvolutionStatus{
+			ReasonCode:               "blocking_backfills_pending",
 			Reason:                   fmt.Sprintf("blocking data backfills incomplete: %v", pending),
 			SchemaVersion:            status.CurrentVersion,
 			BlockingBackfillsPending: pending,

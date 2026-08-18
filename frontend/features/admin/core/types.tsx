@@ -73,10 +73,14 @@ export type DatabaseStatus = {
 };
 
 // Read-only database evolution state served by /api/admin/system/schema-status.
+// reason_code is the stable machine identifier for localized rendering;
+// reason is the English diagnostic and only the fallback display.
 export type SchemaEvolutionStatus = {
   ready: boolean;
   reason?: string;
+  reason_code?: string;
   schema_version: number;
+  dirty_version?: number;
   pending_expand?: Array<{ version: number; name: string }>;
   pending_contract?: Array<{ version: number; name: string }>;
   blocking_backfills_pending?: string[];

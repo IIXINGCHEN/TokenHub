@@ -2,6 +2,7 @@ package dbschema
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -209,8 +210,22 @@ func (r *Runner) applyMigration(ctx context.Context, m Migration) (Applied, stri
 	if err != nil {
 		return Applied{}, "failed", err
 	}
+	// The per-migration lock budget (ADR 0006) bounds how long one migration
+	// may hold the schema lock while it runs, body and postcondition
+	// included. Exceeding it fails the migration like any other error:
+	// transactional runs roll back, non-transactional runs keep the dirty
+	// marker for repair.
+	migrationCtx := ctx
+	var cancel context.CancelFunc
+	if m.LockTimeoutSeconds > 0 {
+		migrationCtx, cancel = context.WithTimeout(ctx, time.Duration(m.LockTimeoutSeconds)*time.Second)
+		defer cancel()
+	}
 	started := time.Now()
-	record, outcome, applyErr := r.runMigration(ctx, m)
+	record, outcome, applyErr := r.runMigration(migrationCtx, m)
+	if errors.Is(applyErr, context.DeadlineExceeded) {
+		applyErr = fmt.Errorf("lock budget of %ds exceeded: %w", m.LockTimeoutSeconds, applyErr)
+	}
 	r.finishAttempt(ctx, attemptID, outcome, time.Since(started), errorCode(applyErr))
 	if applyErr != nil {
 		return Applied{}, outcome, newError(ErrCodeApplyFailed, m.Version, applyErr)
@@ -218,12 +233,53 @@ func (r *Runner) applyMigration(ctx context.Context, m Migration) (Applied, stri
 	return record, outcome, nil
 }
 
+// budgetedExecer enforces a migration's StatementBudget (ADR 0006): every
+// statement the body executes counts against the budget, and exceeding it
+// fails the migration instead of letting it perform unbounded work.
+type budgetedExecer struct {
+	Execer
+	remaining int64
+}
+
+func (b *budgetedExecer) charge() error {
+	if b.remaining <= 0 {
+		return errors.New("statement budget exceeded")
+	}
+	b.remaining--
+	return nil
+}
+
+func (b *budgetedExecer) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	if err := b.charge(); err != nil {
+		return nil, err
+	}
+	return b.Execer.ExecContext(ctx, query, args...)
+}
+
+func (b *budgetedExecer) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	if err := b.charge(); err != nil {
+		return nil, err
+	}
+	return b.Execer.QueryContext(ctx, query, args...)
+}
+
+// QueryRowContext stays uncharged: a *sql.Row cannot carry an injected
+// budget error, and unbounded single-row loops are still bounded by the
+// per-migration lock budget.
+func (b *budgetedExecer) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	return b.Execer.QueryRowContext(ctx, query, args...)
+}
+
 func runMigrationBody(ctx context.Context, db Execer, m Migration) error {
+	if m.Go == nil && int64(len(m.Statements)) > m.StatementBudget {
+		return fmt.Errorf("statement budget exceeded: %d statements, budget %d", len(m.Statements), m.StatementBudget)
+	}
+	budgeted := &budgetedExecer{Execer: db, remaining: m.StatementBudget}
 	if m.Go != nil {
-		return m.Go(ctx, db)
+		return m.Go(ctx, budgeted)
 	}
 	for _, statement := range m.Statements {
-		if _, err := db.ExecContext(ctx, statement); err != nil {
+		if _, err := budgeted.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("statement %q: %w", firstLine(statement), err)
 		}
 	}

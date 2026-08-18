@@ -351,6 +351,10 @@ jobs:
           # adoption must be validated with its real fixture too (ADR 0005).
           N15_DATABASE="${{ runner.temp }}/n15-contract.db"
           boot_and_wait "$RUNNER_TEMP/n15-tokenhub" 18091 /healthz "$RUNNER_TEMP/n15-a.log" "sqlite://${N15_DATABASE}"
+          # Pin the v0.5.0 legacy shape before the current release adopts it;
+          # the v0.4.0 fixture alone is too loose for this leg because v0.5.0
+          # added tables and columns it would not notice.
+          "$RUNNER_TEMP/n1check" -fixture v050 "sqlite://${N15_DATABASE}"
           boot_and_wait "$RUNNER_TEMP/current-tokenhub" 18092 /readyz "$RUNNER_TEMP/cur-f.log" "sqlite://${N15_DATABASE}"
           TOKENHUB_DATABASE_URL="sqlite://${N15_DATABASE}" "$RUNNER_TEMP/current-tokenhub" db verify
           boot_and_wait "$RUNNER_TEMP/n15-tokenhub" 18093 /healthz "$RUNNER_TEMP/n15-d.log" "sqlite://${N15_DATABASE}"

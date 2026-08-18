@@ -65,6 +65,8 @@ func (s *Server) handleAdminSchemaStatus(w http.ResponseWriter, r *http.Request)
 		"ready":                      true,
 		"schema_version":             int64(0),
 		"reason":                     "",
+		"reason_code":                "",
+		"dirty_version":              int64(0),
 		"pending_expand":             []schemaStatusPendingMigration{},
 		"pending_contract":           []schemaStatusPendingMigration{},
 		"blocking_backfills_pending": []string{},
@@ -76,10 +78,12 @@ func (s *Server) handleAdminSchemaStatus(w http.ResponseWriter, r *http.Request)
 		state := gormStore.DatabaseEvolutionStatus(ctx)
 		payload["ready"] = state.Ready
 		payload["reason"] = state.Reason
+		payload["reason_code"] = state.ReasonCode
 		payload["schema_version"] = state.SchemaVersion
 		payload["blocking_backfills_pending"] = state.BlockingBackfillsPending
 		if ledger, err := gormStore.SchemaLedgerStatus(ctx); err == nil {
 			payload["schema_version"] = ledger.CurrentVersion
+			payload["dirty_version"] = ledger.DirtyVersion
 			payload["pending_expand"] = mapPending(ledger.PendingExpand)
 			payload["pending_contract"] = mapPending(ledger.PendingContract)
 		}

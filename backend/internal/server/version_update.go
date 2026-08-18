@@ -279,16 +279,20 @@ func (s *versionService) applyNativeRelease(ctx context.Context, release githubR
 }
 
 // runTargetDatabasePreflight runs the freshly installed target release binary
-// against the current database before activation (ADR 0005): `db verify` is
-// the read-only semantic preflight and `db migrate` applies the pending expand
-// migrations under the target's own runner. Completing expands before
-// activation is intentional; the database keeps them even if the upgrade is
-// later rolled back (ADR 0005: no automatic backup restore).
+// against the current database before activation (ADR 0005). `db migrate`
+// comes first: its runner rejects an incompatible ledger (unknown checksums,
+// dirty state) before touching anything, then applies the pending expand
+// migrations. `db verify` runs afterwards — semantic verification compares the
+// live schema against the target's frozen reference, so it can only pass once
+// the expands it expects are in place; verifying first would reject every
+// valid pre-upgrade database for missing exactly those objects. Completing
+// expands before activation is intentional; the database keeps them even if
+// the upgrade is later rolled back (ADR 0005: no automatic backup restore).
 func (s *versionService) runTargetDatabasePreflight(ctx context.Context, binary, version string) error {
 	if s.databaseURL == "" {
 		return errors.New("database URL is not configured; cannot preflight the target release")
 	}
-	for _, args := range [][]string{{"db", "verify"}, {"db", "migrate"}} {
+	for _, args := range [][]string{{"db", "migrate"}, {"db", "verify"}} {
 		command := exec.CommandContext(ctx, binary, args...)
 		command.Env = append(os.Environ(), "TOKENHUB_DATABASE_URL="+s.databaseURL)
 		output, err := command.CombinedOutput()

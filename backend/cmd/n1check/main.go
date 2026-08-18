@@ -5,8 +5,12 @@
 //
 // Usage:
 //
-//	n1check <database-url>             verify against the committed fixture
-//	n1check -dump <out.json> <url>     write the introspected shape as a fixture
+//	n1check <database-url>                      verify against the committed fixture
+//	n1check -dump <out.json> <url>              write the introspected shape as a fixture
+//	n1check -fixture v050 <url>                 verify against a named legacy fixture
+//
+// The default fixture is v040; -fixture selects another committed legacy
+// shape such as v050.
 package main
 
 import (
@@ -31,8 +35,16 @@ func main() {
 func run() error {
 	args := os.Args[1:]
 	dumpPath := ""
-	if len(args) >= 2 && args[0] == "-dump" {
-		dumpPath = args[1]
+	fixtureName := "v040"
+	for len(args) >= 2 {
+		switch args[0] {
+		case "-dump":
+			dumpPath = args[1]
+		case "-fixture":
+			fixtureName = args[1]
+		default:
+			return fmt.Errorf("unknown flag %q", args[0])
+		}
 		args = args[2:]
 	}
 	databaseURL := ""
@@ -43,7 +55,7 @@ func run() error {
 		databaseURL = os.Getenv("TOKENHUB_DATABASE_URL")
 	}
 	if databaseURL == "" {
-		return fmt.Errorf("usage: n1check [-dump <out.json>] <database-url>")
+		return fmt.Errorf("usage: n1check [-dump <out.json>] [-fixture <name>] <database-url>")
 	}
 	driver, db, err := server.OpenRawDatabase(databaseURL)
 	if err != nil {
@@ -62,14 +74,14 @@ func run() error {
 		raw = append(raw, '\n')
 		return os.WriteFile(dumpPath, raw, 0o644)
 	}
-	fixture, err := loadFixture(driver)
+	fixture, err := loadFixture(fixtureName, driver)
 	if err != nil {
 		return err
 	}
 	if violations := dbschema.CompareObjects(fixture, actual); len(violations) > 0 {
 		return fmt.Errorf("legacy database does not match the immutable N-1 schema fixture:\n%s", dbschema.FormatViolations(violations))
 	}
-	_, _ = fmt.Fprintf(os.Stdout, "N-1 legacy schema fixture verified (%d tables, driver=%s)\n", len(actual.Tables), driver)
+	_, _ = fmt.Fprintf(os.Stdout, "N-1 legacy schema fixture %s verified (%d tables, driver=%s)\n", fixtureName, len(actual.Tables), driver)
 	return nil
 }
 
@@ -77,17 +89,17 @@ func run() error {
 // this file's location so the tool works regardless of the working directory.
 // The semantic shape is the same across dialects but column type strings are
 // not, so each dialect pins its own immutable fixture.
-func fixturePath(driver string) string {
+func fixturePath(name, driver string) string {
 	_, thisFile, _, _ := runtime.Caller(0)
 	base := filepath.Join(filepath.Dir(thisFile), "..", "..", "internal", "dbschema", "fixtures")
 	if driver == "postgres" {
-		return filepath.Join(base, "n1-legacy-v040-postgres.json")
+		return filepath.Join(base, "n1-legacy-"+name+"-postgres.json")
 	}
-	return filepath.Join(base, "n1-legacy-v040-sqlite.json")
+	return filepath.Join(base, "n1-legacy-"+name+"-sqlite.json")
 }
 
-func loadFixture(driver string) (dbschema.ObjectSet, error) {
-	raw, err := os.ReadFile(fixturePath(driver))
+func loadFixture(name, driver string) (dbschema.ObjectSet, error) {
+	raw, err := os.ReadFile(fixturePath(name, driver))
 	if err != nil {
 		return dbschema.ObjectSet{}, fmt.Errorf("read N-1 legacy fixture: %w", err)
 	}
