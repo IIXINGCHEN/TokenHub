@@ -143,6 +143,7 @@ func (s *Server) routes() {
 	s.registerDynamicMethodRoute(http.MethodDelete, "/api/admin/providers/{provider_id}", s.handleAdminProviderDelete)
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/providers/{provider_id}/health", s.handleAdminProviderHealthPost, s.adminMethodNotAllowed("provider", http.MethodPost))
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/providers/{provider_id}/test", s.handleAdminProviderTestPost, s.adminMethodNotAllowed("provider", http.MethodPost))
+	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/providers/{provider_id}/refresh-token", s.handleAdminProviderRefreshTokenPost, s.adminMethodNotAllowed("provider", http.MethodPost))
 	s.mux.HandleFunc("/api/admin/providers/", s.handleAdminProviderNested)
 	s.registerMethodRoutes(
 		"/api/admin/provider-resources",
