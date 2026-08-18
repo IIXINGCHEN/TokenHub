@@ -560,7 +560,7 @@ func (s *GormStore) rollbackResponseJobAdmission(tx *gorm.DB, job ResponseJob) e
 		return err
 	}
 	if job.MinuteRequestHeld {
-		bucket, err := s.quotaBucketForUpdate(tx, job.APIKeyID, "minute", minuteBucket(*job.AdmittedAt))
+		bucket, err := s.quotaBucketForUpdate(tx, job.APIKeyID, "minute", minuteBucket(*job.AdmittedAt), job.AttributedUserID)
 		if err != nil {
 			return err
 		}
@@ -575,7 +575,7 @@ func (s *GormStore) rollbackResponseJobAdmission(tx *gorm.DB, job ResponseJob) e
 		Key:              APIKey{ID: job.APIKeyID},
 		TokenLimitBucket: job.TokenLimitBucket,
 		ReservedTokens:   job.ReservedTokens,
-	}, 0); err != nil {
+	}, 0, job.AttributedUserID); err != nil {
 		return err
 	}
 	userQuotaID := userQuotaBucketKey(job.AttributedUserID)
@@ -584,7 +584,7 @@ func (s *GormStore) rollbackResponseJobAdmission(tx *gorm.DB, job ResponseJob) e
 			return err
 		}
 		if job.UserMinuteRequestHeld {
-			userMinuteBucket, err := s.quotaBucketForUpdate(tx, userQuotaID, "minute", minuteBucket(*job.AdmittedAt))
+			userMinuteBucket, err := s.quotaBucketForUpdate(tx, userQuotaID, "minute", minuteBucket(*job.AdmittedAt), job.AttributedUserID)
 			if err != nil {
 				return err
 			}
@@ -595,7 +595,7 @@ func (s *GormStore) rollbackResponseJobAdmission(tx *gorm.DB, job ResponseJob) e
 				return err
 			}
 		}
-		if err := s.reconcileQuotaMinuteTokens(tx, userQuotaID, job.UserTokenLimitBucket, job.ReservedTokens, 0); err != nil {
+		if err := s.reconcileQuotaMinuteTokens(tx, userQuotaID, job.UserTokenLimitBucket, job.ReservedTokens, 0, job.AttributedUserID); err != nil {
 			return err
 		}
 	}
@@ -606,7 +606,7 @@ func (s *GormStore) rollbackResponseJobAdmission(tx *gorm.DB, job ResponseJob) e
 		{scope: "day", bucket: dayBucket(*job.AdmittedAt)},
 		{scope: "month", bucket: monthBucket(*job.AdmittedAt)},
 	} {
-		bucket, err := s.quotaBucketForUpdate(tx, job.APIKeyID, period.scope, period.bucket)
+		bucket, err := s.quotaBucketForUpdate(tx, job.APIKeyID, period.scope, period.bucket, job.AttributedUserID)
 		if err != nil {
 			return err
 		}
@@ -617,7 +617,7 @@ func (s *GormStore) rollbackResponseJobAdmission(tx *gorm.DB, job ResponseJob) e
 			return err
 		}
 		if job.UserQuotaEnabled {
-			userBucket, err := s.quotaBucketForUpdate(tx, userQuotaID, period.scope, period.bucket)
+			userBucket, err := s.quotaBucketForUpdate(tx, userQuotaID, period.scope, period.bucket, job.AttributedUserID)
 			if err != nil {
 				return err
 			}
@@ -905,7 +905,7 @@ func (s *GormStore) refundUndispatchedResponseJobReservation(tx *gorm.DB, job Re
 		Key:              APIKey{ID: job.APIKeyID},
 		TokenLimitBucket: job.TokenLimitBucket,
 		ReservedTokens:   job.ReservedTokens,
-	}, 0); err != nil {
+	}, 0, job.AttributedUserID); err != nil {
 		return err
 	}
 	if job.UserQuotaEnabled {
@@ -913,7 +913,7 @@ func (s *GormStore) refundUndispatchedResponseJobReservation(tx *gorm.DB, job Re
 		if err := s.lockScopeForUpdate(tx, "user_quota", userQuotaID); err != nil {
 			return err
 		}
-		if err := s.reconcileQuotaMinuteTokens(tx, userQuotaID, job.UserTokenLimitBucket, job.ReservedTokens, 0); err != nil {
+		if err := s.reconcileQuotaMinuteTokens(tx, userQuotaID, job.UserTokenLimitBucket, job.ReservedTokens, 0, job.AttributedUserID); err != nil {
 			return err
 		}
 		if job.AdmittedAt != nil {
@@ -924,7 +924,7 @@ func (s *GormStore) refundUndispatchedResponseJobReservation(tx *gorm.DB, job Re
 				{scope: "day", bucket: dayBucket(*job.AdmittedAt)},
 				{scope: "month", bucket: monthBucket(*job.AdmittedAt)},
 			} {
-				counter, err := s.quotaBucketForUpdate(tx, userQuotaID, period.scope, period.bucket)
+				counter, err := s.quotaBucketForUpdate(tx, userQuotaID, period.scope, period.bucket, job.AttributedUserID)
 				if err != nil {
 					return err
 				}

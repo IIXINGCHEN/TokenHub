@@ -222,6 +222,48 @@ func TestUserQuotaIncludesUsageBeforePolicyCreation(t *testing.T) {
 	}
 }
 
+func TestUserQuotaHistoryUsesSettlementAttributionAfterKeyOwnerChanges(t *testing.T) {
+	store, project, keyA, keyB := setupUserQuotaTest(t, map[string]any{})
+	call, err := store.StartCall(context.Background(), project, keyA, "user-quota-model", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.FinishCall(call, RouteSelection{}, Usage{TotalTokens: 10}, http.StatusOK, "", "127.0.0.1", "user-quota-test")
+	if _, err := store.UpdateAPIKey(keyA.ID, APIKey{OwnerUserID: "usr_new_quota_owner"}); err != nil {
+		t.Fatal(err)
+	}
+	store.CreateResource("quota-policies", AdminResource{
+		ID: "quota_user_quota_after_transfer", Name: "User quota after transfer", Status: StatusActive,
+		Fields: map[string]any{"scope": "user", "scope_id": "usr_user_quota", "daily_tokens": int64(10)},
+	})
+	if _, err := store.StartCall(context.Background(), project, keyB, "user-quota-model", 0); err == nil || AsHTTPError(err).Code != "quota_exceeded" {
+		t.Fatalf("usage settled before key owner transfer should remain with the original user, got %v", err)
+	}
+}
+
+func TestUserQuotaHistorySurvivesAPIKeyDeletion(t *testing.T) {
+	store, project, keyA, keyB := setupUserQuotaTest(t, map[string]any{})
+	call, err := store.StartCall(context.Background(), project, keyA, "user-quota-model", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.FinishCall(call, RouteSelection{}, Usage{TotalTokens: 10}, http.StatusOK, "", "127.0.0.1", "user-quota-test")
+	if err := store.DeleteAPIKey(keyA.ID); err != nil {
+		t.Fatal(err)
+	}
+	store.CreateResource("quota-policies", AdminResource{
+		ID: "quota_user_quota_after_delete", Name: "User quota after delete", Status: StatusActive,
+		Fields: map[string]any{"scope": "user", "scope_id": "usr_user_quota", "daily_tokens": int64(10)},
+	})
+	usage, supported, err := store.GetQuotaPolicyUsage("user", "usr_user_quota")
+	if err != nil || !supported || usage.Daily.TotalTokens != 10 {
+		t.Fatalf("deleted-key history was not surfaced: usage=%+v supported=%v err=%v", usage, supported, err)
+	}
+	if _, err := store.StartCall(context.Background(), project, keyB, "user-quota-model", 0); err == nil || AsHTTPError(err).Code != "quota_exceeded" {
+		t.Fatalf("deleted-key history should still exhaust the user quota, got %v", err)
+	}
+}
+
 func TestInactiveUserQuotaPolicyCanBeDisabled(t *testing.T) {
 	store := NewMemoryStore()
 	admin, err := store.CreateAdminUser(AdminUser{ID: "usr_quota_admin", Username: "quota-admin", Email: "quota-admin@example.test", Role: "admin", Status: StatusActive}, "QuotaAdminPass123!")

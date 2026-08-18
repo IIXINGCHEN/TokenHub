@@ -392,8 +392,17 @@ func (s *GormStore) codexImageResourceAvailable(resource ProviderResource) bool 
 	}
 }
 
-func (s *GormStore) quotaBucketForUpdate(tx *gorm.DB, keyID, scope, bucket string) (QuotaBucket, error) {
-	seed := QuotaBucket{KeyID: keyID, Scope: scope, Bucket: bucket}
+func (s *GormStore) quotaBucketForUpdate(tx *gorm.DB, keyID, scope, bucket string, attributedUserIDs ...string) (QuotaBucket, error) {
+	attributedUserID := ""
+	if len(attributedUserIDs) > 0 {
+		attributedUserID = strings.TrimSpace(attributedUserIDs[0])
+	}
+	seed := QuotaBucket{
+		KeyID:            keyID,
+		Scope:            scope,
+		Bucket:           bucket,
+		AttributedUserID: attributedUserID,
+	}
 	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&seed).Error; err != nil {
 		return QuotaBucket{}, err
 	}
@@ -405,15 +414,19 @@ func (s *GormStore) quotaBucketForUpdate(tx *gorm.DB, keyID, scope, bucket strin
 	if err := query.First(&item, "key_id = ? AND scope = ? AND bucket = ?", keyID, scope, bucket).Error; err != nil {
 		return QuotaBucket{}, err
 	}
+	if attributedUserID != "" && item.AttributedUserID == "" {
+		item.AttributedUserID = attributedUserID
+		if err := tx.Model(&QuotaBucket{}).
+			Where("key_id = ? AND scope = ? AND bucket = ? AND (attributed_user_id IS NULL OR attributed_user_id = '')", keyID, scope, bucket).
+			Update("attributed_user_id", attributedUserID).Error; err != nil {
+			return QuotaBucket{}, err
+		}
+	}
 	return item, nil
 }
 
 func userQuotaBucketKey(userID string) string {
 	return "user:" + strings.TrimSpace(userID)
-}
-
-func userIDFromQuotaBucketKey(bucketID string) string {
-	return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(bucketID), "user:"))
 }
 
 func (s *GormStore) GetQuotaPolicyUsage(scope string, scopeID string) (QuotaPolicyUsage, bool, error) {
@@ -465,14 +478,11 @@ func (s *GormStore) GetQuotaPolicyUsage(scope string, scopeID string) (QuotaPoli
 
 func (s *GormStore) aggregateUserQuotaCounter(tx *gorm.DB, userID string, scope string, bucket string) (QuotaCounter, error) {
 	var aggregate QuotaCounter
-	creatorExpression := apiKeyCreatorExpression(s.dbDriver)
-	attributionExpression := "COALESCE(NULLIF(TRIM(ak.owner_user_id), ''), NULLIF(TRIM(" + creatorExpression + "), ''), NULLIF(TRIM(p.owner_user_id), ''))"
 	err := tx.Table("quota_buckets AS qb").
 		Select("COALESCE(SUM(qb.requests), 0) AS requests, COALESCE(SUM(qb.prompt_tokens), 0) AS prompt_tokens, COALESCE(SUM(qb.completion_tokens), 0) AS completion_tokens, COALESCE(SUM(qb.total_tokens), 0) AS total_tokens, COALESCE(SUM(qb.cost_usd), 0) AS cost_usd").
-		Joins("JOIN api_keys AS ak ON ak.id = qb.key_id").
-		Joins("JOIN projects AS p ON p.id = ak.project_id").
 		Where("qb.scope = ? AND qb.bucket = ?", scope, bucket).
-		Where(attributionExpression+" = ?", strings.TrimSpace(userID)).
+		Where("qb.key_id NOT LIKE ?", "user:%").
+		Where("qb.attributed_user_id = ?", strings.TrimSpace(userID)).
 		Scan(&aggregate).Error
 	return aggregate, err
 }

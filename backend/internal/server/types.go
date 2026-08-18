@@ -521,6 +521,13 @@ type ImageJob struct {
 	APIKeyID                string     `json:"api_key_id" gorm:"index"`
 	AttributedUserID        string     `json:"attributed_user_id,omitempty" gorm:"index"`
 	RequestID               string     `json:"request_id,omitempty" gorm:"index"`
+	UserQuotaEnabled        bool       `json:"-"`
+	UserMinuteRequestHeld   bool       `json:"-"`
+	UserTokenLimitBucket    string     `json:"-"`
+	TokenLimitBucket        string     `json:"-"`
+	MinuteRequestHeld       bool       `json:"-"`
+	ReservedTokens          int64      `json:"-"`
+	AdmittedAt              *time.Time `json:"-"`
 	Status                  string     `json:"status" gorm:"index"`
 	Model                   string     `json:"model"`
 	Action                  string     `json:"action"`

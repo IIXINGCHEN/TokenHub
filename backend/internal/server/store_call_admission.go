@@ -99,7 +99,8 @@ func (s *GormStore) admitCallTransaction(ctx context.Context, tx *gorm.DB, key A
 	if err := pruneAPIKeyMinuteBuckets(tx, privateKey.ID, now); err != nil {
 		return admission, err
 	}
-	minuteCounter, err := s.consumeAPIKeyMinuteRequest(tx, privateKey.ID, effectiveLimits, minuteLimitScopes, tokenReservation, now)
+	attributedUserID := usageAttributionUserID(privateKey, privateProject)
+	minuteCounter, err := s.consumeAPIKeyMinuteRequest(tx, privateKey.ID, effectiveLimits, minuteLimitScopes, tokenReservation, now, attributedUserID)
 	if err != nil {
 		return admission, err
 	}
@@ -120,23 +121,23 @@ func (s *GormStore) admitCallTransaction(ctx context.Context, tx *gorm.DB, key A
 		if userPolicy.Limits.TokenLimitTPM > 0 {
 			userMinuteScopes.TPM = "user"
 		}
-		userMinuteCounter, err = s.consumeAPIKeyMinuteRequest(tx, userQuotaID, userPolicy.Limits, userMinuteScopes, tokenReservation, now)
+		userMinuteCounter, err = s.consumeAPIKeyMinuteRequest(tx, userQuotaID, userPolicy.Limits, userMinuteScopes, tokenReservation, now, userPolicy.UserID)
 		if err != nil {
 			return admission, err
 		}
 	}
-	dayCounter, err := s.quotaBucketForUpdate(tx, privateKey.ID, "day", dayBucket(now))
+	dayCounter, err := s.quotaBucketForUpdate(tx, privateKey.ID, "day", dayBucket(now), attributedUserID)
 	if err != nil {
 		return admission, err
 	}
 	userDayCounter := QuotaBucket{}
 	userMonthCounter := QuotaBucket{}
 	if userPolicy.Enabled() {
-		userDayCounter, err = s.quotaBucketForUpdate(tx, userQuotaID, "day", dayBucket(now))
+		userDayCounter, err = s.quotaBucketForUpdate(tx, userQuotaID, "day", dayBucket(now), userPolicy.UserID)
 		if err != nil {
 			return admission, err
 		}
-		userMonthCounter, err = s.quotaBucketForUpdate(tx, userQuotaID, "month", monthBucket(now))
+		userMonthCounter, err = s.quotaBucketForUpdate(tx, userQuotaID, "month", monthBucket(now), userPolicy.UserID)
 		if err != nil {
 			return admission, err
 		}
@@ -151,7 +152,7 @@ func (s *GormStore) admitCallTransaction(ctx context.Context, tx *gorm.DB, key A
 		mergeQuotaCounterMax(&userDayCounter.QuotaCounter, historicalDay)
 		mergeQuotaCounterMax(&userMonthCounter.QuotaCounter, historicalMonth)
 	}
-	monthCounter, err := s.quotaBucketForUpdate(tx, privateKey.ID, "month", monthBucket(now))
+	monthCounter, err := s.quotaBucketForUpdate(tx, privateKey.ID, "month", monthBucket(now), attributedUserID)
 	if err != nil {
 		return admission, err
 	}

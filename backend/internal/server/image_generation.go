@@ -96,7 +96,7 @@ func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	job, err := s.store.CreateImageJob(ImageJob{
+	job, err := s.store.CreateImageJob(imageJobWithAdmission(ImageJob{
 		ProjectID:        project.ID,
 		APIKeyID:         key.ID,
 		AttributedUserID: usageAttributionUserID(key, project),
@@ -106,7 +106,7 @@ func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) 
 		Action:           "generate",
 		Quality:          request.Quality,
 		Size:             request.Size,
-	}, request.Prompt)
+	}, call), request.Prompt)
 	if err != nil {
 		s.store.FinishCall(call, RouteSelection{}, Usage{}, http.StatusInternalServerError, "image_job_create_failed", s.clientIP(r), r.UserAgent())
 		s.recordRequestPayload(call.RequestID, imageAuditRequest(ImageJob{RequestID: call.RequestID, Model: request.Model, Action: "generate", Quality: request.Quality, Size: request.Size}), auditErrorPayload(err, call.RequestID))
@@ -242,7 +242,7 @@ func (s *Server) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	job, err := s.store.CreateImageJob(ImageJob{
+	job, err := s.store.CreateImageJob(imageJobWithAdmission(ImageJob{
 		ProjectID:        project.ID,
 		APIKeyID:         key.ID,
 		AttributedUserID: usageAttributionUserID(key, project),
@@ -252,7 +252,7 @@ func (s *Server) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 		Action:           "edit",
 		Quality:          request.Quality,
 		Size:             request.Size,
-	}, request.Prompt)
+	}, call), request.Prompt)
 	if err != nil {
 		s.store.FinishCall(call, RouteSelection{}, Usage{}, http.StatusInternalServerError, "image_job_create_failed", s.clientIP(r), r.UserAgent())
 		s.recordRequestPayload(call.RequestID, imageAuditRequest(ImageJob{RequestID: call.RequestID, Model: request.Model, Action: "edit", Quality: request.Quality, Size: request.Size}), auditErrorPayload(err, call.RequestID))
@@ -435,6 +435,20 @@ func (s *Server) startImageCall(w http.ResponseWriter, r *http.Request, project 
 	w.Header().Set("x-request-id", call.RequestID)
 	writeRateLimitHeaders(w.Header(), call.RateLimitHeaders)
 	return call, true
+}
+
+func imageJobWithAdmission(job ImageJob, call CallContext) ImageJob {
+	job.TokenLimitBucket = call.TokenLimitBucket
+	job.MinuteRequestHeld = call.MinuteRequestHeld
+	job.UserQuotaEnabled = call.UserQuotaEnabled
+	job.UserMinuteRequestHeld = call.UserMinuteRequestHeld
+	job.UserTokenLimitBucket = call.UserTokenLimitBucket
+	job.ReservedTokens = call.ReservedTokens
+	if !call.StartedAt.IsZero() {
+		admittedAt := call.StartedAt
+		job.AdmittedAt = &admittedAt
+	}
+	return job
 }
 
 func (s *Server) startImageWorkers() {

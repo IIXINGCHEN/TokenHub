@@ -467,11 +467,11 @@ func pruneAPIKeyMinuteBuckets(tx *gorm.DB, keyID string, now time.Time) error {
 	return tx.Where("key_id = ? AND scope = ? AND bucket < ?", keyID, "minute", cutoff).Delete(&QuotaBucket{}).Error
 }
 
-func (s *GormStore) consumeAPIKeyMinuteRequest(tx *gorm.DB, keyID string, limits QuotaLimits, scopes MinuteLimitScopes, tokenReservation int64, now time.Time) (QuotaCounter, error) {
+func (s *GormStore) consumeAPIKeyMinuteRequest(tx *gorm.DB, keyID string, limits QuotaLimits, scopes MinuteLimitScopes, tokenReservation int64, now time.Time, attributedUserIDs ...string) (QuotaCounter, error) {
 	if limits.RateLimitRPM <= 0 && limits.TokenLimitTPM <= 0 {
 		return QuotaCounter{}, nil
 	}
-	bucket, err := s.quotaBucketForUpdate(tx, keyID, "minute", minuteBucket(now))
+	bucket, err := s.quotaBucketForUpdate(tx, keyID, "minute", minuteBucket(now), attributedUserIDs...)
 	if err != nil {
 		return QuotaCounter{}, err
 	}
@@ -621,6 +621,7 @@ func (s *GormStore) FinishCall(call CallContext, route RouteSelection, usage Usa
 }
 
 func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route RouteSelection, usage Usage, statusCode int, errorCode string, clientIP string, userAgent string, now time.Time, elapsed time.Duration) error {
+	attributedUserID := usageAttributionUserID(call.Key, call.Project)
 	if call.RequestID != "" {
 		if err := s.lockScopeForUpdate(tx, "request_settlement", call.RequestID); err != nil {
 			return err
@@ -662,15 +663,15 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 			return err
 		}
 		if call.UserQuotaEnabled {
-			if err := s.reconcileQuotaMinuteTokens(tx, call.UserQuotaID, call.UserTokenLimitBucket, call.ReservedTokens, actualTokens); err != nil {
+			if err := s.reconcileQuotaMinuteTokens(tx, call.UserQuotaID, call.UserTokenLimitBucket, call.ReservedTokens, actualTokens, attributedUserID); err != nil {
 				return err
 			}
 		}
-		dayCounter, err := s.quotaBucketForUpdate(tx, key.ID, "day", dayBucket(now))
+		dayCounter, err := s.quotaBucketForUpdate(tx, key.ID, "day", dayBucket(now), attributedUserID)
 		if err != nil {
 			return err
 		}
-		monthCounter, err := s.quotaBucketForUpdate(tx, key.ID, "month", monthBucket(now))
+		monthCounter, err := s.quotaBucketForUpdate(tx, key.ID, "month", monthBucket(now), attributedUserID)
 		if err != nil {
 			return err
 		}
@@ -690,11 +691,11 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 			if settlementAt.IsZero() {
 				settlementAt = now
 			}
-			userDayCounter, err := s.quotaBucketForUpdate(tx, call.UserQuotaID, "day", dayBucket(settlementAt))
+			userDayCounter, err := s.quotaBucketForUpdate(tx, call.UserQuotaID, "day", dayBucket(settlementAt), attributedUserID)
 			if err != nil {
 				return err
 			}
-			userMonthCounter, err := s.quotaBucketForUpdate(tx, call.UserQuotaID, "month", monthBucket(settlementAt))
+			userMonthCounter, err := s.quotaBucketForUpdate(tx, call.UserQuotaID, "month", monthBucket(settlementAt), attributedUserID)
 			if err != nil {
 				return err
 			}
@@ -791,15 +792,26 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 	return s.deleteRequestConcurrencyLeases(tx, call.RequestID)
 }
 
-func (s *GormStore) reconcileAPIKeyMinuteTokens(tx *gorm.DB, call CallContext, actualTokens int64) error {
-	return s.reconcileQuotaMinuteTokens(tx, call.Key.ID, call.TokenLimitBucket, call.ReservedTokens, actualTokens)
+func (s *GormStore) reconcileAPIKeyMinuteTokens(tx *gorm.DB, call CallContext, actualTokens int64, attributedUserIDs ...string) error {
+	attributedUserID := usageAttributionUserID(call.Key, call.Project)
+	if len(attributedUserIDs) > 0 && strings.TrimSpace(attributedUserIDs[0]) != "" {
+		attributedUserID = strings.TrimSpace(attributedUserIDs[0])
+	}
+	return s.reconcileQuotaMinuteTokens(
+		tx,
+		call.Key.ID,
+		call.TokenLimitBucket,
+		call.ReservedTokens,
+		actualTokens,
+		attributedUserID,
+	)
 }
 
-func (s *GormStore) reconcileQuotaMinuteTokens(tx *gorm.DB, bucketID string, bucketName string, reservedTokens int64, actualTokens int64) error {
+func (s *GormStore) reconcileQuotaMinuteTokens(tx *gorm.DB, bucketID string, bucketName string, reservedTokens int64, actualTokens int64, attributedUserIDs ...string) error {
 	if bucketName == "" || reservedTokens == 0 && actualTokens == 0 {
 		return nil
 	}
-	bucket, err := s.quotaBucketForUpdate(tx, bucketID, "minute", bucketName)
+	bucket, err := s.quotaBucketForUpdate(tx, bucketID, "minute", bucketName, attributedUserIDs...)
 	if err != nil {
 		return err
 	}
@@ -993,6 +1005,86 @@ func (s *GormStore) RecordRequestPayload(requestID string, requestBody string, r
 	}).Error
 }
 
+func (s *GormStore) rollbackImageJobAdmission(tx *gorm.DB, job ImageJob) error {
+	if job.AdmittedAt == nil {
+		return nil
+	}
+	attributedUserID := strings.TrimSpace(job.AttributedUserID)
+	if err := s.lockScopeForUpdate(tx, "api_key", job.APIKeyID); err != nil {
+		return err
+	}
+	admittedAt := *job.AdmittedAt
+	if job.MinuteRequestHeld {
+		bucket, err := s.quotaBucketForUpdate(tx, job.APIKeyID, "minute", minuteBucket(admittedAt), attributedUserID)
+		if err != nil {
+			return err
+		}
+		if bucket.Requests > 0 {
+			bucket.Requests--
+		}
+		if err := tx.Save(&bucket).Error; err != nil {
+			return err
+		}
+	}
+	if err := s.reconcileQuotaMinuteTokens(tx, job.APIKeyID, job.TokenLimitBucket, job.ReservedTokens, 0, attributedUserID); err != nil {
+		return err
+	}
+
+	userQuotaID := userQuotaBucketKey(attributedUserID)
+	if job.UserQuotaEnabled {
+		if err := s.lockScopeForUpdate(tx, "user_quota", userQuotaID); err != nil {
+			return err
+		}
+		if job.UserMinuteRequestHeld {
+			bucket, err := s.quotaBucketForUpdate(tx, userQuotaID, "minute", minuteBucket(admittedAt), attributedUserID)
+			if err != nil {
+				return err
+			}
+			if bucket.Requests > 0 {
+				bucket.Requests--
+			}
+			if err := tx.Save(&bucket).Error; err != nil {
+				return err
+			}
+		}
+		if err := s.reconcileQuotaMinuteTokens(tx, userQuotaID, job.UserTokenLimitBucket, job.ReservedTokens, 0, attributedUserID); err != nil {
+			return err
+		}
+	}
+
+	for _, period := range []string{"day", "month"} {
+		bucketName := dayBucket(admittedAt)
+		if period == "month" {
+			bucketName = monthBucket(admittedAt)
+		}
+		bucket, err := s.quotaBucketForUpdate(tx, job.APIKeyID, period, bucketName, attributedUserID)
+		if err != nil {
+			return err
+		}
+		if bucket.Requests > 0 {
+			bucket.Requests--
+		}
+		if err := tx.Save(&bucket).Error; err != nil {
+			return err
+		}
+		if !job.UserQuotaEnabled {
+			continue
+		}
+		userBucket, err := s.quotaBucketForUpdate(tx, userQuotaID, period, bucketName, attributedUserID)
+		if err != nil {
+			return err
+		}
+		if userBucket.Requests > 0 {
+			userBucket.Requests--
+		}
+		refundQuotaReservation(&userBucket.QuotaCounter, job.ReservedTokens)
+		if err := tx.Save(&userBucket).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *GormStore) CreateImageJob(job ImageJob, prompt string) (ImageJob, error) {
 	if strings.TrimSpace(job.ID) == "" {
 		job.ID = NewID("imgjob")
@@ -1078,6 +1170,9 @@ func (s *GormStore) FailUnfinishedImageJobs(code string, message string) ([]Imag
 			return err
 		}
 		for _, job := range jobs {
+			if err := s.rollbackImageJobAdmission(tx, job); err != nil {
+				return err
+			}
 			if strings.TrimSpace(job.RequestID) == "" {
 				continue
 			}

@@ -286,21 +286,6 @@ func monitorResourceMessage(resource ProviderResource, healthy bool) string {
 	return "Provider 资源实例未启用或不可用：" + resource.Status
 }
 
-func exceedsRequestQuota(limits QuotaLimits, day, month *QuotaCounter) bool {
-	return (limits.DailyRequests > 0 && day.Requests >= limits.DailyRequests) ||
-		(limits.MonthlyRequests > 0 && month.Requests >= limits.MonthlyRequests)
-}
-
-func exceedsTokenQuota(limits QuotaLimits, day, month *QuotaCounter) bool {
-	return (limits.DailyTokens > 0 && day.TotalTokens >= limits.DailyTokens) ||
-		(limits.MonthlyTokens > 0 && month.TotalTokens >= limits.MonthlyTokens)
-}
-
-func exceedsCostQuota(limits QuotaLimits, day, month *QuotaCounter) bool {
-	return (limits.DailyCostUSD > 0 && day.CostUSD >= limits.DailyCostUSD) ||
-		(limits.MonthlyCostUSD > 0 && month.CostUSD >= limits.MonthlyCostUSD)
-}
-
 func exceededQuotaLimitWithScope(limits QuotaLimits, scopes MinuteLimitScopes, day, month *QuotaCounter) (string, string) {
 	switch {
 	case limits.DailyRequests > 0 && day.Requests >= limits.DailyRequests:

@@ -16,9 +16,10 @@ const (
 )
 
 type QuotaBucket struct {
-	KeyID  string `gorm:"primaryKey;index"`
-	Scope  string `gorm:"primaryKey"`
-	Bucket string `gorm:"primaryKey;index"`
+	KeyID            string `gorm:"primaryKey;index"`
+	Scope            string `gorm:"primaryKey"`
+	Bucket           string `gorm:"primaryKey;index"`
+	AttributedUserID string `gorm:"index"`
 	QuotaCounter
 }
 
