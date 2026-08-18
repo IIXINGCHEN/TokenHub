@@ -10,6 +10,28 @@ import (
 	"testing"
 )
 
+func TestGenericIdentityProviderAuthorizeURLIncludesPKCE(t *testing.T) {
+	provider := AdminResource{Fields: map[string]any{
+		"client_id":     "generic-client",
+		"authorize_url": "https://idp.example.test/authorize",
+		"scopes":        "openid profile",
+	}}
+	challenge := testAdminOAuthCodeChallenge(t)
+	target, err := buildIdentityProviderAuthorizeURL(
+		provider, "https://tokenhub.example.test/api/admin/auth/oauth/callback", "signed-state", challenge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := parsed.Query()
+	if query.Get("code_challenge") != challenge || query.Get("code_challenge_method") != "S256" {
+		t.Fatalf("generic OAuth authorize URL must retain provider PKCE: %s", parsed.RawQuery)
+	}
+}
+
 func TestDingTalkIdentityProviderLoginProtocol(t *testing.T) {
 	var tokenRequested bool
 	var userInfoRequested bool
@@ -80,7 +102,7 @@ func TestDingTalkIdentityProviderLoginProtocol(t *testing.T) {
 	query := parsedAuthorizeTarget.Query()
 	if query.Get("client_id") != "ding-app-key" || query.Get("response_type") != "code" ||
 		query.Get("scope") != "openid" || query.Get("state") != "signed-state" || query.Get("prompt") != "consent" ||
-		query.Get("code_challenge") != authorizeChallenge || query.Get("code_challenge_method") != "S256" {
+		query.Has("code_challenge") || query.Has("code_challenge_method") {
 		t.Fatalf("unexpected authorize query: %s", parsedAuthorizeTarget.RawQuery)
 	}
 
@@ -203,7 +225,7 @@ func TestFeishuIdentityProviderLoginProtocol(t *testing.T) {
 	if query.Get("app_id") != "feishu-app-id" || query.Get("redirect_uri") == "" || query.Get("state") != "signed-state" ||
 		query.Get("scope") != "contact:user.base:readonly" ||
 		query.Has("client_id") || query.Has("response_type") ||
-		query.Get("code_challenge") != authorizeChallenge || query.Get("code_challenge_method") != "S256" {
+		query.Has("code_challenge") || query.Has("code_challenge_method") {
 		t.Fatalf("unexpected authorize query: %s", parsedAuthorizeTarget.RawQuery)
 	}
 
@@ -285,7 +307,7 @@ func TestWeComIdentityProviderLoginProtocol(t *testing.T) {
 	query := parsedAuthorizeTarget.Query()
 	if query.Get("login_type") != "CorpApp" || query.Get("appid") != "ww-corp-id" || query.Get("agentid") != "1000002" ||
 		query.Get("redirect_uri") == "" || query.Get("state") != "signed-state" || query.Has("client_id") || query.Has("scope") ||
-		query.Get("code_challenge") != authorizeChallenge || query.Get("code_challenge_method") != "S256" {
+		query.Has("code_challenge") || query.Has("code_challenge_method") {
 		t.Fatalf("unexpected authorize query: %s", parsedAuthorizeTarget.RawQuery)
 	}
 
