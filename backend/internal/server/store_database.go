@@ -131,7 +131,17 @@ func OpenStoreWithConfig(databaseURL string, config Config) (*GormStore, error) 
 	if strings.TrimSpace(databaseURL) == "" {
 		databaseURL = defaultConfigDatabaseURL()
 	}
-	return NewStoreWithDialect(databaseURL, config)
+	return newStoreWithDialect(databaseURL, config, true)
+}
+
+// OpenStoreForMaintenance opens the store without publishing an instance
+// heartbeat. Maintenance commands never serve traffic and must not make their
+// own no-live-instances preflight fail.
+func OpenStoreForMaintenance(databaseURL string, config Config) (*GormStore, error) {
+	if strings.TrimSpace(databaseURL) == "" {
+		databaseURL = defaultConfigDatabaseURL()
+	}
+	return newStoreWithDialect(databaseURL, config, false)
 }
 
 func NewSQLiteStore(databaseURL string) (*GormStore, error) {
@@ -141,6 +151,10 @@ func NewSQLiteStore(databaseURL string) (*GormStore, error) {
 // NewStoreWithDialect creates a Store with the appropriate driver based on the database URL.
 // It supports SQLite and PostgreSQL.
 func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) {
+	return newStoreWithDialect(databaseURL, config, true)
+}
+
+func newStoreWithDialect(databaseURL string, config Config, publishHeartbeat bool) (*GormStore, error) {
 	driver, dsn, err := parseDatabaseURL(databaseURL)
 	if err != nil {
 		return nil, err
@@ -255,18 +269,20 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 		if err := legacyDataBackfills(); err != nil {
 			return err
 		}
-		// Publish the instance heartbeat before the schema lock is released:
-		// once the lock drops, `tokenhub db contract` may acquire it, and its
-		// no-live-instances preflight must not mistake this booting instance
-		// for a drained cluster. A failed publish stays non-fatal, matching
-		// StartInstanceHeartbeat: readiness gates the instance until the
-		// refresher publishes successfully.
-		id, err := publishInitialInstanceHeartbeat(db, config.AppVersion)
-		if err != nil {
-			log.Printf("[tokenhub] failed to publish initial instance heartbeat under the schema lock: %v", err)
-			return nil
+		if publishHeartbeat {
+			// Publish the instance heartbeat before the schema lock is released:
+			// once the lock drops, `tokenhub db contract` may acquire it, and its
+			// no-live-instances preflight must not mistake this booting instance
+			// for a drained cluster. A failed publish stays non-fatal, matching
+			// StartInstanceHeartbeat: readiness gates the instance until the
+			// refresher publishes successfully.
+			id, err := publishInitialInstanceHeartbeat(db, config.AppVersion)
+			if err != nil {
+				log.Printf("[tokenhub] failed to publish initial instance heartbeat under the schema lock: %v", err)
+				return nil
+			}
+			instanceHeartbeatID = id
 		}
-		instanceHeartbeatID = id
 		return nil
 	}); err != nil {
 		return nil, err
@@ -299,6 +315,26 @@ func NewStoreWithDialect(databaseURL string, config Config) (*GormStore, error) 
 		clusterLockTTL:       time.Duration(defaultInt(config.ClusterLockTTLSeconds, 180)) * time.Second,
 		imageCapabilityRetry: time.Duration(defaultInt(config.ImageCapabilityRetrySecs, 86400)) * time.Second,
 	}, nil
+}
+
+// Close releases the primary and analytics database pools owned by the store.
+func (s *GormStore) Close() error {
+	var closeErr error
+	if s.db != nil {
+		if db, err := s.db.DB(); err != nil {
+			closeErr = errors.Join(closeErr, err)
+		} else {
+			closeErr = errors.Join(closeErr, db.Close())
+		}
+	}
+	if s.analyticsDB != nil {
+		if db, err := s.analyticsDB.DB(); err != nil {
+			closeErr = errors.Join(closeErr, err)
+		} else {
+			closeErr = errors.Join(closeErr, db.Close())
+		}
+	}
+	return closeErr
 }
 
 func openAnalyticsDatabase(driver string, dsn string, config Config) (*gorm.DB, error) {

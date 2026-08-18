@@ -306,7 +306,7 @@ func (e *BackfillExecutor) RunOnlineBatch(ctx context.Context) ([]OnlineProgress
 			return progress, newError(ErrCodeBackfillFailed, 0, fmt.Errorf("backfill %q: %w", b.ID, err))
 		}
 		if err := e.recordProgress(ctx, b.ID, remaining); err != nil {
-			return progress, err
+			return progress, newError(ErrCodeBackfillFailed, 0, err)
 		}
 		progress = append(progress, OnlineProgress{ID: b.ID, Remaining: remaining})
 	}
@@ -382,8 +382,16 @@ func (e *BackfillExecutor) recordProgress(ctx context.Context, id string, remain
 	query := fmt.Sprintf(
 		"UPDATE data_backfills SET remaining = %s, lease_expires_at = %s, state = %s, updated_at = %s WHERE id = %s AND lease_owner = %s",
 		marks[0], marks[1], marks[2], marks[3], marks[4], marks[5])
-	if _, err := e.db.ExecContext(ctx, query, remaining, expires, state, e.nowText(), id, e.owner); err != nil {
+	result, err := e.db.ExecContext(ctx, query, remaining, expires, state, e.nowText(), id, e.owner)
+	if err != nil {
 		return fmt.Errorf("dbschema: record backfill progress %q: %w", id, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("dbschema: record backfill progress %q: %w", id, err)
+	}
+	if affected != 1 {
+		return fmt.Errorf("dbschema: record backfill progress %q: lease lost", id)
 	}
 	return nil
 }

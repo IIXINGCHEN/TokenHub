@@ -59,7 +59,7 @@ func TestRepairSafeRetryReapplies(t *testing.T) {
 	runner := mustRunner(t, db, []Migration{{
 		Version: 2,
 		Name:    "retryable",
-		Go: func(ctx context.Context, ex Execer) error {
+		Go: func(ctx context.Context, ex MigrationExecer) error {
 			if bodyFails {
 				bodyFails = false
 				return errors.New("executor died mid-run")
@@ -112,7 +112,7 @@ func TestRepairRefusedWithoutSafeRetry(t *testing.T) {
 	runner := mustRunner(t, db, []Migration{{
 		Version: 2,
 		Name:    "not-retryable",
-		Go: func(context.Context, Execer) error {
+		Go: func(context.Context, MigrationExecer) error {
 			return errors.New("executor died mid-run")
 		},
 		NonTransactional: true,

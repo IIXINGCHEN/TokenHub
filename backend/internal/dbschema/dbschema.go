@@ -97,8 +97,22 @@ type Execer interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
+// RowScanner is the result of a single-row migration query. The interface lets
+// the budget wrapper return a deferred budget error from Scan without issuing
+// another database statement.
+type RowScanner interface {
+	Scan(dest ...any) error
+}
+
+// MigrationExecer is the budgeted execution surface exposed to Go migrations.
+type MigrationExecer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) RowScanner
+}
+
 // GoMigration is a migration implemented as a Go callback instead of SQL.
-type GoMigration func(ctx context.Context, db Execer) error
+type GoMigration func(ctx context.Context, db MigrationExecer) error
 
 // Migration is one registered schema change. Exactly one of Statements or Go
 // must be set. Content is frozen once released: the checksum of an applied

@@ -371,7 +371,7 @@ func TestUnknownAppliedVersionRefusesStartup(t *testing.T) {
 
 func TestRegistryValidation(t *testing.T) {
 	db := newTestDB(t)
-	goWithoutChecksum := Migration{Version: 2, Name: "go-migration", Go: func(context.Context, Execer) error { return nil }}
+	goWithoutChecksum := Migration{Version: 2, Name: "go-migration", Go: func(context.Context, MigrationExecer) error { return nil }}
 	_, err := NewRunner(db, DialectSQLite, []Migration{goWithoutChecksum})
 	requireErrorCode(t, err, ErrCodeInvalidRegistry)
 

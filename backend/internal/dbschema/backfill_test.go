@@ -249,3 +249,27 @@ func TestOnlineLeaseBlocksSecondExecutor(t *testing.T) {
 		t.Fatal("lease takeover did not finish the backfill")
 	}
 }
+
+func TestOnlineBackfillRejectsProgressAfterLeaseLoss(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	executor := mustExecutor(t, db, []Backfill{{
+		ID:   "online-lease-loss",
+		Mode: BackfillOnline,
+		RunBatch: func(ctx context.Context, db Execer, _ int) (int64, error) {
+			_, err := db.ExecContext(ctx,
+				"UPDATE data_backfills SET lease_owner = ? WHERE id = ?", "executor-b", "online-lease-loss")
+			return 7, err
+		},
+	}}, WithBackfillOwner("executor-a"))
+
+	progress, err := executor.RunOnlineBatch(ctx)
+	requireErrorCode(t, err, ErrCodeBackfillFailed)
+	if len(progress) != 0 {
+		t.Fatalf("lost lease must not report progress: %+v", progress)
+	}
+	state := backfillStateByID(t, executor, "online-lease-loss")
+	if state.LeaseOwner != "executor-b" || state.Remaining != -1 {
+		t.Fatalf("lost lease must preserve the new owner's ledger state: %+v", state)
+	}
+}

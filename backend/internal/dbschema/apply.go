@@ -237,9 +237,15 @@ func (r *Runner) applyMigration(ctx context.Context, m Migration) (Applied, stri
 // statement the body executes counts against the budget, and exceeding it
 // fails the migration instead of letting it perform unbounded work.
 type budgetedExecer struct {
-	Execer
+	db        Execer
 	remaining int64
 }
+
+type errorRow struct {
+	err error
+}
+
+func (r errorRow) Scan(_ ...any) error { return r.err }
 
 func (b *budgetedExecer) charge() error {
 	if b.remaining <= 0 {
@@ -253,28 +259,28 @@ func (b *budgetedExecer) ExecContext(ctx context.Context, query string, args ...
 	if err := b.charge(); err != nil {
 		return nil, err
 	}
-	return b.Execer.ExecContext(ctx, query, args...)
+	return b.db.ExecContext(ctx, query, args...)
 }
 
 func (b *budgetedExecer) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	if err := b.charge(); err != nil {
 		return nil, err
 	}
-	return b.Execer.QueryContext(ctx, query, args...)
+	return b.db.QueryContext(ctx, query, args...)
 }
 
-// QueryRowContext stays uncharged: a *sql.Row cannot carry an injected
-// budget error, and unbounded single-row loops are still bounded by the
-// per-migration lock budget.
-func (b *budgetedExecer) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
-	return b.Execer.QueryRowContext(ctx, query, args...)
+func (b *budgetedExecer) QueryRowContext(ctx context.Context, query string, args ...any) RowScanner {
+	if err := b.charge(); err != nil {
+		return errorRow{err: err}
+	}
+	return b.db.QueryRowContext(ctx, query, args...)
 }
 
 func runMigrationBody(ctx context.Context, db Execer, m Migration) error {
 	if m.Go == nil && int64(len(m.Statements)) > m.StatementBudget {
 		return fmt.Errorf("statement budget exceeded: %d statements, budget %d", len(m.Statements), m.StatementBudget)
 	}
-	budgeted := &budgetedExecer{Execer: db, remaining: m.StatementBudget}
+	budgeted := &budgetedExecer{db: db, remaining: m.StatementBudget}
 	if m.Go != nil {
 		return m.Go(ctx, budgeted)
 	}

@@ -103,3 +103,41 @@ func TestContractDryRunOnAdoptedDatabase(t *testing.T) {
 		t.Fatalf("contract without maintenance assertion: code=%d output=%q", code, output)
 	}
 }
+
+func TestSQLiteContractBackupStoreDoesNotPublishHeartbeat(t *testing.T) {
+	databaseURL := cliTestEnv(t)
+	config := server.ConfigFromEnv()
+	config.DatabaseURL = databaseURL
+	config.SQLiteBackupDir = t.TempDir()
+
+	runtimeStore, err := server.OpenStoreWithConfig(databaseURL, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopHeartbeat := runtimeStore.StartInstanceHeartbeat("cli-test")
+	stopHeartbeat()
+	if err := runtimeStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := openSession(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close()
+	maintenanceStore, err := server.OpenStoreForMaintenance(databaseURL, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer maintenanceStore.Close() //nolint:errcheck // test cleanup
+	backup, err := maintenanceStore.CreateSQLiteBackup("tokenhub-db-contract", 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := maintenanceStore.GetSQLiteBackup(backup.ID); err != nil {
+		t.Fatalf("verify backup: %v", err)
+	}
+	if err := requireNoLiveInstances(context.Background(), s); err != nil {
+		t.Fatalf("maintenance backup store must not block contract: %v", err)
+	}
+}

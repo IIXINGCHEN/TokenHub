@@ -287,10 +287,11 @@ func runContract(ctx context.Context, args []string, config server.Config, stdou
 		} else {
 			// SQLite evidence is a built-in backup created and verified by
 			// TokenHub itself before anything destructive runs (ADR 0005).
-			store, storeErr := server.OpenStoreWithConfig(config.DatabaseURL, config)
+			store, storeErr := server.OpenStoreForMaintenance(config.DatabaseURL, config)
 			if storeErr != nil {
 				return storeErr
 			}
+			defer func() { _ = store.Close() }()
 			record, backupErr := store.CreateSQLiteBackup("tokenhub-db-contract", 30)
 			if backupErr != nil {
 				return fmt.Errorf("create verified backup before contract: %w", backupErr)

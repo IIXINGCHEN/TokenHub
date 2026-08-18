@@ -50,7 +50,7 @@ func TestStatementBudgetBoundsGoMigrationStatements(t *testing.T) {
 		{
 			Version: 2,
 			Name:    "go overspending",
-			Go: func(ctx context.Context, db Execer) error {
+			Go: func(ctx context.Context, db MigrationExecer) error {
 				for i := 0; i < 3; i++ {
 					if _, err := db.ExecContext(ctx, "SELECT 1"); err != nil {
 						return err
@@ -76,6 +76,35 @@ func TestStatementBudgetBoundsGoMigrationStatements(t *testing.T) {
 	}
 }
 
+func TestStatementBudgetBoundsGoMigrationQueryRows(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	runner := mustRunner(t, db, nil)
+	if _, err := runner.Adopt(ctx, nil); err != nil {
+		t.Fatalf("Adopt: %v", err)
+	}
+	runner = mustRunner(t, db, []Migration{{
+		Version: 2,
+		Name:    "go query-row overspending",
+		Go: func(ctx context.Context, db MigrationExecer) error {
+			for range 3 {
+				var value int
+				if err := db.QueryRowContext(ctx, "SELECT 1").Scan(&value); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+		StatementBudget:  2,
+		ChecksumOverride: "test-go-query-row-budget-checksum",
+	}})
+	_, err := runner.Migrate(ctx)
+	if err == nil || !strings.Contains(err.Error(), "statement budget exceeded") {
+		t.Fatalf("expected query-row statement budget failure, got %v", err)
+	}
+	requireErrorCode(t, err, ErrCodeApplyFailed)
+}
+
 func TestLockBudgetDeadlineFailsMigration(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
@@ -88,7 +117,7 @@ func TestLockBudgetDeadlineFailsMigration(t *testing.T) {
 			Version:            2,
 			Name:               "slow",
 			LockTimeoutSeconds: 1,
-			Go: func(ctx context.Context, db Execer) error {
+			Go: func(ctx context.Context, db MigrationExecer) error {
 				select {
 				case <-time.After(1500 * time.Millisecond):
 					return nil
