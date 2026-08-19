@@ -384,6 +384,14 @@ func TestAdminProviderMethodRoutesPreserveEscapedProviderID(t *testing.T) {
 	if !ok || updated.Healthy {
 		t.Fatalf("escaped provider health was not updated: %+v", updated)
 	}
+	refresh := methodRoutingJSONRequest(t, app, http.MethodPost, "/api/admin/providers/tenant%2Fprovider/refresh-token", map[string]any{"healthy": true}, adminToken)
+	if refresh.Code != http.StatusOK {
+		t.Fatalf("POST refresh-token for escaped provider: expected 200, got %d: %s", refresh.Code, refresh.Body.String())
+	}
+	updated, ok = store.GetProvider(provider.ID)
+	if !ok || !updated.Healthy {
+		t.Fatalf("escaped provider refresh-token was not routed to health update: %+v", updated)
+	}
 
 	response := methodRoutingRequest(app, http.MethodDelete, "/api/admin/providers/tenant%2Fprovider", adminToken)
 	if response.Code != http.StatusNoContent {
@@ -472,9 +480,23 @@ func TestAdminProviderMethodRoutesKeepReservedStaticPathsAheadOfProviderIDs(t *t
 	}
 }
 
-func TestAdminProviderMethodRoutesPreserveLegacyRefreshTokenSubtree(t *testing.T) {
+func TestAdminProviderMethodRoutesPreserveLegacyRefreshToken(t *testing.T) {
 	store, app := newMethodRoutingAdminServer(t, "provider-refresh-token-password")
 	adminToken, _ := loginMethodRoutingAdmin(t, app, "provider-refresh-token-password")
+	user, err := store.CreateAdminUser(AdminUser{
+		Username: "provider-refresh-token-user",
+		Name:     "Provider Refresh Token User",
+		Email:    "provider-refresh-token-user@tokenhub.local",
+		Role:     "user",
+		Status:   StatusActive,
+	}, "provider-refresh-token-user-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, userSession, err := store.CreateAdminSession(user.ID, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
 	provider := store.AddProvider(Provider{
 		ID:      "prv_refresh_token",
 		Name:    "Refresh Token Provider",
@@ -482,23 +504,85 @@ func TestAdminProviderMethodRoutesPreserveLegacyRefreshTokenSubtree(t *testing.T
 		Status:  StatusActive,
 		Healthy: true,
 	})
+	auditsBefore := len(store.ListAuditEvents())
+
+	nonexistentPost := methodRoutingJSONRequest(t, app, http.MethodPost, "/api/admin/providers/prv_missing/refresh-token", map[string]any{
+		"healthy": false,
+	}, adminToken)
+	assertJSONError(t, nonexistentPost, http.StatusNotFound, "provider_not_found")
+	assertAllowHeader(t, nonexistentPost, "")
+	if _, ok := store.GetProvider("prv_missing"); ok {
+		t.Fatal("nonexistent refresh-token target was unexpectedly created")
+	}
+	if got := len(store.ListAuditEvents()); got != auditsBefore {
+		t.Fatalf("nonexistent refresh-token request wrote audit events: got %d, want %d", got, auditsBefore)
+	}
+
+	ordinaryPost := methodRoutingJSONRequest(t, app, http.MethodPost, "/api/admin/providers/"+provider.ID+"/refresh-token", map[string]any{
+		"healthy": false,
+	}, userSession.Token)
+	assertJSONError(t, ordinaryPost, http.StatusForbidden, "admin_forbidden")
+	assertAllowHeader(t, ordinaryPost, "")
+	if updated, ok := store.GetProvider(provider.ID); !ok || !updated.Healthy {
+		t.Fatalf("ordinary-user refresh-token changed provider health: %+v", updated)
+	}
+	if got := len(store.ListAuditEvents()); got != auditsBefore {
+		t.Fatalf("ordinary-user refresh-token request wrote audit events: got %d, want %d", got, auditsBefore)
+	}
+
+	unauthorizedPost := methodRoutingJSONRequest(t, app, http.MethodPost, "/api/admin/providers/"+provider.ID+"/refresh-token", map[string]any{
+		"healthy": false,
+	}, "")
+	assertJSONError(t, unauthorizedPost, http.StatusUnauthorized, "invalid_admin_token")
+	assertAllowHeader(t, unauthorizedPost, "")
+	if updated, ok := store.GetProvider(provider.ID); !ok || !updated.Healthy {
+		t.Fatalf("unauthorized refresh-token changed provider health: %+v", updated)
+	}
 
 	unauthorized := methodRoutingRequest(app, http.MethodGet, "/api/admin/providers/"+provider.ID+"/refresh-token", "")
 	assertJSONError(t, unauthorized, http.StatusUnauthorized, "invalid_admin_token")
 	assertAllowHeader(t, unauthorized, "")
-	wrongMethod := methodRoutingRequest(app, http.MethodGet, "/api/admin/providers/"+provider.ID+"/refresh-token", adminToken)
-	assertJSONError(t, wrongMethod, http.StatusMethodNotAllowed, "method_not_allowed")
-	assertAllowHeader(t, wrongMethod, http.MethodPost)
+	for _, method := range []string{http.MethodGet, http.MethodPatch, http.MethodDelete, http.MethodPut} {
+		t.Run("wrong method "+method, func(t *testing.T) {
+			wrongMethod := methodRoutingRequest(app, method, "/api/admin/providers/"+provider.ID+"/refresh-token", adminToken)
+			assertJSONError(t, wrongMethod, http.StatusMethodNotAllowed, "method_not_allowed")
+			assertAllowHeader(t, wrongMethod, http.MethodPost)
+		})
+	}
+	if got := len(store.ListAuditEvents()); got != auditsBefore {
+		t.Fatalf("unauthorized and wrong-method requests wrote audit events: got %d, want %d", got, auditsBefore)
+	}
+	malformedRequest := httptest.NewRequest(http.MethodPost, "/api/admin/providers/"+provider.ID+"/refresh-token", strings.NewReader(`{"healthy":`))
+	malformedRequest.Header.Set("authorization", "Bearer "+adminToken)
+	malformedRequest.Header.Set("content-type", "application/json")
+	malformedResponse := httptest.NewRecorder()
+	app.ServeHTTP(malformedResponse, malformedRequest)
+	assertJSONError(t, malformedResponse, http.StatusBadRequest, "invalid_request")
+	assertAllowHeader(t, malformedResponse, "")
+	if updated, ok := store.GetProvider(provider.ID); !ok || !updated.Healthy {
+		t.Fatalf("malformed refresh-token changed provider health: %+v", updated)
+	}
+	if got := len(store.ListAuditEvents()); got != auditsBefore {
+		t.Fatalf("malformed refresh-token wrote audit events: got %d, want %d", got, auditsBefore)
+	}
 	refreshed := methodRoutingJSONRequest(t, app, http.MethodPost, "/api/admin/providers/"+provider.ID+"/refresh-token", map[string]any{
 		"healthy": false,
 	}, adminToken)
 	if refreshed.Code != http.StatusOK {
 		t.Fatalf("POST legacy refresh-token: expected 200, got %d: %s", refreshed.Code, refreshed.Body.String())
 	}
+	var response Provider
+	if err := json.NewDecoder(refreshed.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.ID != provider.ID || response.Healthy {
+		t.Fatalf("legacy refresh-token response = %+v", response)
+	}
 	updated, ok := store.GetProvider(provider.ID)
 	if !ok || updated.Healthy {
 		t.Fatalf("legacy refresh-token did not preserve health behavior: %+v", updated)
 	}
+	assertProviderRoutingAuditEvent(t, store.ListAuditEvents(), "health", "provider", provider.ID)
 }
 
 func TestAdminProviderMethodRoutesPreserveTrailingSlashHandlers(t *testing.T) {
@@ -526,6 +610,17 @@ func TestAdminProviderMethodRoutesPreserveTrailingSlashHandlers(t *testing.T) {
 	if !ok || updated.Healthy {
 		t.Fatalf("health trailing slash did not update provider: %+v", updated)
 	}
+	refresh := methodRoutingJSONRequest(t, app, http.MethodPost, "/api/admin/providers/"+provider.ID+"/refresh-token/", map[string]any{"healthy": true}, adminToken)
+	if refresh.Code != http.StatusOK {
+		t.Fatalf("refresh-token trailing slash: expected 200, got %d: %s", refresh.Code, refresh.Body.String())
+	}
+	updated, ok = store.GetProvider(provider.ID)
+	if !ok || !updated.Healthy {
+		t.Fatalf("refresh-token trailing slash did not preserve health behavior: %+v", updated)
+	}
+	wrongRefresh := methodRoutingRequest(app, http.MethodGet, "/api/admin/providers/"+provider.ID+"/refresh-token/", adminToken)
+	assertJSONError(t, wrongRefresh, http.StatusMethodNotAllowed, "method_not_allowed")
+	assertAllowHeader(t, wrongRefresh, http.MethodPost)
 	deleted := methodRoutingRequest(app, http.MethodDelete, "/api/admin/providers/"+provider.ID+"/", adminToken)
 	if deleted.Code != http.StatusNoContent {
 		t.Fatalf("DELETE trailing slash: expected 204, got %d: %s", deleted.Code, deleted.Body.String())
@@ -545,5 +640,6 @@ func adminProviderMethodRoutes() []adminProviderMethodRoute {
 		{name: "provider_item", path: "/api/admin/providers/prv_mock", wrongMethod: http.MethodGet, allow: "PATCH, DELETE"},
 		{name: "provider_health", path: "/api/admin/providers/prv_mock/health", wrongMethod: http.MethodGet, allow: http.MethodPost},
 		{name: "provider_test", path: "/api/admin/providers/prv_mock/test", wrongMethod: http.MethodGet, allow: http.MethodPost},
+		{name: "provider_refresh_token", path: "/api/admin/providers/prv_mock/refresh-token", wrongMethod: http.MethodGet, allow: http.MethodPost},
 	}
 }
