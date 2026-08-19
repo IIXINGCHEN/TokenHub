@@ -20,9 +20,9 @@ import (
 
 func TestNativeUpdateDownloadsVerifiesAndActivatesRelease(t *testing.T) {
 	root := prepareNativeInstallRoot(t, "0.3.1", nil)
-	// The target binary must satisfy the database preflight (`db verify`,
-	// `db migrate` exit 0) before the release can be activated.
-	targetBinary := "#!/bin/sh\ncase \"$2\" in verify|migrate) exit 0;; *) exit 1;; esac\n"
+	// The target binary must satisfy database preparation and verification
+	// before the release can be activated.
+	targetBinary := "#!/bin/sh\ncase \"$2\" in prepare|verify) exit 0;; *) exit 1;; esac\n"
 	archive := nativeTestArchive(t, "0.3.2", map[string]nativeTestArchiveEntry{
 		"bin/tokenhub": {content: targetBinary, mode: 0o755},
 	})

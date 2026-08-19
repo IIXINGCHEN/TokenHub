@@ -22,6 +22,7 @@ TokenHub 使用显式、只前进的迁移演进数据库。本文说明演进�
 ```bash
 tokenhub db status                                  # ledger、回填、在线实例
 tokenhub db verify                                  # ledger 校验和 + 语义校验
+tokenhub db prepare                                 # 以启动兼容方式采纳并执行扩展迁移，但不提供服务
 tokenhub db migrate                                 # 执行待执行的扩展迁移
 tokenhub db repair --version <n>                    # 清除 dirty 迁移（仅限受验证的修复）
 tokenhub db contract --dry-run                      # 收缩迁移预检
@@ -37,7 +38,7 @@ tokenhub db contract --backup-reference <ref> --maintenance
 - 对没有采纳基线的数据库执行 `tokenhub db migrate` 会提示先正常启动一次服务：采纳在服务的串行结构流程中完成。
 - 被拒绝的 contract 会说明失败的前置条件；此时没有执行任何操作。
 - 回退到旧版本后，旧版本可在当前数据库上继续工作；新版本回归时重新校验 ledger 并继续演进。
-- 托管升级会先用目标 Release 自身的二进制执行 `db migrate`：在第一次修改前，迁移运行器会确认现有账本版本和校验和均可识别，且不存在脏迁移，然后应用待处理的 expand 迁移；随后执行 `db verify`，对迁移后的账本和数据库结构做语义校验。两者都成功后才激活目标 Release。激活后的 Release 首次启动失败时，自动重新激活上一 Release 一次（仅当本次升级未执行 contract、且上一 Release 的兼容记录覆盖当前数据库状态时）；第二次失败则停止版本切换，交由人工恢复。
+- 托管升级会先用目标 Release 自身的二进制执行 `db prepare`：在不发布服务实例心跳的情况下，运行串行且与启动一致的采纳与 expand 流程，因此受支持但尚无 ledger 的旧数据库也能在激活前完成准备；随后执行 `db verify`，对准备后的 ledger 和数据库结构做语义校验。两者都成功后才激活目标 Release。激活后的 Release 首次启动失败时，自动重新激活上一 Release 一次（仅当本次升级未执行 contract、且上一 Release 的兼容记录覆盖当前数据库状态时）；第二次失败则停止版本切换，交由人工恢复。
 - 管理界面展示只读的数据库演进区块（状态版本、就绪状态、兼容范围、回填、在线实例）；contract 与 repair 操作按设计只存在于 CLI。
 
 ## 开发者说明

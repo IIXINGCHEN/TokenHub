@@ -44,6 +44,53 @@ func TestStatusAndMigrateOnUnadoptedDatabase(t *testing.T) {
 	}
 }
 
+func TestPrepareAdoptsLegacyDatabaseWithoutPublishingHeartbeat(t *testing.T) {
+	databaseURL := cliTestEnv(t)
+	_, db, err := server.OpenRawDatabase(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A known pre-ledger TokenHub table selects the frozen legacy-adoption
+	// path instead of the fresh-baseline replay.
+	if _, err := db.Exec("CREATE TABLE projects (id TEXT PRIMARY KEY)"); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	code, output := runCLI(t, "prepare")
+	if code != 0 || !strings.Contains(output, "database prepared") {
+		t.Fatalf("prepare legacy database: code=%d output=%q", code, output)
+	}
+	code, output = runCLI(t, "verify")
+	if code != 0 || !strings.Contains(output, "schema: verified") {
+		t.Fatalf("verify prepared legacy database: code=%d output=%q", code, output)
+	}
+
+	_, db, err = server.OpenRawDatabase(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close() //nolint:errcheck // test cleanup
+	var baselineCount, heartbeatTableCount, heartbeatCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 1 AND dirty = 0").Scan(&baselineCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'instance_heartbeats'").Scan(&heartbeatTableCount); err != nil {
+		t.Fatal(err)
+	}
+	if heartbeatTableCount > 0 {
+		if err := db.QueryRow("SELECT COUNT(*) FROM instance_heartbeats").Scan(&heartbeatCount); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if baselineCount != 1 || heartbeatCount != 0 {
+		t.Fatalf("prepare state: baseline=%d heartbeats=%d, want 1 and 0", baselineCount, heartbeatCount)
+	}
+}
+
 func TestCommandsOnAdoptedDatabase(t *testing.T) {
 	databaseURL := cliTestEnv(t)
 	// Opening the store once adopts the database and records the baseline.

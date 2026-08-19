@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -180,5 +181,38 @@ func TestPostgresFreshStoreAdoptsFromBaselineSQL(t *testing.T) {
 	}
 	if err := VerifySchemaSemantics(context.Background(), dsn); err != nil {
 		t.Fatalf("semantic verification after fresh adoption: %v", err)
+	}
+}
+
+func TestPostgresStartupSchemaLockWaitHonorsContext(t *testing.T) {
+	admin, _ := openPostgresAdmin(t)
+	holder, err := admin.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close() //nolint:errcheck // test cleanup
+	if _, err := holder.ExecContext(t.Context(), "SELECT pg_advisory_lock(hashtextextended($1, 0))", dbschema.SchemaMigrationLockName); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_, _ = holder.ExecContext(context.Background(), "SELECT pg_advisory_unlock(hashtextextended($1, 0))", dbschema.SchemaMigrationLockName)
+	}()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 150*time.Millisecond)
+	defer cancel()
+	migrateCalled := false
+	started := time.Now()
+	err = runSchemaMigrationLocked(ctx, admin, "postgres", func() error {
+		migrateCalled = true
+		return nil
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("startup lock wait error = %v, want context deadline", err)
+	}
+	if migrateCalled {
+		t.Fatal("startup migration ran without acquiring the advisory lock")
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("startup lock wait ignored its deadline: %s", elapsed)
 	}
 }

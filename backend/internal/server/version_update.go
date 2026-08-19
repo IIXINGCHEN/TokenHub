@@ -264,9 +264,9 @@ func (s *versionService) applyNativeRelease(ctx context.Context, release githubR
 		return err
 	}
 	// The managed-upgrade contract in docs/database-evolution.md requires the
-	// target release's own binary to run against the current database — a
-	// read-only preflight, then the pending
-	// expand migrations — so a database the target cannot serve is never
+	// target release's own binary to run its startup-compatible preparation
+	// and verification against the current database, so a database the target
+	// cannot serve is never
 	// activated. The managed upgrade never runs contracts; the upgrade state
 	// records that so the post-restart auto-rollback gate stays closed.
 	targetBinary := filepath.Join(root, "releases", version, "bin", "tokenhub")
@@ -280,20 +280,19 @@ func (s *versionService) applyNativeRelease(ctx context.Context, release githubR
 }
 
 // runTargetDatabasePreflight runs the freshly installed target release binary
-// against the current database before activation. `db migrate`
-// comes first: its runner rejects an incompatible ledger (unknown checksums,
-// dirty state) before touching anything, then applies the pending expand
-// migrations. `db verify` runs afterwards — semantic verification compares the
-// live schema against the target's frozen reference, so it can only pass once
-// the expands it expects are in place; verifying first would reject every
-// valid pre-upgrade database for missing exactly those objects. Completing
-// expands before activation is intentional; the database keeps them even if
-// the upgrade is later rolled back (no automatic backup restore).
+// against the current database before activation. `db prepare` runs the same
+// serialized adoption and expand flow as startup, but without publishing a
+// serving heartbeat. This lets a target release safely adopt a supported
+// pre-ledger database instead of demanding that it be started before
+// activation. `db verify` runs afterwards — semantic verification compares
+// the live schema against the target's frozen reference, so it can only pass
+// once preparation is complete. Expands remain in the database if the upgrade
+// is later rolled back (there is no automatic backup restore).
 func (s *versionService) runTargetDatabasePreflight(ctx context.Context, binary, version string) error {
 	if s.databaseURL == "" {
 		return errors.New("database URL is not configured; cannot preflight the target release")
 	}
-	for _, args := range [][]string{{"db", "migrate"}, {"db", "verify"}} {
+	for _, args := range [][]string{{"db", "prepare"}, {"db", "verify"}} {
 		command := exec.CommandContext(ctx, binary, args...)
 		command.Env = append(os.Environ(), "TOKENHUB_DATABASE_URL="+s.databaseURL)
 		output, err := command.CombinedOutput()

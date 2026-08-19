@@ -25,13 +25,6 @@ func (r *Runner) verifyAgainstReference(ctx context.Context) error {
 	return nil
 }
 
-// lockName keys the runner's PostgreSQL advisory lock. It deliberately
-// matches the store's startup lock: startup runs the runner under external
-// coordination and never takes this lock itself, while maintenance commands
-// (contract, standalone migrate) share one lock domain with server startup so
-// they exclude each other.
-const lockName = "tokenhub:schema-migration"
-
 // Adopt bridges a database that has no adoption baseline: it runs the frozen
 // adoption callback (if any), then records the baseline row. A database that
 // already carries a baseline is only verified, after which pending expand
@@ -457,43 +450,13 @@ func (r *Runner) appliedRecord(m Migration) Applied {
 }
 
 // acquireLock serializes migration executors across processes. PostgreSQL uses
-// a session advisory lock with a bounded poll; SQLite writer exclusion comes
-// from per-migration BEGIN IMMEDIATE transactions, so the SQLite path is a
-// no-op here. Runners created with WithExternalCoordination skip locking
-// because the caller already serializes schema work.
+// a session advisory lock; SQLite uses a host lock file that remains held
+// across non-transactional dirty-marker commits and contract preconditions.
+// Runners created with WithExternalCoordination skip locking because the
+// caller already holds the same migration lock around a larger startup flow.
 func (r *Runner) acquireLock(ctx context.Context) (func(), error) {
-	if r.externalCoordination || r.dialect == DialectSQLite {
+	if r.externalCoordination {
 		return func() {}, nil
 	}
-	conn, err := r.db.Conn(ctx)
-	if err != nil {
-		return nil, err
-	}
-	deadline := time.Now().Add(r.lockWait)
-	for {
-		var acquired bool
-		if err := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock(hashtextextended($1, 0))", lockName).Scan(&acquired); err != nil {
-			conn.Close()
-			return nil, err
-		}
-		if acquired {
-			break
-		}
-		if time.Now().After(deadline) {
-			_, _ = conn.ExecContext(context.Background(), "SELECT pg_advisory_unlock(hashtextextended($1, 0))", lockName)
-			conn.Close()
-			return nil, newError(ErrCodeLockTimeout, 0, fmt.Errorf("schema migration lock %q still held after %s", lockName, r.lockWait))
-		}
-		r.log("dbschema: waiting for schema migration lock %q (bounded at %s)", lockName, r.lockWait)
-		select {
-		case <-ctx.Done():
-			conn.Close()
-			return nil, ctx.Err()
-		case <-time.After(200 * time.Millisecond):
-		}
-	}
-	return func() {
-		_, _ = conn.ExecContext(context.Background(), "SELECT pg_advisory_unlock(hashtextextended($1, 0))", lockName)
-		conn.Close()
-	}, nil
+	return AcquireMigrationLock(ctx, r.db, r.dialect, r.lockWait, r.log)
 }

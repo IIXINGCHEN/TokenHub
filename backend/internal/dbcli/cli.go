@@ -68,6 +68,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		err = runStatus(ctx, config, stdout)
 	case "verify":
 		err = runVerify(ctx, config, stdout)
+	case "prepare":
+		err = runPrepare(config, stdout)
 	case "migrate":
 		err = runMigrate(ctx, config, stdout)
 	case "repair":
@@ -175,6 +177,21 @@ func runVerify(ctx context.Context, config server.Config, stdout io.Writer) erro
 		return err
 	}
 	_, _ = fmt.Fprintln(stdout, "schema: verified against the frozen reference snapshot")
+	return nil
+}
+
+// runPrepare executes the target release's serialized startup schema flow
+// without publishing a serving heartbeat. Managed upgrades use it to adopt a
+// supported pre-ledger database and apply expands before activation.
+func runPrepare(config server.Config, stdout io.Writer) error {
+	store, err := server.OpenStoreForMaintenance(config.DatabaseURL, config)
+	if err != nil {
+		return err
+	}
+	if err := store.Close(); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintln(stdout, "database prepared for this release")
 	return nil
 }
 
@@ -395,6 +412,7 @@ func usage(w io.Writer) {
 commands:
   status                      show ledger, backfill, and instance state
   verify                      verify ledger checksums and semantic schema
+  prepare                     adopt a supported legacy database and apply expands
   migrate                     apply pending expand migrations
   repair --version <n>        clear a dirty migration via verified repair
   contract [--dry-run]

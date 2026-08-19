@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"tokenhub/backend/internal/dbschema"
 	"tokenhub/backend/internal/guardrails"
 
 	"gorm.io/driver/postgres"
@@ -258,7 +259,9 @@ func newStoreWithDialect(databaseURL string, config Config, publishHeartbeat boo
 		return backfillRoutingPolicyBindingKeys(db)
 	}
 	var instanceHeartbeatID string
-	if err := runSchemaMigrationLocked(sqlDB, driver, func() error {
+	const startupSchemaLockWait = time.Duration(dbschema.DefaultExpandLockTimeoutSeconds) * time.Second
+	schemaLockCtx, cancelSchemaLock := context.WithTimeout(context.Background(), startupSchemaLockWait)
+	schemaErr := runSchemaMigrationLocked(schemaLockCtx, sqlDB, driver, func() error {
 		if err := adoptSchemaLedger(context.Background(), sqlDB, driver, dsn, legacySchemaFlow); err != nil {
 			return err
 		}
@@ -283,8 +286,10 @@ func newStoreWithDialect(databaseURL string, config Config, publishHeartbeat boo
 			instanceHeartbeatID = id
 		}
 		return nil
-	}); err != nil {
-		return nil, err
+	})
+	cancelSchemaLock()
+	if schemaErr != nil {
+		return nil, schemaErr
 	}
 	if postgresMaxOpenConns > 0 {
 		sqlDB.SetMaxOpenConns(postgresMaxOpenConns)
@@ -884,33 +889,12 @@ func (s *GormStore) withReadSnapshot(read func(*gorm.DB) error) error {
 	return s.db.Transaction(read)
 }
 
-func runSchemaMigrationLocked(sqlDB *sql.DB, driver string, migrate func() error) error {
-	if driver != "postgres" {
-		return migrate()
-	}
-	ctx := context.Background()
-	conn, err := sqlDB.Conn(ctx)
+func runSchemaMigrationLocked(ctx context.Context, sqlDB *sql.DB, driver string, migrate func() error) error {
+	release, err := dbschema.AcquireMigrationLock(ctx, sqlDB, dbschema.Dialect(driver), time.Duration(dbschema.DefaultExpandLockTimeoutSeconds)*time.Second, log.Printf)
 	if err != nil {
-		return err
+		return fmt.Errorf("acquire startup schema migration lock: %w", err)
 	}
-	defer conn.Close()
-	const lockName = "tokenhub:schema-migration"
-	// A blocking advisory-lock statement remains active while it waits. That
-	// would keep CREATE INDEX CONCURRENTLY in the lock holder waiting for this
-	// session, so poll with completed statements until the lock is available.
-	for {
-		var acquired bool
-		if err := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock(hashtextextended($1, 0))", lockName).Scan(&acquired); err != nil {
-			return err
-		}
-		if acquired {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	defer func() {
-		_, _ = conn.ExecContext(context.Background(), "SELECT pg_advisory_unlock(hashtextextended($1, 0))", lockName)
-	}()
+	defer release()
 	return migrate()
 }
 

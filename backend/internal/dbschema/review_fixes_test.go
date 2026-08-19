@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 )
 
 // newSingleConnDB mirrors the server's SQLite pool (one connection): helpers
@@ -19,6 +21,17 @@ func newSingleConnDB(t *testing.T) *sql.DB {
 		t.Fatalf("open sqlite: %v", err)
 	}
 	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
+func openSharedSQLiteTestDB(t *testing.T, dsn string) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open shared sqlite: %v", err)
+	}
+	db.SetMaxOpenConns(2)
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
@@ -50,6 +63,164 @@ func TestNonTransactionalSuccessWithSingleConnectionPool(t *testing.T) {
 		t.Fatalf("expected version 2 applied, got %+v", result.Applied)
 	}
 	requireCleanApplied(t, db, 2)
+}
+
+func TestSQLiteNonTransactionalMigrationExcludesConcurrentRepair(t *testing.T) {
+	dsn := fmt.Sprintf("file:%s?_busy_timeout=5000", filepath.Join(t.TempDir(), "shared-non-transactional.db"))
+	firstDB := openSharedSQLiteTestDB(t, dsn)
+	secondDB := openSharedSQLiteTestDB(t, dsn)
+	ctx := context.Background()
+	if _, err := mustRunner(t, firstDB, nil).Adopt(ctx, nil); err != nil {
+		t.Fatalf("Adopt: %v", err)
+	}
+
+	bodyStarted := make(chan struct{})
+	allowBody := make(chan struct{})
+	var startOnce sync.Once
+	migration := Migration{
+		Version:          2,
+		Name:             "coordinated-non-transactional",
+		NonTransactional: true,
+		Go: func(ctx context.Context, db MigrationExecer) error {
+			startOnce.Do(func() { close(bodyStarted) })
+			select {
+			case <-allowBody:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			_, err := db.ExecContext(ctx, "CREATE TABLE coordinated_non_tx (id INTEGER PRIMARY KEY)")
+			return err
+		},
+		Postcondition: func(ctx context.Context, db MigrationExecer) error {
+			var count int
+			return db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'coordinated_non_tx'").Scan(&count)
+		},
+		ChecksumOverride: "coordinated-non-transactional-test",
+	}
+	firstRunner := mustRunner(t, firstDB, []Migration{migration})
+	waiting := make(chan struct{})
+	var waitingOnce sync.Once
+	secondRunner := mustRunner(t, secondDB, []Migration{migration}, WithLogger(func(string, ...any) {
+		waitingOnce.Do(func() { close(waiting) })
+	}))
+
+	migrateDone := make(chan error, 1)
+	go func() {
+		_, err := firstRunner.Migrate(ctx)
+		migrateDone <- err
+	}()
+	select {
+	case <-bodyStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("non-transactional migration did not reach its body")
+	}
+	var dirty bool
+	if err := secondDB.QueryRow("SELECT dirty FROM schema_migrations WHERE version = 2").Scan(&dirty); err != nil || !dirty {
+		t.Fatalf("expected committed dirty marker while body runs, dirty=%t err=%v", dirty, err)
+	}
+
+	repairDone := make(chan error, 1)
+	go func() {
+		_, err := secondRunner.Repair(ctx, 2)
+		repairDone <- err
+	}()
+	select {
+	case <-waiting:
+	case err := <-repairDone:
+		t.Fatalf("repair escaped SQLite coordination while migration was running: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("repair did not contend on the SQLite migration lock")
+	}
+	select {
+	case err := <-repairDone:
+		t.Fatalf("repair completed before the migration released its lock: %v", err)
+	default:
+	}
+
+	close(allowBody)
+	if err := <-migrateDone; err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	err := <-repairDone
+	requireErrorCode(t, err, ErrCodeNotDirty)
+	requireCleanApplied(t, firstDB, 2)
+}
+
+func TestSQLiteContractPreconditionAndMutationShareStartupLock(t *testing.T) {
+	dsn := fmt.Sprintf("file:%s?_busy_timeout=5000", filepath.Join(t.TempDir(), "shared-contract.db"))
+	contractDB := openSharedSQLiteTestDB(t, dsn)
+	startupDB := openSharedSQLiteTestDB(t, dsn)
+	ctx := context.Background()
+	registry := contractTestRegistry()
+	runner := mustRunner(t, contractDB, registry)
+	if _, err := runner.Adopt(ctx, nil); err != nil {
+		t.Fatalf("Adopt: %v", err)
+	}
+	if _, err := runner.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	preconditionStarted := make(chan struct{})
+	allowContract := make(chan struct{})
+	contractDone := make(chan error, 1)
+	go func() {
+		_, err := runner.ApplyContract(ctx, ContractOptions{
+			RequireCluster: func(ctx context.Context) error {
+				close(preconditionStarted)
+				select {
+				case <-allowContract:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			},
+		})
+		contractDone <- err
+	}()
+	select {
+	case <-preconditionStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("contract did not reach the cluster precondition")
+	}
+
+	startupWaiting := make(chan struct{})
+	var waitingOnce sync.Once
+	startupAcquired := make(chan func(), 1)
+	lockCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	go func() {
+		release, err := AcquireMigrationLock(lockCtx, startupDB, DialectSQLite, time.Second, func(string, ...any) {
+			waitingOnce.Do(func() { close(startupWaiting) })
+		})
+		if err != nil {
+			startupAcquired <- nil
+			return
+		}
+		startupAcquired <- release
+	}()
+	select {
+	case <-startupWaiting:
+	case release := <-startupAcquired:
+		if release != nil {
+			release()
+		}
+		t.Fatal("startup entered the schema section between contract preflight and mutation")
+	case <-time.After(2 * time.Second):
+		t.Fatal("startup did not contend on the contract migration lock")
+	}
+
+	close(allowContract)
+	if err := <-contractDone; err != nil {
+		t.Fatalf("ApplyContract: %v", err)
+	}
+	release := <-startupAcquired
+	if release == nil {
+		t.Fatal("startup did not acquire the schema lock after contract completion")
+	}
+	release()
+	if tableExists(t, contractDB, "contract_demo") {
+		t.Fatal("contract mutation did not complete before startup acquired the lock")
+	}
 }
 
 func TestContractRefusedWhileExpandPending(t *testing.T) {

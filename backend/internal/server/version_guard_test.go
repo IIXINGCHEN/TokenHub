@@ -223,7 +223,7 @@ func TestRunTargetDatabasePreflight(t *testing.T) {
 
 	// A passing target binary: both subcommands exit 0.
 	good := filepath.Join(t.TempDir(), "tokenhub-ok")
-	if err := os.WriteFile(good, []byte("#!/bin/sh\ncase \"$2\" in verify|migrate) exit 0;; *) exit 1;; esac\n"), 0o755); err != nil {
+	if err := os.WriteFile(good, []byte("#!/bin/sh\ncase \"$2\" in prepare|verify) exit 0;; *) exit 1;; esac\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := versions.runTargetDatabasePreflight(ctx, good, "0.6.0"); err != nil {

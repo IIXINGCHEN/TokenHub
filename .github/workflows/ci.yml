@@ -69,7 +69,7 @@ jobs:
           set -euo pipefail
           go run ./cmd/manifestgen
           if ! git diff --exit-code --quiet -- internal/dbschema/migrations_manifest.json; then
-            echo "Embedded migration manifest is stale (ADR 0006)." >&2
+            echo "Embedded migration manifest is stale (see docs/database-evolution.md)." >&2
             echo "Run: go run ./cmd/manifestgen" >&2
             exit 1
           fi
@@ -111,7 +111,7 @@ jobs:
         env:
           TEST_POSTGRES_URL: postgresql://tokenhub:tokenhub-e2e-password@localhost:5432/tokenhub_e2e?sslmode=disable
         run: |
-          go test -tags=integration ./internal/server -run '^TestMultiInstancePostgresE2E$|^TestPostgresBaselineSQLIsCurrent$|^TestPostgresFreshStoreAdoptsFromBaselineSQL$' -count=1 -v
+          go test -tags=integration ./internal/server -run '^TestMultiInstancePostgresE2E$|^TestPostgresBaselineSQLIsCurrent$|^TestPostgresFreshStoreAdoptsFromBaselineSQL$|^TestPostgresStartupSchemaLockWaitHonorsContext$' -count=1 -v
           go test -tags=integration ./internal/dbschema -run '^TestPostgres' -count=1 -v
 
       - name: Check out previous release tag
@@ -195,7 +195,8 @@ jobs:
             echo "current release reads v0.4.0 PostgreSQL writes"
           }
           # The previous release creates the legacy PostgreSQL database, and
-          # the immutable N-1 schema fixture pins its shape (ADR 0005).
+          # the immutable N-1 schema fixture pins its shape as required by
+          # docs/database-evolution.md.
           boot_and_wait "$RUNNER_TEMP/n1-tokenhub" 18581 /healthz "$RUNNER_TEMP/pg-n1-a.log"
           "$RUNNER_TEMP/n1check" "${N1_PG_URL}"
           # The current release adopts it and reports full readiness.
@@ -280,7 +281,7 @@ jobs:
             done
             echo "timeout waiting for port ${port}; log follows"; cat "$log"; kill "$pid" 2>/dev/null || true; return 1
           }
-          # The N-1 CRUD contract (ADR 0005): the old binary must complete
+          # The N-1 CRUD contract in docs/database-evolution.md: the old binary must complete
           # auth, project & team, API key, provider, model & route, one gateway
           # request, and audit writes against the adopted database.
           run_crud_contract() {
@@ -329,7 +330,7 @@ jobs:
           # health endpoint is a plain connectivity probe.
           boot_and_wait "$RUNNER_TEMP/n1-tokenhub" 18081 /healthz "$RUNNER_TEMP/n1-a.log" "sqlite://${N1_DATABASE}"
           # The immutable N-1 schema fixture pins the legacy shape before the
-          # current release adopts it (ADR 0005).
+          # current release adopts it, as specified in docs/database-evolution.md.
           "$RUNNER_TEMP/n1check" "sqlite://${N1_DATABASE}"
           # The current release adopts it and must report full readiness, not
           # just liveness: /readyz fails on dirty or unverifiable state.
@@ -348,13 +349,19 @@ jobs:
           TOKENHUB_DATABASE_URL="sqlite://${N1_DATABASE}" "$RUNNER_TEMP/current-tokenhub" db status
 
           # Leg 2: v0.5.0 is the other pre-ledger stable release; legacy
-          # adoption must be validated with its real fixture too (ADR 0005).
+          # adoption must be validated with its real fixture too, as specified
+          # in docs/database-evolution.md.
           N15_DATABASE="${{ runner.temp }}/n15-contract.db"
           boot_and_wait "$RUNNER_TEMP/n15-tokenhub" 18091 /healthz "$RUNNER_TEMP/n15-a.log" "sqlite://${N15_DATABASE}"
           # Pin the v0.5.0 legacy shape before the current release adopts it;
           # the v0.4.0 fixture alone is too loose for this leg because v0.5.0
           # added tables and columns it would not notice.
           "$RUNNER_TEMP/n1check" -fixture v050 "sqlite://${N15_DATABASE}"
+          # Exercise the managed-upgrade preflight path directly: the target
+          # binary must adopt the real pre-ledger v0.5.0 shape before it is
+          # activated, without requiring a target server start first.
+          TOKENHUB_DATABASE_URL="sqlite://${N15_DATABASE}" "$RUNNER_TEMP/current-tokenhub" db prepare
+          TOKENHUB_DATABASE_URL="sqlite://${N15_DATABASE}" "$RUNNER_TEMP/current-tokenhub" db verify
           boot_and_wait "$RUNNER_TEMP/current-tokenhub" 18092 /readyz "$RUNNER_TEMP/cur-f.log" "sqlite://${N15_DATABASE}"
           TOKENHUB_DATABASE_URL="sqlite://${N15_DATABASE}" "$RUNNER_TEMP/current-tokenhub" db verify
           boot_and_wait "$RUNNER_TEMP/n15-tokenhub" 18093 /healthz "$RUNNER_TEMP/n15-d.log" "sqlite://${N15_DATABASE}"
