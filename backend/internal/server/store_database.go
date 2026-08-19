@@ -273,13 +273,12 @@ func newStoreWithDialect(databaseURL string, config Config, publishHeartbeat boo
 			// Publish the instance heartbeat before the schema lock is released:
 			// once the lock drops, `tokenhub db contract` may acquire it, and its
 			// no-live-instances preflight must not mistake this booting instance
-			// for a drained cluster. A failed publish stays non-fatal, matching
-			// StartInstanceHeartbeat: readiness gates the instance until the
-			// refresher publishes successfully.
+			// for a drained cluster. Fail startup when publication cannot be
+			// established: releasing the lock without a row would let contract
+			// maintenance miss this booting instance.
 			id, err := publishInitialInstanceHeartbeat(db, config.AppVersion)
 			if err != nil {
-				log.Printf("[tokenhub] failed to publish initial instance heartbeat under the schema lock: %v", err)
-				return nil
+				return fmt.Errorf("publish initial instance heartbeat under schema lock: %w", err)
 			}
 			instanceHeartbeatID = id
 		}

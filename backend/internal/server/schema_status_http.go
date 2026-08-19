@@ -117,5 +117,7 @@ func (s *Server) annotateRollbackCompatibility(ctx context.Context, versions []r
 		verdict := s.rollbackCompatibility(ctx, versions[i].Version)
 		versions[i].Compatibility = verdict.Compatibility
 		versions[i].CompatibilityReason = verdict.Reason
+		versions[i].CompatibilityReasonCode = verdict.ReasonCode
+		versions[i].CompatibilityReasonParams = verdict.ReasonParams
 	}
 }

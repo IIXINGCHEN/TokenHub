@@ -67,7 +67,9 @@ func TestAnnotateRollbackCompatibility(t *testing.T) {
 	if versions[0].Compatibility != rollbackCompatible {
 		t.Fatalf("expected v0.4.0 compatible, got %+v", versions[0])
 	}
-	if versions[1].Compatibility != rollbackUnknown || versions[1].CompatibilityReason == "" {
+	if versions[1].Compatibility != rollbackUnknown || versions[1].CompatibilityReason == "" ||
+		versions[1].CompatibilityReasonCode != "compatibility_record_missing" ||
+		versions[1].CompatibilityReasonParams["version"] != "0.3.0" {
 		t.Fatalf("expected v0.3.0 unknown with reason, got %+v", versions[1])
 	}
 }

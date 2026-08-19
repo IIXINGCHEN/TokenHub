@@ -30,11 +30,12 @@ func TestRollbackCompatibilityPreflight(t *testing.T) {
 		t.Fatalf("expected v0.5.0 compatible on baseline database (fixture-verified), got %+v", verdict)
 	}
 	unknown := server.rollbackCompatibility(ctx, "0.3.0")
-	if unknown.Compatibility != rollbackUnknown || !strings.Contains(unknown.Reason, "no verified record") {
+	if unknown.Compatibility != rollbackUnknown || unknown.ReasonCode != "compatibility_record_missing" ||
+		unknown.ReasonParams["version"] != "0.3.0" || !strings.Contains(unknown.Reason, "no verified record") {
 		t.Fatalf("expected unknown compatibility for 0.3.0, got %+v", unknown)
 	}
 	notSemver := server.rollbackCompatibility(ctx, "latest")
-	if notSemver.Compatibility != rollbackUnknown {
+	if notSemver.Compatibility != rollbackUnknown || notSemver.ReasonCode != "requested_version_invalid" {
 		t.Fatalf("expected unknown compatibility for non-semantic version, got %+v", notSemver)
 	}
 
@@ -43,7 +44,7 @@ func TestRollbackCompatibilityPreflight(t *testing.T) {
 		t.Fatal(err)
 	}
 	dirty := server.rollbackCompatibility(ctx, "v0.4.0")
-	if dirty.Compatibility != rollbackIncompatible || !strings.Contains(dirty.Reason, "not clean") {
+	if dirty.Compatibility != rollbackIncompatible || dirty.ReasonCode != "database_evolution_not_clean" || !strings.Contains(dirty.Reason, "not clean") {
 		t.Fatalf("expected incompatible on tampered ledger, got %+v", dirty)
 	}
 }

@@ -575,6 +575,7 @@ jobs:
     needs:
       - backend
       - backend-postgres
+      - backend-db-n1
       - frontend
       - deployment
       - repo-gates
@@ -582,7 +583,7 @@ jobs:
     steps:
       - name: Verify every job succeeded
         env:
-          EXPECTED_JOBS: 5
+          EXPECTED_JOBS: 6
         run: |
           set -euo pipefail
           results='${{ join(needs.*.result, ' ') }}'

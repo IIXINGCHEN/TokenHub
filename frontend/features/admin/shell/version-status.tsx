@@ -17,6 +17,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { type AdminUser, type ApiContext } from "../core/types";
+import { rollbackCompatibilityReasonText } from "../i18n/db-evolution-reasons";
 import { languageLocale, tx } from "../i18n/runtime";
 import { adminFetch, readAdminError } from "../resources/payloads";
 import { GitHubBrandIcon } from "../shared/auth";
@@ -55,6 +56,14 @@ type RollbackVersionInfo = {
   html_url: string;
   compatibility?: string;
   compatibility_reason?: string;
+  compatibility_reason_code?: string;
+  compatibility_reason_params?: {
+    version?: string;
+    state?: number;
+    release?: string;
+    min?: number;
+    max?: number;
+  };
 };
 
 function RollbackConfirmDialog({
@@ -589,7 +598,7 @@ export function VersionStatus({ api, user }: { api: ApiContext; user: AdminUser 
                                   className={selectedVersion === version.version ? "version-option selected" : "version-option"}
                                   key={version.version}
                                 >
-                                  <label title={blocked ? version.compatibility_reason : undefined}>
+                                  <label title={blocked ? rollbackCompatibilityReasonText(version) : undefined}>
                                     <input
                                       checked={selectedVersion === version.version}
                                       disabled={blocked}

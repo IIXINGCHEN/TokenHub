@@ -75,15 +75,18 @@ func publishInitialInstanceHeartbeat(db *gorm.DB, release string) (string, error
 }
 
 // StartInstanceHeartbeat publishes this instance and refreshes it until the
-// returned stop function removes the row. A non-fatal start keeps the server
-// running without a heartbeat: losing the heartbeat only delays contract
-// maintenance, it never blocks serving.
+// returned stop function removes the row. Publication failures fail closed via
+// DatabaseEvolutionStatus so contract maintenance can never miss a serving
+// instance merely because its heartbeat row is absent.
 func (s *GormStore) StartInstanceHeartbeat(release string) (stop func()) {
 	instanceID := s.instanceHeartbeatID
 	if instanceID == "" {
 		instanceID = NewID("instance")
 	}
 	if err := s.db.Exec(instanceHeartbeatTableDDL).Error; err != nil {
+		if s.heartbeatState != nil {
+			s.heartbeatState.Store(heartbeatFailing)
+		}
 		log.Printf("[tokenhub] failed to create instance heartbeat table: %v", err)
 		return func() {}
 	}

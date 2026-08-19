@@ -37,6 +37,57 @@ func TestInstanceHeartbeatLifecycle(t *testing.T) {
 	stop()
 }
 
+func TestOpenStoreFailsWhenInitialHeartbeatCannotPublish(t *testing.T) {
+	databaseURL := "sqlite://" + filepath.Join(t.TempDir(), "heartbeat-startup.db")
+	maintenanceStore, err := OpenStoreForMaintenance(databaseURL, Config{AppVersion: "v0.6.0-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := maintenanceStore.db.Exec(instanceHeartbeatTableDDL).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := maintenanceStore.db.Exec(`CREATE TRIGGER reject_instance_heartbeat_insert
+		BEFORE INSERT ON instance_heartbeats
+		BEGIN
+			SELECT RAISE(FAIL, 'heartbeat insert rejected');
+		END`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := maintenanceStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := OpenStoreWithConfig(databaseURL, Config{AppVersion: "v0.6.0-test"})
+	if store != nil {
+		_ = store.Close()
+		t.Fatal("startup must not return a store without an initial heartbeat")
+	}
+	if err == nil || !strings.Contains(err.Error(), "publish initial instance heartbeat") {
+		t.Fatalf("expected initial heartbeat publication failure, got %v", err)
+	}
+}
+
+func TestHeartbeatTableSetupFailureFailsReadinessClosed(t *testing.T) {
+	databaseURL := "sqlite://" + filepath.Join(t.TempDir(), "heartbeat-refresh.db")
+	store, err := OpenStoreForMaintenance(databaseURL, Config{AppVersion: "v0.6.0-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := store.db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	stop := store.StartInstanceHeartbeat("v0.6.0-test")
+	defer stop()
+	if got := store.heartbeatState.Load(); got != heartbeatFailing {
+		t.Fatalf("heartbeat state = %d, want failing", got)
+	}
+}
+
 func TestReadinessGatesOnEvolutionState(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "ready.db")
 	store, err := NewSQLiteStore("sqlite://" + databasePath)

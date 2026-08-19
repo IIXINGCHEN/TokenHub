@@ -65,8 +65,10 @@ type rollbackVersionInfo struct {
 	HTMLURL     string `json:"html_url"`
 	// Compatibility marks whether the current database state allows
 	// activating this release: compatible, incompatible, or unknown.
-	Compatibility       string `json:"compatibility,omitempty"`
-	CompatibilityReason string `json:"compatibility_reason,omitempty"`
+	Compatibility             string         `json:"compatibility,omitempty"`
+	CompatibilityReason       string         `json:"compatibility_reason,omitempty"`
+	CompatibilityReasonCode   string         `json:"compatibility_reason_code,omitempty"`
+	CompatibilityReasonParams map[string]any `json:"compatibility_reason_params,omitempty"`
 }
 
 type githubRelease struct {

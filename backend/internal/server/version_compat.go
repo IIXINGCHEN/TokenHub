@@ -53,6 +53,8 @@ type RollbackCompatibility struct {
 	Release       string
 	Compatibility string
 	Reason        string
+	ReasonCode    string
+	ReasonParams  map[string]any
 }
 
 func (s *Server) rollbackCompatibility(ctx context.Context, requestedVersion string) RollbackCompatibility {
@@ -62,6 +64,8 @@ func (s *Server) rollbackCompatibility(ctx context.Context, requestedVersion str
 			Release:       requestedVersion,
 			Compatibility: rollbackUnknown,
 			Reason:        "requested version is not a semantic version",
+			ReasonCode:    "requested_version_invalid",
+			ReasonParams:  map[string]any{"version": requestedVersion},
 		}
 	}
 	manifest, known := legacyReleaseCompatibility[canonical]
@@ -70,6 +74,8 @@ func (s *Server) rollbackCompatibility(ctx context.Context, requestedVersion str
 			Release:       canonical,
 			Compatibility: rollbackUnknown,
 			Reason:        "release predates database compatibility manifests and carries no verified record",
+			ReasonCode:    "compatibility_record_missing",
+			ReasonParams:  map[string]any{"version": canonical},
 		}
 	}
 	evolution, hasEvolution := s.store.(interface {
@@ -86,6 +92,8 @@ func (s *Server) rollbackCompatibility(ctx context.Context, requestedVersion str
 			Release:       canonical,
 			Compatibility: rollbackIncompatible,
 			Reason:        fmt.Sprintf("database evolution state is not clean: %s", state.Reason),
+			ReasonCode:    "database_evolution_not_clean",
+			ReasonParams:  map[string]any{"reason_code": state.ReasonCode},
 		}
 	}
 	if state.SchemaVersion > manifest.MaxCompatible || state.SchemaVersion < manifest.MinCompatible {
@@ -94,6 +102,13 @@ func (s *Server) rollbackCompatibility(ctx context.Context, requestedVersion str
 			Compatibility: rollbackIncompatible,
 			Reason: fmt.Sprintf("database state version %d is outside release %s compatibility range [%d, %d]",
 				state.SchemaVersion, canonical, manifest.MinCompatible, manifest.MaxCompatible),
+			ReasonCode: "database_version_outside_range",
+			ReasonParams: map[string]any{
+				"state":   state.SchemaVersion,
+				"release": canonical,
+				"min":     manifest.MinCompatible,
+				"max":     manifest.MaxCompatible,
+			},
 		}
 	}
 	return RollbackCompatibility{Release: canonical, Compatibility: rollbackCompatible}
