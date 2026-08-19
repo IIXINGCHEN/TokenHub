@@ -20,7 +20,7 @@ func TestRepairVerifiedCompleteClearsDirty(t *testing.T) {
 		Name:             "crash-after-body",
 		Statements:       []string{"CREATE TABLE repair_demo (id INTEGER PRIMARY KEY)"},
 		NonTransactional: true,
-		Postcondition: func(ctx context.Context, ex Execer) error {
+		Postcondition: func(ctx context.Context, ex MigrationExecer) error {
 			if postconditionPasses {
 				return nil
 			}
@@ -69,7 +69,7 @@ func TestRepairSafeRetryReapplies(t *testing.T) {
 		},
 		NonTransactional: true,
 		SafeRetry:        true,
-		Postcondition: func(ctx context.Context, ex Execer) error {
+		Postcondition: func(ctx context.Context, ex MigrationExecer) error {
 			var count int
 			if err := ex.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'retry_demo'").Scan(&count); err != nil {
 				return err
@@ -116,7 +116,7 @@ func TestRepairRefusedWithoutSafeRetry(t *testing.T) {
 			return errors.New("executor died mid-run")
 		},
 		NonTransactional: true,
-		Postcondition: func(context.Context, Execer) error {
+		Postcondition: func(context.Context, MigrationExecer) error {
 			return errors.New("target state not proven")
 		},
 		ChecksumOverride: "repair-test-not-retryable-v1",

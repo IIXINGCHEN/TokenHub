@@ -97,6 +97,45 @@ func TestPostgresAdoptMigrateAndVerify(t *testing.T) {
 	}
 }
 
+func TestPostgresStatementBudgetIncludesPostconditionQueries(t *testing.T) {
+	db := openPostgresTestDB(t)
+	ctx := context.Background()
+	adoptRunner, err := NewRunner(db, DialectPostgres, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adoptRunner.Adopt(ctx, nil); err != nil {
+		t.Fatalf("Adopt: %v", err)
+	}
+	runner, err := NewRunner(db, DialectPostgres, []Migration{{
+		Version:          2,
+		Name:             "postcondition overspending",
+		Statements:       []string{"CREATE TABLE postcondition_budget (id BIGINT PRIMARY KEY)"},
+		NonTransactional: true,
+		Postcondition: func(ctx context.Context, db MigrationExecer) error {
+			var count int
+			return db.QueryRowContext(ctx, "SELECT COUNT(*) FROM postcondition_budget").Scan(&count)
+		},
+		StatementBudget: 1,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = runner.Migrate(ctx)
+	if err == nil || !strings.Contains(err.Error(), "postcondition: statement budget exceeded") {
+		t.Fatalf("expected shared postcondition statement budget failure, got %v", err)
+	}
+	requireErrorCode(t, err, ErrCodeApplyFailed)
+	var dirty bool
+	if err := db.QueryRowContext(ctx, "SELECT dirty FROM schema_migrations WHERE version = 2").Scan(&dirty); err != nil {
+		t.Fatalf("read dirty marker: %v", err)
+	}
+	if !dirty {
+		t.Fatal("postcondition budget failure must keep the dirty marker")
+	}
+}
+
 // TestPostgresBackfillExecutor pins the dialect placeholder handling of the
 // backfill ledger updates (a review finding: reused $1 placeholders made
 // every PostgreSQL update fail) and the atomic lease takeover on PostgreSQL.

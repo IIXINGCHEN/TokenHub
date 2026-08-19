@@ -1,7 +1,7 @@
 // Command manifestgen regenerates the embedded migration manifest
 // (backend/internal/dbschema/migrations_manifest.json) from the migration
 // registry and the frozen dialect baselines. CI runs it and fails on a diff,
-// so the manifest never drifts from source (ADR 0006).
+// so the manifest never drifts from source.
 package main
 
 import (

@@ -10,7 +10,7 @@ import (
 
 // TestEmbeddedManifestIsCurrent fails when the embedded manifest does not
 // match the registry and frozen baselines, so a source change without a
-// manifest update breaks CI (ADR 0006). Regenerate with:
+// manifest update breaks CI. Regenerate with:
 //
 //	UPDATE_BASELINE=1 go test ./cmd/manifestgen -run TestEmbeddedManifestIsCurrent
 func TestEmbeddedManifestIsCurrent(t *testing.T) {

@@ -1,5 +1,5 @@
 import { type SchemaEvolutionStatus } from "../core/types";
-import { formatTranslationTemplate, tx } from "./runtime";
+import { formatLocaleNumber, formatTranslationTemplate, tx } from "./runtime";
 
 export type RollbackCompatibilityReason = {
   compatibility_reason_code?: string;
@@ -26,7 +26,7 @@ export function evolutionReasonText(schema: SchemaEvolutionStatus): string {
       return tx("实例心跳未发布；contract 维护无法发现该实例");
     case "dirty_migration":
       return formatTranslationTemplate(tx("版本 {version} 的迁移处于脏状态，需要修复"), {
-        version: String(schema.dirty_version ?? schema.schema_version),
+        version: formatLocaleNumber(schema.dirty_version ?? schema.schema_version),
       });
     case "ledger_verification_failed":
       return tx("迁移账本校验失败");
@@ -58,10 +58,10 @@ export function rollbackCompatibilityReasonText(reason: RollbackCompatibilityRea
       return tx("数据库演进状态未就绪，暂时无法回退");
     case "database_version_outside_range":
       return formatTranslationTemplate(tx("数据库状态版本 {state} 超出版本 {release} 的兼容范围 {min} – {max}"), {
-        state: String(params.state ?? ""),
+        state: params.state === undefined ? "" : formatLocaleNumber(params.state),
         release: String(params.release ?? ""),
-        min: String(params.min ?? ""),
-        max: String(params.max ?? ""),
+        min: params.min === undefined ? "" : formatLocaleNumber(params.min),
+        max: params.max === undefined ? "" : formatLocaleNumber(params.max),
       });
     default:
       return tx("数据库兼容性检查未通过");

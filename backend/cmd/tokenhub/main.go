@@ -40,8 +40,9 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// ADR 0005: after a managed upgrade, the first boot of the target release
-	// runs the auto-rollback guard before any schema flow — a crashed boot
+	// The managed-upgrade contract in docs/database-evolution.md keeps the
+	// target release guarded until its first boot runs the auto-rollback guard
+	// before any schema flow — a crashed boot
 	// re-activates the previous release once, breaking a crash loop before the
 	// new release touches the database.
 	guardCtx, cancelGuard := context.WithTimeout(context.Background(), 60*time.Second)

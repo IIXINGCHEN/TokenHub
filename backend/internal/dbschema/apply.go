@@ -67,7 +67,7 @@ func (r *Runner) Adopt(ctx context.Context, frozen func(ctx context.Context) err
 		return r.migrateLocked(ctx)
 	}
 	// A database without business tables adopts from the frozen baseline SQL
-	// instead of the legacy flow (ADR 0005). SQLite serializes the recheck
+	// instead of the legacy flow. SQLite serializes the recheck
 	// and replay under BEGIN IMMEDIATE and may fall through to legacy.
 	if len(r.freshBaseline) > 0 {
 		if r.dialect == DialectSQLite {
@@ -91,7 +91,7 @@ func (r *Runner) Adopt(ctx context.Context, frozen func(ctx context.Context) err
 	}
 	started := time.Now()
 	// Unrecognized databases refuse adoption instead of being absorbed into
-	// the baseline by the frozen flow (ADR 0005).
+	// the baseline by the frozen flow.
 	if r.legacyRecognizer != nil {
 		if recognizeErr := r.legacyRecognizer(ctx, r.db); recognizeErr != nil {
 			r.finishAttempt(ctx, attemptID, "failed", time.Since(started), ErrCodeUnrecognizedDatabase)
@@ -105,7 +105,7 @@ func (r *Runner) Adopt(ctx context.Context, frozen func(ctx context.Context) err
 		}
 	}
 	// The frozen flow completed; before the baseline is recorded the database
-	// must semantically match the reference schema (ADR 0005).
+	// must semantically match the reference schema.
 	if r.adoptionReference != nil {
 		if verifyErr := r.verifyAgainstReference(ctx); verifyErr != nil {
 			r.finishAttempt(ctx, attemptID, "failed", time.Since(started), ErrCodeSchemaVerification)
@@ -210,7 +210,7 @@ func (r *Runner) applyMigration(ctx context.Context, m Migration) (Applied, stri
 	if err != nil {
 		return Applied{}, "failed", err
 	}
-	// The per-migration lock budget (ADR 0006) bounds how long one migration
+	// The per-migration lock budget bounds how long one migration
 	// may hold the schema lock while it runs, body and postcondition
 	// included. Exceeding it fails the migration like any other error:
 	// transactional runs roll back, non-transactional runs keep the dirty
@@ -233,9 +233,10 @@ func (r *Runner) applyMigration(ctx context.Context, m Migration) (Applied, stri
 	return record, outcome, nil
 }
 
-// budgetedExecer enforces a migration's StatementBudget (ADR 0006): every
-// statement the body executes counts against the budget, and exceeding it
-// fails the migration instead of letting it perform unbounded work.
+// budgetedExecer enforces a migration's StatementBudget: every
+// statement the body or postcondition executes counts against one shared
+// budget, and exceeding it fails the migration instead of letting it perform
+// unbounded work.
 type budgetedExecer struct {
 	db        Execer
 	remaining int64
@@ -276,16 +277,19 @@ func (b *budgetedExecer) QueryRowContext(ctx context.Context, query string, args
 	return b.db.QueryRowContext(ctx, query, args...)
 }
 
-func runMigrationBody(ctx context.Context, db Execer, m Migration) error {
+func newBudgetedExecer(db Execer, m Migration) *budgetedExecer {
+	return &budgetedExecer{db: db, remaining: m.StatementBudget}
+}
+
+func runMigrationBody(ctx context.Context, db MigrationExecer, m Migration) error {
 	if m.Go == nil && int64(len(m.Statements)) > m.StatementBudget {
 		return fmt.Errorf("statement budget exceeded: %d statements, budget %d", len(m.Statements), m.StatementBudget)
 	}
-	budgeted := &budgetedExecer{db: db, remaining: m.StatementBudget}
 	if m.Go != nil {
-		return m.Go(ctx, budgeted)
+		return m.Go(ctx, db)
 	}
 	for _, statement := range m.Statements {
-		if _, err := budgeted.ExecContext(ctx, statement); err != nil {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("statement %q: %w", firstLine(statement), err)
 		}
 	}
@@ -352,7 +356,8 @@ func (r *Runner) runOnSQLite(ctx context.Context, m Migration) (Applied, string,
 		return Applied{}, "skipped", nil
 	}
 	if m.transactional() {
-		if err := runMigrationBody(ctx, conn, m); err != nil {
+		budgeted := newBudgetedExecer(conn, m)
+		if err := runMigrationBody(ctx, budgeted, m); err != nil {
 			return Applied{}, "rolled_back", err
 		}
 		if err := r.insertAppliedOn(ctx, conn, m.Version, m.Name, m.Phase, m.Checksum(), false); err != nil {
@@ -374,10 +379,11 @@ func (r *Runner) runOnSQLite(ctx context.Context, m Migration) (Applied, string,
 		return Applied{}, "failed", err
 	}
 	open = false
-	if err := runMigrationBody(ctx, conn, m); err != nil {
+	budgeted := newBudgetedExecer(conn, m)
+	if err := runMigrationBody(ctx, budgeted, m); err != nil {
 		return Applied{}, "dirty", err
 	}
-	if err := m.Postcondition(ctx, conn); err != nil {
+	if err := m.Postcondition(ctx, budgeted); err != nil {
 		return Applied{}, "dirty", fmt.Errorf("postcondition: %w", err)
 	}
 	// Must run on the held connection: the server pool is single-connection
@@ -403,7 +409,8 @@ func (r *Runner) runOnPostgres(ctx context.Context, m Migration) (Applied, strin
 			return Applied{}, "failed", err
 		}
 		defer func() { _ = tx.Rollback() }()
-		if err := runMigrationBody(ctx, tx, m); err != nil {
+		budgeted := newBudgetedExecer(tx, m)
+		if err := runMigrationBody(ctx, budgeted, m); err != nil {
 			return Applied{}, "rolled_back", err
 		}
 		if err := r.insertAppliedOn(ctx, tx, m.Version, m.Name, m.Phase, m.Checksum(), false); err != nil {
@@ -425,10 +432,11 @@ func (r *Runner) runOnPostgres(ctx context.Context, m Migration) (Applied, strin
 	if err := tx.Commit(); err != nil {
 		return Applied{}, "failed", err
 	}
-	if err := runMigrationBody(ctx, r.db, m); err != nil {
+	budgeted := newBudgetedExecer(r.db, m)
+	if err := runMigrationBody(ctx, budgeted, m); err != nil {
 		return Applied{}, "dirty", err
 	}
-	if err := m.Postcondition(ctx, r.db); err != nil {
+	if err := m.Postcondition(ctx, budgeted); err != nil {
 		return Applied{}, "dirty", fmt.Errorf("postcondition: %w", err)
 	}
 	if err := r.clearDirty(ctx, m.Version); err != nil {

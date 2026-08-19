@@ -168,7 +168,7 @@ func TestRunStartupGuardRefusesIncompatiblePrevious(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A dirty ledger makes every rollback incompatible (ADR 0005).
+	// A dirty ledger makes every rollback incompatible.
 	if err := store.db.Exec("INSERT INTO schema_migrations (version, name, phase, checksum, dirty) VALUES (2, 'dirty', 'expand', 'abc', 1)").Error; err != nil {
 		t.Fatal(err)
 	}

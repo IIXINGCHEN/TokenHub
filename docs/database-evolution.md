@@ -2,6 +2,8 @@
 
 TokenHub evolves its database with explicit, forward-only migrations. This page explains the model, the maintenance commands, and how upgrades and rollbacks interact with the database.
 
+This page is the repository's normative source for the database evolution lifecycle and safety contract implemented by `backend/internal/dbschema`, the maintenance CLI, managed upgrades, and CI.
+
 ## Model
 
 - **Adoption baseline.** Every database carries a migration ledger (`schema_migrations`). Databases created by older releases are adopted on the next start: the frozen schema flow completes them, they are semantically verified against a reference snapshot, and the baseline row is recorded. Fresh databases are created from frozen baseline SQL, not from the ORM flow.
@@ -42,5 +44,5 @@ The database is resolved from `TOKENHUB_DATABASE_URL` (or the default SQLite pat
 
 - The migration runner lives in `backend/internal/dbschema`. Frozen baseline SQL is embedded per dialect under `backend/internal/dbschema/migrations/`.
 - Regenerate the SQLite baseline after model changes with `UPDATE_BASELINE=1 go test ./internal/server -run TestSQLiteBaselineSQLIsCurrent`; the PostgreSQL baseline regenerates the same way with `TEST_POSTGRES_URL` set and the `integration` build tag. Tests fail on a stale baseline.
-- CI runs the PostgreSQL integration suite and a v0.4.0 N-1 two-way contract on SQLite and PostgreSQL: the old binary creates a database, the current release adopts it and reports ready, the old binary boots again and completes an API contract (auth, project, API key, provider, model and route, one gateway request, and audit writes), and the current release returns and reads selected durable records (project and model on both dialects, plus provider on SQLite). A separate SQLite leg pins the real v0.5.0 schema shape, adopts it, and proves both releases can boot; it does not run the CRUD contract or a PostgreSQL v0.5.0 leg. The committed immutable fixtures under `backend/internal/dbschema/fixtures/` cover v0.4.0 on both dialects and v0.5.0 on SQLite; CI checks each covered database with `go run ./cmd/n1check` before adoption (ADR 0005).
-- Regenerate the embedded migration manifest after registry or baseline changes with `go run ./cmd/manifestgen` from `backend/`; CI fails when the embedded copy is stale (ADR 0006).
+- CI runs the PostgreSQL integration suite and a v0.4.0 N-1 two-way contract on SQLite and PostgreSQL: the old binary creates a database, the current release adopts it and reports ready, the old binary boots again and completes an API contract (auth, project, API key, provider, model and route, one gateway request, and audit writes), and the current release returns and reads selected durable records (project and model on both dialects, plus provider on SQLite). A separate SQLite leg pins the real v0.5.0 schema shape, adopts it, and proves both releases can boot; it does not run the CRUD contract or a PostgreSQL v0.5.0 leg. The committed immutable fixtures under `backend/internal/dbschema/fixtures/` cover v0.4.0 on both dialects and v0.5.0 on SQLite; CI checks each covered database with `go run ./cmd/n1check` before adoption.
+- Regenerate the embedded migration manifest after registry or baseline changes with `go run ./cmd/manifestgen` from `backend/`; CI fails when the embedded copy is stale.

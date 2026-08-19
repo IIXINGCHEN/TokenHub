@@ -22,8 +22,9 @@ import (
 )
 
 // adoptSchemaLedger records or verifies the dbschema adoption baseline around
-// the frozen startup schema flow (bridge-release semantics, ADR 0005). The
-// caller already serializes schema work across processes, so the runner runs
+// the frozen startup schema flow using the bridge-release semantics documented
+// in docs/database-evolution.md. The caller already serializes schema work
+// across processes, so the runner runs
 // under external coordination. Empty databases adopt from the frozen baseline
 // SQL (SQLite and PostgreSQL); databases with business tables run the legacy
 // callback and are semantically verified against the reference snapshot
@@ -76,7 +77,7 @@ func adoptSchemaLedger(ctx context.Context, db *sql.DB, driver, dsn string, lega
 }
 
 // adoptionExecutor names the instance that runs the startup adoption, used to
-// stamp migration_attempts rows (ADR 0006). The host name distinguishes
+// stamp migration_attempts rows. The host name distinguishes
 // instances on shared databases without leaking identifiers into logs.
 func adoptionExecutor() string {
 	if host, err := os.Hostname(); err == nil && host != "" {
@@ -124,7 +125,7 @@ func acquireSQLiteAdoptionLock(dsn string) (func(), error) {
 // legacyLooksLikeTokenHub refuses legacy adoption of databases that hold
 // tables but none from a known TokenHub release: the frozen flow would simply
 // complete an unrelated database and record it as the supported baseline
-// (ADR 0005). This any-known-table heuristic is a bridge-release gate; full
+// . This any-known-table heuristic is a bridge-release gate; full
 // fingerprints verified against real v0.4.0/v0.5.0 fixtures replace it when
 // the migration chain lands.
 func legacyLooksLikeTokenHub(driver string) func(ctx context.Context, db *sql.DB) error {
@@ -152,7 +153,7 @@ var schemaReferenceCache sync.Map // driver string -> dbschema.ObjectSet
 
 // schemaReferenceSnapshot returns the semantic reference schema for the
 // driver, building it once by running the frozen structural flow on a
-// throwaway database and introspecting the result (ADR 0006).
+// throwaway database and introspecting the result.
 func schemaReferenceSnapshot(ctx context.Context, driver, dsn string) (dbschema.ObjectSet, error) {
 	if cached, ok := schemaReferenceCache.Load(driver); ok {
 		return cached.(dbschema.ObjectSet), nil

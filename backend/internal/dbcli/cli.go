@@ -1,7 +1,7 @@
 // Package dbcli implements the `tokenhub db` maintenance commands. The
 // commands expose the migration ledger, semantic verification, pending expand
 // migrations, dirty-migration repair, and contract execution with the
-// operator-verified preconditions (ADR 0005). They never run the server.
+// operator-verified preconditions. They never run the server.
 package dbcli
 
 import (
@@ -46,7 +46,7 @@ func openSession(databaseURL string) (*session, error) {
 }
 
 // cliExecutor names the maintenance invocation that runs migrations, stamped
-// into migration_attempts rows (ADR 0006).
+// into migration_attempts rows.
 func cliExecutor() string {
 	if host, err := os.Hostname(); err == nil && host != "" {
 		return "cli:" + host
@@ -286,7 +286,7 @@ func runContract(ctx context.Context, args []string, config server.Config, stdou
 			}
 		} else {
 			// SQLite evidence is a built-in backup created and verified by
-			// TokenHub itself before anything destructive runs (ADR 0005).
+			// TokenHub itself before anything destructive runs.
 			store, storeErr := server.OpenStoreForMaintenance(config.DatabaseURL, config)
 			if storeErr != nil {
 				return storeErr
@@ -346,8 +346,9 @@ func requireBackfillsComplete(ctx context.Context, s *session) error {
 // requireNoLiveInstances refuses contract execution while any instance
 // publishes a fresh heartbeat. Compatibility-range comparison arrives with
 // the release manifest; until then any live instance counts as potentially
-// incompatible, the conservative reading of ADR 0005. A missing heartbeat
-// table also refuses: without it the preflight cannot prove that no instance
+// incompatible, matching the conservative contract in
+// docs/database-evolution.md. A missing heartbeat table also refuses: without
+// it the preflight cannot prove that no instance
 // is serving, and a server whose heartbeat publication failed keeps running.
 func requireNoLiveInstances(ctx context.Context, s *session) error {
 	exists, err := heartbeatTableExists(ctx, s)

@@ -21,7 +21,7 @@ type baselineFile struct {
 }
 
 // SQLiteBaselineStatements returns the frozen SQL statements that create the
-// adoption-baseline schema on a fresh SQLite database (ADR 0005: fresh
+// adoption-baseline schema on a fresh SQLite database (fresh
 // databases are created from explicit SQL; only databases that already carry
 // business tables run the frozen legacy-adoption flow). Regenerate the file
 // with UPDATE_BASELINE=1 go test ./internal/server -run TestSQLiteBaselineSQLIsCurrent.

@@ -37,7 +37,7 @@ func TestNonTransactionalSuccessWithSingleConnectionPool(t *testing.T) {
 		Name:             "online-index-single-conn",
 		Statements:       []string{"CREATE TABLE single_conn_demo (id INTEGER PRIMARY KEY)"},
 		NonTransactional: true,
-		Postcondition: func(ctx context.Context, ex Execer) error {
+		Postcondition: func(ctx context.Context, ex MigrationExecer) error {
 			var count int
 			return ex.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'single_conn_demo'").Scan(&count)
 		},

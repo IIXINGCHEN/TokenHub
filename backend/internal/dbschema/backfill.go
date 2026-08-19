@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// BackfillMode classifies a one-time data conversion (ADR 0007). Blocking
+// BackfillMode classifies a one-time data conversion. Blocking
 // backfills must finish before the release reports ready; online backfills
 // run in idempotent batches while the service keeps serving.
 type BackfillMode string
@@ -38,7 +38,7 @@ const (
 
 // Backfill is one registered one-time data conversion. Operations that drift
 // again after completion (process interruption aside) are continuous repairs
-// and must not be registered here (ADR 0007).
+// and must not be registered here.
 type Backfill struct {
 	ID   string
 	Mode BackfillMode
@@ -230,7 +230,7 @@ func (e *BackfillExecutor) Status(ctx context.Context) ([]BackfillState, error) 
 
 // RunBlocking executes every incomplete blocking backfill to completion. A
 // failure leaves the ledger row in running state and returns a typed error;
-// the release must not report ready until a retry succeeds (ADR 0007).
+// the release must not report ready until a retry succeeds.
 func (e *BackfillExecutor) RunBlocking(ctx context.Context) error {
 	if err := e.EnsureLedger(ctx); err != nil {
 		return err
@@ -262,7 +262,7 @@ func (e *BackfillExecutor) RunBlocking(ctx context.Context) error {
 // RunOnlineBatch executes at most one batch per incomplete online backfill for
 // which this executor can claim the lease. Progress rows update after the
 // batch commits; a crashed executor's stale lease expires and another instance
-// resumes from the committed data state (ADR 0005).
+// resumes from the committed data state.
 func (e *BackfillExecutor) RunOnlineBatch(ctx context.Context) ([]OnlineProgress, error) {
 	if err := e.EnsureLedger(ctx); err != nil {
 		return nil, err

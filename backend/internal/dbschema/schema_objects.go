@@ -423,7 +423,7 @@ func normalizeColumnType(typeName string) string {
 
 // CompareObjects checks that every object in the reference schema exists in
 // the actual schema with the same semantics. Extra objects in the actual
-// schema are allowed (ADR 0006).
+// schema are allowed.
 func CompareObjects(reference, actual ObjectSet) []Violation {
 	var violations []Violation
 	actualByTable := make(map[string]TableObjects, len(actual.Tables))

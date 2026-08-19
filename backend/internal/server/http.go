@@ -224,7 +224,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	// Readiness reflects the database evolution state: a dirty or unverifiable
 	// migration ledger and incomplete blocking backfills keep the instance out
-	// of rotation; pending online backfills do not (ADR 0007).
+	// of rotation; pending online backfills do not.
 	if evolution, ok := s.store.(interface {
 		DatabaseEvolutionStatus(ctx context.Context) DatabaseEvolutionStatus
 	}); ok {

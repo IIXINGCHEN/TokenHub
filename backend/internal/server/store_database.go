@@ -263,7 +263,7 @@ func newStoreWithDialect(databaseURL string, config Config, publishHeartbeat boo
 			return err
 		}
 		// Data repairs keep running on every boot until they become versioned
-		// data backfills (ADR 0007); they are idempotent, and legacy-shaped
+		// data backfills; they are idempotent, and legacy-shaped
 		// data can appear after adoption through backup restores or an older
 		// release writing to the same database.
 		if err := legacyDataBackfills(); err != nil {

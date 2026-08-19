@@ -184,7 +184,7 @@ func TestDirtyNonTransactionalMigrationRefusesStartupUntilCleared(t *testing.T) 
 		Name:             "broken-non-transactional",
 		Statements:       []string{"CREATE TABLE broken ("},
 		NonTransactional: true,
-		Postcondition: func(context.Context, Execer) error {
+		Postcondition: func(context.Context, MigrationExecer) error {
 			return nil
 		},
 	}
@@ -217,7 +217,7 @@ func TestDirtyNonTransactionalMigrationRefusesStartupUntilCleared(t *testing.T) 
 		Name:             "fixed-non-transactional",
 		Statements:       []string{"CREATE TABLE fixed_marker (id INTEGER PRIMARY KEY)"},
 		NonTransactional: true,
-		Postcondition: func(ctx context.Context, ex Execer) error {
+		Postcondition: func(ctx context.Context, ex MigrationExecer) error {
 			var count int
 			return ex.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'fixed_marker'").Scan(&count)
 		},
@@ -398,7 +398,7 @@ func TestNonTransactionalSuccessClearsDirtyMarker(t *testing.T) {
 			Name:             "online-index",
 			Statements:       []string{"CREATE TABLE online_demo (id INTEGER PRIMARY KEY)"},
 			NonTransactional: true,
-			Postcondition: func(ctx context.Context, ex Execer) error {
+			Postcondition: func(ctx context.Context, ex MigrationExecer) error {
 				var count int
 				return ex.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'online_demo'").Scan(&count)
 			},

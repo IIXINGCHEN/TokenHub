@@ -54,4 +54,17 @@ describe("database evolution reason localization", () => {
       compatibility_reason_code: "future_reason",
     })).toBe("The database compatibility check did not pass");
   });
+
+  it("formats numeric reason parameters with the active non-English locale", () => {
+    setActiveLanguage("ja");
+    expect(evolutionReasonText({
+      ready: false,
+      reason_code: "dirty_migration",
+      schema_version: 12345,
+    })).toBe("バージョン 12,345 のマイグレーションが不完全な状態です。修復が必要です");
+    expect(rollbackCompatibilityReasonText({
+      compatibility_reason_code: "database_version_outside_range",
+      compatibility_reason_params: { state: 12345, release: "0.4.0", min: 1000, max: 9999 },
+    })).toBe("データベース状態バージョン 12,345 はバージョン 0.4.0 の互換範囲 1,000 – 9,999 外です");
+  });
 });

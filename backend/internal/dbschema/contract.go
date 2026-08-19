@@ -5,8 +5,9 @@ import (
 	"fmt"
 )
 
-// ContractOptions carries the caller-verified preconditions that ADR 0005
-// requires before a contract migration may run. The runner cannot observe
+// ContractOptions carries the caller-verified preconditions that must hold
+// before a contract migration may run, as documented in
+// docs/database-evolution.md. The runner cannot observe
 // these facts itself: data-backfill completion (Group 2 ledger), live
 // incompatible instances (heartbeat), backup evidence, and drain or
 // maintenance state all belong to the maintenance command that drives the
@@ -53,7 +54,7 @@ func (r *Runner) PlanContract(ctx context.Context) (ContractPlan, error) {
 
 // ApplyContract executes pending contract migrations after every configured
 // precondition passes. A dry run performs the same verification but executes
-// nothing. Ordinary startup paths never call this (ADR 0005).
+// nothing. Ordinary startup paths never call this.
 func (r *Runner) ApplyContract(ctx context.Context, options ContractOptions) (Result, error) {
 	plan, err := r.PlanContract(ctx)
 	if err != nil {

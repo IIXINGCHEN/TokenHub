@@ -2,7 +2,8 @@
 // narrow migration runner with a per-version ledger, checksum verification,
 // dirty-state handling, and bounded cross-process locking. It executes only
 // registered SQL statements or Go callbacks and deliberately does not grow
-// into a general migration framework or SQL parser (ADR 0006).
+// into a general migration framework or SQL parser. The normative lifecycle
+// and safety contract is documented in docs/database-evolution.md.
 package dbschema
 
 import (
@@ -27,7 +28,7 @@ const (
 // Phase classifies a migration. Expand migrations stay compatible with the
 // supported rollback window and may run at startup; contract migrations only
 // run through an explicit maintenance operation and are never applied by
-// Runner.Migrate (ADR 0005).
+// Runner.Migrate.
 type Phase string
 
 const (
@@ -60,7 +61,7 @@ const (
 	// are still unapplied.
 	ErrCodeExpandPending = "expand_pending"
 	// ErrCodeUnrecognizedDatabase marks a refused legacy adoption: the
-	// database does not look like a known TokenHub release (ADR 0005).
+	// database does not look like a known TokenHub release.
 	ErrCodeUnrecognizedDatabase = "unrecognized_database"
 )
 
@@ -129,13 +130,13 @@ type Migration struct {
 	// NonTransactional opts out of per-migration transaction atomicity. A
 	// non-transactional migration must declare Postcondition; while it runs the
 	// ledger holds a dirty marker that refuses startup until the migration is
-	// proven complete (ADR 0005).
+	// proven complete.
 	NonTransactional bool
-	Postcondition    func(ctx context.Context, db Execer) error
+	Postcondition    func(ctx context.Context, db MigrationExecer) error
 	// SafeRetry declares that re-executing the statements after a failed
 	// non-transactional run is harmless. Repair may then drop the dirty row
 	// and re-apply the migration; without it a failed postcondition refuses
-	// repair (ADR 0005: no generic force-version escape hatch).
+	// repair (no generic force-version escape hatch).
 	SafeRetry bool
 	// ChecksumOverride pins the checksum explicitly. It is required for Go
 	// migrations, whose source checksum is produced by the build-time manifest.
@@ -143,20 +144,20 @@ type Migration struct {
 	// LockTimeoutSeconds declares how long this migration may hold the
 	// database lock. Expands keep the short default so startup never blocks
 	// the cluster for long; contracts may declare a longer budget because
-	// they only run inside the maintenance window (ADR 0006).
+	// they only run inside the maintenance window.
 	LockTimeoutSeconds int64
 	// StatementBudget bounds the work one migration may perform: an expand
 	// must not rewrite unbounded tables, and a contract may claim a longer
-	// budget only when its maintenance conditions are met (ADR 0006).
+	// budget only when its maintenance conditions are met.
 	StatementBudget int64
 }
 
 const (
 	// DefaultExpandLockTimeoutSeconds is the short lock budget every expand
-	// migration carries unless it declares its own (ADR 0006).
+	// migration carries unless it declares its own.
 	DefaultExpandLockTimeoutSeconds int64 = 30
 	// DefaultExpandStatementBudget bounds the statements of an expand so it
-	// cannot rewrite unbounded tables (ADR 0006).
+	// cannot rewrite unbounded tables.
 	DefaultExpandStatementBudget int64 = 50
 	// DefaultContractLockTimeoutSeconds is the longer lock budget a contract
 	// may use; contracts only run inside the maintenance window.
@@ -223,7 +224,7 @@ const (
 )
 
 // AdoptionChecksum pins the adoption pseudo-migration. A later release binds it
-// to the release manifest checksum (ADR 0005).
+// to the release manifest checksum.
 var AdoptionChecksum = func() string {
 	sum := sha256.Sum256([]byte("tokenhub:legacy-adoption:v1"))
 	return hex.EncodeToString(sum[:])
@@ -258,7 +259,7 @@ func WithAppRelease(release string) Option {
 }
 
 // WithExecutor stamps the executing instance into migration_attempts rows
-// (ADR 0006: the audit records who ran each attempt). Callers that run
+// (the audit records who ran each attempt). Callers that run
 // migrations from a known context — the db maintenance CLI or server startup —
 // should pass a stable identifier such as the host name.
 func WithExecutor(executor string) Option {
@@ -284,7 +285,7 @@ func WithExternalCoordination() Option {
 
 // WithAdoptionReference supplies a reference schema snapshot that the runner
 // verifies semantically against the database before recording the adoption
-// baseline (ADR 0005/0006). The builder only runs on the adoption path, never
+// baseline. The builder only runs on the adoption path, never
 // on ordinary restarts.
 func WithAdoptionReference(builder func(ctx context.Context) (ObjectSet, error)) Option {
 	return func(r *Runner) { r.adoptionReference = builder }
@@ -293,14 +294,14 @@ func WithAdoptionReference(builder func(ctx context.Context) (ObjectSet, error))
 // WithFreshBaseline supplies the frozen SQL that creates the baseline schema
 // on a database that holds no business tables yet. Databases that already
 // carry business tables ignore it and run the frozen legacy-adoption callback
-// instead (ADR 0005).
+// instead.
 func WithFreshBaseline(statements []string) Option {
 	return func(r *Runner) { r.freshBaseline = statements }
 }
 
 // WithLegacyRecognizer supplies a gate that runs before the frozen legacy
 // flow and refuses adoption of databases that do not look like a known
-// TokenHub release (ADR 0005: unrecognized databases refuse to start instead
+// TokenHub release (unrecognized databases refuse to start instead
 // of being absorbed into the baseline).
 func WithLegacyRecognizer(fn func(ctx context.Context, db *sql.DB) error) Option {
 	return func(r *Runner) { r.legacyRecognizer = fn }
@@ -342,7 +343,7 @@ func NewRunner(db *sql.DB, dialect Dialect, migrations []Migration, opts ...Opti
 // unique positive versions above the baseline, a recognized phase and
 // dialect, exactly one of Statements or Go, and positive lock and statement
 // budgets. Undeclared budgets are filled from the phase defaults so the
-// release manifest always carries concrete values (ADR 0006).
+// release manifest always carries concrete values.
 func NormalizeMigrations(migrations []Migration) ([]Migration, error) {
 	registry := make([]Migration, len(migrations))
 	copy(registry, migrations)
@@ -403,7 +404,7 @@ func NormalizeMigrations(migrations []Migration) ([]Migration, error) {
 			}
 		}
 		if m.LockTimeoutSeconds < 0 || m.StatementBudget < 0 {
-			return nil, fmt.Errorf("migration %q: lock and statement budgets must be non-negative (ADR 0006)", m.Name)
+			return nil, fmt.Errorf("migration %q: lock and statement budgets must be non-negative", m.Name)
 		}
 	}
 	return registry, nil

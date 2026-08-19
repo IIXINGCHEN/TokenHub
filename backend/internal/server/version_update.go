@@ -263,8 +263,9 @@ func (s *versionService) applyNativeRelease(ctx context.Context, release githubR
 	if err := s.installNativeBundle(extracted, version); err != nil {
 		return err
 	}
-	// ADR 0005: before activating the target release, run its own binary
-	// against the current database — a read-only preflight, then the pending
+	// The managed-upgrade contract in docs/database-evolution.md requires the
+	// target release's own binary to run against the current database — a
+	// read-only preflight, then the pending
 	// expand migrations — so a database the target cannot serve is never
 	// activated. The managed upgrade never runs contracts; the upgrade state
 	// records that so the post-restart auto-rollback gate stays closed.
@@ -279,7 +280,7 @@ func (s *versionService) applyNativeRelease(ctx context.Context, release githubR
 }
 
 // runTargetDatabasePreflight runs the freshly installed target release binary
-// against the current database before activation (ADR 0005). `db migrate`
+// against the current database before activation. `db migrate`
 // comes first: its runner rejects an incompatible ledger (unknown checksums,
 // dirty state) before touching anything, then applies the pending expand
 // migrations. `db verify` runs afterwards — semantic verification compares the
@@ -287,7 +288,7 @@ func (s *versionService) applyNativeRelease(ctx context.Context, release githubR
 // the expands it expects are in place; verifying first would reject every
 // valid pre-upgrade database for missing exactly those objects. Completing
 // expands before activation is intentional; the database keeps them even if
-// the upgrade is later rolled back (ADR 0005: no automatic backup restore).
+// the upgrade is later rolled back (no automatic backup restore).
 func (s *versionService) runTargetDatabasePreflight(ctx context.Context, binary, version string) error {
 	if s.databaseURL == "" {
 		return errors.New("database URL is not configured; cannot preflight the target release")
@@ -305,7 +306,7 @@ func (s *versionService) runTargetDatabasePreflight(ctx context.Context, binary,
 
 // upgradeState is the on-disk record of a pending managed upgrade. It exists
 // between activation and the first successful boot of the target release and
-// drives the one-shot auto-rollback (ADR 0005). BootFailed marks that the
+// drives the one-shot auto-rollback. BootFailed marks that the
 // target release's previous boot started but never completed its schema flow.
 type upgradeState struct {
 	PreviousVersion string `json:"previous_version"`
@@ -376,7 +377,7 @@ func (s *versionService) markUpgradeBootStarted() error {
 }
 
 // settleUpgrade removes the upgrade state so a later boot does not attempt
-// the auto-rollback a second time (ADR 0005: at most one automatic
+// the auto-rollback a second time (at most one automatic
 // re-activation per upgrade).
 func (s *versionService) settleUpgrade() error {
 	path, err := s.upgradeStatePath()
@@ -416,7 +417,7 @@ func (s *versionService) activeNativeVersion() (string, bool) {
 var startupGuardNewService = newVersionService
 
 // RunStartupGuard runs before any database schema flow on a managed native
-// install (ADR 0005). After a managed upgrade activated a release, the first
+// install. After a managed upgrade activated a release, the first
 // boot marks the boot as in progress; if that boot crashes inside the schema
 // flow, the next boot re-activates the previous release once — provided the
 // upgrade ran no contract and the previous release's verified compatibility
@@ -472,7 +473,7 @@ func RunStartupGuard(ctx context.Context, config Config) error {
 
 // RecordStartupGuardSuccess settles a pending upgrade once the target release
 // completed its database schema flow, so a healthy first boot ends the
-// auto-rollback protocol (ADR 0005).
+// auto-rollback protocol.
 func RecordStartupGuardSuccess(config Config) error {
 	versions := startupGuardNewService(config)
 	if !versions.supportsManagedUpdates() {

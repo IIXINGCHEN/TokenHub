@@ -2,6 +2,8 @@
 
 TokenHub 使用显式、只前进的迁移演进数据库。本文说明演进模型、维护命令，以及升级与回退和数据库的关系。
 
+本文是仓库内数据库演进生命周期与安全契约的规范来源；`backend/internal/dbschema`、维护 CLI、托管升级和 CI 均以此为准。
+
 ## 模型
 
 - **采纳基线**：每个数据库携带迁移 ledger（`schema_migrations`）。旧版本创建的数据库会在下一次启动时被采纳：冻结的结构流程将其补齐，与参考快照做语义校验，然后记录基线。全新数据库直接由冻结的基线 SQL 创建，不再走 ORM 流程。
@@ -42,5 +44,5 @@ tokenhub db contract --backup-reference <ref> --maintenance
 
 - 迁移运行器位于 `backend/internal/dbschema`；冻结基线 SQL 按方言嵌入在 `backend/internal/dbschema/migrations/` 下。
 - 模型变更后重新生成 SQLite 基线：`UPDATE_BASELINE=1 go test ./internal/server -run TestSQLiteBaselineSQLIsCurrent`；PostgreSQL 基线以同样方式生成，需设置 `TEST_POSTGRES_URL` 并加 `integration` 构建标签。基线过期时测试会失败。
-- CI 会运行 PostgreSQL 集成测试，并在 SQLite 和 PostgreSQL 上执行 v0.4.0 N-1 双向契约：旧版本创建数据库，当前版本采纳并进入就绪，旧版本再次启动并完成 API 契约（认证、项目、API key、Provider、Model 与 Route、一次网关请求和审计写入），随后当前版本返回并读取部分持久化记录（两个方言都检查项目和模型，SQLite 还检查 Provider）。另一个 SQLite 流程会固定真实 v0.5.0 的数据库结构、完成采纳，并证明两个版本都能启动；该流程不运行 CRUD 契约，也没有 v0.5.0 PostgreSQL 流程。`backend/internal/dbschema/fixtures/` 下已提交的不可变 fixture 覆盖两个方言的 v0.4.0 和 SQLite 的 v0.5.0；CI 会在采纳前用 `go run ./cmd/n1check` 校验对应数据库（ADR 0005）。
-- 注册表或基线变更后重新生成内嵌迁移 manifest：在 `backend/` 下执行 `go run ./cmd/manifestgen`；内嵌副本过期时 CI 会失败（ADR 0006）。
+- CI 会运行 PostgreSQL 集成测试，并在 SQLite 和 PostgreSQL 上执行 v0.4.0 N-1 双向契约：旧版本创建数据库，当前版本采纳并进入就绪，旧版本再次启动并完成 API 契约（认证、项目、API key、Provider、Model 与 Route、一次网关请求和审计写入），随后当前版本返回并读取部分持久化记录（两个方言都检查项目和模型，SQLite 还检查 Provider）。另一个 SQLite 流程会固定真实 v0.5.0 的数据库结构、完成采纳，并证明两个版本都能启动；该流程不运行 CRUD 契约，也没有 v0.5.0 PostgreSQL 流程。`backend/internal/dbschema/fixtures/` 下已提交的不可变 fixture 覆盖两个方言的 v0.4.0 和 SQLite 的 v0.5.0；CI 会在采纳前用 `go run ./cmd/n1check` 校验对应数据库。
+- 注册表或基线变更后重新生成内嵌迁移 manifest：在 `backend/` 下执行 `go run ./cmd/manifestgen`；内嵌副本过期时 CI 会失败。

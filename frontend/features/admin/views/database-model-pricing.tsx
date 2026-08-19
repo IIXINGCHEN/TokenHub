@@ -2,7 +2,7 @@ import { Activity, AlertCircle, Check, Database, Server, X } from "lucide-react"
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type ApiContext, type DatabaseStatus, type Model, type SchemaEvolutionStatus } from "../core/types";
 import { evolutionReasonText } from "../i18n/db-evolution-reasons";
-import { tx, formatTranslationTemplate } from "../i18n/runtime";
+import { formatLocaleNumber, formatTranslationTemplate, tx } from "../i18n/runtime";
 import { adminFetch, isAuthExpiredError } from "../resources/payloads";
 import { DataSection } from "../shared/ui";
 
@@ -203,14 +203,14 @@ export function DatabaseStatusView({ api }: { api: ApiContext; isDark: boolean }
               </span>
               <span className="database-status-card-value">
                 {formatTranslationTemplate(tx("数据库状态版本 {version}"), {
-                  version: String(schema.schema_version),
+                  version: formatLocaleNumber(schema.schema_version),
                 })}
               </span>
               {schema.compatibility && (
                 <span className="database-status-note">
                   {formatTranslationTemplate(tx("兼容范围 {min} – {max}"), {
-                    min: String(schema.compatibility.min_compatible),
-                    max: String(schema.compatibility.max_compatible),
+                    min: formatLocaleNumber(schema.compatibility.min_compatible),
+                    max: formatLocaleNumber(schema.compatibility.max_compatible),
                   })}
                 </span>
               )}
@@ -220,12 +220,12 @@ export function DatabaseStatusView({ api }: { api: ApiContext; isDark: boolean }
             )}
             <div className="database-status-note">
               {formatTranslationTemplate(tx("待执行迁移：{count}"), {
-                count: String((schema.pending_expand?.length ?? 0) + (schema.pending_contract?.length ?? 0)),
+                count: formatLocaleNumber((schema.pending_expand?.length ?? 0) + (schema.pending_contract?.length ?? 0)),
               })}
             </div>
             <div className="database-status-note">
               {formatTranslationTemplate(tx("数据回填：{count}"), {
-                count: String(schema.backfills?.length ?? 0),
+                count: formatLocaleNumber(schema.backfills?.length ?? 0),
               })}
             </div>
             {schema.instances && schema.instances.length > 0 && (

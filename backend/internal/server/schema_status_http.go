@@ -54,7 +54,7 @@ type schemaStatusBackfill struct {
 // handleAdminSchemaStatus serves the read-only database evolution status for
 // the admin console: ledger state, readiness reason, pending migrations,
 // data-backfill progress, live instances, and this release's compatibility
-// manifest (ADR 0005: the Admin API only ever shows status; contract and
+// manifest (the Admin API only ever shows status; contract and
 // repair stay on the CLI).
 func (s *Server) handleAdminSchemaStatus(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAdmin(w, r, "system", r.Method); !ok {
@@ -111,7 +111,7 @@ func mapPending(migrations []dbschema.Migration) []schemaStatusPendingMigration 
 
 // annotateRollbackCompatibility marks each rollback candidate with its
 // database compatibility verdict so the admin UI can disable unknown or
-// incompatible targets (ADR 0005).
+// incompatible targets.
 func (s *Server) annotateRollbackCompatibility(ctx context.Context, versions []rollbackVersionInfo) {
 	for i := range versions {
 		verdict := s.rollbackCompatibility(ctx, versions[i].Version)

@@ -1,7 +1,7 @@
 // Command n1check verifies that a live database created by the N-1 (previous)
-// release matches the committed immutable legacy schema fixture (ADR 0005:
-// CI maintains the immutable N-1 schema fixture). It is dialect-neutral: the
-// same semantic fixture pins the SQLite and PostgreSQL legacy shapes.
+// release matches the committed immutable legacy schema fixture required by
+// docs/database-evolution.md. It is dialect-neutral: the same semantic
+// fixture pins the SQLite and PostgreSQL legacy shapes.
 //
 // Usage:
 //

@@ -19,8 +19,9 @@ const (
 	RepairRetried RepairOutcome = "retried"
 )
 
-// Repair clears a dirty non-transactional migration the only two ways ADR 0005
-// allows: prove the target state with the migration's postcondition, or, when
+// Repair clears a dirty non-transactional migration only through the two
+// verified paths documented in docs/database-evolution.md: prove the target
+// state with the migration's postcondition, or, when
 // the migration declares SafeRetry, drop the dirty row and re-apply it. It
 // never rewrites arbitrary ledger rows and refuses everything else.
 func (r *Runner) Repair(ctx context.Context, version int64) (RepairOutcome, error) {
@@ -64,7 +65,14 @@ func (r *Runner) Repair(ctx context.Context, version int64) (RepairOutcome, erro
 		return "", err
 	}
 	started := time.Now()
-	if err := migration.Postcondition(ctx, r.db); err == nil {
+	verificationCtx := ctx
+	var cancel context.CancelFunc
+	if migration.LockTimeoutSeconds > 0 {
+		verificationCtx, cancel = context.WithTimeout(ctx, time.Duration(migration.LockTimeoutSeconds)*time.Second)
+		defer cancel()
+	}
+	budgeted := newBudgetedExecer(r.db, *migration)
+	if err := migration.Postcondition(verificationCtx, budgeted); err == nil {
 		if err := r.clearDirty(ctx, version); err != nil {
 			r.finishAttempt(ctx, attemptID, "failed", time.Since(started), ErrCodeApplyFailed)
 			return "", newError(ErrCodeApplyFailed, version, err)

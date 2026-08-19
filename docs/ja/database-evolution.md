@@ -2,6 +2,8 @@
 
 TokenHub は明示的かつフォワードオンリーなマイグレーションでデータベースを進化させます。このページでは進化モデル、メンテナンスコマンド、そしてアップグレードとロールバックがデータベースとどう関わるかを説明します。
 
+このページは、リポジトリ内のデータベース進化ライフサイクルと安全契約の規範となる情報源です。`backend/internal/dbschema`、メンテナンス CLI、管理アップグレード、CI はこの契約に従います。
+
 ## モデル
 
 - **採用ベースライン**：すべてのデータベースはマイグレーション台帳（`schema_migrations`）を持ちます。旧リリースが作成したデータベースは次回起動時に採用されます。凍結されたスキーマフローで補完し、参照スナップショットと意味的検証を行い、ベースラインを記録します。新規データベースは凍結されたベースライン SQL から直接作成され、ORM フローは実行しません。
@@ -42,5 +44,5 @@ tokenhub db contract --backup-reference <ref> --maintenance
 
 - マイグレーションランナーは `backend/internal/dbschema` にあります。凍結されたベースライン SQL は `backend/internal/dbschema/migrations/` の下に方言ごとに埋め込まれます。
 - モデル変更後に SQLite ベースラインを再生成するには `UPDATE_BASELINE=1 go test ./internal/server -run TestSQLiteBaselineSQLIsCurrent` を実行します。PostgreSQL ベースラインは `TEST_POSTGRES_URL` を設定し `integration` ビルドタグを付けて同様に再生成します。ベースラインが古いとテストは失敗します。
-- CI は PostgreSQL 統合スイートに加え、SQLite と PostgreSQL で v0.4.0 の N-1 双方向契約を実行します。旧リリースがデータベースを作成し、現在のリリースが採用して準備完了を報告した後、旧リリースが再起動して API 契約（認証、プロジェクト、API key、Provider、Model と Route、1 回のゲートウェイリクエスト、監査書き込み）を完了します。現在のリリースは戻った後、永続化された一部のレコードを読み取ります（両方の方言でプロジェクトとモデル、SQLite では Provider も確認）。別の SQLite フローでは実際の v0.5.0 スキーマ形状を固定し、採用後に両方のリリースが起動できることを確認しますが、CRUD 契約や v0.5.0 の PostgreSQL フローは実行しません。`backend/internal/dbschema/fixtures/` のコミット済み不変 fixture は、両方の方言の v0.4.0 と SQLite の v0.5.0 を対象とし、CI は採用前に `go run ./cmd/n1check` で各対象データベースを照合します（ADR 0005）。
-- レジストリまたはベースライン変更後に埋め込みマイグレーション manifest を再生成するには `backend/` で `go run ./cmd/manifestgen` を実行します。埋め込みコピーが古いと CI が失敗します（ADR 0006）。
+- CI は PostgreSQL 統合スイートに加え、SQLite と PostgreSQL で v0.4.0 の N-1 双方向契約を実行します。旧リリースがデータベースを作成し、現在のリリースが採用して準備完了を報告した後、旧リリースが再起動して API 契約（認証、プロジェクト、API key、Provider、Model と Route、1 回のゲートウェイリクエスト、監査書き込み）を完了します。現在のリリースは戻った後、永続化された一部のレコードを読み取ります（両方の方言でプロジェクトとモデル、SQLite では Provider も確認）。別の SQLite フローでは実際の v0.5.0 スキーマ形状を固定し、採用後に両方のリリースが起動できることを確認しますが、CRUD 契約や v0.5.0 の PostgreSQL フローは実行しません。`backend/internal/dbschema/fixtures/` のコミット済み不変 fixture は、両方の方言の v0.4.0 と SQLite の v0.5.0 を対象とし、CI は採用前に `go run ./cmd/n1check` で各対象データベースを照合します。
+- レジストリまたはベースライン変更後に埋め込みマイグレーション manifest を再生成するには `backend/` で `go run ./cmd/manifestgen` を実行します。埋め込みコピーが古いと CI が失敗します。

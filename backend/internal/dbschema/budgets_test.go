@@ -105,6 +105,41 @@ func TestStatementBudgetBoundsGoMigrationQueryRows(t *testing.T) {
 	requireErrorCode(t, err, ErrCodeApplyFailed)
 }
 
+func TestSQLiteStatementBudgetIncludesPostconditionQueries(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	if _, err := mustRunner(t, db, nil).Adopt(ctx, nil); err != nil {
+		t.Fatalf("Adopt: %v", err)
+	}
+	runner := mustRunner(t, db, []Migration{{
+		Version:          2,
+		Name:             "postcondition overspending",
+		Statements:       []string{"CREATE TABLE postcondition_budget (id INTEGER PRIMARY KEY)"},
+		NonTransactional: true,
+		Postcondition: func(ctx context.Context, db MigrationExecer) error {
+			var count int
+			return db.QueryRowContext(ctx, "SELECT COUNT(*) FROM postcondition_budget").Scan(&count)
+		},
+		StatementBudget: 1,
+	}})
+
+	_, err := runner.Migrate(ctx)
+	if err == nil || !strings.Contains(err.Error(), "postcondition: statement budget exceeded") {
+		t.Fatalf("expected shared postcondition statement budget failure, got %v", err)
+	}
+	requireErrorCode(t, err, ErrCodeApplyFailed)
+	if outcome := lastAttemptOutcome(t, db, 2); outcome != "dirty" {
+		t.Fatalf("expected dirty attempt outcome, got %s", outcome)
+	}
+	var dirty bool
+	if err := db.QueryRow("SELECT dirty FROM schema_migrations WHERE version = 2").Scan(&dirty); err != nil {
+		t.Fatalf("read dirty marker: %v", err)
+	}
+	if !dirty {
+		t.Fatal("postcondition budget failure must keep the dirty marker")
+	}
+}
+
 func TestLockBudgetDeadlineFailsMigration(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()

@@ -8,7 +8,7 @@ import (
 )
 
 // CompatibilityManifest declares the database compatibility range of one
-// release (ADR 0005): target is the database state the release establishes,
+// release: target is the database state the release establishes,
 // min_compatible the lowest state it fully runs on, and max_compatible the
 // highest state it can run on. Compatibility means full read and write, not
 // merely being able to query.
@@ -32,7 +32,7 @@ func CurrentCompatibilityManifest() CompatibilityManifest {
 // legacyReleaseCompatibility is the bridge release's one-time record of
 // releases that predate the migration ledger. Each entry's range is verified
 // with the real release binary against databases created and extended by the
-// frozen schema flow (ADR 0005: legacy adoption is validated with real v0.4.0
+// frozen schema flow (legacy adoption is validated with real v0.4.0
 // and v0.5.0 fixtures). Releases without an entry have unknown compatibility
 // and must not be activated through a managed rollback.
 var legacyReleaseCompatibility = map[string]CompatibilityManifest{

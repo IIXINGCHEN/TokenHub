@@ -22,7 +22,7 @@ const (
 	InstanceHeartbeatTTL = 90 * time.Second
 )
 
-// InstanceHeartbeat is one published instance row (ADR 0005: every running
+// InstanceHeartbeat is one published instance row (every running
 // instance publishes its release through a TTL'd database heartbeat).
 type InstanceHeartbeat struct {
 	InstanceID string `json:"instance_id"`
@@ -153,7 +153,7 @@ func (s *GormStore) ListInstanceHeartbeats(ctx context.Context) ([]InstanceHeart
 // DatabaseEvolutionStatus reports whether the database evolution state allows
 // serving: the migration ledger verifies (no dirty migration, no checksum or
 // unknown-version drift) and every registered blocking data backfill is
-// complete. Pending online backfills never affect readiness (ADR 0007).
+// complete. Pending online backfills never affect readiness.
 // ReasonCode is the stable machine identifier of the failure for localized
 // status surfaces; Reason stays the English diagnostic for logs.
 type DatabaseEvolutionStatus struct {

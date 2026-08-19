@@ -18,7 +18,7 @@ const ManifestSchemaVersion = 1
 
 // ManifestEntry is the frozen fingerprint of one registered migration:
 // its content checksum plus the lock and statement budgets it declares
-// (ADR 0006).
+// .
 type ManifestEntry struct {
 	Version            int64   `json:"version"`
 	Name               string  `json:"name"`
@@ -31,7 +31,7 @@ type ManifestEntry struct {
 
 // Manifest is the build-time fingerprint of the frozen schema evolution: the
 // dialect baseline SQL and every registered migration. Release builds embed
-// it and CI verifies the embedded copy matches the source (ADR 0006).
+// it and CI verifies the embedded copy matches the source.
 type Manifest struct {
 	SchemaVersion int               `json:"schema_version"`
 	Baselines     map[string]string `json:"baselines"`
