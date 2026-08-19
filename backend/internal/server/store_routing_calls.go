@@ -962,6 +962,41 @@ func (s *GormStore) ListImageJobs(limit int) []ImageJob {
 	return jobs
 }
 
+type ImageJobAuditQuery struct {
+	Limit      int
+	Global     bool
+	ProjectIDs []string
+	APIKeyIDs  []string
+}
+
+func (s *GormStore) ListImageJobsForAudit(query ImageJobAuditQuery) []ImageJob {
+	if query.Limit <= 0 || query.Limit > 1000 {
+		query.Limit = 200
+	}
+	db := s.db
+	if !query.Global {
+		switch {
+		case len(query.ProjectIDs) > 0 && len(query.APIKeyIDs) > 0:
+			db = db.Where("project_id IN ? OR api_key_id IN ?", query.ProjectIDs, query.APIKeyIDs)
+		case len(query.ProjectIDs) > 0:
+			db = db.Where("project_id IN ?", query.ProjectIDs)
+		case len(query.APIKeyIDs) > 0:
+			db = db.Where("api_key_id IN ?", query.APIKeyIDs)
+		default:
+			return []ImageJob{}
+		}
+	}
+	var jobs []ImageJob
+	if err := db.Order("created_at desc").Limit(query.Limit).Find(&jobs).Error; err != nil {
+		return nil
+	}
+	for index := range jobs {
+		jobs[index].Prompt = s.decryptSecret(jobs[index].PromptCiphertext)
+		jobs[index].RevisedPrompt = s.decryptSecret(jobs[index].RevisedPromptCiphertext)
+	}
+	return jobs
+}
+
 func (s *GormStore) FailUnfinishedImageJobs(code string, message string) ([]ImageJob, error) {
 	now := time.Now().UTC()
 	var jobs []ImageJob

@@ -28,7 +28,7 @@ Start the full local development stack from the repository root:
 To run components separately, start the backend from `backend/`:
 
 ```bash
-go run ./cmd/tokenhub
+TOKENHUB_CORS_ALLOWED_ORIGINS=http://localhost:3000 go run ./cmd/tokenhub
 ```
 
 Start the admin console from `frontend/`:

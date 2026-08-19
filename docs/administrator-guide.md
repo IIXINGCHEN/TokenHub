@@ -328,6 +328,12 @@ Creating an identity source uses three required steps: choose the source, enter 
 
 Use the public TokenHub backend URL with the callback path `/api/admin/auth/oauth/callback`. You may leave Callback URL blank to derive it from the incoming backend host; when setting it explicitly, the complete URL must exactly match the redirect URL registered with the identity provider.
 
+Completing an administrator OAuth login never puts the administrator session token in a redirect URL. TokenHub returns a short-lived, single-use code to the console, which exchanges it once and keeps the resulting session only in the current browser tab. Reloading that tab preserves the session; closing it requires signing in again.
+
+Identity-source client secrets and notification-channel credentials, including webhook URLs, SMTP passwords, bot tokens, signing secrets, and access tokens, are masked in management API responses and CSV exports and redacted from audit snapshots. Alert-delivery output never exposes a complete credential-bearing URL: URL targets retain only the scheme and host, while paths, queries, and matching credentials in error text are masked. This protection also applies to alert-delivery CSV exports and delivery audit snapshots.
+
+When updating an identity source or notification channel, the following values mean "keep the stored secret": an empty string, the masks `********` and `••••••••`, and `[redacted]`. Send JSON `null` to clear a secret explicitly. Clearing a notification-channel secret also removes related aliases, such as `url` / `webhook_url`, `smtp_password` / `password`, and the channel-specific token or secret aliases. Only platform administrators can create, update, or delete identity sources; security administrators have read-only access to the masked configuration.
+
 | Provider | Required application configuration | TokenHub behavior |
 | --- | --- | --- |
 | DingTalk | Create a web application, enable user authorization, register the callback URL, and copy its App Key and App Secret | Uses the DingTalk v1.0 JSON token API and user access-token header. If the authorized profile has no email, TokenHub derives a stable internal email from `unionId`. |
