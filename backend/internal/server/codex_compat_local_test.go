@@ -392,12 +392,11 @@ func TestLocalCodexCompatNonStreamingCompletedAndIncompleteResponses(t *testing.
 			if message["content"] != testCase.text {
 				t.Fatalf("Chat content = %#v", message["content"])
 			}
-			gotUsage, ok := chat["usage"].(Usage)
-			if !ok ||
-				gotUsage.PromptTokens != usage.PromptTokens ||
-				gotUsage.CachedInputTokens != usage.CachedInputTokens ||
-				gotUsage.CompletionTokens != usage.CompletionTokens ||
-				gotUsage.TotalTokens != usage.TotalTokens {
+			gotUsage := usageMapField(t, chat, "usage")
+			if gotUsage["prompt_tokens"] != usage.PromptTokens ||
+				gotUsage["cached_input_tokens"] != usage.CachedInputTokens ||
+				gotUsage["completion_tokens"] != usage.CompletionTokens ||
+				gotUsage["total_tokens"] != usage.TotalTokens {
 				t.Fatalf("Chat usage = %#v", chat["usage"])
 			}
 		})
