@@ -154,7 +154,7 @@ Project and API-key model access is an explicit least-privilege layer before rou
 - Project API keys are validated for hash, status, project state, expiration, model scope, IP allowlist, quota, and concurrency.
 - Admin calls use a login session token or `TOKENHUB_ADMIN_TOKEN`; the initial `admin` account is created from `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD`.
 - Non-development startup rejects placeholder values, Admin Tokens or backend secrets under 32 bytes, and bootstrap passwords under 12 bytes.
-- `TOKENHUB_TRUSTED_PROXY_CIDRS` defines which proxies may supply `X-Forwarded-For`; `TOKENHUB_CORS_ALLOWED_ORIGINS` controls credentialed browser origins.
+- `TOKENHUB_TRUSTED_PROXY_CIDRS` defines which proxies may supply `X-Forwarded-For`, `X-Forwarded-Host`, and `X-Forwarded-Proto`; trusted proxies must overwrite those headers. `TOKENHUB_CORS_ALLOWED_ORIGINS` controls credentialed browser origins.
 - `/livez` is a process liveness probe. `/readyz` and compatibility `/healthz` check database availability and the database evolution state: they return `503` when the database is unavailable, a migration is dirty or the ledger fails verification, or a blocking data backfill is incomplete. Pending online backfills keep the instance ready.
 
 Provider credentials, billing connector credentials, raw billing snapshots, and persistent background Responses payloads are AES-GCM encrypted from `TOKENHUB_SECRET_KEY`; project API keys retain only a SHA-256 digest plus display prefix and suffix. Every replica must use the same stable secret.

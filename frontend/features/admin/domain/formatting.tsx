@@ -338,7 +338,7 @@ export function stringifyChatContent(content: unknown): string {
 }
 
 export function formatNumber(value: number) {
-  return new Intl.NumberFormat("en-US").format(value || 0);
+  return new Intl.NumberFormat(languageLocale()).format(value || 0);
 }
 
 export function compactNumber(value: number) {

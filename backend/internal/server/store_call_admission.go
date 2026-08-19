@@ -103,7 +103,7 @@ func (s *GormStore) admitCallTransaction(ctx context.Context, tx *gorm.DB, key A
 		exceedsCostQuota(effectiveLimits, &dayCounter.QuotaCounter, &monthCounter.QuotaCounter) {
 		return admission, ErrQuotaExceeded
 	}
-	if err := s.checkRuntimeBudget(tx, privateProject); err != nil {
+	if err := s.checkRuntimeBudget(tx, privateProject, now); err != nil {
 		return admission, err
 	}
 	dayCounter.Requests++

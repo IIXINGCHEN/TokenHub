@@ -28,7 +28,7 @@ TokenHub 包含 Go 后端、Next.js 管理后台、Node.js SDK 冒烟测试、YA
 需要单独运行组件时，在 `backend/` 目录启动后端：
 
 ```bash
-go run ./cmd/tokenhub
+TOKENHUB_CORS_ALLOWED_ORIGINS=http://localhost:3000 go run ./cmd/tokenhub
 ```
 
 在 `frontend/` 目录启动管理后台：

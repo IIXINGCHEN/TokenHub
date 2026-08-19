@@ -344,7 +344,8 @@ func (s *Server) handleImageJobGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAdminImageJobs(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r, "audit", r.Method); !ok {
+	user, ok := s.requireAdmin(w, r, "audit", r.Method)
+	if !ok {
 		return
 	}
 	limit := 200
@@ -356,7 +357,14 @@ func (s *Server) handleAdminImageJobs(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = parsed
 	}
-	jobs := s.store.ListImageJobs(limit)
+	query := ImageJobAuditQuery{Limit: limit, Global: s.canViewGlobalOperations(user)}
+	if !query.Global {
+		if normalizeAdminRole(user.Role) == "team_leader" {
+			query.ProjectIDs = trueMapKeys(s.visibleProjectIDSet(user))
+		}
+		query.APIKeyIDs = trueMapKeys(s.visibleAPIKeyIDSet(user))
+	}
+	jobs := s.store.ListImageJobsForAudit(query)
 	data := make([]map[string]any, 0, len(jobs))
 	for _, job := range jobs {
 		item := s.imageJobResponse(r, job)

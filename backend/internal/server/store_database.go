@@ -851,6 +851,8 @@ func schemaModels() []any {
 		&ApprovalRequest{},
 		&AdminUser{},
 		&AdminSession{},
+		&adminOAuthFlowRecord{},
+		&adminOAuthExchangeRecord{},
 		&AdminPasswordResetToken{},
 		&SQLiteBackupRecord{},
 	}

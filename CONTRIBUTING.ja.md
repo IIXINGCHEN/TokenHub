@@ -28,7 +28,7 @@ TokenHub は、Go バックエンド、Next.js 管理コンソール、Node.js S
 コンポーネントを個別に実行する場合は、`backend/` でバックエンドを起動します。
 
 ```bash
-go run ./cmd/tokenhub
+TOKENHUB_CORS_ALLOWED_ORIGINS=http://localhost:3000 go run ./cmd/tokenhub
 ```
 
 `frontend/` で管理コンソールを起動します。

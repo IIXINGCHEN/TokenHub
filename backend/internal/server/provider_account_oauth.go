@@ -204,7 +204,7 @@ func (s *Server) handleAdminOpenAIAccountOAuthGenerateAuthURL(w http.ResponseWri
 		writeError(w, r, err)
 		return
 	}
-	returnURL := safeOAuthReturnURL(req.ReturnURL, r)
+	returnURL := s.safeOAuthReturnURL(req.ReturnURL, r)
 	state, err := randomHex(32)
 	if err != nil {
 		writeError(w, r, err)
