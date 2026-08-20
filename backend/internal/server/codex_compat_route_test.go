@@ -44,7 +44,9 @@ func newCodexCompatibilityRouteTestServer(t *testing.T, transport http.RoundTrip
 		Priority: 1, Weight: 100, Status: StatusActive, Strategy: RouteStrategyPriorityOnly,
 	})
 	server := NewWithConfig(store, Config{AdminToken: "dev_admin_token", SecretKey: "codex-bridge-route-secret"})
-	server.codexSubscription.Client = &http.Client{Transport: transport}
+	if transport != nil {
+		server.codexSubscription.Client = &http.Client{Transport: transport}
+	}
 	server.codexSubscription.MaxRequestRetries = 1
 	return server, store, secret
 }

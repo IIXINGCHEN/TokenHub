@@ -66,6 +66,44 @@ func TestProviderTransportUsesConfiguredForwardProxy(t *testing.T) {
 	}
 }
 
+func TestCodexSubscriptionResponsesInheritsEnvironmentProxy(t *testing.T) {
+	connectTargets := make(chan string, 1)
+	proxy := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodConnect {
+			t.Errorf("environment proxy method = %s, want CONNECT", request.Method)
+		}
+		connectTargets <- request.Host
+		writer.WriteHeader(http.StatusBadGateway)
+	}))
+	defer proxy.Close()
+
+	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
+		t.Setenv(name, proxy.URL)
+	}
+	for _, name := range []string{"NO_PROXY", "no_proxy"} {
+		t.Setenv(name, "")
+	}
+
+	server, _, secret := newCodexCompatibilityRouteTestServer(t, nil)
+	t.Cleanup(func() { _ = server.Shutdown(t.Context()) })
+	response := doCodexCompatibilityRouteJSON(t, server.Handler(), "/v1/responses", map[string]any{
+		"model": codexCompatibilityRouteModel,
+		"input": "verify the inherited environment proxy",
+	}, secret, "environment-proxy-regression")
+	if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), "provider_proxy_connect_failed") {
+		t.Fatalf("environment proxy failure = %d: %s", response.Code, response.Body.String())
+	}
+
+	select {
+	case target := <-connectTargets:
+		if target != "chatgpt.com:443" {
+			t.Fatalf("environment proxy CONNECT target = %q, want %q", target, "chatgpt.com:443")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Codex Subscription request did not use HTTPS_PROXY")
+	}
+}
+
 func TestProviderTransportUsesGuardedDirectPathWithoutProxy(t *testing.T) {
 	var directRequests atomic.Int32
 	direct := roundTripperFunc(func(*http.Request) (*http.Response, error) {
