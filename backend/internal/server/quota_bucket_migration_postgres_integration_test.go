@@ -35,6 +35,12 @@ func TestQuotaBucketMigrationPostgresAddsAttributionColumnBeforeBackfill(t *test
 			t.Errorf("drop migration test schema: %v", err)
 		}
 	})
+	// Legacy adoption rejects unrelated databases before running AutoMigrate.
+	// Include a known TokenHub table so this fixture exercises the supported
+	// pre-ledger upgrade path instead of bypassing the database recognizer.
+	if err := adminStore.db.Exec(fmt.Sprintf("CREATE TABLE %s.projects (id TEXT PRIMARY KEY)", schema)).Error; err != nil {
+		t.Fatalf("create legacy TokenHub marker table: %v", err)
+	}
 
 	legacyTable := fmt.Sprintf(`CREATE TABLE %s.quota_buckets (
 key_id TEXT NOT NULL,
