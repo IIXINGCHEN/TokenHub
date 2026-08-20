@@ -375,7 +375,12 @@ PRIMARY KEY (key_id, scope, bucket, attributed_user_id)
 			return tx.Exec("DROP TABLE quota_buckets_legacy").Error
 		})
 	}
-	// PostgreSQL can replace the primary-key constraint in place.
+	// PostgreSQL can replace the primary-key constraint in place. Add the new
+	// column before backfilling it because this helper runs before AutoMigrate;
+	// legacy databases do not have attributed_user_id yet.
+	if err := db.Exec("ALTER TABLE quota_buckets ADD COLUMN IF NOT EXISTS attributed_user_id TEXT").Error; err != nil {
+		return err
+	}
 	if err := db.Exec("UPDATE quota_buckets SET attributed_user_id = CASE WHEN key_id LIKE 'user:%' THEN SUBSTRING(key_id FROM 6) ELSE ? END WHERE attributed_user_id IS NULL OR attributed_user_id = ''", unattributedQuotaUserID).Error; err != nil {
 		return err
 	}
