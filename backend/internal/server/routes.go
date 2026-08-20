@@ -254,6 +254,7 @@ func (s *Server) routes() {
 	s.registerDynamicMethodRoute(http.MethodPost, "/api/admin/approvals/{approval_id}/reject", s.handleAdminApprovalRejectPost)
 	s.mux.HandleFunc("/api/admin/approvals/", s.handleAdminApprovalItem)
 	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/system/db-status", s.handleAdminSystemDBStatus, plainTextMethodNotAllowed(http.MethodGet))
+	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/system/schema-status", s.handleAdminSchemaStatus, jsonMethodNotAllowed(http.MethodGet))
 	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/system/version", s.handleAdminSystemVersion, jsonMethodNotAllowed(http.MethodGet))
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/system/update", s.handleAdminSystemUpdate, jsonMethodNotAllowed(http.MethodPost))
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/system/rollback", s.handleAdminSystemRollback, jsonMethodNotAllowed(http.MethodPost))
