@@ -22,6 +22,16 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+const unattributedQuotaUserID = "__tokenhub_unattributed__"
+
+func quotaAttributionKey(userID string) string {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return unattributedQuotaUserID
+	}
+	return userID
+}
+
 func (s *GormStore) CreateSQLiteBackup(createdBy string, expireDays int) (SQLiteBackupRecord, error) {
 	if s.IsPostgreSQL() {
 		return s.CreatePostgreSQLBackup(createdBy, expireDays)
@@ -397,6 +407,22 @@ func (s *GormStore) quotaBucketForUpdate(tx *gorm.DB, keyID, scope, bucket strin
 	if len(attributedUserIDs) > 0 {
 		attributedUserID = strings.TrimSpace(attributedUserIDs[0])
 	}
+	attributedUserID = quotaAttributionKey(attributedUserID)
+	if attributedUserID == unattributedQuotaUserID {
+		var canonicalCount int64
+		if err := tx.Model(&QuotaBucket{}).
+			Where("key_id = ? AND scope = ? AND bucket = ? AND attributed_user_id = ?", keyID, scope, bucket, unattributedQuotaUserID).
+			Count(&canonicalCount).Error; err != nil {
+			return QuotaBucket{}, err
+		}
+		if canonicalCount == 0 {
+			if err := tx.Model(&QuotaBucket{}).
+				Where("key_id = ? AND scope = ? AND bucket = ? AND (attributed_user_id IS NULL OR attributed_user_id = '')", keyID, scope, bucket).
+				Update("attributed_user_id", unattributedQuotaUserID).Error; err != nil {
+				return QuotaBucket{}, err
+			}
+		}
+	}
 	seed := QuotaBucket{
 		KeyID:            keyID,
 		Scope:            scope,
@@ -411,14 +437,12 @@ func (s *GormStore) quotaBucketForUpdate(tx *gorm.DB, keyID, scope, bucket strin
 		query = query.Clauses(clause.Locking{Strength: "UPDATE"})
 	}
 	var item QuotaBucket
-	if err := query.First(&item, "key_id = ? AND scope = ? AND bucket = ?", keyID, scope, bucket).Error; err != nil {
+	if err := query.First(&item, "key_id = ? AND scope = ? AND bucket = ? AND attributed_user_id = ?", keyID, scope, bucket, attributedUserID).Error; err != nil {
 		return QuotaBucket{}, err
 	}
-	if attributedUserID != "" && item.AttributedUserID == "" {
-		item.AttributedUserID = attributedUserID
-		if err := tx.Model(&QuotaBucket{}).
-			Where("key_id = ? AND scope = ? AND bucket = ? AND (attributed_user_id IS NULL OR attributed_user_id = '')", keyID, scope, bucket).
-			Update("attributed_user_id", attributedUserID).Error; err != nil {
+	if item.AttributedUserID == "" {
+		item.AttributedUserID = unattributedQuotaUserID
+		if err := tx.Model(&QuotaBucket{}).Where("key_id = ? AND scope = ? AND bucket = ? AND (attributed_user_id IS NULL OR attributed_user_id = '')", keyID, scope, bucket).Update("attributed_user_id", unattributedQuotaUserID).Error; err != nil {
 			return QuotaBucket{}, err
 		}
 	}
@@ -449,6 +473,10 @@ func (s *GormStore) GetQuotaPolicyUsage(scope string, scopeID string) (QuotaPoli
 		return QuotaPolicyUsage{}, false, err
 	}
 	usage := QuotaPolicyUsage{}
+	lookupAttribution := unattributedQuotaUserID
+	if scope == "user" {
+		lookupAttribution = scopeID
+	}
 	for _, period := range []struct {
 		scope   string
 		bucket  string
@@ -458,7 +486,14 @@ func (s *GormStore) GetQuotaPolicyUsage(scope string, scopeID string) (QuotaPoli
 		{scope: "month", bucket: monthBucket(now), counter: &usage.Monthly},
 	} {
 		var item QuotaBucket
-		err := s.db.First(&item, "key_id = ? AND scope = ? AND bucket = ?", bucketID, period.scope, period.bucket).Error
+		attributionQuery := "attributed_user_id = ?"
+		attributionArgs := []any{lookupAttribution}
+		if scope == "user" {
+			attributionQuery = "attributed_user_id IN (?, '')"
+			attributionArgs = append(attributionArgs, lookupAttribution)
+		}
+		queryArgs := append([]any{bucketID, period.scope, period.bucket}, attributionArgs...)
+		err := s.db.Where("key_id = ? AND scope = ? AND bucket = ? AND "+attributionQuery, queryArgs...).First(&item).Error
 		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return QuotaPolicyUsage{}, false, err
 		}

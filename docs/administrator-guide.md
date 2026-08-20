@@ -54,7 +54,7 @@ When a policy blocks a request, compatible APIs return HTTP 403 with `guardrail_
 
 When issuing an API Key, select the actual user in **Owner User**. The issuer remains in audit metadata, but the Key's usage is attributed to its owner. Platform administrators may select any active user; team leaders may select an active user in their own team; ordinary users can only assign Keys to themselves.
 
-Each new usage record snapshots the attributed user, so later ownership changes or Key deletion do not rewrite that recorded history. Records created before this field existed fall back to the Key's current owner, then its legacy issuer, then the project owner, and finally `unknown`. The individual ranking shows distinct used Keys and currently owned non-revoked Keys separately.
+Each new usage record snapshots the attributed user, so later ownership changes or Key deletion do not rewrite that recorded history. Records created before this field existed use only attribution that can be proven from their immutable usage record or request history; otherwise they remain `unknown`. Legacy quota buckets are retained as unattributed canonical history and are never silently assigned to the current owner during upgrade. The individual ranking shows distinct used Keys and currently owned non-revoked Keys separately.
 
 ## Read-only Cost Access for Local Agents
 
@@ -70,7 +70,7 @@ An exceeded limit returns HTTP 429 with `api_key_rpm_exceeded` or `api_key_tpm_e
 
 ## Aggregate User Quotas
 
-Platform administrators configure aggregate user limits under **Cost Governance > Quota Policies** by selecting `user` as the scope and an active administrator user ID as `scope_id`. The user selector lists available users, and the policy table shows current daily and monthly consumption. User policies support the complete quota surface: RPM, TPM, daily and monthly requests, tokens and cost, plus maximum concurrency.
+Platform administrators and team leaders configure aggregate user limits under **Cost Governance > Quota Policies** by selecting `user` as the scope and an active user ID as `scope_id`. A team leader may manage policies only for users in the leader's own teams; platform administrators may manage any active user. The user selector lists the users available to the current administrator, and the policy table shows current daily and monthly consumption. User policies support the complete quota surface: RPM, TPM, daily and monthly requests, tokens and cost, plus maximum concurrency.
 
 TokenHub resolves the attributed user with the same order used for usage accounting: API Key `owner_user_id`, then legacy Key metadata `created_by`, then Project `owner_user_id`. Every Key attributed to that user consumes the same user buckets, including Keys in different Projects. Rotating, revoking, deleting, or replacing a Key does not reset those counters because the buckets are owned by the user rather than the Key.
 

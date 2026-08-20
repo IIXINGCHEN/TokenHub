@@ -605,6 +605,33 @@ func TestFailUnfinishedImageJobsRefundsPersistedAdmission(t *testing.T) {
 	}
 }
 
+func TestImageAdmissionAndJobCreationRollbackTogether(t *testing.T) {
+	store, project, key, _ := setupUserQuotaTest(t, map[string]any{"daily_tokens": 10, "max_concurrency": 1})
+	if _, err := store.CreateImageJob(ImageJob{ID: "img_duplicate", ProjectID: project.ID, APIKeyID: key.ID, Status: imageJobStatusQueued, Model: "user-quota-model", Action: "generate"}, "existing"); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := store.CreateImageJobWithAdmission(context.Background(), project, key, "user-quota-model", 5, ImageJob{
+		ID: "img_duplicate", ProjectID: project.ID, APIKeyID: key.ID, Status: imageJobStatusQueued, Model: "user-quota-model", Action: "generate",
+	}, "duplicate")
+	if err == nil {
+		t.Fatal("duplicate image job should fail")
+	}
+	var leases int64
+	if err := store.db.Model(&InFlightLease{}).Count(&leases).Error; err != nil {
+		t.Fatal(err)
+	}
+	if leases != 0 {
+		t.Fatalf("failed image job creation leaked %d concurrency leases", leases)
+	}
+	var requests int64
+	if err := store.db.Model(&QuotaBucket{}).Where("key_id = ? AND scope IN ?", key.ID, []string{"day", "month"}).Select("COALESCE(SUM(requests), 0)").Scan(&requests).Error; err != nil {
+		t.Fatal(err)
+	}
+	if requests != 0 {
+		t.Fatalf("failed image job creation retained %d quota requests", requests)
+	}
+}
+
 func TestCodexImageVirtualModelRequiresSupportedSubscriptionAccount(t *testing.T) {
 	store := NewMemoryStore()
 	project := store.CreateProject(Project{Name: "Codex Image Model Project"})

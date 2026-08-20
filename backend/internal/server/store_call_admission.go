@@ -100,7 +100,7 @@ func (s *GormStore) admitCallTransaction(ctx context.Context, tx *gorm.DB, key A
 		return admission, err
 	}
 	attributedUserID := usageAttributionUserID(privateKey, privateProject)
-	minuteCounter, err := s.consumeAPIKeyMinuteRequest(tx, privateKey.ID, effectiveLimits, minuteLimitScopes, tokenReservation, now, attributedUserID)
+	minuteCounter, err := s.consumeAPIKeyMinuteRequest(tx, privateKey.ID, effectiveLimits, minuteLimitScopes, tokenReservation, now)
 	if err != nil {
 		return admission, err
 	}
@@ -126,7 +126,7 @@ func (s *GormStore) admitCallTransaction(ctx context.Context, tx *gorm.DB, key A
 			return admission, err
 		}
 	}
-	dayCounter, err := s.quotaBucketForUpdate(tx, privateKey.ID, "day", dayBucket(now), attributedUserID)
+	dayCounter, err := s.quotaBucketForUpdate(tx, privateKey.ID, "day", dayBucket(now))
 	if err != nil {
 		return admission, err
 	}
@@ -152,7 +152,7 @@ func (s *GormStore) admitCallTransaction(ctx context.Context, tx *gorm.DB, key A
 		mergeQuotaCounterMax(&userDayCounter.QuotaCounter, historicalDay)
 		mergeQuotaCounterMax(&userMonthCounter.QuotaCounter, historicalMonth)
 	}
-	monthCounter, err := s.quotaBucketForUpdate(tx, privateKey.ID, "month", monthBucket(now), attributedUserID)
+	monthCounter, err := s.quotaBucketForUpdate(tx, privateKey.ID, "month", monthBucket(now))
 	if err != nil {
 		return admission, err
 	}
@@ -222,6 +222,7 @@ func (s *GormStore) admitCallTransaction(ctx context.Context, tx *gorm.DB, key A
 		UserQuotaEnabled:      userPolicy.Enabled(),
 		UserMinuteRequestHeld: userPolicy.Enabled() && userPolicy.Limits.RateLimitRPM > 0,
 		UserQuotaLimits:       userPolicy.Limits,
+		AttributedUserID:      attributedUserID,
 	}
 	if userPolicy.Enabled() {
 		admission.call.RateLimitHeaders = combinedRateLimitHeaders(effectiveLimits, minuteCounter, userPolicy.Limits, userMinuteCounter, now, false)

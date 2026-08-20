@@ -241,6 +241,33 @@ func TestUserQuotaHistoryUsesSettlementAttributionAfterKeyOwnerChanges(t *testin
 	}
 }
 
+func TestQuotaHistorySplitsUsageWhenAPIKeyOwnerChangesWithinBucket(t *testing.T) {
+	store, project, key, _ := setupUserQuotaTest(t, map[string]any{})
+	if _, err := store.CreateAdminUser(AdminUser{ID: "usr_new_quota_owner", Username: "new-owner", Email: "new-owner@example.test", Status: StatusActive, Role: "user"}, "NewOwnerPass123!"); err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.StartCall(context.Background(), project, key, "user-quota-model", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.FinishCall(first, RouteSelection{}, Usage{TotalTokens: 3}, http.StatusOK, "", "127.0.0.1", "user-quota-test")
+	if _, err := store.UpdateAPIKey(key.ID, APIKey{OwnerUserID: "usr_new_quota_owner"}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.StartCall(context.Background(), project, key, "user-quota-model", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.FinishCall(second, RouteSelection{}, Usage{TotalTokens: 7}, http.StatusOK, "", "127.0.0.1", "user-quota-test")
+
+	for userID, want := range map[string]int64{"usr_user_quota": 3, "usr_new_quota_owner": 7} {
+		usage, supported, err := store.GetQuotaPolicyUsage("user", userID)
+		if err != nil || !supported || usage.Daily.TotalTokens != want {
+			t.Fatalf("owner %s usage = %+v supported=%v err=%v, want %d tokens", userID, usage, supported, err, want)
+		}
+	}
+}
+
 func TestUserQuotaHistorySurvivesAPIKeyDeletion(t *testing.T) {
 	store, project, keyA, keyB := setupUserQuotaTest(t, map[string]any{})
 	call, err := store.StartCall(context.Background(), project, keyA, "user-quota-model", 0)

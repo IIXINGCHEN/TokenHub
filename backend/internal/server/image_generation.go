@@ -92,25 +92,33 @@ func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) 
 		writeError(w, r, err)
 		return
 	}
-	call, ok := s.startImageCall(w, r, project, key, request)
+	job, call, err, atomicAdmission, ok := s.createImageJobForRequest(w, r, project, key, request, ImageJob{
+		ProjectID: project.ID,
+		APIKeyID:  key.ID,
+		Status:    imageJobStatusQueued,
+		Model:     request.Model,
+		Action:    "generate",
+		Quality:   request.Quality,
+		Size:      request.Size,
+	}, request.Prompt)
 	if !ok {
 		return
 	}
-	job, err := s.store.CreateImageJob(imageJobWithAdmission(ImageJob{
-		ProjectID:        project.ID,
-		APIKeyID:         key.ID,
-		AttributedUserID: usageAttributionUserID(key, project),
-		RequestID:        call.RequestID,
-		Status:           imageJobStatusQueued,
-		Model:            request.Model,
-		Action:           "generate",
-		Quality:          request.Quality,
-		Size:             request.Size,
-	}, call), request.Prompt)
 	if err != nil {
-		s.store.FinishCall(call, RouteSelection{}, Usage{}, http.StatusInternalServerError, "image_job_create_failed", s.clientIP(r), r.UserAgent())
-		s.recordRequestPayload(call.RequestID, imageAuditRequest(ImageJob{RequestID: call.RequestID, Model: request.Model, Action: "generate", Quality: request.Quality, Size: request.Size}), auditErrorPayload(err, call.RequestID))
-		writeError(w, r, NewHTTPError(http.StatusInternalServerError, "image_job_create_failed", err.Error()))
+		if call.RequestID != "" && !atomicAdmission {
+			s.store.FinishCall(call, RouteSelection{}, Usage{}, http.StatusInternalServerError, "image_job_create_failed", s.clientIP(r), r.UserAgent())
+		}
+		httpErr := AsHTTPError(err)
+		if httpErr.Code == "internal_error" {
+			httpErr = NewHTTPError(http.StatusInternalServerError, "image_job_create_failed", err.Error())
+		}
+		requestID := call.RequestID
+		if requestID == "" {
+			requestID = s.store.RecordRejectedRequest(project, key, request.Model, false, httpErr.Status, httpErr.Code, s.clientIP(r), r.UserAgent())
+		}
+		w.Header().Set("x-request-id", requestID)
+		s.recordRequestPayload(requestID, imageAuditRequest(ImageJob{RequestID: requestID, Model: request.Model, Action: "generate", Quality: request.Quality, Size: request.Size}), auditErrorPayload(err, requestID))
+		writeError(w, r, httpErr)
 		return
 	}
 	work := imageJobWork{
@@ -238,25 +246,33 @@ func (s *Server) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 	if mask != nil {
 		inputs = append(inputs, *mask)
 	}
-	call, ok := s.startImageCall(w, r, project, key, request)
+	job, call, err, atomicAdmission, ok := s.createImageJobForRequest(w, r, project, key, request, ImageJob{
+		ProjectID: project.ID,
+		APIKeyID:  key.ID,
+		Status:    imageJobStatusQueued,
+		Model:     request.Model,
+		Action:    "edit",
+		Quality:   request.Quality,
+		Size:      request.Size,
+	}, request.Prompt)
 	if !ok {
 		return
 	}
-	job, err := s.store.CreateImageJob(imageJobWithAdmission(ImageJob{
-		ProjectID:        project.ID,
-		APIKeyID:         key.ID,
-		AttributedUserID: usageAttributionUserID(key, project),
-		RequestID:        call.RequestID,
-		Status:           imageJobStatusQueued,
-		Model:            request.Model,
-		Action:           "edit",
-		Quality:          request.Quality,
-		Size:             request.Size,
-	}, call), request.Prompt)
 	if err != nil {
-		s.store.FinishCall(call, RouteSelection{}, Usage{}, http.StatusInternalServerError, "image_job_create_failed", s.clientIP(r), r.UserAgent())
-		s.recordRequestPayload(call.RequestID, imageAuditRequest(ImageJob{RequestID: call.RequestID, Model: request.Model, Action: "edit", Quality: request.Quality, Size: request.Size}), auditErrorPayload(err, call.RequestID))
-		writeError(w, r, NewHTTPError(http.StatusInternalServerError, "image_job_create_failed", err.Error()))
+		if call.RequestID != "" && !atomicAdmission {
+			s.store.FinishCall(call, RouteSelection{}, Usage{}, http.StatusInternalServerError, "image_job_create_failed", s.clientIP(r), r.UserAgent())
+		}
+		httpErr := AsHTTPError(err)
+		if httpErr.Code == "internal_error" {
+			httpErr = NewHTTPError(http.StatusInternalServerError, "image_job_create_failed", err.Error())
+		}
+		requestID := call.RequestID
+		if requestID == "" {
+			requestID = s.store.RecordRejectedRequest(project, key, request.Model, false, httpErr.Status, httpErr.Code, s.clientIP(r), r.UserAgent())
+		}
+		w.Header().Set("x-request-id", requestID)
+		s.recordRequestPayload(requestID, imageAuditRequest(ImageJob{RequestID: requestID, Model: request.Model, Action: "edit", Quality: request.Quality, Size: request.Size}), auditErrorPayload(err, requestID))
+		writeError(w, r, httpErr)
 		return
 	}
 	for index, input := range inputs {
@@ -443,6 +459,23 @@ func (s *Server) startImageCall(w http.ResponseWriter, r *http.Request, project 
 	w.Header().Set("x-request-id", call.RequestID)
 	writeRateLimitHeaders(w.Header(), call.RateLimitHeaders)
 	return call, true
+}
+
+func (s *Server) createImageJobForRequest(w http.ResponseWriter, r *http.Request, project Project, key APIKey, request imageGenerationRequest, job ImageJob, prompt string) (ImageJob, CallContext, error, bool, bool) {
+	if atomicStore, ok := s.store.(*GormStore); ok {
+		persisted, call, err := atomicStore.CreateImageJobWithAdmission(s.imageContext, project, key, request.Model, EstimateTextTokens(prompt), job, prompt)
+		if err == nil {
+			w.Header().Set("x-request-id", call.RequestID)
+			writeRateLimitHeaders(w.Header(), call.RateLimitHeaders)
+		}
+		return persisted, call, err, true, true
+	}
+	call, ok := s.startImageCall(w, r, project, key, request)
+	if !ok {
+		return ImageJob{}, CallContext{}, nil, false, false
+	}
+	persisted, err := s.store.CreateImageJob(imageJobWithAdmission(job, call), prompt)
+	return persisted, call, err, false, true
 }
 
 func imageJobWithAdmission(job ImageJob, call CallContext) ImageJob {

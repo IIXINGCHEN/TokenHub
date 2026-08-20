@@ -621,7 +621,10 @@ func (s *GormStore) FinishCall(call CallContext, route RouteSelection, usage Usa
 }
 
 func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route RouteSelection, usage Usage, statusCode int, errorCode string, clientIP string, userAgent string, now time.Time, elapsed time.Duration) error {
-	attributedUserID := usageAttributionUserID(call.Key, call.Project)
+	attributedUserID := strings.TrimSpace(call.AttributedUserID)
+	if attributedUserID == "" {
+		attributedUserID = usageAttributionUserID(call.Key, call.Project)
+	}
 	if call.RequestID != "" {
 		if err := s.lockScopeForUpdate(tx, "request_settlement", call.RequestID); err != nil {
 			return err
@@ -659,7 +662,7 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 		if call.StreamOutputCommitted && providerTokens == 0 && actualTokens < call.ReservedTokens {
 			actualTokens = call.ReservedTokens
 		}
-		if err := s.reconcileAPIKeyMinuteTokens(tx, call, actualTokens, attributedUserID); err != nil {
+		if err := s.reconcileAPIKeyMinuteTokens(tx, call, actualTokens); err != nil {
 			return err
 		}
 		if call.UserQuotaEnabled {
@@ -678,11 +681,11 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 		if admittedAt.IsZero() {
 			admittedAt = now
 		}
-		dayCounter, err := s.quotaBucketForUpdate(tx, key.ID, "day", dayBucket(admittedAt), attributedUserID)
+		dayCounter, err := s.quotaBucketForUpdate(tx, key.ID, "day", dayBucket(admittedAt))
 		if err != nil {
 			return err
 		}
-		monthCounter, err := s.quotaBucketForUpdate(tx, key.ID, "month", monthBucket(admittedAt), attributedUserID)
+		monthCounter, err := s.quotaBucketForUpdate(tx, key.ID, "month", monthBucket(admittedAt))
 		if err != nil {
 			return err
 		}
@@ -693,6 +696,17 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 		}
 		if err := tx.Save(&monthCounter).Error; err != nil {
 			return err
+		}
+		for _, period := range []struct {
+			scope  string
+			bucket string
+		}{
+			{scope: "day", bucket: dayBucket(admittedAt)},
+			{scope: "month", bucket: monthBucket(admittedAt)},
+		} {
+			if err := s.addAttributedQuotaUsage(tx, key.ID, period.scope, period.bucket, attributedUserID, usage); err != nil {
+				return err
+			}
 		}
 		if err := raiseQuotaAlerts(tx, key, &dayCounter.QuotaCounter, &monthCounter.QuotaCounter); err != nil {
 			return err
@@ -737,7 +751,7 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 		RequestID:             call.RequestID,
 		ProjectID:             call.Project.ID,
 		APIKeyID:              call.Key.ID,
-		AttributedUserID:      usageAttributionUserID(call.Key, call.Project),
+		AttributedUserID:      attributedUserID,
 		ModelName:             call.Model.Name,
 		ProviderID:            route.Provider.ID,
 		ProviderResourceID:    routeResourceID(route),
@@ -803,18 +817,30 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 	return s.deleteRequestConcurrencyLeases(tx, call.RequestID)
 }
 
-func (s *GormStore) reconcileAPIKeyMinuteTokens(tx *gorm.DB, call CallContext, actualTokens int64, attributedUserIDs ...string) error {
-	attributedUserID := usageAttributionUserID(call.Key, call.Project)
-	if len(attributedUserIDs) > 0 && strings.TrimSpace(attributedUserIDs[0]) != "" {
-		attributedUserID = strings.TrimSpace(attributedUserIDs[0])
+// addAttributedQuotaUsage keeps per-owner history separate from the canonical
+// API-key counter. The canonical row enforces key-wide limits; this row is the
+// immutable attribution used by aggregate user quota reporting.
+func (s *GormStore) addAttributedQuotaUsage(tx *gorm.DB, keyID, scope, bucket, userID string, usage Usage) error {
+	userID = strings.TrimSpace(userID)
+	if userID == "" || strings.HasPrefix(keyID, "user:") {
+		return nil
 	}
+	item, err := s.quotaBucketForUpdate(tx, keyID, scope, bucket, userID)
+	if err != nil {
+		return err
+	}
+	item.Requests++
+	addUsage(&item.QuotaCounter, usage)
+	return tx.Save(&item).Error
+}
+
+func (s *GormStore) reconcileAPIKeyMinuteTokens(tx *gorm.DB, call CallContext, actualTokens int64, attributedUserIDs ...string) error {
 	return s.reconcileQuotaMinuteTokens(
 		tx,
 		call.Key.ID,
 		call.TokenLimitBucket,
 		call.ReservedTokens,
 		actualTokens,
-		attributedUserID,
 	)
 }
 
@@ -848,12 +874,16 @@ func (s *GormStore) RecordPlaygroundRequest(call CallContext, route RouteSelecti
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	attributedUserID := strings.TrimSpace(call.AttributedUserID)
+	if attributedUserID == "" {
+		attributedUserID = usageAttributionUserID(call.Key, call.Project)
+	}
 	_ = s.db.Create(&RequestLog{
 		ID:                    NewID("log"),
 		RequestID:             call.RequestID,
 		ProjectID:             call.Project.ID,
 		APIKeyID:              call.Key.ID,
-		AttributedUserID:      usageAttributionUserID(call.Key, call.Project),
+		AttributedUserID:      attributedUserID,
 		ModelName:             call.Model.Name,
 		ProviderID:            route.Provider.ID,
 		ProviderResourceID:    routeResourceID(route),
@@ -1026,7 +1056,7 @@ func (s *GormStore) rollbackImageJobAdmission(tx *gorm.DB, job ImageJob) error {
 	}
 	admittedAt := *job.AdmittedAt
 	if job.MinuteRequestHeld {
-		bucket, err := s.quotaBucketForUpdate(tx, job.APIKeyID, "minute", minuteBucket(admittedAt), attributedUserID)
+		bucket, err := s.quotaBucketForUpdate(tx, job.APIKeyID, "minute", minuteBucket(admittedAt))
 		if err != nil {
 			return err
 		}
@@ -1037,7 +1067,7 @@ func (s *GormStore) rollbackImageJobAdmission(tx *gorm.DB, job ImageJob) error {
 			return err
 		}
 	}
-	if err := s.reconcileQuotaMinuteTokens(tx, job.APIKeyID, job.TokenLimitBucket, job.ReservedTokens, 0, attributedUserID); err != nil {
+	if err := s.reconcileQuotaMinuteTokens(tx, job.APIKeyID, job.TokenLimitBucket, job.ReservedTokens, 0); err != nil {
 		return err
 	}
 
@@ -1068,7 +1098,7 @@ func (s *GormStore) rollbackImageJobAdmission(tx *gorm.DB, job ImageJob) error {
 		if period == "month" {
 			bucketName = monthBucket(admittedAt)
 		}
-		bucket, err := s.quotaBucketForUpdate(tx, job.APIKeyID, period, bucketName, attributedUserID)
+		bucket, err := s.quotaBucketForUpdate(tx, job.APIKeyID, period, bucketName)
 		if err != nil {
 			return err
 		}
@@ -1097,6 +1127,10 @@ func (s *GormStore) rollbackImageJobAdmission(tx *gorm.DB, job ImageJob) error {
 }
 
 func (s *GormStore) CreateImageJob(job ImageJob, prompt string) (ImageJob, error) {
+	return s.createImageJob(s.db, job, prompt)
+}
+
+func (s *GormStore) createImageJob(tx *gorm.DB, job ImageJob, prompt string) (ImageJob, error) {
 	if strings.TrimSpace(job.ID) == "" {
 		job.ID = NewID("imgjob")
 	}
@@ -1108,10 +1142,36 @@ func (s *GormStore) CreateImageJob(job ImageJob, prompt string) (ImageJob, error
 	}
 	job.PromptCiphertext = s.encryptSecret(prompt)
 	job.Prompt = prompt
-	if err := s.db.Create(&job).Error; err != nil {
+	if err := tx.Create(&job).Error; err != nil {
 		return ImageJob{}, err
 	}
 	return job, nil
+}
+
+// CreateImageJobWithAdmission commits quota admission, concurrency leases and
+// the durable image job row in one transaction. A crash cannot leave an
+// admission reservation without a job that recovery can inspect.
+func (s *GormStore) CreateImageJobWithAdmission(ctx context.Context, project Project, key APIKey, modelName string, tokenReservation int64, job ImageJob, prompt string) (ImageJob, CallContext, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var admission callAdmissionResult
+	var persisted ImageJob
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var err error
+		admission, err = s.admitCallTransaction(ctx, tx, key, modelName, tokenReservation, NewID("req"))
+		if err != nil {
+			return err
+		}
+		job.RequestID = admission.call.RequestID
+		job.AttributedUserID = admission.call.AttributedUserID
+		persisted, err = s.createImageJob(tx, imageJobWithAdmission(job, admission.call), prompt)
+		return err
+	})
+	if err != nil {
+		return ImageJob{}, CallContext{}, err
+	}
+	return persisted, s.startAdmittedCallHeartbeat(ctx, admission), nil
 }
 
 func (s *GormStore) ClaimImageJob(id string) (ImageJob, bool, error) {

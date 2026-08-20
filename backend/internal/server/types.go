@@ -1256,6 +1256,9 @@ type CallContext struct {
 	UserMinuteRequestHeld bool
 	UserTokenLimitBucket  string
 	UserQuotaLimits       QuotaLimits
+	// AttributedUserID is captured at admission so settlement remains attached
+	// to the owner who actually started the request, even if the key is transferred.
+	AttributedUserID string
 	// StreamOutputCommitted keeps the reservation when a stream delivered data but
 	// ended before an authoritative usage event was received.
 	StreamOutputCommitted bool

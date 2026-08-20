@@ -378,6 +378,7 @@ func (s *GormStore) AdmitResponseJob(ctx context.Context, id string, owner strin
 				"admitted_at":              admission.call.StartedAt,
 				"user_quota_enabled":       admission.call.UserQuotaEnabled,
 				"user_minute_request_held": admission.call.UserMinuteRequestHeld,
+				"attributed_user_id":       admission.call.AttributedUserID,
 			}).Error
 	})
 	s.mu.Unlock()
@@ -560,7 +561,7 @@ func (s *GormStore) rollbackResponseJobAdmission(tx *gorm.DB, job ResponseJob) e
 		return err
 	}
 	if job.MinuteRequestHeld {
-		bucket, err := s.quotaBucketForUpdate(tx, job.APIKeyID, "minute", minuteBucket(*job.AdmittedAt), job.AttributedUserID)
+		bucket, err := s.quotaBucketForUpdate(tx, job.APIKeyID, "minute", minuteBucket(*job.AdmittedAt))
 		if err != nil {
 			return err
 		}
@@ -606,7 +607,7 @@ func (s *GormStore) rollbackResponseJobAdmission(tx *gorm.DB, job ResponseJob) e
 		{scope: "day", bucket: dayBucket(*job.AdmittedAt)},
 		{scope: "month", bucket: monthBucket(*job.AdmittedAt)},
 	} {
-		bucket, err := s.quotaBucketForUpdate(tx, job.APIKeyID, period.scope, period.bucket, job.AttributedUserID)
+		bucket, err := s.quotaBucketForUpdate(tx, job.APIKeyID, period.scope, period.bucket)
 		if err != nil {
 			return err
 		}
