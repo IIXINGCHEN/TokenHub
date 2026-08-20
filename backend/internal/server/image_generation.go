@@ -92,7 +92,7 @@ func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) 
 		writeError(w, r, err)
 		return
 	}
-	job, call, err, atomicAdmission, ok := s.createImageJobForRequest(w, r, project, key, request, ImageJob{
+	job, call, atomicAdmission, ok, err := s.createImageJobForRequest(w, r, project, key, request, ImageJob{
 		ProjectID: project.ID,
 		APIKeyID:  key.ID,
 		Status:    imageJobStatusQueued,
@@ -246,7 +246,7 @@ func (s *Server) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 	if mask != nil {
 		inputs = append(inputs, *mask)
 	}
-	job, call, err, atomicAdmission, ok := s.createImageJobForRequest(w, r, project, key, request, ImageJob{
+	job, call, atomicAdmission, ok, err := s.createImageJobForRequest(w, r, project, key, request, ImageJob{
 		ProjectID: project.ID,
 		APIKeyID:  key.ID,
 		Status:    imageJobStatusQueued,
@@ -461,21 +461,21 @@ func (s *Server) startImageCall(w http.ResponseWriter, r *http.Request, project 
 	return call, true
 }
 
-func (s *Server) createImageJobForRequest(w http.ResponseWriter, r *http.Request, project Project, key APIKey, request imageGenerationRequest, job ImageJob, prompt string) (ImageJob, CallContext, error, bool, bool) {
+func (s *Server) createImageJobForRequest(w http.ResponseWriter, r *http.Request, project Project, key APIKey, request imageGenerationRequest, job ImageJob, prompt string) (ImageJob, CallContext, bool, bool, error) {
 	if atomicStore, ok := s.store.(*GormStore); ok {
 		persisted, call, err := atomicStore.CreateImageJobWithAdmission(s.imageContext, project, key, request.Model, EstimateTextTokens(prompt), job, prompt)
 		if err == nil {
 			w.Header().Set("x-request-id", call.RequestID)
 			writeRateLimitHeaders(w.Header(), call.RateLimitHeaders)
 		}
-		return persisted, call, err, true, true
+		return persisted, call, true, true, err
 	}
 	call, ok := s.startImageCall(w, r, project, key, request)
 	if !ok {
-		return ImageJob{}, CallContext{}, nil, false, false
+		return ImageJob{}, CallContext{}, false, false, nil
 	}
 	persisted, err := s.store.CreateImageJob(imageJobWithAdmission(job, call), prompt)
-	return persisted, call, err, false, true
+	return persisted, call, false, true, err
 }
 
 func imageJobWithAdmission(job ImageJob, call CallContext) ImageJob {
