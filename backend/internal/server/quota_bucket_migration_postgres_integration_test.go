@@ -120,8 +120,34 @@ PRIMARY KEY (key_id, scope, bucket)
 			t.Fatalf("migrated primary key columns = %+v, want %+v", pkColumns, wantPK)
 		}
 	}
+	var beforeConstraintOID int64
+	if err := store.db.Raw(`SELECT c.oid
+	FROM pg_constraint c
+	JOIN pg_class r ON r.oid = c.conrelid
+	JOIN pg_namespace n ON n.oid = r.relnamespace
+	WHERE n.nspname = current_schema()
+	  AND r.relname = 'quota_buckets'
+	  AND c.contype = 'p'`).Scan(&beforeConstraintOID).Error; err != nil {
+		t.Fatalf("read migrated primary key identity: %v", err)
+	}
+	if beforeConstraintOID == 0 {
+		t.Fatal("migrated quota bucket primary key identity is missing")
+	}
 	if err := ensureQuotaBucketAttributionSchema(store.db, "postgres"); err != nil {
 		t.Fatalf("rerun PostgreSQL quota bucket migration: %v", err)
+	}
+	var afterConstraintOID int64
+	if err := store.db.Raw(`SELECT c.oid
+	FROM pg_constraint c
+	JOIN pg_class r ON r.oid = c.conrelid
+	JOIN pg_namespace n ON n.oid = r.relnamespace
+	WHERE n.nspname = current_schema()
+	  AND r.relname = 'quota_buckets'
+	  AND c.contype = 'p'`).Scan(&afterConstraintOID).Error; err != nil {
+		t.Fatalf("read rerun primary key identity: %v", err)
+	}
+	if afterConstraintOID != beforeConstraintOID {
+		t.Fatalf("rerunning migration changed primary key identity from %d to %d", beforeConstraintOID, afterConstraintOID)
 	}
 }
 

@@ -387,7 +387,7 @@ PRIMARY KEY (key_id, scope, bucket, attributed_user_id)
 	var pkColumns []struct {
 		Column string `gorm:"column:column_name"`
 	}
-	if err := db.Raw(`SELECT kcu.column_name FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema WHERE tc.table_name = 'quota_buckets' AND tc.constraint_type = 'PRIMARY KEY' ORDER BY kcu.ordinal_position`).Scan(&pkColumns).Error; err != nil {
+	if err := db.Raw(`SELECT kcu.column_name FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema WHERE tc.table_schema = current_schema() AND tc.table_name = 'quota_buckets' AND tc.constraint_type = 'PRIMARY KEY' ORDER BY kcu.ordinal_position`).Scan(&pkColumns).Error; err != nil {
 		return err
 	}
 	if len(pkColumns) == 4 {
