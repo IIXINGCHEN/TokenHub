@@ -862,11 +862,6 @@ func monitorResult(index int) string {
 	return "ok"
 }
 
-func proxyProtocol(index int) string {
-	protocols := []string{"direct", "http", "https", "socks5"}
-	return protocols[(index-1)%len(protocols)]
-}
-
 func mockNotifyMode(index int) string {
 	if index%4 == 0 {
 		return "popup"

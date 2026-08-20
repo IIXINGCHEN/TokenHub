@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -9,6 +10,18 @@ import (
 	"sync/atomic"
 	"testing"
 )
+
+type failingAdminResourceSecretStore struct {
+	*GormStore
+}
+
+func (store *failingAdminResourceSecretStore) protectAdminResourceSecret(secret string) (string, error) {
+	return secret, errors.New("injected secret protection failure")
+}
+
+func (store *failingAdminResourceSecretStore) revealAdminResourceSecret(secret string) string {
+	return store.GormStore.revealAdminResourceSecret(secret)
+}
 
 func TestGatewaySettingsProtectConfiguredProxyCredential(t *testing.T) {
 	store := NewMemoryStore()
@@ -56,6 +69,51 @@ func TestGatewaySettingsProtectConfiguredProxyCredential(t *testing.T) {
 	stored := stringField(settings[0].Fields, "provider_proxy_password")
 	if stored == "" || stored == password || !strings.HasPrefix(stored, "enc:v1:") {
 		t.Fatalf("stored proxy password is not protected: %q", stored)
+	}
+}
+
+func TestGatewaySettingsFailClosedWhenProxyCredentialProtectionFails(t *testing.T) {
+	base := NewMemoryStoreWithConfig(Config{SecretKey: "proxy-settings-failure-secret-key"})
+	base.CreateResource("settings", AdminResource{
+		ID:     gatewaySettingsID,
+		Name:   "Gateway Base Settings",
+		Status: StatusActive,
+		Fields: map[string]any{providerEgressModeField: providerEgressModeDirect},
+	})
+	store := &failingAdminResourceSecretStore{GormStore: base}
+	server := NewWithConfig(store, Config{AdminToken: "proxy-settings-failure-admin"})
+	t.Cleanup(func() { _ = server.Shutdown(t.Context()) })
+
+	const password = "must-never-reach-storage"
+	response := doJSON(t, server.Handler(), http.MethodPatch, "/api/admin/resources/settings/"+gatewaySettingsID, map[string]any{
+		"name":   "Gateway Base Settings",
+		"status": StatusActive,
+		"fields": map[string]any{
+			providerEgressModeField:       providerEgressModeConfigured,
+			providerProxyProtocolField:    "http",
+			providerProxyHostField:        "proxy.internal",
+			providerProxyPortField:        8080,
+			providerProxyAuthEnabledField: true,
+			providerProxyUsernameField:    "tokenhub",
+			providerProxyPasswordField:    password,
+		},
+	}, "proxy-settings-failure-admin")
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body, "admin_resource_secret_protection_failed") {
+		t.Fatalf("failed proxy password protection = %d: %s", response.Code, response.Body)
+	}
+	if strings.Contains(response.Body, password) {
+		t.Fatalf("secret protection error exposed the password: %s", response.Body)
+	}
+
+	settings := base.ListResources("settings")
+	if len(settings) != 1 {
+		t.Fatalf("stored settings = %d, want 1", len(settings))
+	}
+	if _, exists := settings[0].Fields[providerProxyPasswordField]; exists {
+		t.Fatalf("failed secret protection persisted proxy password: %+v", settings[0].Fields)
+	}
+	if got := stringField(settings[0].Fields, providerEgressModeField); got != providerEgressModeDirect {
+		t.Fatalf("failed secret protection changed Provider egress mode to %q", got)
 	}
 }
 

@@ -31,7 +31,7 @@ var sensitiveAdminResourceFields = map[string]map[string]bool{
 }
 
 type adminResourceSecretCodec interface {
-	protectAdminResourceSecret(string) string
+	protectAdminResourceSecret(string) (string, error)
 	revealAdminResourceSecret(string) string
 }
 
@@ -70,7 +70,11 @@ func protectAdminResourceSecretsForStorage(store Store, kind string, fields map[
 		if strings.HasPrefix(secret, "enc:v1:") && codec.revealAdminResourceSecret(secret) != "" {
 			continue
 		}
-		protected[key] = codec.protectAdminResourceSecret(secret)
+		protectedSecret, err := codec.protectAdminResourceSecret(secret)
+		if err != nil {
+			return nil, NewHTTPError(http.StatusInternalServerError, "admin_resource_secret_protection_failed", "Sensitive resource could not be protected")
+		}
+		protected[key] = protectedSecret
 	}
 	return protected, nil
 }

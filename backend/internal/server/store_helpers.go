@@ -181,8 +181,8 @@ func (s *GormStore) decryptSecret(secret string) string {
 	return string(plaintext)
 }
 
-func (s *GormStore) protectAdminResourceSecret(secret string) string {
-	return s.encryptSecret(secret)
+func (s *GormStore) protectAdminResourceSecret(secret string) (string, error) {
+	return s.encryptSecretStrict(secret)
 }
 
 func (s *GormStore) revealAdminResourceSecret(secret string) string {
