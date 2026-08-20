@@ -39,16 +39,13 @@ func addRuntimeBudgetProject(t *testing.T, store *MemoryStore, project Project) 
 	return created
 }
 
-// runtimeBudgetNow returns a timestamp inside the current billing period.
-// checkRuntimeBudget reads the clock itself, so a fixture built moments before
-// a period rollover would be measured against the next period instead.
+// runtimeBudgetNow returns the reading each test uses for both its usage
+// fixtures and the enforcement call. checkRuntimeBudget takes the clock from
+// its caller, so pinning one value keeps the two in the same billing period
+// even when the test runs across a period rollover.
 func runtimeBudgetNow(t *testing.T) time.Time {
 	t.Helper()
-	now := time.Now().UTC()
-	if periodEnd(now.Format("2006-01")).Sub(now) < time.Minute {
-		t.Skip("skipped within a minute of the billing period rollover")
-	}
-	return now
+	return time.Now().UTC()
 }
 
 // countStoreStatements counts the statements a store operation sends to the
@@ -484,7 +481,7 @@ func TestCheckRuntimeBudgetScopes(t *testing.T) {
 			for index, fields := range test.budgets(project) {
 				addRuntimeBudgetResource(t, store, "budget-"+strconv.Itoa(index), fields)
 			}
-			err := store.checkRuntimeBudget(store.db, project)
+			err := store.checkRuntimeBudget(store.db, project, now)
 			if test.wantBlocked && err != ErrBudgetExceeded {
 				t.Fatalf("expected budget_exceeded, got %v", err)
 			}
@@ -531,7 +528,7 @@ func TestCheckRuntimeBudgetSkipsLookupsWithoutApplicableBudgets(t *testing.T) {
 			}
 			var err error
 			statements := countStoreStatements(t, store, func() {
-				err = store.checkRuntimeBudget(store.db, project)
+				err = store.checkRuntimeBudget(store.db, project, now)
 			})
 			if err != nil {
 				t.Fatalf("expected the call to be admitted, got %v", err)
@@ -580,10 +577,10 @@ func TestCheckRuntimeBudgetUsesConstantQueries(t *testing.T) {
 	largeStore, largeProject := build(t, 20, 10, 5)
 	var smallErr, largeErr error
 	smallStatements := countStoreStatements(t, smallStore, func() {
-		smallErr = smallStore.checkRuntimeBudget(smallStore.db, smallProject)
+		smallErr = smallStore.checkRuntimeBudget(smallStore.db, smallProject, now)
 	})
 	largeStatements := countStoreStatements(t, largeStore, func() {
-		largeErr = largeStore.checkRuntimeBudget(largeStore.db, largeProject)
+		largeErr = largeStore.checkRuntimeBudget(largeStore.db, largeProject, now)
 	})
 	if smallErr != nil || largeErr != nil {
 		t.Fatalf("expected both calls to be admitted, got %v and %v", smallErr, largeErr)
@@ -594,5 +591,26 @@ func TestCheckRuntimeBudgetUsesConstantQueries(t *testing.T) {
 	// Budgets, teams with quota policies, the spend aggregate, and projects.
 	if largeStatements > 4 {
 		t.Fatalf("expected at most one statement per lookup, got %d", largeStatements)
+	}
+}
+
+// TestCheckRuntimeBudgetResolvesPeriodFromCallerClock keeps budget enforcement
+// on the same reading admission uses for the quota buckets. Reading the local
+// clock instead measured spend against a different month than the one the call
+// was admitted into whenever the database host disagreed across a rollover.
+func TestCheckRuntimeBudgetResolvesPeriodFromCallerClock(t *testing.T) {
+	now := runtimeBudgetNow(t)
+	previousPeriod := periodStart(now.Format("2006-01")).Add(-time.Hour)
+
+	store := NewMemoryStore()
+	project := addRuntimeBudgetProject(t, store, Project{Name: "Period Clock"})
+	addRuntimeBudgetUsage(t, store, project.ID, 10, previousPeriod)
+	addRuntimeBudgetResource(t, store, "global-budget", map[string]any{"scope": "global", "amount_usd": 5})
+
+	if err := store.checkRuntimeBudget(store.db, project, previousPeriod); err != ErrBudgetExceeded {
+		t.Fatalf("spend inside the supplied period should block the call, got %v", err)
+	}
+	if err := store.checkRuntimeBudget(store.db, project, now); err != nil {
+		t.Fatalf("spend outside the supplied period should admit the call, got %v", err)
 	}
 }

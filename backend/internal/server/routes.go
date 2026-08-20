@@ -44,6 +44,7 @@ func (s *Server) routes() {
 	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/auth/identity-providers", s.handleAdminAuthIdentityProviders, jsonMethodNotAllowed(http.MethodGet))
 	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/auth/oauth/start", s.handleAdminOAuthStart, jsonMethodNotAllowed(http.MethodGet))
 	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/auth/oauth/callback", s.handleAdminOAuthCallback, jsonMethodNotAllowed(http.MethodGet))
+	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/auth/oauth/exchange", s.handleAdminOAuthExchange, jsonMethodNotAllowed(http.MethodPost))
 	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/overview", s.handleAdminOverview, s.adminMethodNotAllowed("overview", http.MethodGet))
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/playground/chat", s.handleAdminPlaygroundChat, s.adminMethodNotAllowed("playground", http.MethodPost))
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/playground/chat/stream", s.handleAdminPlaygroundChatStream, s.adminMethodNotAllowed("playground", http.MethodPost))
@@ -143,6 +144,7 @@ func (s *Server) routes() {
 	s.registerDynamicMethodRoute(http.MethodDelete, "/api/admin/providers/{provider_id}", s.handleAdminProviderDelete)
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/providers/{provider_id}/health", s.handleAdminProviderHealthPost, s.adminMethodNotAllowed("provider", http.MethodPost))
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/providers/{provider_id}/test", s.handleAdminProviderTestPost, s.adminMethodNotAllowed("provider", http.MethodPost))
+	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/providers/{provider_id}/refresh-token", s.handleAdminProviderRefreshTokenPost, s.adminMethodNotAllowed("provider", http.MethodPost))
 	s.mux.HandleFunc("/api/admin/providers/", s.handleAdminProviderNested)
 	s.registerMethodRoutes(
 		"/api/admin/provider-resources",

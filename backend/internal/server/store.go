@@ -178,6 +178,7 @@ type Store interface {
 	ClaimImageJob(id string) (ImageJob, bool, error)
 	GetImageJob(id string) (ImageJob, bool)
 	ListImageJobs(limit int) []ImageJob
+	ListImageJobsForAudit(query ImageJobAuditQuery) []ImageJob
 	FailUnfinishedImageJobs(code string, message string) ([]ImageJob, error)
 	UpdateImageJob(job ImageJob, revisedPrompt string) error
 	CompleteImageJob(call CallContext, job ImageJob, revisedPrompt string, asset ImageAsset, route RouteSelection, usage Usage, clientIP string, userAgent string) error
@@ -246,6 +247,10 @@ type Store interface {
 	CreateAdminSession(userID string, ttl time.Duration) (AdminUser, AdminSession, error)
 	ValidateAdminSession(token string) (AdminUser, bool)
 	RevokeAdminSession(token string)
+	SaveAdminOAuthFlow(flow adminOAuthFlow) error
+	ConsumeAdminOAuthFlow(state string, browserNonce string) (adminOAuthFlow, bool, error)
+	SaveAdminOAuthExchange(exchange adminOAuthExchange) error
+	ConsumeAdminOAuthExchange(code string, codeVerifier string) (adminOAuthExchange, bool, error)
 	CreateSQLiteBackup(createdBy string, expireDays int) (SQLiteBackupRecord, error)
 	ListSQLiteBackups() []SQLiteBackupRecord
 	GetSQLiteBackup(id string) (SQLiteBackupRecord, error)

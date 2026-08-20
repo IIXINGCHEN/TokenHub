@@ -64,7 +64,7 @@ func (s *Server) serveAdminResourceCollectionGet(w http.ResponseWriter, _ *http.
 	if kind == "quota-policies" {
 		items = s.attachQuotaPolicyUsage(items)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": items})
+	writeJSON(w, http.StatusOK, map[string]any{"data": redactAdminResourcesForResponse(kind, items)})
 }
 
 func (s *Server) attachQuotaPolicyUsage(items []AdminResource) []AdminResource {
@@ -94,6 +94,7 @@ func (s *Server) serveAdminResourceCollectionPost(w http.ResponseWriter, r *http
 		writeError(w, r, NewHTTPError(400, "invalid_resource", "name is required"))
 		return
 	}
+	req.Fields = preserveAdminResourceSecrets(kind, nil, req.Fields)
 	if err := s.validateScopedResourceMutation(user, kind, "", req); err != nil {
 		writeError(w, r, err)
 		return
@@ -126,7 +127,7 @@ func (s *Server) serveAdminResourceCollectionPost(w http.ResponseWriter, r *http
 		s.syntheticDNSPolicy.applySetting(&resource)
 	}
 	s.recordAdminAudit(r, user, "create", kind, resource.ID, "", resource)
-	writeJSON(w, http.StatusCreated, resource)
+	writeJSON(w, http.StatusCreated, redactAdminResourceForResponse(kind, resource))
 }
 
 func (s *Server) serveAdminResourcePatch(w http.ResponseWriter, r *http.Request, user AdminUser, kind string, resourceID string) {
@@ -142,6 +143,14 @@ func (s *Server) serveAdminResourcePatch(w http.ResponseWriter, r *http.Request,
 	if err := s.decodeJSON(w, r, &req); err != nil {
 		writeError(w, r, err)
 		return
+	}
+	if req.Fields != nil && len(sensitiveAdminResourceFields[kind]) > 0 {
+		existing, err := s.findResource(kind, resourceID)
+		if err != nil {
+			writeError(w, r, err)
+			return
+		}
+		req.Fields = preserveAdminResourceSecrets(kind, existing.Fields, req.Fields)
 	}
 	if err := s.validateScopedResourceMutation(user, kind, resourceID, req); err != nil {
 		writeError(w, r, err)
@@ -168,7 +177,7 @@ func (s *Server) serveAdminResourcePatch(w http.ResponseWriter, r *http.Request,
 		s.syntheticDNSPolicy.applySetting(&resource)
 	}
 	s.recordAdminAudit(r, user, "update", kind, resourceID, "", resource)
-	writeJSON(w, http.StatusOK, resource)
+	writeJSON(w, http.StatusOK, redactAdminResourceForResponse(kind, resource))
 }
 
 func (s *Server) serveAdminResourceDelete(w http.ResponseWriter, r *http.Request, user AdminUser, kind string, resourceID string) {

@@ -185,7 +185,7 @@ func (s *GormStore) admitCallTransaction(ctx context.Context, tx *gorm.DB, key A
 		s.metrics.ObserveRateLimitHit(privateKey.ID, limit, scope)
 		return admission, quotaExceededError(scope)
 	}
-	if err := s.checkRuntimeBudget(tx, privateProject); err != nil {
+	if err := s.checkRuntimeBudget(tx, privateProject, now); err != nil {
 		return admission, err
 	}
 	dayCounter.Requests++

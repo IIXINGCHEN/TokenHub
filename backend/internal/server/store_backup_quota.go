@@ -519,6 +519,14 @@ func scopedHTTPError(base *HTTPError, scope string) *HTTPError {
 }
 
 func priceUsage(model Model, usage Usage) Usage {
+	// Upstream-reported usage is untrusted: the provider parsers preserve the
+	// sign of whatever the upstream sent, and a negative count would flow into
+	// addUsage and shrink the day/month quota counters, letting a key keep
+	// spending past its configured limits. Clamping PromptTokens first also
+	// keeps the CachedInputTokens clamp below from going negative again.
+	usage.PromptTokens = maxInt64(usage.PromptTokens, 0)
+	usage.CompletionTokens = maxInt64(usage.CompletionTokens, 0)
+	usage.TotalTokens = maxInt64(usage.TotalTokens, 0)
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = saturatingAddNonNegative(usage.PromptTokens, usage.CompletionTokens)
 	}
@@ -889,8 +897,13 @@ type projectPeriodCost struct {
 // without matching budgets never reads the usage tables: the candidate pass
 // needs the budget rows alone, and the cost center, project, and usage lookups
 // only happen once a candidate is known to apply.
-func (s *GormStore) checkRuntimeBudget(tx *gorm.DB, project Project) error {
-	now := time.Now().UTC()
+//
+// The caller supplies now so budget enforcement resolves its period from the
+// same database clock reading that admission uses for the quota buckets. A
+// local reading would place the two on different months whenever the database
+// and this host disagree across a period boundary.
+func (s *GormStore) checkRuntimeBudget(tx *gorm.DB, project Project, now time.Time) error {
+	now = now.UTC()
 	period := now.Format("2006-01")
 	var budgets []AdminResource
 	if err := tx.Where("kind = ? AND status = ?", "budgets", StatusActive).Find(&budgets).Error; err != nil {

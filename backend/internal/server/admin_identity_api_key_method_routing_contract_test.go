@@ -356,8 +356,8 @@ func TestAdminUserMethodRoutesPreserveTeamLeaderScope(t *testing.T) {
 	}
 	select {
 	case message := <-messages:
-		if !strings.Contains(message, "To: "+teamUser.Email) || !strings.Contains(message, "https://console.tokenhub.example/?reset_token=") {
-			t.Fatalf("reset email did not preserve forwarded headers: %s", message)
+		if !strings.Contains(message, "To: "+teamUser.Email) || !strings.Contains(message, "https://console.tokenhub.example/#reset_token=") || strings.Contains(message, "?reset_token=") {
+			t.Fatalf("reset email did not keep the token in the console URL fragment: %s", message)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for team leader reset email")
@@ -548,6 +548,7 @@ func newAdminIdentityAPIKeyMethodRoutingServer(t *testing.T) (*GormStore, *Serve
 	config := ConfigFromEnv()
 	config.AdminToken = "dev_admin_token"
 	config.BootstrapAdminPassword = "identity-api-key-method-password"
+	config.CORSAllowedOrigins = []string{"https://console.tokenhub.example"}
 	store := NewMemoryStoreWithConfig(config)
 	if err := BootstrapBaseDataWithConfig(store, config); err != nil {
 		t.Fatal(err)

@@ -659,7 +659,7 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 		if call.StreamOutputCommitted && providerTokens == 0 && actualTokens < call.ReservedTokens {
 			actualTokens = call.ReservedTokens
 		}
-		if err := s.reconcileAPIKeyMinuteTokens(tx, call, actualTokens); err != nil {
+		if err := s.reconcileAPIKeyMinuteTokens(tx, call, actualTokens, attributedUserID); err != nil {
 			return err
 		}
 		if call.UserQuotaEnabled {
@@ -667,11 +667,22 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 				return err
 			}
 		}
-		dayCounter, err := s.quotaBucketForUpdate(tx, key.ID, "day", dayBucket(now), attributedUserID)
+		// Admission counted this request on the buckets derived from
+		// call.StartedAt, the database clock reading StartCall took. Deriving
+		// them from the completion clock instead would post the tokens and cost
+		// to a different period whenever the two disagree across a day or month
+		// boundary — the request would be counted in one period and charged to
+		// another, leaving the first under-enforced. The response job rollback
+		// already settles against its own admission reading for the same reason.
+		admittedAt := call.StartedAt
+		if admittedAt.IsZero() {
+			admittedAt = now
+		}
+		dayCounter, err := s.quotaBucketForUpdate(tx, key.ID, "day", dayBucket(admittedAt), attributedUserID)
 		if err != nil {
 			return err
 		}
-		monthCounter, err := s.quotaBucketForUpdate(tx, key.ID, "month", monthBucket(now), attributedUserID)
+		monthCounter, err := s.quotaBucketForUpdate(tx, key.ID, "month", monthBucket(admittedAt), attributedUserID)
 		if err != nil {
 			return err
 		}
@@ -1139,6 +1150,41 @@ func (s *GormStore) ListImageJobs(limit int) []ImageJob {
 	}
 	var jobs []ImageJob
 	if err := s.db.Order("created_at desc").Limit(limit).Find(&jobs).Error; err != nil {
+		return nil
+	}
+	for index := range jobs {
+		jobs[index].Prompt = s.decryptSecret(jobs[index].PromptCiphertext)
+		jobs[index].RevisedPrompt = s.decryptSecret(jobs[index].RevisedPromptCiphertext)
+	}
+	return jobs
+}
+
+type ImageJobAuditQuery struct {
+	Limit      int
+	Global     bool
+	ProjectIDs []string
+	APIKeyIDs  []string
+}
+
+func (s *GormStore) ListImageJobsForAudit(query ImageJobAuditQuery) []ImageJob {
+	if query.Limit <= 0 || query.Limit > 1000 {
+		query.Limit = 200
+	}
+	db := s.db
+	if !query.Global {
+		switch {
+		case len(query.ProjectIDs) > 0 && len(query.APIKeyIDs) > 0:
+			db = db.Where("project_id IN ? OR api_key_id IN ?", query.ProjectIDs, query.APIKeyIDs)
+		case len(query.ProjectIDs) > 0:
+			db = db.Where("project_id IN ?", query.ProjectIDs)
+		case len(query.APIKeyIDs) > 0:
+			db = db.Where("api_key_id IN ?", query.APIKeyIDs)
+		default:
+			return []ImageJob{}
+		}
+	}
+	var jobs []ImageJob
+	if err := db.Order("created_at desc").Limit(query.Limit).Find(&jobs).Error; err != nil {
 		return nil
 	}
 	for index := range jobs {

@@ -3,6 +3,11 @@ import e2eDefaults from "./e2e/config.cjs";
 
 const frontendPort = Number(process.env.TOKENHUB_E2E_FRONTEND_PORT ?? e2eDefaults.frontendPort);
 const baseURL = `http://127.0.0.1:${frontendPort}`;
+const browserChannel = process.env.TOKENHUB_E2E_BROWSER_CHANNEL;
+
+if (browserChannel !== undefined && browserChannel !== "chrome") {
+  throw new Error(`Unsupported TOKENHUB_E2E_BROWSER_CHANNEL: ${browserChannel}`);
+}
 
 export default defineConfig({
   testDir: "./e2e",
@@ -34,7 +39,10 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      use: {
+        ...devices["Desktop Chrome"],
+        ...(browserChannel ? { channel: browserChannel } : {}),
+      },
     },
   ],
 });

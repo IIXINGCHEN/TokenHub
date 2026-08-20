@@ -337,6 +337,12 @@ Token 用量与成本只挂在 generation span 上，绝不挂在根 span 上。
 
 请使用 TokenHub 后端公开地址和回调路径 `/api/admin/auth/oauth/callback`。Callback URL 可留空，让系统按后端请求 Host 自动生成；如果显式填写，完整 URL 必须与身份平台中登记的回调地址完全一致。
 
+管理员 OAuth 登录完成时，重定向 URL 不会携带管理员会话 Token。TokenHub 只向控制台返回短时、单次使用的 code；控制台完成一次交换后，仅在当前浏览器标签页保留得到的会话。刷新该标签页仍会保持登录；关闭标签页后需要重新登录。
+
+身份源 Client Secret 与通知渠道敏感字段（包括 Webhook URL、SMTP 密码、Bot Token、签名密钥和 Access Token）在管理 API 响应和 CSV 导出中始终以掩码展示，并在审计快照中脱敏。告警投递输出不会暴露包含凭据的完整 URL：URL 目标只保留 scheme 和 host，路径、query 以及错误文本中匹配到的凭据都会被掩码；该规则同样覆盖告警投递 CSV 导出和投递审计快照。
+
+更新身份源或通知渠道时，空字符串、掩码 `********`、`••••••••` 或 `[redacted]` 都表示“保留已存储的 Secret”。只有发送 JSON `null` 才会显式清空 Secret。清空通知渠道 Secret 时，还会一并删除相关别名，例如 `url` / `webhook_url`、`smtp_password` / `password`，以及当前渠道对应的 Token 或 Secret 别名。只有平台管理员可以新增、修改或删除身份源；安全管理员只能读取已掩码的配置。
+
 | 平台 | 应用侧必填配置 | TokenHub 处理方式 |
 | --- | --- | --- |
 | 钉钉 | 创建网页应用，开启用户授权，登记回调地址，复制 App Key 和 App Secret | 使用钉钉 v1.0 JSON Token API 和专用的用户 Token 请求头。如授权资料不包含邮箱，TokenHub 会基于 `unionId` 生成稳定的内部邮箱。 |

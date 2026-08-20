@@ -120,6 +120,12 @@ TokenHub 的演进离不开真实企业场景里的使用反馈、网关集成�
       </a>
     </td>
     <td align="center" valign="top" width="12.5%">
+      <a href="https://github.com/deepjerry-ai">
+        <img src="https://avatars.githubusercontent.com/u/262369278?v=4" width="80px" alt="deepjerry-ai" />
+        <br /><sub><b>deepjerry-ai</b></sub>
+      </a>
+    </td>
+    <td align="center" valign="top" width="12.5%">
       <a href="https://github.com/legendtkl">
         <img src="https://avatars.githubusercontent.com/u/2370761?v=4" width="80px" alt="legendtkl" />
         <br /><sub><b>legendtkl</b></sub>
@@ -129,12 +135,6 @@ TokenHub 的演进离不开真实企业场景里的使用反馈、网关集成�
       <a href="https://github.com/Mr0bean">
         <img src="https://avatars.githubusercontent.com/u/19573968?v=4" width="80px" alt="Mr0bean" />
         <br /><sub><b>Mr0bean</b></sub>
-      </a>
-    </td>
-    <td align="center" valign="top" width="12.5%">
-      <a href="https://github.com/deepjerry-ai">
-        <img src="https://avatars.githubusercontent.com/u/262369278?v=4" width="80px" alt="deepjerry-ai" />
-        <br /><sub><b>deepjerry-ai</b></sub>
       </a>
     </td>
     <td align="center" valign="top" width="12.5%">
@@ -200,19 +200,25 @@ TokenHub 的演进离不开真实企业场景里的使用反馈、网关集成�
       </a>
     </td>
     <td align="center" valign="top" width="12.5%">
+      <a href="https://github.com/debin-ge">
+        <img src="https://avatars.githubusercontent.com/u/21329997?v=4" width="80px" alt="debin-ge" />
+        <br /><sub><b>debin-ge</b></sub>
+      </a>
+    </td>
+    <td align="center" valign="top" width="12.5%">
       <a href="https://github.com/ocass-chen">
         <img src="https://avatars.githubusercontent.com/u/172055494?v=4" width="80px" alt="ocass-chen" />
         <br /><sub><b>ocass-chen</b></sub>
       </a>
     </td>
+  </tr>
+  <tr>
     <td align="center" valign="top" width="12.5%">
       <a href="https://github.com/AnxForever">
         <img src="https://avatars.githubusercontent.com/u/130662349?v=4" width="80px" alt="AnxForever" />
         <br /><sub><b>AnxForever</b></sub>
       </a>
     </td>
-  </tr>
-  <tr>
     <td align="center" valign="top" width="12.5%">
       <a href="https://github.com/yujiewanwan">
         <img src="https://avatars.githubusercontent.com/u/268286250?v=4" width="80px" alt="yujiewanwan" />

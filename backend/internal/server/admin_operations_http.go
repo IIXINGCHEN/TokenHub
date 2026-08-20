@@ -625,7 +625,7 @@ func (s *Server) handleAdminAuditEvents(w http.ResponseWriter, r *http.Request) 
 	if _, ok := s.requireAdmin(w, r, "admin_audit", r.Method); !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": s.store.ListAuditEvents()})
+	writeJSON(w, http.StatusOK, map[string]any{"data": redactAuditEventsForResponse(s.store.ListAuditEvents())})
 }
 
 func (s *Server) handleAdminExport(w http.ResponseWriter, r *http.Request) {
@@ -796,7 +796,7 @@ func (s *Server) serveAdminExport(w http.ResponseWriter, r *http.Request, user A
 		}
 	case "alert-deliveries":
 		_ = writer.Write([]string{"created_at", "alert_id", "channel_id", "channel", "target", "status", "status_code", "error"})
-		for _, item := range s.store.ListAlertDeliveries() {
+		for _, item := range redactAlertDeliveriesForResponse(s.store.ListAlertDeliveries()) {
 			_ = writer.Write([]string{
 				item.CreatedAt.Format(time.RFC3339),
 				item.AlertID,
@@ -809,7 +809,7 @@ func (s *Server) serveAdminExport(w http.ResponseWriter, r *http.Request, user A
 			})
 		}
 	default:
-		items := s.filterResourcesForUser(user, kind, s.store.ListResources(kind))
+		items := redactAdminResourcesForResponse(kind, s.filterResourcesForUser(user, kind, s.store.ListResources(kind)))
 		_ = writer.Write([]string{"id", "kind", "name", "status", "description", "fields", "updated_at"})
 		for _, item := range items {
 			_ = writer.Write([]string{

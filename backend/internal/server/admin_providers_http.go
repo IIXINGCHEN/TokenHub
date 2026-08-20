@@ -500,6 +500,10 @@ func (s *Server) handleAdminProviderHealthPost(w http.ResponseWriter, r *http.Re
 	s.handleAdminProviderItemRoute(w, r, s.serveAdminProviderHealth)
 }
 
+func (s *Server) handleAdminProviderRefreshTokenPost(w http.ResponseWriter, r *http.Request) {
+	s.handleAdminProviderItemRoute(w, r, s.serveAdminProviderHealth)
+}
+
 func (s *Server) handleAdminProviderTestPost(w http.ResponseWriter, r *http.Request) {
 	s.handleAdminProviderItemRoute(w, r, s.serveAdminProviderTest)
 }
