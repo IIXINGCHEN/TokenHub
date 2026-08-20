@@ -186,6 +186,7 @@ export function loadPlanForView(user: AdminUser, view: ViewKey): LoadPlan {
       addResourceDependency(plan, "role-configs");
       break;
     case "settings":
+	  plan.providers = true;
       addResourceDependency(plan, "settings");
       addResourceDependency(plan, "role-configs");
       addResourceDependency(plan, "identity-providers");
@@ -200,7 +201,6 @@ export function loadPlanForView(user: AdminUser, view: ViewKey): LoadPlan {
     case "reports":
     case "notification-channels":
     case "monitors":
-    case "proxies":
     case "announcements":
     case "identity-providers":
       addResourceDependency(plan, view);

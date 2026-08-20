@@ -270,11 +270,15 @@ func seedDefaultOrgResources(store Store) error {
 			syntheticDNSEnabledField:      false,
 			syntheticDNSCIDRsField:        defaultSyntheticDNSCIDRs,
 			syntheticDNSAllowPrivateField: false,
+			providerEgressModeField:       providerEgressModeEnvironment,
 		},
 	}); err != nil {
 		return fmt.Errorf("seed gateway settings: %w", err)
 	}
 	if err := ensureProviderSyntheticDNSSettings(store); err != nil {
+		return err
+	}
+	if err := ensureProviderProxySettings(store); err != nil {
 		return err
 	}
 	seedResourceIfMissing(store, "identity-providers", AdminResource{
@@ -383,17 +387,6 @@ func seedAdminResources(store Store) error {
 			"model":            "gpt-4.1-mini",
 			"interval_seconds": 60,
 			"last_result":      "ok",
-		},
-	})
-	store.CreateResource("proxies", AdminResource{
-		ID:          "prx_direct",
-		Name:        "Direct Egress",
-		Description: "Default egress without a proxy.",
-		Status:      StatusActive,
-		Fields: map[string]any{
-			"protocol": "direct",
-			"host":     "-",
-			"port":     0,
 		},
 	})
 	store.CreateResource("announcements", AdminResource{
@@ -693,19 +686,6 @@ func seedMockResources(store Store) {
 				"model":            fmt.Sprintf("mock-model-%03d", ((i-1)%96)+1),
 				"interval_seconds": 30 + (i%8)*15,
 				"last_result":      monitorResult(i),
-			},
-		})
-	}
-	for i := 1; i <= 60; i++ {
-		store.CreateResource("proxies", AdminResource{
-			ID:          fmt.Sprintf("prx_mock_%02d", i),
-			Name:        fmt.Sprintf("Mock Proxy Egress %02d", i),
-			Description: fmt.Sprintf("Egress policy for the %s region.", mockRegion(i)),
-			Status:      activeEvery(i, 20),
-			Fields: map[string]any{
-				"protocol": proxyProtocol(i),
-				"host":     fmt.Sprintf("proxy-%02d.internal", i),
-				"port":     8000 + i,
 			},
 		})
 	}

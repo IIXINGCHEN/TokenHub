@@ -864,7 +864,6 @@ export type ViewKey =
   | "notification-channels"
   | "alert-deliveries"
   | "security-policies"
-  | "proxies"
   | "sqlite-backups"
   | "database-status"
   | "announcements"
@@ -898,7 +897,6 @@ export const viewRoutes: Record<ViewKey, string> = {
   "notification-channels": "/notification-channels",
   "alert-deliveries": "/alert-deliveries",
   "security-policies": "/security-policies",
-  proxies: "/proxies",
   "sqlite-backups": "/sqlite-backups",
   "database-status": "/database-status",
   announcements: "/announcements",

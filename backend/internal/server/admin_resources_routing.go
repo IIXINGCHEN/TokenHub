@@ -79,6 +79,9 @@ func (s *Server) serveAdminResourceCollectionPost(w http.ResponseWriter, r *http
 		return
 	}
 	req.Fields = preserveAdminResourceSecrets(kind, nil, req.Fields)
+	if kind == "settings" {
+		req.Fields = normalizeProviderProxySettingsFields(req.Fields)
+	}
 	if err := s.validateScopedResourceMutation(user, kind, "", req); err != nil {
 		writeError(w, r, err)
 		return
@@ -87,6 +90,18 @@ func (s *Server) serveAdminResourceCollectionPost(w http.ResponseWriter, r *http
 		s.syntheticDNSSetting.Lock()
 		defer s.syntheticDNSSetting.Unlock()
 		if err := validateProviderSyntheticDNSSettings(req); err != nil {
+			writeError(w, r, err)
+			return
+		}
+		if err := validateProviderProxySettings(req, s.store); err != nil {
+			writeError(w, r, err)
+			return
+		}
+	}
+	if kind == "settings" {
+		var err error
+		req.Fields, err = protectAdminResourceSecretsForStorage(s.store, kind, req.Fields)
+		if err != nil {
 			writeError(w, r, err)
 			return
 		}
@@ -109,6 +124,7 @@ func (s *Server) serveAdminResourceCollectionPost(w http.ResponseWriter, r *http
 	}
 	if kind == "settings" && resource.ID == gatewaySettingsID {
 		s.syntheticDNSPolicy.applySetting(&resource)
+		s.providerProxyPolicy.applySetting(&resource)
 	}
 	s.recordAdminAudit(r, user, "create", kind, resource.ID, "", resource)
 	writeJSON(w, http.StatusCreated, redactAdminResourceForResponse(kind, resource))
@@ -136,6 +152,9 @@ func (s *Server) serveAdminResourcePatch(w http.ResponseWriter, r *http.Request,
 		}
 		req.Fields = preserveAdminResourceSecrets(kind, existing.Fields, req.Fields)
 	}
+	if kind == "settings" {
+		req.Fields = normalizeProviderProxySettingsFields(req.Fields)
+	}
 	if err := s.validateScopedResourceMutation(user, kind, resourceID, req); err != nil {
 		writeError(w, r, err)
 		return
@@ -143,6 +162,18 @@ func (s *Server) serveAdminResourcePatch(w http.ResponseWriter, r *http.Request,
 	if kind == "settings" && resourceID == gatewaySettingsID {
 		req.ID = resourceID
 		if err := validateProviderSyntheticDNSSettings(req); err != nil {
+			writeError(w, r, err)
+			return
+		}
+		if err := validateProviderProxySettings(req, s.store); err != nil {
+			writeError(w, r, err)
+			return
+		}
+	}
+	if kind == "settings" {
+		var err error
+		req.Fields, err = protectAdminResourceSecretsForStorage(s.store, kind, req.Fields)
+		if err != nil {
 			writeError(w, r, err)
 			return
 		}
@@ -159,6 +190,7 @@ func (s *Server) serveAdminResourcePatch(w http.ResponseWriter, r *http.Request,
 	}
 	if kind == "settings" && resourceID == gatewaySettingsID {
 		s.syntheticDNSPolicy.applySetting(&resource)
+		s.providerProxyPolicy.applySetting(&resource)
 	}
 	s.recordAdminAudit(r, user, "update", kind, resourceID, "", resource)
 	writeJSON(w, http.StatusOK, redactAdminResourceForResponse(kind, resource))
@@ -188,6 +220,7 @@ func (s *Server) serveAdminResourceDelete(w http.ResponseWriter, r *http.Request
 	}
 	if kind == "settings" && resourceID == gatewaySettingsID {
 		s.syntheticDNSPolicy.applySetting(nil)
+		s.providerProxyPolicy.applySetting(nil)
 	}
 	s.recordAdminAudit(r, user, "delete", kind, resourceID, "", nil)
 	w.WriteHeader(http.StatusNoContent)

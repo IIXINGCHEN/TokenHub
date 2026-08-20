@@ -1024,6 +1024,7 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
         <EditModal
           state={modal}
           data={data}
+          api={api}
           currentUser={currentUser}
           loading={loading}
           onClose={() => setModal(null)}

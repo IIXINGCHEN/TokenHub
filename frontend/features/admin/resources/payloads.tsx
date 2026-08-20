@@ -12,6 +12,7 @@ import { initialModelRoutes } from "../domain/provider-model-selection";
 import { modelMetadataPayload } from "../domain/model-display-name";
 import { defaultDisplayName } from "../domain/form-defaults";
 import { providerReasoningOptions, providerReasoningOverrideFormValues } from "../domain/provider-reasoning";
+import { providerEgressTestPayload } from "../domain/provider-egress";
 import { providerHeadersFormValue, providerHeadersPayload } from "../domain/provider-headers";
 import { activeLanguage, tx } from "../i18n/runtime";
 import { handleApprovalOrJSON } from "./governance-config";
@@ -747,6 +748,15 @@ export async function adminMutate(ctx: ApiContext, path: string, method: "POST" 
   }
 }
 
+export async function testProviderEgress(ctx: ApiContext, providerID: string, values: Record<string, string>) {
+  const resp = await adminFetch(ctx, "/api/admin/provider-egress/test", {
+    method: "POST",
+    body: JSON.stringify(providerEgressTestPayload(providerID, values)),
+  });
+  if (!resp.ok) throw new Error(await readAdminError(resp, tx("代理连接测试失败")));
+  return await resp.json() as { ok: boolean; latency_ms?: number; target_host?: string };
+}
+
 export async function testProviderAvailability(ctx: ApiContext, provider: { id: string }) {
   const resourcesResp = await adminFetch(ctx, "/api/admin/provider-resources");
   if (!resourcesResp.ok) throw new Error(await readAdminError(resourcesResp, tx("读取 Provider 账号资源")));
@@ -861,7 +871,6 @@ export function resourceKindLabel(kind: string) {
     reports: "导出报表",
     "notification-channels": "通知渠道",
     monitors: "健康检测",
-    proxies: "代理出口",
     announcements: "公告通知",
     "security-policies": "安全策略",
   };

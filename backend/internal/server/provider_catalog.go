@@ -29,16 +29,20 @@ type providerCatalogService struct {
 	upstreamClient providerCatalogHTTPClient
 }
 
-func newProviderCatalogService(store Store, catalogFile string) *providerCatalogService {
+func newProviderCatalogService(store Store, catalogFile string, clients ...providerCatalogHTTPClient) *providerCatalogService {
 	catalogFile = strings.TrimSpace(catalogFile)
 	if catalogFile == "" {
 		catalogFile = defaultProviderCatalogFile()
+	}
+	upstreamClient := providerCatalogHTTPClient(&http.Client{Timeout: providerCatalogUpstreamTimeout})
+	if len(clients) > 0 && clients[0] != nil {
+		upstreamClient = clients[0]
 	}
 	return &providerCatalogService{
 		store:          store,
 		catalogFile:    catalogFile,
 		upstreamURL:    providerCatalogUpstreamURL,
-		upstreamClient: &http.Client{Timeout: providerCatalogUpstreamTimeout},
+		upstreamClient: upstreamClient,
 	}
 }
 
@@ -581,7 +585,7 @@ func CustomProviderCatalogFromUpstream(ctx context.Context, client *http.Client,
 	if err != nil || endpoint.Scheme == "" || endpoint.Host == "" {
 		return ProviderCatalogEntry{}, NewHTTPError(http.StatusBadRequest, "provider_base_url_invalid", "Base URL is invalid")
 	}
-	if err := validateProviderUpstreamBaseURL(endpoint, allowedProviderUpstreamCIDRs(), providerUpstreamLoopbackAllowed()); err != nil {
+	if err := validateProviderUpstreamURLSyntax(endpoint); err != nil {
 		return ProviderCatalogEntry{}, err
 	}
 	client = ssrfGuardedProviderClient(client)
@@ -620,6 +624,9 @@ func CustomProviderCatalogFromUpstream(ctx context.Context, client *http.Client,
 	applyProviderHeaders(httpReq.Header, headers)
 	resp, err := client.Do(httpReq)
 	if err != nil {
+		if egressErr := providerEgressFailure(err); egressErr != nil {
+			return ProviderCatalogEntry{}, egressErr
+		}
 		return ProviderCatalogEntry{}, NewHTTPError(http.StatusBadGateway, "provider_models_request_failed", "Failed to request upstream models")
 	}
 	defer resp.Body.Close()

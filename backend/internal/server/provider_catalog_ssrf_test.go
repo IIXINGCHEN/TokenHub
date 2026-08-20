@@ -728,13 +728,25 @@ func TestAdminCreateProviderAllowsAllowlistedPrivateLiteral(t *testing.T) {
 func TestUpstreamClientsGuardInferenceDial(t *testing.T) {
 	client, streamClient, _ := newUpstreamClients(Config{})
 	for name, candidate := range map[string]*http.Client{"non-streaming": client, "streaming": streamClient} {
-		policy, ok := candidate.Transport.(*providerUpstreamPolicyTransport)
-		if !ok {
-			t.Fatalf("expected %s client to validate each request before sending it", name)
+		proxying, ok := candidate.Transport.(*providerEnvironmentProxyTransport)
+		if !ok || proxying.proxied.Proxy == nil {
+			t.Fatalf("expected %s client to honor the operator forward proxy", name)
 		}
-		transport, ok := policy.next.(*http.Transport)
-		if !ok || transport.DialContext == nil {
-			t.Fatalf("expected %s client to install a guarded DialContext", name)
+		policy, ok := proxying.direct.(*providerUpstreamPolicyTransport)
+		if !ok {
+			t.Fatalf("expected %s direct path to validate each request before sending it", name)
+		}
+		var transport *http.Transport
+		switch guarded := policy.next.(type) {
+		case *providerUpstreamTransportPool:
+			transport = guarded.current
+		case *http.Transport:
+			transport = guarded
+		default:
+			t.Fatalf("expected %s direct path to use a guarded transport, got %T", name, guarded)
+		}
+		if transport == nil || transport.DialContext == nil {
+			t.Fatalf("expected %s direct client path to install a guarded DialContext", name)
 		}
 		if candidate.CheckRedirect == nil {
 			t.Fatalf("expected %s client to enforce the strict redirect policy", name)
@@ -759,8 +771,12 @@ func TestUpstreamClientsGuardInferenceDial(t *testing.T) {
 		_ = listener.Close()
 	}
 	server := New(NewMemoryStore())
-	if _, ok := server.codexSubscription.Client.Transport.(*providerUpstreamPolicyTransport); !ok {
-		t.Fatal("expected Codex subscription client to validate each request before sending it")
+	proxying, ok := server.codexSubscription.Client.Transport.(*providerEnvironmentProxyTransport)
+	if !ok {
+		t.Fatal("expected Codex subscription client to honor the operator forward proxy")
+	}
+	if _, ok := proxying.direct.(*providerUpstreamPolicyTransport); !ok {
+		t.Fatal("expected Codex subscription direct path to validate each request before sending it")
 	}
 }
 
