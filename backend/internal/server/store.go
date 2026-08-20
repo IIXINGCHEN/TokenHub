@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"tokenhub/backend/internal/guardrails"
@@ -19,7 +20,7 @@ type QuotaBucket struct {
 	KeyID            string `gorm:"primaryKey;index"`
 	Scope            string `gorm:"primaryKey"`
 	Bucket           string `gorm:"primaryKey;index"`
-	AttributedUserID string `gorm:"primaryKey;index"`
+	AttributedUserID string `gorm:"primaryKey;index;default:__tokenhub_unattributed__"`
 	QuotaCounter
 }
 
@@ -280,20 +281,25 @@ type Store interface {
 var _ Store = (*GormStore)(nil)
 
 type GormStore struct {
-	db                   *gorm.DB
-	analyticsDB          *gorm.DB
-	mu                   *sync.Mutex
-	leaseHeartbeats      *sync.Map
-	lastUsed             *lastUsedThrottle
-	modelLabels          *modelLabelCache
-	secretKey            string
-	metrics              *GatewayMetrics
-	failureThreshold     int
-	cooldownDuration     time.Duration
-	cooldownMax          time.Duration
-	sqliteDSN            string
-	backupDir            string
-	dbDriver             string // "sqlite" or "postgres"
+	db               *gorm.DB
+	analyticsDB      *gorm.DB
+	mu               *sync.Mutex
+	leaseHeartbeats  *sync.Map
+	lastUsed         *lastUsedThrottle
+	modelLabels      *modelLabelCache
+	secretKey        string
+	metrics          *GatewayMetrics
+	failureThreshold int
+	cooldownDuration time.Duration
+	cooldownMax      time.Duration
+	sqliteDSN        string
+	backupDir        string
+	dbDriver         string        // "sqlite" or "postgres"
+	heartbeatState   *atomic.Int32 // shared across value copies of the store
+	// instanceHeartbeatID identifies the row this instance published while it
+	// still held the schema migration lock; StartInstanceHeartbeat refreshes
+	// that row instead of creating a second one.
+	instanceHeartbeatID  string
 	inFlightLeaseTTL     time.Duration
 	clusterLockTTL       time.Duration
 	imageCapabilityRetry time.Duration

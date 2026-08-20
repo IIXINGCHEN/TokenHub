@@ -8,6 +8,7 @@ TokenHub documentation is now organized around the three roles used in an enterp
 
 - [Architecture](architecture.md): deployment modes, control and data planes, model request flow, persistence, and security boundaries.
 - [Deployment](deployment.md): Docker Compose, environment variables, databases, reverse proxying, and health checks.
+- [Database Evolution](database-evolution.md): forward-only migrations, adoption baseline, maintenance commands, and rollback compatibility.
 - [PostgreSQL Setup Guide](postgresql-setup.md): PostgreSQL configuration, operations, and migration.
 - [Performance Benchmarking](performance-benchmarking.md): reproducible gateway comparisons, internal allocation benchmarks, and regression budgets.
 

@@ -481,7 +481,7 @@ func TestAdminAPIManagesUserQuotaPolicies(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	if err := store.db.Create(&QuotaBucket{
-		KeyID: userQuotaBucketKey(user.ID), Scope: "day", Bucket: dayBucket(now),
+		KeyID: userQuotaBucketKey(user.ID), Scope: "day", Bucket: dayBucket(now), AttributedUserID: user.ID,
 		QuotaCounter: QuotaCounter{Requests: 3, TotalTokens: 37, CostUSD: 1.25},
 	}).Error; err != nil {
 		t.Fatal(err)

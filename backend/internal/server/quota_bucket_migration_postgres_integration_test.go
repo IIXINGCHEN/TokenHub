@@ -149,6 +149,16 @@ PRIMARY KEY (key_id, scope, bucket)
 	if afterConstraintOID != beforeConstraintOID {
 		t.Fatalf("rerunning migration changed primary key identity from %d to %d", beforeConstraintOID, afterConstraintOID)
 	}
+	if err := store.db.Exec("INSERT INTO quota_buckets (key_id, scope, bucket, requests) VALUES (?, ?, ?, ?)", "key_rollback", "day", "2026-08-20", 1).Error; err != nil {
+		t.Fatalf("simulate an older release writing without attribution: %v", err)
+	}
+	var rollbackRow QuotaBucket
+	if err := store.db.First(&rollbackRow, "key_id = ?", "key_rollback").Error; err != nil {
+		t.Fatalf("load older-release quota row: %v", err)
+	}
+	if rollbackRow.AttributedUserID != unattributedQuotaUserID {
+		t.Fatalf("older-release write attribution = %q, want %q", rollbackRow.AttributedUserID, unattributedQuotaUserID)
+	}
 }
 
 func closeQuotaMigrationPostgresStore(t *testing.T, store *GormStore) {
