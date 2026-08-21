@@ -10,7 +10,7 @@ import { emptyData, emptySummary, filterByModelCategory, filterRows } from "../d
 import { filterAPIKeys } from "../domain/api-key-filter";
 import { auditRequestPagePath } from "../domain/audit-request-page";
 import { modelRouteDefaults, rowTitle } from "../domain/entities";
-import { uniqueUIID, viewFromPath } from "../domain/formatting";
+import { apiKeyUsageIDFromPath, uniqueUIID, viewFromPath } from "../domain/formatting";
 import { reportDatasetLabel } from "../domain/labels";
 import { exchangeOAuthLoginCode, resolvePendingOAuthLoginResult } from "../domain/oauth-login";
 import { resourceCreateTarget } from "../domain/resource-create-target";
@@ -41,11 +41,13 @@ import { ContentSecurityPolicies, SecurityPolicyTabs } from "../views/security-p
 import { APIKeyWizardModal, UserImportModal } from "../views/modals";
 import { EditModal, SettingsView } from "../views/settings-table";
 import { BillingView, UsageView } from "../views/usage-billing";
+import { APIKeyUsageView } from "../views/api-key-usage";
 
 export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
   const pathname = usePathname();
   const router = useRouter();
   const routeView = viewFromPath(pathname);
+  const apiKeyUsageID = apiKeyUsageIDFromPath(pathname);
   const [language, setLanguage] = useState<AppLanguage>(() => readSavedLanguage());
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [baseURL, setBaseURL] = useState(defaultBaseURL);
@@ -846,7 +848,7 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
         />
 
         <div className={activeView === "playground" ? "content-panel playground-content-panel" : "content-panel"}>
-          {activeView === "playground" || activeView === "overview" ? null : (
+          {activeView === "playground" || activeView === "overview" || apiKeyUsageID ? null : (
             <PageHeader activeView={activeView} data={data} meta={activeMeta} user={currentUser} />
           )}
 
@@ -857,9 +859,11 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
             onClearNotice={() => setNotice("")}
           />
 
-          {activeView === "playground" ? null : <div className="divider" />}
+          {activeView === "playground" || apiKeyUsageID ? null : <div className="divider" />}
 
-          {activeView === "overview" ? (
+          {apiKeyUsageID ? (
+            <APIKeyUsageView api={api} data={data} user={currentUser} keyID={apiKeyUsageID} onBack={() => selectView("api-keys")} />
+          ) : activeView === "overview" ? (
             <OverviewView data={data} user={currentUser} onSelectView={selectView} />
           ) : activeView === "playground" ? (
             <PlaygroundPage api={api} data={data} canViewRoutes={canAccessView(currentUser, "routes")} />

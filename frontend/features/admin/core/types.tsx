@@ -60,6 +60,7 @@ export type APIKey = {
   expires_at?: string;
   rotated_from_id?: string;
   grace_until?: string;
+  created_at?: string;
   last_used_at?: string;
   metadata?: Record<string, string>;
 };
@@ -851,6 +852,69 @@ export type UsageDaily = {
   breakdown: UsageBreakdown;
 };
 
+export type APIKeyUsageMetrics = {
+  request_count: number;
+  error_count: number;
+  average_latency_ms: number;
+  input_tokens: number;
+  cached_input_tokens: number;
+  cache_write_input_tokens: number;
+  input_audio_tokens: number;
+  output_tokens: number;
+  reasoning_output_tokens: number;
+  output_audio_tokens: number;
+  accepted_prediction_tokens: number;
+  rejected_prediction_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+};
+
+export type APIKeyUsagePoint = APIKeyUsageMetrics & { date: string };
+
+export type APIKeyUsageBreakdownRow = APIKeyUsageMetrics & {
+  id: string;
+  resource_id?: string;
+  status_code?: number;
+  error_code?: string;
+  last_occurred_at?: string;
+};
+
+export type APIKeyQuotaLimits = {
+  rate_limit_rpm: number;
+  token_limit_tpm: number;
+  daily_requests: number;
+  monthly_requests: number;
+  daily_tokens: number;
+  monthly_tokens: number;
+  daily_cost_usd: number;
+  monthly_cost_usd: number;
+  max_concurrency: number;
+};
+
+export type APIKeyQuotaCounter = {
+  requests: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+};
+
+export type APIKeyUsageResponse = {
+  key: APIKey;
+  range: { from: string; to: string };
+  generated_at: string;
+  summary: APIKeyUsageMetrics;
+  quota: {
+    effective_limits: APIKeyQuotaLimits;
+    day: { bucket: string; usage: APIKeyQuotaCounter };
+    month: { bucket: string; usage: APIKeyQuotaCounter };
+  };
+  timeseries: APIKeyUsagePoint[];
+  models: APIKeyUsageBreakdownRow[];
+  errors: APIKeyUsageBreakdownRow[];
+  providers?: APIKeyUsageBreakdownRow[];
+};
+
 export type ViewKey =
   | "overview"
   | "playground"
@@ -1003,6 +1067,7 @@ export type ResourceAction<T> = {
   label: string;
   title?: string;
   visible?: (item: T) => boolean;
+  href?: (item: T) => string;
   navigate?: (item: T) => ViewKey;
   run?: (ctx: ApiContext, item: T) => Promise<void>;
   modal?: (item: T, data: AppData) => ModalState<any>;
