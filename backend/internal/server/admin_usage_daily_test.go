@@ -1,15 +1,21 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 )
 
-func TestUsageDailyUsesRequestedTimezoneWindow(t *testing.T) {
+func TestUsageDailyUsesDashboardTimezoneWindow(t *testing.T) {
 	store := NewMemoryStore()
 	server := New(store)
+	store.CreateResource("settings", AdminResource{
+		ID:     gatewaySettingsID,
+		Status: StatusActive,
+		Fields: map[string]any{dashboardTimezoneField: "Asia/Shanghai"},
+	})
 	project := store.CreateProject(Project{ID: "prj_daily", Name: "Daily project", CostCenter: "CC-DAILY", Status: StatusActive})
 	records := []UsageRecord{
 		{
@@ -88,7 +94,7 @@ func TestUsageDailyUsesRequestedTimezoneWindow(t *testing.T) {
 	}
 
 	now := time.Date(2026, 3, 6, 2, 30, 0, 0, time.UTC)
-	daily, err := server.usageDailyForUser(t.Context(), AdminUser{ID: "usr_daily_admin", Role: "admin", Status: StatusActive}, "Asia/Shanghai", now)
+	daily, err := server.usageDailyForUser(t.Context(), AdminUser{ID: "usr_daily_admin", Role: "admin", Status: StatusActive}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +138,7 @@ func TestUsageDailyUsesConfiguredDashboardTimezone(t *testing.T) {
 		Fields: map[string]any{dashboardTimezoneField: "Asia/Shanghai"},
 	})
 
-	daily, err := server.usageDailyForUser(t.Context(), AdminUser{ID: "usr_daily_admin", Role: "admin", Status: StatusActive}, "", time.Date(2026, 3, 6, 2, 30, 0, 0, time.UTC))
+	daily, err := server.usageDailyForUser(t.Context(), AdminUser{ID: "usr_daily_admin", Role: "admin", Status: StatusActive}, time.Date(2026, 3, 6, 2, 30, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,11 +151,132 @@ func TestUsageDailyUsesConfiguredDashboardTimezone(t *testing.T) {
 	}
 }
 
-func TestUsageDailyRejectsInvalidTimezone(t *testing.T) {
-	app := New(NewMemoryStore()).Handler()
-	response := doJSON(t, app, http.MethodGet, "/api/admin/usage/daily?timezone=Nope/Nowhere", nil, "")
-	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body, "invalid_usage_timezone") {
-		t.Fatalf("invalid timezone response = %d %s, want invalid_usage_timezone", response.Code, response.Body)
+func TestUsageDailyEndpointIgnoresTimezoneQuery(t *testing.T) {
+	store := NewMemoryStore()
+	store.CreateResource("settings", AdminResource{
+		ID:     gatewaySettingsID,
+		Status: StatusActive,
+		Fields: map[string]any{dashboardTimezoneField: "Asia/Shanghai"},
+	})
+	app := New(store).Handler()
+	response := doJSON(t, app, http.MethodGet, "/api/admin/usage/daily?timezone=UTC", nil, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("usage daily response = %d %s, want 200", response.Code, response.Body)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(response.Body), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if got := payload["timezone"]; got != "Asia/Shanghai" {
+		t.Fatalf("timezone = %#v, want configured dashboard timezone", got)
+	}
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	localNow := time.Now().In(location)
+	expectedStart := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), 0, 0, 0, 0, location).UTC().Format(time.RFC3339)
+	if got := payload["window_start"]; got != expectedStart {
+		t.Fatalf("window_start = %#v, want dashboard timezone day start", got)
+	}
+}
+
+func TestUsageDailyRedactsProviderBreakdownsForNonPlatformRoles(t *testing.T) {
+	store := NewMemoryStore()
+	server := New(store)
+	store.CreateResource("teams", AdminResource{ID: "team_daily", Status: StatusActive})
+	teamProject, err := store.CreateProjectChecked(Project{
+		ID:          "prj_daily_team",
+		Name:        "Daily team project",
+		TeamID:      "team_daily",
+		OwnerUserID: "usr_daily_user",
+		Status:      StatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := UsageRecord{
+		ID:                 "use_daily_provider",
+		RequestID:          "req_daily_provider",
+		ProjectID:          teamProject.ID,
+		APIKeyID:           "key_daily_provider",
+		ModelName:          "gpt-daily-provider",
+		ProviderID:         "provider_sensitive_daily",
+		ProviderResourceID: "resource_sensitive_daily",
+		InputTokens:        10,
+		OutputTokens:       5,
+		TotalTokens:        15,
+		CostUSD:            12.34,
+		CreatedAt:          time.Date(2026, 8, 21, 8, 0, 0, 0, time.UTC),
+	}
+	if err := store.db.Create(&record).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		user AdminUser
+	}{
+		{name: "team leader", user: AdminUser{ID: "usr_daily_leader", Role: "team_leader", TeamID: "team_daily", Status: StatusActive}},
+		{name: "user", user: AdminUser{ID: "usr_daily_user", Role: "user", TeamID: "team_daily", Status: StatusActive}},
+		{name: "security admin", user: AdminUser{ID: "usr_daily_security", Role: "security_admin", Status: StatusActive}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			daily, err := server.usageDailyForUser(t.Context(), test.user, time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC))
+			if err != nil {
+				t.Fatal(err)
+			}
+			breakdown := daily["breakdown"].(map[string]any)
+			if _, ok := breakdown["providers"]; ok {
+				t.Fatalf("providers breakdown = %#v, want redacted", breakdown["providers"])
+			}
+			if _, ok := breakdown["provider_resources"]; ok {
+				t.Fatalf("provider_resources breakdown = %#v, want redacted", breakdown["provider_resources"])
+			}
+			body, err := json.Marshal(daily)
+			if err != nil {
+				t.Fatal(err)
+			}
+			bodyText := string(body)
+			if strings.Contains(bodyText, "provider_sensitive_daily") || strings.Contains(bodyText, "resource_sensitive_daily") {
+				t.Fatalf("daily payload leaked provider identifiers: %s", bodyText)
+			}
+		})
+	}
+}
+
+func TestUsageDailyIncludesProviderBreakdownsForPlatformAdmin(t *testing.T) {
+	store := NewMemoryStore()
+	server := New(store)
+	project := store.CreateProject(Project{ID: "prj_daily_platform", Name: "Daily platform project", Status: StatusActive})
+	record := UsageRecord{
+		ID:                 "use_daily_platform_provider",
+		RequestID:          "req_daily_platform_provider",
+		ProjectID:          project.ID,
+		ModelName:          "gpt-daily-platform-provider",
+		ProviderID:         "provider_platform_daily",
+		ProviderResourceID: "resource_platform_daily",
+		TotalTokens:        15,
+		CostUSD:            12.34,
+		CreatedAt:          time.Date(2026, 8, 21, 8, 0, 0, 0, time.UTC),
+	}
+	if err := store.db.Create(&record).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	daily, err := server.usageDailyForUser(t.Context(), AdminUser{ID: "usr_daily_admin", Role: "admin", Status: StatusActive}, time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	breakdown := daily["breakdown"].(map[string]any)
+	providers := breakdown["providers"].([]map[string]any)
+	if len(providers) != 1 || providers[0]["id"] != "provider_platform_daily" || providers[0]["estimated_cost_usd"] != 12.34 {
+		t.Fatalf("providers breakdown = %#v, want platform provider row", providers)
+	}
+	resources := breakdown["provider_resources"].([]map[string]any)
+	if len(resources) != 1 || resources[0]["id"] != "resource_platform_daily" || resources[0]["estimated_cost_usd"] != 12.34 {
+		t.Fatalf("provider_resources breakdown = %#v, want platform resource row", resources)
 	}
 }
 

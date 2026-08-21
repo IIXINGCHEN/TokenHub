@@ -7,10 +7,8 @@ import (
 	"time"
 )
 
-func (s *Server) usageDailyForUser(ctx context.Context, user AdminUser, timezone string, now time.Time) (map[string]any, error) {
-	if strings.TrimSpace(timezone) == "" {
-		timezone = s.dashboardTimezone()
-	}
+func (s *Server) usageDailyForUser(ctx context.Context, user AdminUser, now time.Time) (map[string]any, error) {
+	timezone := s.dashboardTimezone()
 	location, timezoneName, err := usageDailyLocation(timezone)
 	if err != nil {
 		return nil, err
@@ -42,6 +40,10 @@ func (s *Server) usageDailyForUser(ctx context.Context, user AdminUser, timezone
 	breakdown := s.usageBreakdownFromRecords(records, projectsByID)
 	breakdown["api_keys"] = aggregateUsage(records, func(record UsageRecord) string { return record.APIKeyID })
 	breakdown["members"] = s.aggregateUsageByMember(user, records, projectsByID)
+	if !isPlatformAdminRole(user.Role) {
+		delete(breakdown, "providers")
+		delete(breakdown, "provider_resources")
+	}
 
 	return map[string]any{
 		"timezone":     timezoneName,

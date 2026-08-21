@@ -73,7 +73,8 @@ export function DailyUsageSection({ data, user }: { data: AppData; user: AdminUs
   const role = appRole(user.role);
   const showMemberBreakdown = role === "team_leader";
   const showGovernanceBreakdown = role !== "user";
-  const tokenDetail = dailyUsageTokenDetail(summary.input_tokens, summary.cached_input_tokens ?? 0, summary.output_tokens);
+  const showProviderBreakdown = role === "admin";
+  const tokenDetail = dailyUsageTokenDetail(summary.input_tokens, summary.cached_input_tokens ?? 0, summary.cache_write_input_tokens ?? 0, summary.output_tokens);
   const tokenTypeRows = dailyUsageTokenTypeRows(summary);
   return (
     <section className="executive-report daily-usage-report">
@@ -103,8 +104,8 @@ export function DailyUsageSection({ data, user }: { data: AppData; user: AdminUs
         {showMemberBreakdown ? <DailyUsageTable title="今日成员用量" label="成员" rows={daily.breakdown.members ?? []} nameForRow={(row) => usageMemberLabel(data, row.id)} paginationKey="daily-usage-members" /> : null}
         <DailyUsageTable title="今日项目归因" label="项目" rows={daily.breakdown.projects ?? []} nameForRow={(row) => projectName(data, row.id)} paginationKey="daily-usage-projects" />
         <DailyUsageTable title="今日 API Key 用量" label="API Key" rows={daily.breakdown.api_keys ?? []} nameForRow={(row) => apiKeyAuditLabel(data, row.id)} paginationKey="daily-usage-api-keys" />
-        <DailyUsageTable title="今日 Provider 用量" label="Provider" rows={daily.breakdown.providers ?? []} nameForRow={(row) => findProvider(data, row.id)?.name || row.id} paginationKey="daily-usage-providers" />
-        <DailyUsageTable title="今日资源账号用量" label="资源账号" rows={daily.breakdown.provider_resources ?? []} nameForRow={(row) => providerResourceAuditLabel(data, row.id)} paginationKey="daily-usage-provider-resources" />
+        {showProviderBreakdown ? <DailyUsageTable title="今日 Provider 用量" label="Provider" rows={daily.breakdown.providers ?? []} nameForRow={(row) => findProvider(data, row.id)?.name || row.id} paginationKey="daily-usage-providers" /> : null}
+        {showProviderBreakdown ? <DailyUsageTable title="今日资源账号用量" label="资源账号" rows={daily.breakdown.provider_resources ?? []} nameForRow={(row) => providerResourceAuditLabel(data, row.id)} paginationKey="daily-usage-provider-resources" /> : null}
         {showGovernanceBreakdown ? <DailyUsageTable title="今日成本中心用量" label="成本中心" rows={daily.breakdown.cost_centers ?? []} nameForRow={(row) => costCenterLabel(data, row.id)} paginationKey="daily-usage-cost-centers" /> : null}
       </div>
     </section>
@@ -179,18 +180,23 @@ function dailyUsageDateLabel(start: string, timezone: string) {
   }).format(new Date(start));
 }
 
-function dailyUsageTokenDetail(inputTokens: number, cachedInputTokens: number, outputTokens: number) {
-  return formatTranslationTemplate(tx("输入 {input} / 缓存读 {cached} / 输出 {output}"), {
+function dailyUsageTokenDetail(inputTokens: number, cachedInputTokens: number, cacheWriteInputTokens: number, outputTokens: number) {
+  return formatTranslationTemplate(tx("输入 {input} / 缓存读 {cached} / 缓存写 {cacheWrite} / 输出 {output}"), {
     input: compactNumber(inputTokens),
     cached: compactNumber(cachedInputTokens),
+    cacheWrite: compactNumber(cacheWriteInputTokens),
     output: compactNumber(outputTokens),
   });
 }
 
 function dailyUsageTokenTypeRows(summary: AppData["dailyUsage"]["summary"]): UsageBreakdownRow[] {
+  const cachedInputTokens = summary.cached_input_tokens ?? 0;
+  const cacheWriteInputTokens = summary.cache_write_input_tokens ?? 0;
+  const uncachedInputTokens = Math.max(0, summary.input_tokens - cachedInputTokens - cacheWriteInputTokens);
   return [
-    dailyUsageTokenTypeRow("输入", summary.input_tokens),
-    dailyUsageTokenTypeRow("缓存读", summary.cached_input_tokens ?? 0),
+    dailyUsageTokenTypeRow("输入", uncachedInputTokens),
+    dailyUsageTokenTypeRow("缓存读", cachedInputTokens),
+    dailyUsageTokenTypeRow("缓存写", cacheWriteInputTokens),
     dailyUsageTokenTypeRow("输出", summary.output_tokens),
   ].filter((row) => row.total_tokens > 0);
 }

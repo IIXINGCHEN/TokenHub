@@ -551,7 +551,7 @@ func (s *Server) handleAdminUsageDaily(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	daily, err := s.usageDailyForUser(r.Context(), user, r.URL.Query().Get("timezone"), time.Now())
+	daily, err := s.usageDailyForUser(r.Context(), user, time.Now())
 	if err != nil {
 		writeError(w, r, err)
 		return
