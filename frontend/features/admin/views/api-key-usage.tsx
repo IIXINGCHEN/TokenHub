@@ -5,7 +5,7 @@ import { type AdminUser, type ApiContext, type APIKeyUsageMetrics, type APIKeyUs
 import { apiKeyCustomUsageRange, apiKeyUsageRangeForDays, type APIKeyUsageRange, utcDateInputValue } from "../domain/api-key-usage-range";
 import { auditRequestPagePath, type AuditRequestStatus } from "../domain/audit-request-page";
 import { findProvider, projectName, providerResourceAuditLabel, usageMemberLabel } from "../domain/entities";
-import { compactNumber, formatMoney, formatNumber, formatTime } from "../domain/formatting";
+import { compactNumber, formatNumber, formatTime } from "../domain/formatting";
 import { formatTranslationTemplate, languageLocale, tx } from "../i18n/runtime";
 import { adminFetch, isAuthExpiredError, readAdminError } from "../resources/payloads";
 import { PaginationControls, type PaginationState } from "../shared/pagination";
@@ -225,11 +225,12 @@ function QuotaCard({ label, used, limit, money = false, tokens = false }: { labe
   );
 }
 
-function UsageTrend({ points, metric }: { points: APIKeyUsageResponse["timeseries"]; metric: UsageMetricKey }) {
+export function UsageTrend({ points, metric }: { points: APIKeyUsageResponse["timeseries"]; metric: UsageMetricKey }) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   if (!points.length) return <div className="compact-empty">{tx("所选时间范围内暂无用量")}</div>;
   const values = points.map((point) => point[metric]);
-  const max = Math.max(...values, 1);
+  const max = Math.max(...values);
+  if (!(max > 0)) return <div className="compact-empty">{tx("所选时间范围内该指标为 0")}</div>;
   const ticks = [1, 0.75, 0.5, 0.25];
   const labelEvery = Math.max(1, Math.ceil(points.length / 8));
   const slotCount = points.length;
@@ -447,7 +448,7 @@ function formatMetric(value: number, metric: UsageMetricKey) {
   return formatNumber(value);
 }
 function formatAxisTick(value: number, metric: UsageMetricKey) {
-  if (metric === "estimated_cost_usd") return `$${formatMoney(value)}`;
+  if (metric === "estimated_cost_usd") return formatUSD(value);
   if (metric === "total_tokens") return compactNumber(Math.round(value || 0));
   return formatNumber(Math.round(value || 0));
 }
