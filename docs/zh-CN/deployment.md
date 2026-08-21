@@ -344,6 +344,8 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_PROVIDER_UPSTREAM_ALLOWED_CIDRS` | 空 | 逗号分隔的私网 CIDR（仅 RFC1918/ULA），网段内的字面量 IP 可用作自定义 provider base URL（用于内网模型服务）。这些显式放行的私网字面量可使用 HTTP；公网 provider URL 必须使用 HTTPS。解析到私网地址的域名与重定向目标仍被拒绝 |
 | `TOKENHUB_PROVIDER_UPSTREAM_NAT64_PREFIX` | 空 | 可选的 RFC 6052 DNS64/NAT64 前缀，用于识别其中嵌入的 IPv4 目标。支持 32、40、48、56、64、96 位前缀；使用 `64:ff9b:1::/48` 等网络专用前缀时需要配置，标准 `64:ff9b::/96` 前缀无需配置 |
 | `TOKENHUB_PROVIDER_UPSTREAM_ALLOW_LOOPBACK` | `false` | 显式允许 provider base URL（包括 HTTP URL）使用 `localhost`、`127.0.0.1` 或 `::1`，用于本地 Ollama/LM Studio 开发；公网 provider URL 必须使用 HTTPS；生产环境应保持关闭 |
+| `HTTP_PROXY` / `HTTPS_PROXY` | 空 | 所有 HTTP Provider 通道使用的标准出站 forward proxy。代理选择由运维配置负责；未走代理的请求继续接受 TokenHub 的 DNS/IP 出站校验 |
+| `NO_PROXY` | 空 | 标准代理绕过列表，以逗号分隔；匹配的 Provider 请求使用带防护的直连路径 |
 | `TOKENHUB_CORS_ALLOWED_ORIGINS` | 公网地址 | 允许调用后端的精确浏览器 Origin，逗号分隔；设置后，同一列表也是 OAuth 控制台回跳 Origin 的精确白名单。每项只能包含 scheme、host 和可选端口，不得包含路径 |
 | `TOKENHUB_ADMIN_TOKEN` | `change-me-tokenhub-admin-token` | Admin API 启动访问 Token |
 | `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD` | `change-me-tokenhub-admin-password` | 初始 `admin` 用户密码；生产启动前必须修改 |
@@ -400,6 +402,10 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_RESPONSE_RESULT_TTL_SECONDS` | `3600` | 任务完成后加密请求与结果载荷的保留时长 |
 | `TOKENHUB_RESPONSE_MAX_QUEUED_JOBS` | `1000` | 单个部署接受的排队中与运行中后台 Responses 任务总上限 |
 | `TOKENHUB_API` | 空 | `tokenhub-migrate` CLI 的目标 Admin API 地址。仅由该 CLI 读取，后端服务不会读取；可被 `--to` 覆盖 |
+
+无需重启也可以在「系统设置 → 基础设置 → Provider 出口模式」切换出口。升级默认使用「继承环境变量代理」，读取进程启动时捕获的 `HTTP_PROXY`、`HTTPS_PROXY` 和 `NO_PROXY`；「直接连接」忽略这些变量；「使用统一代理」把一个 HTTP 或 HTTPS forward proxy 用于全部 Provider 上游通道，包括推理、流式、图片、模型发现、Provider catalog 刷新、额度查询和 Provider 凭据刷新。身份登录、通知、Tracing 和版本更新不受这项设置影响。
+
+统一代理支持可选的 Basic 认证，密码会加密保存，API 与控制台只显示掩码。保存代理配置时只校验其语法；「测试代理连接」使用当前未保存表单和已有 Provider，仅验证代理 TCP/TLS、认证、CONNECT 与目标 TLS（使用系统 CA），不会发送 Provider 凭据或模型请求。无论选择哪种代理模式，Provider 与 Provider Resource 的 Base URL 都保留原有的入库协议和字面量地址校验：metadata 等始终禁止的目标仍会被拒绝，私网字面量仍需通过 `TOKENHUB_PROVIDER_UPSTREAM_ALLOWED_CIDRS` 明确允许。每次代理请求前，TokenHub 都会在本地解析原始 Provider 域名，拒绝私网、loopback、link-local、metadata 及其他禁止地址，并把代理请求或 CONNECT 隧道固定到已校验的 IP，同时保留原始 HTTP Host 和 TLS 服务名。直连及 `NO_PROXY` 命中的请求也会在受保护的拨号路径执行相同地址策略。代理配置、认证、连接、超时和 HTTPS CONNECT 失败按平台出口故障处理，不会惩罚 Provider 资源，也不会触发路由故障转移。对于明文 HTTP 代理请求，HTTP 错误响应可能来自代理或 Provider，因此保留常规上游错误处理。多实例会在五秒内加载共享配置，数据库临时读取失败时继续使用上一份有效配置。
 
 当 TokenHub 所在主机的代理工作在 Fake-IP 模式时，在「系统设置 → 基础设置 → Synthetic DNS / Fake-IP 网段」中配置。该例外默认关闭，只作用于域名解析结果，不允许字面量 IP Provider URL。应填写代理实际使用的地址池，不要假设所有实现都使用 `198.18.0.0/15`：这个网段为基准测试保留，虽常被 Fake-IP 使用，但并非 Fake-IP 专属。普通模式仍禁止 RFC1918 私网和 IPv6 ULA；如果代理确实使用这些范围（例如 Xray 的 IPv6 Fake-IP 池），必须另行开启高风险私网信任。开启后，Provider 域名可能访问配置范围内的真实内网服务。loopback、link-local、metadata、multicast、NAT64 等范围在任何模式下仍会被拒绝。
 

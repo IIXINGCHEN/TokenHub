@@ -344,6 +344,8 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_PROVIDER_UPSTREAM_ALLOWED_CIDRS` | 空 | カスタムプロバイダーの base URL としてリテラル IP を許可するプライベート CIDR（RFC1918/ULA のみ、カンマ区切り、社内モデルサーバー向け）。明示的に許可したプライベートリテラルでは HTTP を使用できますが、公開プロバイダー URL には HTTPS が必須です。プライベートアドレスに解決されるホスト名とリダイレクト先は引き続き拒否 |
 | `TOKENHUB_PROVIDER_UPSTREAM_NAT64_PREFIX` | 空 | 埋め込まれた IPv4 宛先を分類するための任意の RFC 6052 DNS64/NAT64 プレフィックス。32、40、48、56、64、96 ビット長をサポートします。`64:ff9b:1::/48` などのネットワーク固有プレフィックスを使用する場合に設定します。標準の `64:ff9b::/96` は設定不要です |
 | `TOKENHUB_PROVIDER_UPSTREAM_ALLOW_LOOPBACK` | `false` | ローカルの Ollama/LM Studio 開発用に、provider base URL の `localhost`、`127.0.0.1`、`::1`（HTTP URL を含む）を明示的に許可します。公開プロバイダー URL には HTTPS が必須です。本番環境では無効のままにしてください |
+| `HTTP_PROXY` / `HTTPS_PROXY` | 空 | すべての HTTP Provider チャネルが使用する標準の送信 forward proxy。プロキシ選択は運用者が管理し、プロキシを使用しないリクエストには TokenHub の DNS/IP 送信先検証が引き続き適用されます |
+| `NO_PROXY` | 空 | 標準のカンマ区切りプロキシ除外リスト。一致した Provider リクエストは保護された直接接続経路を使用します |
 | `TOKENHUB_CORS_ALLOWED_ORIGINS` | 公開 URL | バックエンドを呼び出せる正確なブラウザー Origin（カンマ区切り）。設定時は同じ一覧が OAuth コンソールの戻り先 Origin の完全一致 allowlist にもなります。各値には scheme、host、任意の port だけを含め、path は含めません |
 | `TOKENHUB_ADMIN_TOKEN` | `change-me-tokenhub-admin-token` | Admin API 用の初期 Token |
 | `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD` | `change-me-tokenhub-admin-password` | 初期 `admin` ユーザーのパスワード。本番起動前に変更が必要 |
@@ -400,6 +402,10 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_RESPONSE_RESULT_TTL_SECONDS` | `3600` | 完了後に暗号化されたリクエストと結果 payload を保持する期間 |
 | `TOKENHUB_RESPONSE_MAX_QUEUED_JOBS` | `1000` | 1 つのデプロイが受け付ける待機中および実行中のバックグラウンド Responses ジョブ上限 |
 | `TOKENHUB_API` | 空 | `tokenhub-migrate` CLI が対象とする Admin API の URL。この CLI のみが読み取り、バックエンドサーバーは読み取りません。`--to` で上書きされます |
+
+再起動せずに **システム設定 → 基本設定 → Provider エグレスモード** で送信経路を変更できます。アップグレード時の既定値である「環境変数のプロキシを継承」は、プロセス起動時に取得した `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` を使用します。「直接接続」はこれらを無視し、「統一プロキシを使用」は 1 つの HTTP または HTTPS forward proxy を推論、ストリーミング、画像、モデル検出、Provider catalog 更新、Quota、Provider 資格情報更新を含むすべての Provider 上流チャネルに適用します。ID ログイン、通知、Tracing、バージョン更新には適用されません。
+
+統一プロキシは任意の Basic 認証に対応し、パスワードは暗号化して保存され、API とコンソールではマスクされます。プロキシ設定の保存時はその構文だけを検証します。**プロキシ接続をテスト** は現在の未保存フォームと既存 Provider を使い、Provider 資格情報やモデルリクエストを送信せず、プロキシ TCP/TLS、認証、CONNECT、システム CA による対象 TLS だけを検証します。どのプロキシモードでも Provider と Provider Resource の Base URL には従来の保存時スキームおよびリテラルアドレス検証が適用されます。metadata など常に拒否される対象は引き続き拒否され、プライベートアドレスのリテラルは `TOKENHUB_PROVIDER_UPSTREAM_ALLOWED_CIDRS` による明示的な許可が必要です。プロキシ経由の各リクエストの前に、TokenHub は元の Provider ホスト名をローカルで解決し、プライベート、loopback、link-local、metadata などの禁止アドレスを拒否します。そのうえで元の HTTP Host と TLS サーバー名を維持したまま、プロキシリクエストまたは CONNECT トンネルを検証済み IP に固定します。直接接続と `NO_PROXY` に一致するリクエストも、保護されたダイヤル経路で同じアドレスポリシーを適用します。プロキシ設定、認証、接続、タイムアウト、HTTPS CONNECT の失敗はプラットフォームの送信障害として扱われ、Provider リソースへのペナルティやルート failover は発生しません。平文 HTTP プロキシリクエストの場合、HTTP エラー応答はプロキシまたは Provider のどちらから返される可能性があるため、通常の上流エラー処理を維持します。レプリカは共有設定を 5 秒以内に再読み込みし、データベースの一時的な読み取り失敗時は直前の有効設定を保持します。
 
 TokenHub ホストのプロキシが Fake-IP モードで動作する場合は、**システム設定 → 基本設定 → Synthetic DNS / Fake-IP 範囲** で設定します。この例外は既定で無効であり、ホスト名の DNS 解決結果にだけ適用され、リテラル IP の Provider URL には適用されません。すべての実装が `198.18.0.0/15` を使うと仮定せず、プロキシが実際に使用するプールを入力してください。この範囲はベンチマーク用に予約され、Fake-IP でよく使われますが、Fake-IP 専用ではありません。通常モードでは RFC1918 プライベートネットワークと IPv6 ULA は引き続きブロックされます。プロキシが実際にこれらの範囲を使用する場合（例：Xray の IPv6 Fake-IP プール）は、別の高リスクなプライベート範囲信頼を明示的に有効にする必要があります。有効にすると、Provider ホスト名が設定範囲内の実在する内部サービスへ到達できる可能性があります。loopback、link-local、metadata、multicast、NAT64 の各範囲はどのモードでもブロックされます。
 

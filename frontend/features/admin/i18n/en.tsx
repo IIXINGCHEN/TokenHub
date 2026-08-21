@@ -1492,8 +1492,8 @@ export const enTranslations: Record<string, string> = {
     "检测降级": "Detection degraded",
     "命中位置": "Matched Text",
     "脱敏结果": "Masked Result",
-    "命中详情": "Findings",
-    "未命中检测项": "No detection items matched",
-    "放行": "Allow",
-    "使用独立配置的 Qwen3Guard 服务；未配置或不可用时执行下方策略。": "Uses the separately configured Qwen3Guard service; the behavior below applies when it is unconfigured or unavailable.",
+    "命中详情": "Findings", "未命中检测项": "No detection items matched",
+    "放行": "Allow", "使用独立配置的 Qwen3Guard 服务；未配置或不可用时执行下方策略。": "Uses the separately configured Qwen3Guard service; the behavior below applies when it is unconfigured or unavailable.",
+    "Provider 出口模式": "Provider Egress Mode", "继承环境变量代理": "Inherit Environment Proxy", "直接连接": "Direct Connection", "使用统一代理": "Use Global Proxy", "代理协议": "Proxy Protocol", "代理 Host": "Proxy Host", "代理端口": "Proxy Port", "启用代理 Basic 认证": "Enable Proxy Basic Authentication", "代理用户名": "Proxy Username", "代理密码": "Proxy Password", "测试目标 Provider": "Test Target Provider", "正在测试代理": "Testing Proxy", "测试代理连接": "Test Proxy Connection", "代理连接测试通过": "Proxy connection test passed", "代理连接测试失败": "Proxy connection test failed",
+    "仅作用于所有 Provider 上游通道。升级后的默认值为继承 HTTP_PROXY、HTTPS_PROXY 和 NO_PROXY。": "Applies only to all Provider upstream channels. After upgrading, the default inherits HTTP_PROXY, HTTPS_PROXY, and NO_PROXY.", "支持 HTTP 或 HTTPS forward proxy，不支持 SOCKS5。": "Supports HTTP or HTTPS forward proxies. SOCKS5 is not supported.", "密码会加密保存；编辑时留空表示保留原密码，关闭认证会清除用户名和密码。": "The password is encrypted at rest. Leave it blank when editing to retain the current password; disabling authentication clears both username and password.", "使用当前未保存配置，只验证代理连接、认证、CONNECT 和目标 TLS；不会携带 Provider 凭据或发送模型请求。": "Uses the current unsaved settings to verify only proxy connectivity, authentication, CONNECT, and target TLS. It does not send Provider credentials or model requests.",
     };

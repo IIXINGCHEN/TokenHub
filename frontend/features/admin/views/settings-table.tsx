@@ -1,14 +1,14 @@
 import { Edit3, Info, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { type FormEvent, useMemo, useState } from "react";
-import { type AdminResource, type AdminUser, type APIKey, type AppData, type ModalState, type Model, type ResourceAction, type ResourceConfig, type SettingsTabKey, type ToolbarAction, type ViewKey } from "../core/types";
+import { type AdminResource, type AdminUser, type ApiContext, type APIKey, type AppData, type ModalState, type Model, type ResourceAction, type ResourceConfig, type SettingsTabKey, type ToolbarAction, type ViewKey } from "../core/types";
 import { filterRows } from "../domain/catalog";
 import { readPath, rowID, stringifyValue } from "../domain/entities";
 import { formatNumber, formatTime } from "../domain/formatting";
 import { settingsTabLabel } from "../domain/labels";
 import { LanguageSwitcher, languageOptionLabel } from "../i18n/language-switcher";
 import { type AppLanguage, countWithLabel, displayText, languageOptions, translatedCell, tx } from "../i18n/runtime";
-import { defaultFormValues } from "../resources/payloads";
+import { defaultFormValues, testProviderEgress } from "../resources/payloads";
 import { apiKeyStatusAction, APIKeyDownloadMenu, APIKeyStatusSwitch } from "../resources/project-key-config";
 import { identityProviderConfig, roleConfig, systemSettingConfig } from "../resources/settings-config";
 import { usePagination } from "../shared/pagination";
@@ -456,6 +456,7 @@ export function resultCountLabel(totalItems: number, query: string) {
 export function EditModal<T>({
   state,
   data,
+  api,
   currentUser,
   loading,
   onClose,
@@ -463,6 +464,7 @@ export function EditModal<T>({
 }: {
   state: ModalState<T>;
   data: AppData;
+  api: ApiContext;
   currentUser?: AdminUser | null;
   loading: boolean;
   onClose: () => void;
@@ -475,6 +477,19 @@ export function EditModal<T>({
   const [values, setValues] = useState<Record<string, string>>(
     state.config.view === "identity-providers" ? identityProviderInitialFormValues(initial, !state.item) : initial,
   );
+  const [proxyTestProviderID, setProxyTestProviderID] = useState(data.providers.find((provider) => provider.status === "active")?.id ?? data.providers[0]?.id ?? "");
+  const [proxyTestState, setProxyTestState] = useState<{ status: "idle" | "testing" | "success" | "error"; message?: string }>({ status: "idle" });
+
+  async function runProxyTest() {
+    if (!proxyTestProviderID) return;
+    setProxyTestState({ status: "testing" });
+    try {
+      const result = await testProviderEgress(api, proxyTestProviderID, values);
+      setProxyTestState({ status: "success", message: `${tx("代理连接测试通过")} · ${formatNumber(result.latency_ms ?? 0)} ms` });
+    } catch (error) {
+      setProxyTestState({ status: "error", message: error instanceof Error ? error.message : tx("代理连接测试失败") });
+    }
+  }
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -538,6 +553,22 @@ export function EditModal<T>({
               }))}
             />
           ))}
+          {state.config.view === "settings" && values.provider_egress_mode === "configured_proxy" ? (
+            <div className="inline-notice">
+              <label className="field">
+                <span>{tx("测试目标 Provider")}</span>
+                <select value={proxyTestProviderID} onChange={(event) => setProxyTestProviderID(event.target.value)}>
+                  <option value="">{tx("请选择")}</option>
+                  {data.providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
+                </select>
+                <small>{tx("使用当前未保存配置，只验证代理连接、认证、CONNECT 和目标 TLS；不会携带 Provider 凭据或发送模型请求。")}</small>
+              </label>
+              <button className="secondary-button" disabled={!proxyTestProviderID || proxyTestState.status === "testing"} onClick={() => void runProxyTest()} type="button">
+                {tx(proxyTestState.status === "testing" ? "正在测试代理" : "测试代理连接")}
+              </button>
+              {proxyTestState.message ? <small className={proxyTestState.status === "error" ? "error" : "success"}>{proxyTestState.message}</small> : null}
+            </div>
+          ) : null}
         </div>
         <div className="modal-actions">
           <button className="secondary-button" onClick={onClose} type="button">{tx("取消")}</button>
