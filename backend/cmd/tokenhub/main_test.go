@@ -29,7 +29,7 @@ func TestPrintInitialAdminPassword(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := server.OpenStoreWithConfig(config.DatabaseURL, config)
+	store, err := server.OpenStoreForMaintenance(config.DatabaseURL, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,6 +40,9 @@ func TestPrintInitialAdminPassword(t *testing.T) {
 	if err != nil || !available {
 		t.Fatalf("initial password unavailable: available=%v err=%v", available, err)
 	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	var output bytes.Buffer
 	if err := printInitialAdminPassword(&output); err != nil {
@@ -48,7 +51,32 @@ func TestPrintInitialAdminPassword(t *testing.T) {
 	if got := strings.TrimSpace(output.String()); got != want {
 		t.Fatalf("printed password does not match generated password")
 	}
+	driver, rawDB, err := server.OpenRawDatabase(config.DatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if driver != "sqlite" {
+		t.Fatalf("driver = %q, want sqlite", driver)
+	}
+	var heartbeatTables int
+	if err := rawDB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'instance_heartbeats'").Scan(&heartbeatTables); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if heartbeatTables != 0 {
+		t.Fatalf("read-only password command published an instance heartbeat")
+	}
+
+	store, err = server.OpenStoreForMaintenance(config.DatabaseURL, config)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, _, err := store.AuthenticateAdminUser("admin", want, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := printInitialAdminPassword(&output); err == nil {

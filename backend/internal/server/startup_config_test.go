@@ -48,6 +48,52 @@ func TestPrepareForStartupGeneratesPersistentSecretForNewSQLite(t *testing.T) {
 	}
 }
 
+func TestPrepareForStartupGeneratesPersistentSecretForSQLiteFileURI(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "tokenhub.db")
+	config := Config{
+		Environment: "prod",
+		SecretKey:   "change-me-tokenhub-secret-key",
+		DatabaseURL: "file:" + filepath.ToSlash(databasePath) + "?cache=shared&mode=rwc",
+	}
+
+	prepared, err := config.PrepareForStartup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prepared.SecretKey) != 64 {
+		t.Fatalf("expected a 32-byte hex secret, got %d characters", len(prepared.SecretKey))
+	}
+	if _, err := os.Stat(databasePath + sqliteSecretKeySuffix); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSQLiteDatabaseFilePathClassifiesFileURIs(t *testing.T) {
+	tests := []struct {
+		name     string
+		dsn      string
+		wantPath string
+		wantFile bool
+	}{
+		{name: "absolute file", dsn: "file:/app/data/tokenhub.db?cache=shared", wantPath: "/app/data/tokenhub.db", wantFile: true},
+		{name: "relative file", dsn: "file:tokenhub.db?mode=rwc", wantPath: "tokenhub.db", wantFile: true},
+		{name: "memory name", dsn: "file:memdb1?mode=memory&cache=shared"},
+		{name: "memory sentinel", dsn: "file::memory:?cache=shared"},
+		{name: "plain memory", dsn: ":memory:"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path, fileBacked, err := sqliteDatabaseFilePath(test.dsn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if path != test.wantPath || fileBacked != test.wantFile {
+				t.Fatalf("sqliteDatabaseFilePath(%q) = (%q, %v), want (%q, %v)", test.dsn, path, fileBacked, test.wantPath, test.wantFile)
+			}
+		})
+	}
+}
+
 func TestPrepareForStartupRefusesNewKeyForExistingSQLite(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "tokenhub.db")
 	if err := os.WriteFile(databasePath, []byte("existing database"), 0o600); err != nil {

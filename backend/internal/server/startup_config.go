@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -69,17 +70,46 @@ func sqliteSecretKeyPaths(databaseURL string) (keyPath string, databasePath stri
 	if err != nil {
 		return "", "", false, err
 	}
-	if driver != "sqlite" || dsn == "" || dsn == ":memory:" || strings.HasPrefix(dsn, "file:") {
+	if driver != "sqlite" {
 		return "", "", false, nil
 	}
-	databasePath = dsn
-	if queryIndex := strings.Index(databasePath, "?"); queryIndex >= 0 {
-		databasePath = databasePath[:queryIndex]
-	}
-	if strings.TrimSpace(databasePath) == "" {
-		return "", "", false, nil
+	databasePath, ok, err = sqliteDatabaseFilePath(dsn)
+	if err != nil || !ok {
+		return "", "", false, err
 	}
 	return databasePath + sqliteSecretKeySuffix, databasePath, true, nil
+}
+
+func sqliteDatabaseFilePath(dsn string) (string, bool, error) {
+	dsn = strings.TrimSpace(dsn)
+	if dsn == "" || dsn == ":memory:" {
+		return "", false, nil
+	}
+	if !strings.HasPrefix(dsn, "file:") {
+		if queryIndex := strings.Index(dsn, "?"); queryIndex >= 0 {
+			dsn = dsn[:queryIndex]
+		}
+		if strings.TrimSpace(dsn) == "" {
+			return "", false, nil
+		}
+		return dsn, true, nil
+	}
+
+	parsed, err := url.Parse(dsn)
+	if err != nil {
+		return "", false, fmt.Errorf("parse SQLite file DSN: %w", err)
+	}
+	if strings.EqualFold(parsed.Query().Get("mode"), "memory") {
+		return "", false, nil
+	}
+	path := parsed.Path
+	if path == "" {
+		path = parsed.Opaque
+	}
+	if path == "" || path == ":memory:" {
+		return "", false, nil
+	}
+	return path, true, nil
 }
 
 func loadOrCreateSQLiteSecretKey(keyPath string, databasePath string) (string, error) {

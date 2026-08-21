@@ -142,10 +142,11 @@ func printInitialAdminPassword(output io.Writer) error {
 	if err := config.ValidateForStartup(); err != nil {
 		return err
 	}
-	store, err := server.OpenStoreWithConfig(config.DatabaseURL, config)
+	store, err := server.OpenStoreForMaintenance(config.DatabaseURL, config)
 	if err != nil {
 		return err
 	}
+	defer func() { _ = store.Close() }()
 	password, available, err := store.InitialAdminPassword()
 	if err != nil {
 		return err
