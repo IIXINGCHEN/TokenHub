@@ -273,7 +273,7 @@ func (s *GormStore) AddProviderResource(resource ProviderResource) (ProviderReso
 	// routeSelection lets a non-empty resource BaseURL override the provider's
 	// validated one, so resource-level URLs must pass the same SSRF guard at
 	// persistence time (operator allowlist and explicit loopback opt-in included).
-	if err := validateProviderUpstreamBaseURLForProxyPolicy(resource.BaseURL, s.providerProxyPolicy); err != nil {
+	if err := ValidateProviderUpstreamBaseURL(resource.BaseURL); err != nil {
 		return ProviderResource{}, err
 	}
 	now := time.Now().UTC()
@@ -435,7 +435,7 @@ func (s *GormStore) updateProviderResource(ctx context.Context, id string, patch
 	// Same SSRF persistence guard as AddProviderResource: an empty value
 	// clears the override (the provider URL applies again), a non-empty one
 	// must be a routable upstream.
-	if err := validateProviderUpstreamBaseURLForProxyPolicy(resource.BaseURL, s.providerProxyPolicy); err != nil {
+	if err := ValidateProviderUpstreamBaseURL(resource.BaseURL); err != nil {
 		return ProviderResource{}, err
 	}
 	shouldEncryptAPIKey := false
@@ -790,7 +790,7 @@ func (s *GormStore) ImportProviderResources(resources []ProviderResource) (Provi
 		}
 		// Same SSRF persistence guard as AddProviderResource: a rejected row
 		// fails the row, not the whole import, matching the per-row contract.
-		if err := validateProviderUpstreamBaseURLForProxyPolicy(resource.BaseURL, s.providerProxyPolicy); err != nil {
+		if err := ValidateProviderUpstreamBaseURL(resource.BaseURL); err != nil {
 			result.Failed++
 			result.Errors = append(result.Errors, "row "+row+": "+err.Error())
 			continue
@@ -1042,13 +1042,19 @@ func (s *GormStore) CheckProviderResourceCapacity(ctx context.Context, resourceI
 		if err != nil {
 			return err
 		}
+		if resource.Status != StatusActive {
+			return NewHTTPError(http.StatusServiceUnavailable, "provider_resource_disabled", "Provider resource is disabled")
+		}
 		if !resource.Healthy {
 			// Half-open admission. The resource is parked; the trial is claimed by
 			// pushing cooldown_until into the future, which both rejects every
 			// concurrent request below and pre-arms the next window if this trial
 			// fails. The UPDATE is guarded by the deadline it read, so across
 			// replicas exactly one caller can win.
-			if resource.CooldownUntil == nil || now.Before(*resource.CooldownUntil) {
+			if resource.CooldownUntil == nil {
+				return NewHTTPError(http.StatusServiceUnavailable, "provider_resource_unhealthy", "Provider resource is unhealthy")
+			}
+			if now.Before(*resource.CooldownUntil) {
 				return NewHTTPError(http.StatusTooManyRequests, "provider_resource_cooling_down", "Provider resource is cooling down")
 			}
 			nextDeadline := now.Add(s.cooldownWindow(resource.FailureCount))

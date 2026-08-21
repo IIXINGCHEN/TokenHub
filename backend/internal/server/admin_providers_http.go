@@ -302,7 +302,7 @@ func (s *Server) providerFromCreateRequest(ctx context.Context, req ProviderCrea
 	// non-provider ranges. The operator
 	// allowlist (TOKENHUB_PROVIDER_UPSTREAM_ALLOWED_CIDRS) and the explicit
 	// loopback opt-in apply exactly as they do for upstream model discovery.
-	if err := validateProviderUpstreamBaseURLForProxyPolicy(provider.BaseURL, s.providerProxyPolicy); err != nil {
+	if err := ValidateProviderUpstreamBaseURL(provider.BaseURL); err != nil {
 		return Provider{}, ProviderCatalogEntry{}, catalogSource, err
 	}
 	if provider.Options == nil {

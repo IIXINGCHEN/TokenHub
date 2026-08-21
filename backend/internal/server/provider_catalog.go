@@ -576,6 +576,9 @@ func CustomProviderCatalogFromUpstream(ctx context.Context, client *http.Client,
 	if baseURL == "" {
 		return ProviderCatalogEntry{}, NewHTTPError(http.StatusBadRequest, "provider_base_url_required", "Base URL is required to load upstream models")
 	}
+	if err := ValidateProviderUpstreamBaseURL(baseURL); err != nil {
+		return ProviderCatalogEntry{}, err
+	}
 	providerType := strings.ToLower(strings.TrimSpace(req.Type))
 	modelsURL := strings.TrimRight(baseURL, "/") + "/models"
 	if providerType == ProviderAnthropic {

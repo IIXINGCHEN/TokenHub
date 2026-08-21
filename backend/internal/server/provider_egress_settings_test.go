@@ -209,13 +209,12 @@ func TestGatewaySettingsSwitchConfiguredProxyForNewRequests(t *testing.T) {
 	}
 }
 
-func TestConfiguredProxyOwnsProviderTargetAddressPolicy(t *testing.T) {
+func TestConfiguredProxyDoesNotRelaxProviderTargetValidation(t *testing.T) {
+	var proxyRequests atomic.Int32
 	proxy := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Host != "169.254.169.254" || request.URL.Path != "/v1/models" {
-			t.Errorf("proxy request target = %s", request.URL.String())
-		}
+		proxyRequests.Add(1)
 		writeJSON(writer, http.StatusOK, map[string]any{
-			"data": []map[string]any{{"id": "operator-approved-model", "object": "model"}},
+			"data": []map[string]any{{"id": "unexpected-model", "object": "model"}},
 		})
 	}))
 	defer proxy.Close()
@@ -233,15 +232,18 @@ func TestConfiguredProxyOwnsProviderTargetAddressPolicy(t *testing.T) {
 	t.Cleanup(func() { _ = server.Shutdown(t.Context()) })
 
 	response := doJSON(t, server.Handler(), http.MethodPost, "/api/admin/provider-catalog/custom", map[string]any{
-		"name": "Operator Approved", "type": ProviderOpenAICompatible,
+		"name": "Rejected metadata target", "type": ProviderOpenAICompatible,
 		"base_url": "http://169.254.169.254/v1", "api_key": "provider-secret",
 	}, "proxy-trust-admin")
-	if response.Code != http.StatusOK || !strings.Contains(response.Body, "operator-approved-model") {
-		t.Fatalf("configured proxy target policy = %d: %s", response.Code, response.Body)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body, "provider_base_url_not_allowed") {
+		t.Fatalf("configured proxy relaxed Provider catalog validation = %d: %s", response.Code, response.Body)
+	}
+	if proxyRequests.Load() != 0 {
+		t.Fatalf("rejected Provider target reached configured proxy: requests=%d", proxyRequests.Load())
 	}
 }
 
-func TestConfiguredProxyAllowsOperatorControlledPrivateProviderTarget(t *testing.T) {
+func TestConfiguredProxyRejectsMetadataProviderTarget(t *testing.T) {
 	store := NewMemoryStore()
 	if err := BootstrapBaseData(store); err != nil {
 		t.Fatal(err)
@@ -255,11 +257,11 @@ func TestConfiguredProxyAllowsOperatorControlledPrivateProviderTarget(t *testing
 	t.Cleanup(func() { _ = server.Shutdown(t.Context()) })
 
 	response := doJSON(t, server.Handler(), http.MethodPost, "/api/admin/providers", map[string]any{
-		"name": "Private provider through proxy", "type": ProviderOpenAICompatible,
+		"name": "Metadata provider through proxy", "type": ProviderOpenAICompatible,
 		"base_url": "http://169.254.169.254/v1", "status": StatusActive,
 	}, "proxy-private-admin")
-	if response.Code != http.StatusCreated {
-		t.Fatalf("save private Provider target behind configured proxy = %d: %s", response.Code, response.Body)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body, "provider_base_url_not_allowed") {
+		t.Fatalf("configured proxy relaxed Provider save validation = %d: %s", response.Code, response.Body)
 	}
 }
 

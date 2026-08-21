@@ -108,31 +108,6 @@ func ValidateProviderUpstreamBaseURL(raw string) error {
 	return validateProviderUpstreamBaseURLString(raw, allowedProviderUpstreamCIDRs(), providerUpstreamLoopbackAllowed())
 }
 
-func validateProviderUpstreamBaseURLForProxyPolicy(raw string, policy *providerProxyPolicy) error {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	endpoint, err := url.Parse(raw)
-	if err != nil || endpoint.Scheme == "" || endpoint.Host == "" {
-		return NewHTTPError(http.StatusBadRequest, "provider_base_url_invalid", "Base URL is invalid")
-	}
-	if err := validateProviderUpstreamURLSyntax(endpoint); err != nil {
-		return err
-	}
-	if policy != nil {
-		request := (&http.Request{URL: endpoint, Header: make(http.Header)}).WithContext(context.Background())
-		proxyURL, proxyErr := policy.proxyForRequest(request)
-		if proxyErr != nil {
-			return proxyErr
-		}
-		if proxyURL != nil {
-			return nil
-		}
-	}
-	return validateProviderUpstreamBaseURL(endpoint, allowedProviderUpstreamCIDRs(), providerUpstreamLoopbackAllowed())
-}
-
 func providerUpstreamLoopbackAllowed() bool {
 	return getenvBool("TOKENHUB_PROVIDER_UPSTREAM_ALLOW_LOOPBACK", false)
 }

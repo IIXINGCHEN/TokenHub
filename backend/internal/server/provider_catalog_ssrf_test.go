@@ -701,6 +701,70 @@ func TestAdminPatchProviderRejectsSSRFBaseURL(t *testing.T) {
 	}
 }
 
+func TestAdminProviderURLValidationIgnoresAmbientProxy(t *testing.T) {
+	for _, proxyVariables := range []struct {
+		name  string
+		http  string
+		https string
+	}{
+		{name: "uppercase", http: "HTTP_PROXY", https: "HTTPS_PROXY"},
+		{name: "lowercase", http: "http_proxy", https: "https_proxy"},
+	} {
+		t.Run(proxyVariables.name, func(t *testing.T) {
+			for _, variable := range []string{"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"} {
+				t.Setenv(variable, "")
+			}
+			t.Setenv(proxyVariables.http, "http://proxy.example:3128")
+			t.Setenv(proxyVariables.https, "http://proxy.example:3128")
+
+			store := NewMemoryStore()
+			if err := SeedDemoData(store); err != nil {
+				t.Fatal(err)
+			}
+			app := New(store).Handler()
+
+			for _, test := range []struct {
+				name      string
+				baseURL   string
+				errorCode string
+			}{
+				{name: "metadata", baseURL: "http://169.254.169.254/latest/meta-data", errorCode: "provider_base_url_not_allowed"},
+				{name: "public HTTP", baseURL: "http://api.example.com/v1", errorCode: "provider_base_url_insecure_scheme"},
+			} {
+				response := doJSON(t, app, http.MethodPost, "/api/admin/providers", map[string]any{
+					"name":     "Ambient proxy " + test.name,
+					"type":     ProviderOpenAICompatible,
+					"base_url": test.baseURL,
+				}, "")
+				if response.Code != http.StatusBadRequest || !strings.Contains(response.Body, test.errorCode) {
+					t.Fatalf("create with %s accepted %s: %d %s", proxyVariables.name, test.baseURL, response.Code, response.Body)
+				}
+			}
+
+			created := doJSON(t, app, http.MethodPost, "/api/admin/providers", map[string]any{
+				"name":     "Ambient proxy patch target",
+				"type":     ProviderOpenAICompatible,
+				"base_url": "https://api.example.com/v1",
+			}, "")
+			if created.Code != http.StatusCreated {
+				t.Fatalf("create patch target with %s: %d %s", proxyVariables.name, created.Code, created.Body)
+			}
+			var payload struct {
+				Provider Provider `json:"provider"`
+			}
+			if err := json.Unmarshal([]byte(created.Body), &payload); err != nil {
+				t.Fatal(err)
+			}
+			patched := doJSON(t, app, http.MethodPatch, "/api/admin/providers/"+payload.Provider.ID, map[string]any{
+				"base_url": "http://169.254.169.254/latest/meta-data",
+			}, "")
+			if patched.Code != http.StatusBadRequest || !strings.Contains(patched.Body, "provider_base_url_not_allowed") {
+				t.Fatalf("patch with %s accepted metadata URL: %d %s", proxyVariables.name, patched.Code, patched.Body)
+			}
+		})
+	}
+}
+
 // TestAdminCreateProviderAllowsAllowlistedPrivateLiteral covers the operator
 // workflow for in-house model servers: with the range configured, a literal
 // private IP saves successfully.
@@ -855,6 +919,65 @@ func TestProviderResourceBaseURLSSRFGuard(t *testing.T) {
 			t.Fatalf("expected 1 success and 1 row failure, got %d/%d", result.Success, result.Failed)
 		}
 	})
+
+	for _, proxyVariables := range []struct {
+		name  string
+		http  string
+		https string
+	}{
+		{name: "uppercase ambient proxy", http: "HTTP_PROXY", https: "HTTPS_PROXY"},
+		{name: "lowercase ambient proxy", http: "http_proxy", https: "https_proxy"},
+	} {
+		t.Run(proxyVariables.name, func(t *testing.T) {
+			for _, variable := range []string{"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"} {
+				t.Setenv(variable, "")
+			}
+			t.Setenv(proxyVariables.http, "http://proxy.example:3128")
+			t.Setenv(proxyVariables.https, "http://proxy.example:3128")
+
+			store, provider := newStore(t)
+			server := New(store)
+			t.Cleanup(func() { _ = server.Shutdown(t.Context()) })
+			app := server.Handler()
+
+			created := doJSON(t, app, http.MethodPost, "/api/admin/provider-resources", map[string]any{
+				"provider_id": provider.ID, "name": "Rejected metadata create",
+				"resource_type": ProviderResourceAPIKey, "base_url": "http://169.254.169.254/latest/meta-data",
+			}, "")
+			if created.Code != http.StatusBadRequest || !strings.Contains(created.Body, "provider_base_url_not_allowed") {
+				t.Fatalf("ambient proxy relaxed resource create validation: %d %s", created.Code, created.Body)
+			}
+
+			resource, err := store.AddProviderResource(ProviderResource{
+				ProviderID: provider.ID, Name: "Valid patch target", ResourceType: ProviderResourceAPIKey,
+				BaseURL: "https://resource.example.com/v1", Status: StatusActive, Healthy: true,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			patched := doJSON(t, app, http.MethodPatch, "/api/admin/provider-resources/"+resource.ID, map[string]any{
+				"base_url": "http://169.254.169.254/latest/meta-data",
+			}, "")
+			if patched.Code != http.StatusBadRequest || !strings.Contains(patched.Body, "provider_base_url_not_allowed") {
+				t.Fatalf("ambient proxy relaxed resource patch validation: %d %s", patched.Code, patched.Body)
+			}
+
+			imported := doJSON(t, app, http.MethodPost, "/api/admin/provider-resources/import", map[string]any{
+				"resources": []map[string]any{{
+					"provider_id": provider.ID, "name": "Rejected metadata import",
+					"resource_type": ProviderResourceAPIKey, "base_url": "http://169.254.169.254/latest/meta-data",
+				}},
+			}, "")
+			if imported.Code != http.StatusMultiStatus || !strings.Contains(imported.Body, `"success":0`) || !strings.Contains(imported.Body, `"failed":1`) {
+				t.Fatalf("ambient proxy relaxed resource import validation: %d %s", imported.Code, imported.Body)
+			}
+			for _, item := range store.ListProviderResources() {
+				if item.Name == "Rejected metadata import" {
+					t.Fatalf("rejected resource import was persisted: %+v", item)
+				}
+			}
+		})
+	}
 
 	t.Run("allowlisted private literal is accepted", func(t *testing.T) {
 		t.Setenv("TOKENHUB_PROVIDER_UPSTREAM_ALLOWED_CIDRS", "192.168.0.0/16")

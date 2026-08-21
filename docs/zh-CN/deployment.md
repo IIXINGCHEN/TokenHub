@@ -405,7 +405,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 
 无需重启也可以在「系统设置 → 基础设置 → Provider 出口模式」切换出口。升级默认使用「继承环境变量代理」，读取进程启动时捕获的 `HTTP_PROXY`、`HTTPS_PROXY` 和 `NO_PROXY`；「直接连接」忽略这些变量；「使用统一代理」把一个 HTTP 或 HTTPS forward proxy 用于全部 Provider 上游通道，包括推理、流式、图片、模型发现、Provider catalog 刷新、额度查询和 Provider 凭据刷新。身份登录、通知、Tracing 和版本更新不受这项设置影响。
 
-统一代理支持可选的 Basic 认证，密码会加密保存，API 与控制台只显示掩码。保存时只校验配置语法；「测试代理连接」使用当前未保存表单和已有 Provider，仅验证代理 TCP/TLS、认证、CONNECT 与目标 TLS（使用系统 CA），不会发送 Provider 凭据或模型请求。走代理的目标属于运维控制的代理信任边界；直连及 `NO_PROXY` 命中的请求仍执行 TokenHub DNS/IP 出站校验。代理配置、认证、连接、超时和 HTTPS CONNECT 失败按平台出口故障处理，不会惩罚 Provider 资源，也不会触发路由故障转移。对于明文 HTTP 代理请求，HTTP 错误响应可能来自代理或 Provider，因此保留常规上游错误处理。多实例会在五秒内加载共享配置，数据库临时读取失败时继续使用上一份有效配置。
+统一代理支持可选的 Basic 认证，密码会加密保存，API 与控制台只显示掩码。保存代理配置时只校验其语法；「测试代理连接」使用当前未保存表单和已有 Provider，仅验证代理 TCP/TLS、认证、CONNECT 与目标 TLS（使用系统 CA），不会发送 Provider 凭据或模型请求。无论选择哪种代理模式，Provider 与 Provider Resource 的 Base URL 都保留原有的入库协议和字面量地址校验：metadata 等始终禁止的目标仍会被拒绝，私网字面量仍需通过 `TOKENHUB_PROVIDER_UPSTREAM_ALLOWED_CIDRS` 明确允许。通过校验的 URL 选中代理后，由代理完成的解析和连接属于运维控制的代理信任边界；直连及 `NO_PROXY` 命中的请求还会执行 TokenHub DNS/IP 出站校验。代理配置、认证、连接、超时和 HTTPS CONNECT 失败按平台出口故障处理，不会惩罚 Provider 资源，也不会触发路由故障转移。对于明文 HTTP 代理请求，HTTP 错误响应可能来自代理或 Provider，因此保留常规上游错误处理。多实例会在五秒内加载共享配置，数据库临时读取失败时继续使用上一份有效配置。
 
 当 TokenHub 所在主机的代理工作在 Fake-IP 模式时，在「系统设置 → 基础设置 → Synthetic DNS / Fake-IP 网段」中配置。该例外默认关闭，只作用于域名解析结果，不允许字面量 IP Provider URL。应填写代理实际使用的地址池，不要假设所有实现都使用 `198.18.0.0/15`：这个网段为基准测试保留，虽常被 Fake-IP 使用，但并非 Fake-IP 专属。普通模式仍禁止 RFC1918 私网和 IPv6 ULA；如果代理确实使用这些范围（例如 Xray 的 IPv6 Fake-IP 池），必须另行开启高风险私网信任。开启后，Provider 域名可能访问配置范围内的真实内网服务。loopback、link-local、metadata、multicast、NAT64 等范围在任何模式下仍会被拒绝。
 
