@@ -109,7 +109,7 @@ export function APIKeyUsageView({ api, data, user, keyID, onBack }: { api: ApiCo
           <div className="two-column api-key-usage-breakdowns">
             <DataSection title="模型明细">
               <SimpleTable columns={["模型", "请求", "错误率", "平均延迟", "Token", "预估成本"]} rows={usage.models.map((row) => [
-                row.id || tx("未知"), formatNumber(row.request_count), formatPercent(row.error_count, row.request_count), formatDuration(row.average_latency_ms), formatNumber(row.total_tokens), formatUSD(row.estimated_cost_usd),
+                row.id || tx("未知"), formatNumber(row.request_count), formatPercent(row.error_count, row.request_count), formatDuration(row.average_latency_ms), compactNumber(row.total_tokens), formatUSD(row.estimated_cost_usd),
               ])} paginationKey="api-key-usage-models" />
             </DataSection>
             <DataSection title="错误分布">
@@ -137,7 +137,7 @@ function APIKeyIdentity({ data, keyData }: { data: AppData; keyData: APIKeyUsage
       <IdentityField label="用途/环境" value={keyData.group || "-"} />
       <IdentityField label="最后使用" value={keyData.last_used_at ? formatTime(keyData.last_used_at) : tx("尚未使用")} />
       <IdentityField label="有效期" value={keyData.expires_at ? formatTime(keyData.expires_at) : tx("长期有效")} />
-      <IdentityField label="Key RPM / TPM" value={`${keyLimitText(keyData.rate_limit_rpm)} / ${keyLimitText(keyData.token_limit_tpm)}`} />
+      <IdentityField label="Key RPM / TPM" value={`${keyLimitText(keyData.rate_limit_rpm)} / ${keyLimitText(keyData.token_limit_tpm, true)}`} />
       <IdentityField label="轮换关系" value={keyData.rotated_from_id ? tx("由旧 Key 轮换生成") : successor ? tx("已轮换为新 Key") : tx("无轮换记录")} />
     </section>
   );
@@ -179,9 +179,9 @@ function UsageSummary({ metrics }: { metrics: APIKeyUsageMetrics }) {
     <section className="api-key-usage-kpis">
       <UsageKPI label="请求总数" value={formatNumber(metrics.request_count)} detail={formatTranslationTemplate(tx("成功 {success} · 失败 {failure}"), { success: formatNumber(successCount), failure: formatNumber(metrics.error_count) })} />
       <UsageKPI label="成功率" value={formatPercent(successCount, metrics.request_count)} detail={formatTranslationTemplate(tx("平均延迟 {latency}"), { latency: formatDuration(metrics.average_latency_ms) })} />
-      <UsageKPI label="总 Token" value={formatNumber(metrics.total_tokens)} detail={formatTranslationTemplate(tx("输入 {input} · 输出 {output}"), { input: formatNumber(metrics.input_tokens), output: formatNumber(metrics.output_tokens) })} />
-      <UsageKPI label="缓存 Token" value={formatNumber(metrics.cached_input_tokens + metrics.cache_write_input_tokens)} detail={formatTranslationTemplate(tx("缓存读 {read} · 缓存写 {write}"), { read: formatNumber(metrics.cached_input_tokens), write: formatNumber(metrics.cache_write_input_tokens) })} />
-      <UsageKPI label="推理 Token" value={formatNumber(metrics.reasoning_output_tokens)} detail={tx("包含在输出和总 Token 中")} />
+      <UsageKPI label="总 Token" value={compactNumber(metrics.total_tokens)} detail={formatTranslationTemplate(tx("输入 {input} · 输出 {output}"), { input: compactNumber(metrics.input_tokens), output: compactNumber(metrics.output_tokens) })} />
+      <UsageKPI label="缓存 Token" value={compactNumber(metrics.cached_input_tokens + metrics.cache_write_input_tokens)} detail={formatTranslationTemplate(tx("缓存读 {read} · 缓存写 {write}"), { read: compactNumber(metrics.cached_input_tokens), write: compactNumber(metrics.cache_write_input_tokens) })} />
+      <UsageKPI label="推理 Token" value={compactNumber(metrics.reasoning_output_tokens)} detail={tx("包含在输出和总 Token 中")} />
       <UsageKPI label="预估成本" value={formatUSD(metrics.estimated_cost_usd)} detail={tx("按对外模型价格估算")} />
     </section>
   );
@@ -198,24 +198,24 @@ function QuotaOverview({ usage }: { usage: APIKeyUsageResponse }) {
       <div className="api-key-quota-grid">
         <QuotaCard label="今日请求" used={usage.quota.day.usage.requests} limit={limits.daily_requests} />
         <QuotaCard label="本月请求" used={usage.quota.month.usage.requests} limit={limits.monthly_requests} />
-        <QuotaCard label="今日 Token" used={usage.quota.day.usage.total_tokens} limit={limits.daily_tokens} />
-        <QuotaCard label="本月 Token" used={usage.quota.month.usage.total_tokens} limit={limits.monthly_tokens} />
+        <QuotaCard label="今日 Token" used={usage.quota.day.usage.total_tokens} limit={limits.daily_tokens} tokens />
+        <QuotaCard label="本月 Token" used={usage.quota.month.usage.total_tokens} limit={limits.monthly_tokens} tokens />
         <QuotaCard label="今日成本" used={usage.quota.day.usage.cost_usd} limit={limits.daily_cost_usd} money />
         <QuotaCard label="本月成本" used={usage.quota.month.usage.cost_usd} limit={limits.monthly_cost_usd} money />
       </div>
       <div className="api-key-effective-limits">
         <span>{formatTranslationTemplate(tx("RPM {limit}"), { limit: limitText(limits.rate_limit_rpm) })}</span>
-        <span>{formatTranslationTemplate(tx("TPM {limit}"), { limit: limitText(limits.token_limit_tpm) })}</span>
+        <span>{formatTranslationTemplate(tx("TPM {limit}"), { limit: limitText(limits.token_limit_tpm, true) })}</span>
         <span>{formatTranslationTemplate(tx("最大并发 {limit}"), { limit: limitText(limits.max_concurrency) })}</span>
       </div>
     </DataSection>
   );
 }
 
-function QuotaCard({ label, used, limit, money = false }: { label: string; used: number; limit: number; money?: boolean }) {
+function QuotaCard({ label, used, limit, money = false, tokens = false }: { label: string; used: number; limit: number; money?: boolean; tokens?: boolean }) {
   const percent = limit > 0 ? Math.max(0, used / limit * 100) : 0;
-  const value = money ? formatUSD(used) : formatNumber(used);
-  const limitValue = limit > 0 ? (money ? formatUSD(limit) : formatNumber(limit)) : tx("不限");
+  const value = money ? formatUSD(used) : tokens ? compactNumber(used) : formatNumber(used);
+  const limitValue = limit > 0 ? (money ? formatUSD(limit) : tokens ? compactNumber(limit) : formatNumber(limit)) : tx("不限");
   return (
     <article className="api-key-quota-card">
       <span>{tx(label)}</span><strong>{value}</strong><small>{formatTranslationTemplate(tx("上限 {limit}"), { limit: limitValue })}</small>
@@ -311,7 +311,7 @@ function ProviderUsage({ data, rows }: { data: AppData; rows: APIKeyUsageRespons
   return (
     <DataSection title="Provider 路由表现">
       <SimpleTable columns={["Provider", "资源", "请求", "错误率", "平均延迟", "Token", "预估成本"]} rows={rows.map((row) => [
-        findProvider(data, row.id)?.name || row.id || tx("未路由"), providerResourceAuditLabel(data, row.resource_id), formatNumber(row.request_count), formatPercent(row.error_count, row.request_count), formatDuration(row.average_latency_ms), formatNumber(row.total_tokens), formatUSD(row.estimated_cost_usd),
+        findProvider(data, row.id)?.name || row.id || tx("未路由"), providerResourceAuditLabel(data, row.resource_id), formatNumber(row.request_count), formatPercent(row.error_count, row.request_count), formatDuration(row.average_latency_ms), compactNumber(row.total_tokens), formatUSD(row.estimated_cost_usd),
       ])} paginationKey="api-key-usage-providers" />
     </DataSection>
   );
@@ -413,7 +413,7 @@ function APIKeyRequestExplorer({ api, data, user, keyID, range, modelOptions }: 
             {payload.data.map((log) => (
               <button className={`request-list-row ${selectedRequestID === log.request_id ? "active" : ""}`} key={log.request_id} onClick={() => setSelectedRequestID(log.request_id)} type="button">
                 <span className="request-row-main"><strong>{log.model || "-"}</strong><span>{log.request_id}</span></span>
-                <span className="request-row-meta"><span>{formatTime(log.created_at)}</span><span>{formatNumber(log.total_tokens ?? 0)} Token</span><span>{formatUSD(log.estimated_cost_usd ?? 0)}</span></span>
+                <span className="request-row-meta"><span>{formatTime(log.created_at)}</span><span>{compactNumber(log.total_tokens ?? 0)} Token</span><span>{formatUSD(log.estimated_cost_usd ?? 0)}</span></span>
                 <span className="request-row-tail"><StatusPill status={log.status_code >= 400 ? "error" : "ok"} label={String(log.status_code || "-")} /><span>{formatDuration(log.latency_ms)}</span></span>
               </button>
             ))}
@@ -426,15 +426,26 @@ function APIKeyRequestExplorer({ api, data, user, keyID, range, modelOptions }: 
   );
 }
 
-function limitText(value: number | undefined) { return value && value > 0 ? formatNumber(value) : tx("不限"); }
-function keyLimitText(value: number | undefined) { return value == null ? tx("继承上级") : value > 0 ? formatNumber(value) : tx("不额外限制"); }
+function limitText(value: number | undefined, tokens = false) {
+  if (!value || value <= 0) return tx("不限");
+  return tokens ? compactNumber(value) : formatNumber(value);
+}
+function keyLimitText(value: number | undefined, tokens = false) {
+  if (value == null) return tx("继承上级");
+  if (value <= 0) return tx("不额外限制");
+  return tokens ? compactNumber(value) : formatNumber(value);
+}
 function formatUsageDays(days: number) { return formatTranslationTemplate(tx("最近 {days} 天"), { days: formatNumber(days) }); }
 function formatDuration(value: number) { return new Intl.NumberFormat(languageLocale(), { maximumFractionDigits: 0 }).format(value || 0) + " ms"; }
 function formatUSD(value: number) { return new Intl.NumberFormat(languageLocale(), { style: "currency", currency: "USD", minimumFractionDigits: value >= 1 ? 2 : 4, maximumFractionDigits: value >= 1 ? 2 : 6 }).format(value || 0); }
 function formatPercent(numerator: number, denominator: number) { return formatStandalonePercent(denominator > 0 ? numerator / denominator * 100 : 0); }
 function formatStandalonePercent(value: number) { return new Intl.NumberFormat(languageLocale(), { style: "percent", maximumFractionDigits: 1 }).format((value || 0) / 100); }
 function formatUTCDate(value: string, compact = false) { return new Intl.DateTimeFormat(languageLocale(), compact ? { month: "2-digit", day: "2-digit", timeZone: "UTC" } : { dateStyle: "medium", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`)); }
-function formatMetric(value: number, metric: UsageMetricKey) { return metric === "estimated_cost_usd" ? formatUSD(value) : formatNumber(value); }
+function formatMetric(value: number, metric: UsageMetricKey) {
+  if (metric === "estimated_cost_usd") return formatUSD(value);
+  if (metric === "total_tokens") return compactNumber(value);
+  return formatNumber(value);
+}
 function formatAxisTick(value: number, metric: UsageMetricKey) {
   if (metric === "estimated_cost_usd") return `$${formatMoney(value)}`;
   if (metric === "total_tokens") return compactNumber(value);
