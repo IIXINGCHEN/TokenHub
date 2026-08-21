@@ -1,15 +1,11 @@
 package server
 
 import (
-	"bufio"
 	"context"
 	"crypto/tls"
-	"encoding/base64"
-	"fmt"
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -59,7 +55,7 @@ func (s *Server) handleAdminProviderEgressTestPost(w http.ResponseWriter, r *htt
 		return
 	}
 	started := time.Now()
-	if err := testProviderProxyConnection(r.Context(), snapshot.proxyURL, target); err != nil {
+	if err := testProviderProxyConnection(r.Context(), snapshot.proxyURL, target, s.syntheticDNSPolicy); err != nil {
 		writeError(w, r, err)
 		return
 	}
@@ -78,58 +74,30 @@ func providerEgressTestTarget(provider Provider) (*url.URL, error) {
 	if err != nil || target.Scheme == "" || target.Host == "" {
 		return nil, NewHTTPError(http.StatusBadRequest, "provider_base_url_invalid", "Base URL is invalid")
 	}
-	if err := validateProviderUpstreamURLSyntax(target); err != nil {
+	if err := validateProviderUpstreamBaseURL(target, allowedProviderUpstreamCIDRs(), providerUpstreamLoopbackAllowed()); err != nil {
 		return nil, err
 	}
 	return target, nil
 }
 
-func testProviderProxyConnection(parent context.Context, proxyURL, target *url.URL) error {
+func testProviderProxyConnection(parent context.Context, proxyURL, target *url.URL, syntheticDNS providerSyntheticDNSResolver) error {
 	ctx, cancel := context.WithTimeout(parent, providerProxyTestTimeout)
 	defer cancel()
-	proxyAddress := proxyURL.Host
-	if proxyURL.Port() == "" {
-		proxyAddress = net.JoinHostPort(proxyURL.Hostname(), map[string]string{"http": "80", "https": "443"}[proxyURL.Scheme])
-	}
-	connection, err := (&net.Dialer{}).DialContext(ctx, "tcp", proxyAddress)
-	if err != nil {
-		return newProviderProxyTransportError("connect", err)
-	}
-	defer connection.Close()
-	if strings.EqualFold(proxyURL.Scheme, "https") {
-		tlsConnection := tls.Client(connection, &tls.Config{MinVersion: tls.VersionTLS12, ServerName: proxyURL.Hostname()})
-		if err := tlsConnection.HandshakeContext(ctx); err != nil {
-			return newProviderProxyTransportError("connect", err)
-		}
-		connection = tlsConnection
-	}
 	targetPort := target.Port()
 	if targetPort == "" {
 		targetPort = map[string]string{"http": "80", "https": "443"}[strings.ToLower(target.Scheme)]
 	}
-	targetAddress := net.JoinHostPort(target.Hostname(), targetPort)
-	request := "CONNECT " + targetAddress + " HTTP/1.1\r\nHost: " + targetAddress + "\r\n"
-	if proxyURL.User != nil {
-		password, _ := proxyURL.User.Password()
-		credential := base64.StdEncoding.EncodeToString([]byte(proxyURL.User.Username() + ":" + password))
-		request += "Proxy-Authorization: Basic " + credential + "\r\n"
+	targets, err := resolveProviderProxyTargetIPs(ctx, target.Hostname(), allowedProviderUpstreamCIDRs(), syntheticDNS, net.DefaultResolver.LookupIPAddr)
+	if err != nil {
+		return err
 	}
-	request += "Proxy-Connection: close\r\n\r\n"
+	connection, err := dialProviderProxyTunnel(ctx, &net.Dialer{}, providerProxyTestTimeout, proxyURL, targetPort, targets, nil)
+	if err != nil {
+		return err
+	}
+	defer connection.Close()
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = connection.SetDeadline(deadline)
-	}
-	if _, err := connection.Write([]byte(request)); err != nil {
-		return newProviderProxyTransportError("connect", err)
-	}
-	response, err := http.ReadResponse(bufio.NewReader(connection), &http.Request{Method: http.MethodConnect})
-	if err != nil {
-		return newProviderProxyTransportError("connect", err)
-	}
-	if response.StatusCode == http.StatusProxyAuthRequired {
-		return newProviderProxyTransportError("auth", nil)
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return newProviderProxyTransportError("connect", fmt.Errorf("proxy CONNECT returned status %s", strconv.Itoa(response.StatusCode)))
 	}
 	if strings.EqualFold(target.Scheme, "https") {
 		tlsTarget := tls.Client(connection, &tls.Config{MinVersion: tls.VersionTLS12, ServerName: target.Hostname()})

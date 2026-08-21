@@ -793,7 +793,7 @@ func TestUpstreamClientsGuardInferenceDial(t *testing.T) {
 	client, streamClient, _ := newUpstreamClients(Config{})
 	for name, candidate := range map[string]*http.Client{"non-streaming": client, "streaming": streamClient} {
 		proxying, ok := candidate.Transport.(*providerEnvironmentProxyTransport)
-		if !ok || proxying.proxied.Proxy == nil {
+		if !ok || proxying.selectProxy == nil {
 			t.Fatalf("expected %s client to honor the operator forward proxy", name)
 		}
 		policy, ok := proxying.direct.(*providerUpstreamPolicyTransport)

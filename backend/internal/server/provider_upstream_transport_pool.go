@@ -76,5 +76,9 @@ func rotatingProviderUpstreamTransport(allowedPrivate []*net.IPNet, policy *prov
 		direct = newProviderUpstreamTransportPool(policy, factory)
 	}
 	direct = guardProviderUpstreamRequests(direct, allowedPrivate)
-	return providerTransportWithEnvironmentProxy(direct, configure, proxyPolicy)
+	transport := providerTransportWithEnvironmentProxy(direct, configure, proxyPolicy)
+	if proxying, ok := transport.(*providerEnvironmentProxyTransport); ok {
+		proxying.syntheticDNS = policy
+	}
+	return transport
 }

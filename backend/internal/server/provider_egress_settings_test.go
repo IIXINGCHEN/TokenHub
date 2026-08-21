@@ -409,7 +409,7 @@ func TestProviderEgressTestUsesUnsavedProxyWithoutProviderCredentials(t *testing
 	if err := BootstrapBaseData(store); err != nil {
 		t.Fatal(err)
 	}
-	store.AddProvider(Provider{ID: "prv_proxy_test", Name: "Proxy test provider", Type: ProviderOpenAICompatible, BaseURL: "http://provider.example/v1", APIKey: "provider-secret", Status: StatusActive})
+	store.AddProvider(Provider{ID: "prv_proxy_test", Name: "Proxy test provider", Type: ProviderOpenAICompatible, BaseURL: "http://127.0.0.1:8080/v1", APIKey: "provider-secret", Status: StatusActive})
 	server := NewWithConfig(store, Config{AdminToken: "proxy-test-admin", SecretKey: "proxy-test-secret-key"})
 	t.Cleanup(func() { _ = server.Shutdown(t.Context()) })
 	proxyURL, _ := url.Parse(proxy.URL)
@@ -426,7 +426,7 @@ func TestProviderEgressTestUsesUnsavedProxyWithoutProviderCredentials(t *testing
 	if response.Code != http.StatusOK || !strings.Contains(response.Body, `"ok":true`) {
 		t.Fatalf("test unsaved proxy = %d: %s", response.Code, response.Body)
 	}
-	if connectTarget != "provider.example:80" {
+	if connectTarget != "127.0.0.1:8080" {
 		t.Fatalf("CONNECT target = %q", connectTarget)
 	}
 }
