@@ -164,7 +164,7 @@ function UsageRangeToolbar({ rangeOption, customFrom, customTo, error, onPreset,
       </div>
       <div className="api-key-custom-range">
         <label><span>{tx("开始日期")}</span><input aria-label={tx("开始日期")} type="date" value={customFrom} onChange={(event) => onCustomFrom(event.target.value)} /></label>
-        <span>—</span>
+        <span className="api-key-custom-range-sep" aria-hidden="true">—</span>
         <label><span>{tx("结束日期")}</span><input aria-label={tx("结束日期")} type="date" value={customTo} onChange={(event) => onCustomTo(event.target.value)} /></label>
         <button className="secondary-button" type="button" onClick={onApply}>{tx("应用")}</button>
       </div>

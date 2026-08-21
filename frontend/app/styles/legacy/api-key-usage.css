@@ -12,9 +12,19 @@
 .api-key-range-presets { display: flex; gap: 6px; }
 .api-key-range-presets button, .api-key-chart-tools button { border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--muted); padding: 7px 11px; cursor: pointer; }
 .api-key-range-presets button.active, .api-key-chart-tools button.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--text); }
-.api-key-custom-range { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; }
+.api-key-custom-range { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8px; }
 .api-key-custom-range label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; }
-.api-key-custom-range input, .api-key-request-filters select { min-height: 36px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-soft); color: var(--text); padding: 6px 9px; }
+.api-key-custom-range-sep {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-height: 36px;
+  color: var(--muted);
+  line-height: 1;
+}
+.api-key-custom-range > .secondary-button { min-height: 36px; }
+.api-key-custom-range input, .api-key-request-filters select { min-height: 36px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-soft); color: var(--text); padding: 6px 9px; box-sizing: border-box; }
 .api-key-range-toolbar > small { margin-left: auto; color: var(--muted); }
 .api-key-usage-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .api-key-usage-kpis article { display: grid; gap: 7px; padding: 17px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
@@ -95,5 +105,6 @@
   .api-key-usage-head { grid-template-columns: 1fr; }
   .api-key-identity, .api-key-usage-kpis, .api-key-quota-grid, .api-key-request-filters { grid-template-columns: 1fr; }
   .api-key-custom-range { align-items: stretch; }
+  .api-key-custom-range-sep { align-self: center; min-height: auto; }
   .api-key-range-toolbar > small { margin-left: 0; width: 100%; }
 }
