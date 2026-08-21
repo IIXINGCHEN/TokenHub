@@ -176,6 +176,30 @@ EOF
 
 : >"$CALL_LOG"
 FAKE_COMPOSE_ENVIRONMENT="$placeholder_environment"
+set +e
+output="$(run_install --check-only 2>&1)"
+status=$?
+set -e
+if [ "$status" -ne 1 ]; then
+  printf 'expected placeholder root key to exit 1, got %d\n' "$status" >&2
+  exit 1
+fi
+assert_contains "$output" "TOKENHUB_SECRET_KEY must not use a default placeholder value"
+assert_not_contains "$output" "TOKENHUB_ADMIN_TOKEN must not use a default placeholder value"
+assert_not_contains "$output" "TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD must not use a default placeholder value"
+assert_not_contains "$(<"$CALL_LOG")" " pull"
+assert_not_contains "$(<"$CALL_LOG")" " build"
+
+optional_placeholder_environment=$(cat <<'EOF'
+TOKENHUB_ENV=prod
+TOKENHUB_ADMIN_TOKEN=change-me-tokenhub-admin-token
+TOKENHUB_SECRET_KEY=ssssssssssssssssssssssssssssssss
+TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD=change-me-tokenhub-admin-password
+EOF
+)
+
+: >"$CALL_LOG"
+FAKE_COMPOSE_ENVIRONMENT="$optional_placeholder_environment"
 output="$(run_install --check-only 2>&1)"
 assert_contains "$output" "deployment configuration is valid for prod"
 assert_not_contains "$(<"$CALL_LOG")" " pull"

@@ -257,20 +257,22 @@ elif [[ "$environment" != "dev" && "$environment" != "development" && "$environm
     local name="$1"
     local value="$2"
     local minimum_length="$3"
-    shift 3
+    local allow_unset="$4"
+    shift 4
     value="$(trim_whitespace "$value")"
 
     local blocked
     for blocked in "$@"; do
       if [ "$value" = "$blocked" ]; then
-        # Known defaults are interpreted by the backend as an unset bootstrap
-        # value. A new SQLite deployment generates and persists the root key and
-        # initial admin password; custom non-empty weak values remain errors.
-        return 0
+        if [ "$allow_unset" = true ]; then
+          return 0
+        fi
+        validation_errors+=("$name must not use a default placeholder value")
+        return
       fi
     done
 
-    if [ -z "$value" ]; then
+    if [ "$allow_unset" = true ] && [ -z "$value" ]; then
       return 0
     fi
 
@@ -280,11 +282,11 @@ elif [[ "$environment" != "dev" && "$environment" != "development" && "$environm
     fi
   }
 
-  validate_secret "TOKENHUB_ADMIN_TOKEN" "$admin_token" 32 \
+  validate_secret "TOKENHUB_ADMIN_TOKEN" "$admin_token" 32 true \
     "dev_admin_token" "change-me-tokenhub-admin-token"
-  validate_secret "TOKENHUB_SECRET_KEY" "$secret_key" 32 \
+  validate_secret "TOKENHUB_SECRET_KEY" "$secret_key" 32 false \
     "dev_tokenhub_secret_key" "change-me-tokenhub-secret-key"
-  validate_secret "TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD" "$bootstrap_admin_password" 12 \
+  validate_secret "TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD" "$bootstrap_admin_password" 12 true \
     "admin123456" "change-me-tokenhub-admin-password"
 fi
 

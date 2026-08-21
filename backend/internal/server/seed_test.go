@@ -96,6 +96,31 @@ func TestBootstrapGeneratesRetrievableInitialAdminPassword(t *testing.T) {
 	}
 }
 
+func TestCreateAdminSessionDeletesGeneratedInitialAdminPassword(t *testing.T) {
+	store := NewMemoryStoreWithConfig(Config{SecretKey: strings.Repeat("s", 32)})
+	catalogPath := filepath.Join(t.TempDir(), "model-catalog.yaml")
+	if err := os.WriteFile(catalogPath, []byte("version: 1\nmodels:\n  - name: oauth-bootstrap-test-model\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := Config{
+		SecretKey:        strings.Repeat("s", 32),
+		ModelCatalogFile: catalogPath,
+	}
+	if err := BootstrapBaseDataWithConfig(store, config); err != nil {
+		t.Fatal(err)
+	}
+	if _, available, err := store.InitialAdminPassword(); err != nil || !available {
+		t.Fatalf("generated password was not available before session creation: available=%v err=%v", available, err)
+	}
+
+	if _, _, err := store.CreateAdminSession("usr_admin", time.Hour); err != nil {
+		t.Fatalf("create admin session: %v", err)
+	}
+	if _, available, err := store.InitialAdminPassword(); err != nil || available {
+		t.Fatalf("initial password remained retrievable after session creation: available=%v err=%v", available, err)
+	}
+}
+
 func TestSeedDefaultModelCatalogReportsLegacyNameConflict(t *testing.T) {
 	store := NewMemoryStore()
 	store.AddModel(Model{

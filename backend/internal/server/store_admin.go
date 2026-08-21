@@ -633,7 +633,10 @@ func (s *GormStore) CreateAdminSession(userID string, ttl time.Duration) (AdminU
 		if err := tx.Save(&user).Error; err != nil {
 			return err
 		}
-		return tx.Create(&session).Error
+		if err := tx.Create(&session).Error; err != nil {
+			return err
+		}
+		return deleteInitialAdminPassword(tx, user.ID)
 	})
 	if err != nil {
 		return AdminUser{}, AdminSession{}, err
