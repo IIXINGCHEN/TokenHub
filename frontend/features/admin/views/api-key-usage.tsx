@@ -1,11 +1,11 @@
-import { ArrowLeft, CalendarDays, Search } from "lucide-react";
+import { ArrowLeft, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { appRole } from "../core/navigation";
 import { type AdminUser, type ApiContext, type APIKeyUsageMetrics, type APIKeyUsageResponse, type AppData, type RequestDetail, type RequestLogPage } from "../core/types";
 import { apiKeyCustomUsageRange, apiKeyUsageRangeForDays, type APIKeyUsageRange, utcDateInputValue } from "../domain/api-key-usage-range";
 import { auditRequestPagePath, type AuditRequestStatus } from "../domain/audit-request-page";
 import { findProvider, projectName, providerResourceAuditLabel, usageMemberLabel } from "../domain/entities";
-import { formatNumber, formatTime } from "../domain/formatting";
+import { compactNumber, formatMoney, formatNumber, formatTime } from "../domain/formatting";
 import { formatTranslationTemplate, languageLocale, tx } from "../i18n/runtime";
 import { adminFetch, isAuthExpiredError, readAdminError } from "../resources/payloads";
 import { PaginationControls, type PaginationState } from "../shared/pagination";
@@ -103,7 +103,6 @@ export function APIKeyUsageView({ api, data, user, keyID, onBack }: { api: ApiCo
                   {tx(metric === "request_count" ? "请求" : metric === "total_tokens" ? "Token" : "预估成本")}
                 </button>
               ))}
-              <span><CalendarDays size={14} />UTC</span>
             </div>
             <UsageTrend points={usage.timeseries} metric={chartMetric} />
           </DataSection>
@@ -227,21 +226,83 @@ function QuotaCard({ label, used, limit, money = false }: { label: string; used:
 }
 
 function UsageTrend({ points, metric }: { points: APIKeyUsageResponse["timeseries"]; metric: UsageMetricKey }) {
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   if (!points.length) return <div className="compact-empty">{tx("所选时间范围内暂无用量")}</div>;
   const values = points.map((point) => point[metric]);
   const max = Math.max(...values, 1);
+  const ticks = [1, 0.75, 0.5, 0.25];
+  const labelEvery = Math.max(1, Math.ceil(points.length / 8));
+  const slotCount = points.length;
+  const hoveredPoint = hoveredIndex === null ? null : points[hoveredIndex];
+  const hoveredBarTopPercent = hoveredPoint
+    ? 100 - Math.max(hoveredPoint[metric] > 0 ? 1.5 : 0, (hoveredPoint[metric] / max) * 100)
+    : 0;
   return (
-    <div className="api-key-usage-chart" role="img" aria-label={tx("用量趋势")}>
-      {points.map((point, index) => {
-        const value = point[metric];
-        const labelEvery = Math.max(1, Math.ceil(points.length / 8));
-        return (
-          <div className="api-key-usage-bar" key={point.date} title={`${formatUTCDate(point.date)} · ${formatMetric(value, metric)}`}>
-            <span style={{ height: `${Math.max(value > 0 ? 3 : 0, value / max * 100)}%` }} />
-            {index % labelEvery === 0 || index === points.length - 1 ? <small>{formatUTCDate(point.date, true)}</small> : null}
-          </div>
-        );
-      })}
+    <div className="api-key-usage-trend" role="img" aria-label={tx("用量趋势")}>
+      <div className="api-key-usage-trend-body">
+        <div className="api-key-usage-trend-y">
+          {ticks.map((tick) => (
+            <span key={tick} style={{ top: `${(1 - tick) * 100}%` }}>{formatAxisTick(max * tick, metric)}</span>
+          ))}
+        </div>
+        <div className="api-key-usage-trend-plot-wrap">
+          {hoveredPoint ? (
+            <div
+              className="api-key-usage-trend-tooltip"
+              style={{
+                left: `${((hoveredIndex! + 0.5) / slotCount) * 100}%`,
+                top: `${hoveredBarTopPercent}%`,
+              }}
+            >
+              <strong>{formatUTCDate(hoveredPoint.date)}</strong>
+              <span>{formatMetric(hoveredPoint[metric], metric)}</span>
+            </div>
+          ) : null}
+          <svg className="api-key-usage-trend-plot" viewBox="0 0 1000 100" preserveAspectRatio="none">
+            {ticks.map((tick) => {
+              const y = 100 - tick * 100;
+              return <line key={tick} x1="0" x2="1000" y1={y} y2={y} />;
+            })}
+            {points.map((point, index) => {
+              const value = point[metric];
+              const slotWidth = 1000 / slotCount;
+              const barWidth = slotWidth * 0.72;
+              const x = index * slotWidth + (slotWidth - barWidth) / 2;
+              const barHeight = Math.max(value > 0 ? 1.5 : 0, (value / max) * 100);
+              const isHovered = hoveredIndex === index;
+              return (
+                <g key={point.date}>
+                  <rect
+                    className="api-key-usage-trend-hit"
+                    height={100}
+                    width={slotWidth}
+                    x={index * slotWidth}
+                    y={0}
+                    onMouseEnter={() => setHoveredIndex(index)}
+                    onMouseLeave={() => setHoveredIndex(null)}
+                  />
+                  <rect
+                    className={isHovered ? "api-key-usage-trend-bar is-active" : "api-key-usage-trend-bar"}
+                    height={barHeight}
+                    pointerEvents="none"
+                    rx="1.5"
+                    width={barWidth}
+                    x={x}
+                    y={100 - barHeight}
+                  />
+                </g>
+              );
+            })}
+          </svg>
+        </div>
+      </div>
+      <div className="api-key-usage-trend-x">
+        {points.map((point, index) => (
+          <span key={point.date} className={index % labelEvery === 0 || index === points.length - 1 ? "" : "is-spacer"}>
+            {index % labelEvery === 0 || index === points.length - 1 ? formatUTCDate(point.date, true) : ""}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -374,4 +435,9 @@ function formatPercent(numerator: number, denominator: number) { return formatSt
 function formatStandalonePercent(value: number) { return new Intl.NumberFormat(languageLocale(), { style: "percent", maximumFractionDigits: 1 }).format((value || 0) / 100); }
 function formatUTCDate(value: string, compact = false) { return new Intl.DateTimeFormat(languageLocale(), compact ? { month: "2-digit", day: "2-digit", timeZone: "UTC" } : { dateStyle: "medium", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`)); }
 function formatMetric(value: number, metric: UsageMetricKey) { return metric === "estimated_cost_usd" ? formatUSD(value) : formatNumber(value); }
+function formatAxisTick(value: number, metric: UsageMetricKey) {
+  if (metric === "estimated_cost_usd") return `$${formatMoney(value)}`;
+  if (metric === "total_tokens") return compactNumber(value);
+  return formatNumber(Math.round(value || 0));
+}
 function inclusiveRangeEnd(value: string) { return new Date(new Date(value).getTime() - 1).toISOString(); }
