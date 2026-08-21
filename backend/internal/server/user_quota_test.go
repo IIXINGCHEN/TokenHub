@@ -291,6 +291,56 @@ func TestUserQuotaHistorySurvivesAPIKeyDeletion(t *testing.T) {
 	}
 }
 
+func TestQuotaSettlementSurvivesAPIKeyDeletionDuringCall(t *testing.T) {
+	store, project, keyA, keyB := setupUserQuotaTest(t, map[string]any{"token_limit_tpm": int64(10)})
+	keyA, err := store.UpdateAPIKey(keyA.ID, APIKey{TokenLimitSet: true, TokenLimitTPM: int64Pointer(10)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, err := store.StartCall(context.Background(), project, keyA, "user-quota-model", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteAPIKey(keyA.ID); err != nil {
+		t.Fatal(err)
+	}
+	store.FinishCall(call, RouteSelection{}, Usage{TotalTokens: 8}, http.StatusOK, "", "127.0.0.1", "user-quota-test")
+
+	usage, supported, err := store.GetQuotaPolicyUsage("user", "usr_user_quota")
+	if err != nil || !supported || usage.Daily.TotalTokens != 8 {
+		t.Fatalf("usage after deleting in-flight key = %+v supported=%v err=%v, want 8 daily tokens", usage, supported, err)
+	}
+	for _, bucket := range []struct {
+		name               string
+		keyID              string
+		scope              string
+		bucket             string
+		attributedUserID   string
+		expectedTokenTotal int64
+	}{
+		{name: "API key minute", keyID: keyA.ID, scope: "minute", bucket: call.TokenLimitBucket, attributedUserID: unattributedQuotaUserID, expectedTokenTotal: 8},
+		{name: "user minute", keyID: userQuotaBucketKey("usr_user_quota"), scope: "minute", bucket: call.UserTokenLimitBucket, attributedUserID: "usr_user_quota", expectedTokenTotal: 8},
+		{name: "attributed API key day", keyID: keyA.ID, scope: "day", bucket: dayBucket(call.StartedAt), attributedUserID: "usr_user_quota", expectedTokenTotal: 8},
+	} {
+		var counter QuotaBucket
+		if err := store.db.First(&counter, "key_id = ? AND scope = ? AND bucket = ? AND attributed_user_id = ?", bucket.keyID, bucket.scope, bucket.bucket, bucket.attributedUserID).Error; err != nil {
+			t.Fatalf("load %s bucket: %v", bucket.name, err)
+		}
+		if counter.TotalTokens != bucket.expectedTokenTotal {
+			t.Fatalf("%s tokens = %d, want %d", bucket.name, counter.TotalTokens, bucket.expectedTokenTotal)
+		}
+	}
+
+	exact, err := store.StartCall(context.Background(), project, keyB, "user-quota-model", 2)
+	if err != nil {
+		t.Fatalf("remaining minute quota should admit exact reservation: %v", err)
+	}
+	defer store.FinishCall(exact, RouteSelection{}, Usage{TotalTokens: 2}, http.StatusOK, "", "127.0.0.1", "user-quota-test")
+	if _, err := store.StartCall(context.Background(), project, keyB, "user-quota-model", 1); err == nil || AsHTTPError(err).Code != "api_key_tpm_exceeded" || !reflect.DeepEqual(AsHTTPError(err).Details, map[string]string{"scope": "user"}) {
+		t.Fatalf("settled usage should leave no additional minute quota, got %v", err)
+	}
+}
+
 func TestInactiveUserQuotaPolicyCanBeDisabled(t *testing.T) {
 	store := NewMemoryStore()
 	admin, err := store.CreateAdminUser(AdminUser{ID: "usr_quota_admin", Username: "quota-admin", Email: "quota-admin@example.test", Role: "admin", Status: StatusActive}, "QuotaAdminPass123!")

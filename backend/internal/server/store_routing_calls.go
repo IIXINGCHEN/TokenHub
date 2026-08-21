@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -652,8 +653,15 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 			return err
 		}
 	}
-	var key APIKey
-	if err := tx.First(&key, "id = ?", call.Key.ID).Error; err == nil {
+	if call.Key.ID != "" {
+		var liveKey APIKey
+		liveKeyExists := true
+		if err := tx.First(&liveKey, "id = ?", call.Key.ID).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			liveKeyExists = false
+		}
 		providerTokens := meteredTokens(usage)
 		actualTokens := usage.RateLimitTokens
 		if actualTokens <= 0 {
@@ -681,11 +689,11 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 		if admittedAt.IsZero() {
 			admittedAt = now
 		}
-		dayCounter, err := s.quotaBucketForUpdate(tx, key.ID, "day", dayBucket(admittedAt))
+		dayCounter, err := s.quotaBucketForUpdate(tx, call.Key.ID, "day", dayBucket(admittedAt))
 		if err != nil {
 			return err
 		}
-		monthCounter, err := s.quotaBucketForUpdate(tx, key.ID, "month", monthBucket(admittedAt))
+		monthCounter, err := s.quotaBucketForUpdate(tx, call.Key.ID, "month", monthBucket(admittedAt))
 		if err != nil {
 			return err
 		}
@@ -704,23 +712,21 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 			{scope: "day", bucket: dayBucket(admittedAt)},
 			{scope: "month", bucket: monthBucket(admittedAt)},
 		} {
-			if err := s.addAttributedQuotaUsage(tx, key.ID, period.scope, period.bucket, attributedUserID, usage); err != nil {
+			if err := s.addAttributedQuotaUsage(tx, call.Key.ID, period.scope, period.bucket, attributedUserID, usage); err != nil {
 				return err
 			}
 		}
-		if err := raiseQuotaAlerts(tx, key, &dayCounter.QuotaCounter, &monthCounter.QuotaCounter); err != nil {
-			return err
+		if liveKeyExists {
+			if err := raiseQuotaAlerts(tx, liveKey, &dayCounter.QuotaCounter, &monthCounter.QuotaCounter); err != nil {
+				return err
+			}
 		}
 		if call.UserQuotaEnabled {
-			settlementAt := call.StartedAt
-			if settlementAt.IsZero() {
-				settlementAt = now
-			}
-			userDayCounter, err := s.quotaBucketForUpdate(tx, call.UserQuotaID, "day", dayBucket(settlementAt), attributedUserID)
+			userDayCounter, err := s.quotaBucketForUpdate(tx, call.UserQuotaID, "day", dayBucket(admittedAt), attributedUserID)
 			if err != nil {
 				return err
 			}
-			userMonthCounter, err := s.quotaBucketForUpdate(tx, call.UserQuotaID, "month", monthBucket(settlementAt), attributedUserID)
+			userMonthCounter, err := s.quotaBucketForUpdate(tx, call.UserQuotaID, "month", monthBucket(admittedAt), attributedUserID)
 			if err != nil {
 				return err
 			}
