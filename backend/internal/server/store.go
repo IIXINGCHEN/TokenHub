@@ -18,9 +18,10 @@ const (
 )
 
 type QuotaBucket struct {
-	KeyID  string `gorm:"primaryKey;index"`
-	Scope  string `gorm:"primaryKey"`
-	Bucket string `gorm:"primaryKey;index"`
+	KeyID            string `gorm:"primaryKey;index"`
+	Scope            string `gorm:"primaryKey"`
+	Bucket           string `gorm:"primaryKey;index"`
+	AttributedUserID string `gorm:"primaryKey;index;default:__tokenhub_unattributed__"`
 	QuotaCounter
 }
 
@@ -204,6 +205,7 @@ type Store interface {
 	GetImageAsset(id string) (ImageAsset, bool)
 	ListUsageRecords() []UsageRecord
 	QueryUsageSummary(ctx context.Context, query UsageSummaryQuery) (UsageSummary, error)
+	QueryAPIKeyUsage(ctx context.Context, query APIKeyUsageQuery) (APIKeyUsage, error)
 	CreateAnalyticsCredential(credential AnalyticsCredential, rawSecret string) (AnalyticsCredential, string, error)
 	ListAnalyticsCredentials() []AnalyticsCredential
 	RevokeAnalyticsCredential(id string) (AnalyticsCredential, error)
@@ -231,6 +233,7 @@ type Store interface {
 	ListResourcesContext(ctx context.Context, kind string) ([]AdminResource, error)
 	UpdateResource(kind string, id string, patch AdminResource) (AdminResource, error)
 	DeleteResource(kind string, id string) error
+	GetQuotaPolicyUsage(scope string, scopeID string) (QuotaPolicyUsage, bool, error)
 	DeleteTeam(id string) error
 	RunMonitor(id string) (MonitorRunResult, error)
 	CreateApprovalRequest(request ApprovalRequest) ApprovalRequest

@@ -19,18 +19,25 @@
   English | <a href="README.zh-CN.md">简体中文</a> | <a href="README.ja.md">日本語</a>
 </p>
 
-## Supported Providers
+## Enterprise Token Governance
 
-> [!TIP]
-> **Codex subscription ready:** connect OpenAI Codex subscription accounts to TokenHub and serve their models through the same governed gateway as API-based providers. [Set up Codex access →](docs/codex-tokenhub-profile-quick-start.md)
+Enterprises rarely struggle only with calling a model API. They struggle with distributing access tokens without exposing provider credentials, routing requests to the right model when upstreams fail or prices change, and reconciling provider invoices with internal projects, teams, and cost centers.
 
-TokenHub includes native adapters for Codex subscriptions, OpenAI, Azure OpenAI, Anthropic, Gemini, DeepSeek, Qwen, and local models, plus a catalog of 150+ provider templates and custom OpenAI-compatible upstreams. Popular integrations include:
+TokenHub puts those controls in front of every model call:
 
-<p align="center">
-  <img src="docs/assets/provider-showcase.svg" alt="Popular TokenHub provider integrations, including Codex Subscription, OpenAI, Anthropic, Google Gemini, DeepSeek, Qwen, Llama, and custom upstreams." width="100%">
-</p>
+- Project-scoped keys give teams usable access without handing out provider secrets.
+- Routing policies select, prioritize, weight, and fail over model channels centrally.
+- Usage logs and analytics attribute requests to users, projects, teams, models, and cost centers.
+- RBAC, OAuth/OIDC identity sources, audit trails, quotas, and concurrency limits make AI access governable inside private deployments.
 
-Provider templates use the matching native adapter when available; otherwise they connect through an OpenAI-compatible endpoint. Models and capabilities vary by upstream service and account.
+## Why TokenHub
+
+Many open source AI gateways focus on provider fan-out: one endpoint that can call many upstreams. That helps developers connect models, but it does not solve the enterprise operating problem by itself. TokenHub is built around the missing governance layer:
+
+- Token distribution is managed by project and team instead of by copying raw provider keys into every application.
+- Model access, routing, and fallback are policy decisions that administrators can change without rewriting client code.
+- Bills and request history can be compared against internal ownership so finance, platform, and business teams can explain AI spend.
+- User, team leader, and administrator workspaces keep daily usage, approval, cost attribution, and platform operations separated by responsibility.
 
 ## Screenshots
 
@@ -50,19 +57,28 @@ TokenHub separates everyday model usage, team governance, and platform administr
 
 ## Platform Capabilities
 
-- OpenAI-compatible model APIs: `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`; Anthropic Messages APIs: `/v1/messages`, `/v1/messages/count_tokens`.
-- OpenAI-compatible image generation and reference-image editing through `/v1/images/generations` and `/v1/images/edits`, with asynchronous jobs and server-side image retention; `codex-gpt-image-2` uses Codex subscription capacity, while `gpt-image-2` uses OpenAI API providers. See the [image generation guide](docs/user-guide.md#codex-subscription-image-generation).
-- Provider channels for OpenAI-compatible, Azure OpenAI, Anthropic, Gemini, DeepSeek, Qwen, local vLLM/Ollama, and custom upstreams.
-- Model catalog and routing policies with priority, weight, failover order, and route health diagnostics.
 - Project-scoped key management with team ownership, member permissions, quotas, and concurrency controls.
+- Model catalog and routing policies with priority, weight, failover order, and route health diagnostics.
 - Usage analytics and request logs attributed to user, project, team, model, and cost center.
 - Identity source configuration for OAuth/OIDC enterprise sign-in, plus RBAC and audit trails.
+- OpenAI-compatible model APIs: `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`; Anthropic Messages APIs: `/v1/messages`, `/v1/messages/count_tokens`.
+- OpenAI-compatible image generation and reference-image editing through `/v1/images/generations` and `/v1/images/edits`, with asynchronous jobs and server-side image retention.
 - Clean console with compact role-aware navigation, global search, light/dark mode, and split-view API documentation.
 - SQLite-first private deployment with native systemd and Docker Compose options.
 - PostgreSQL supports multi-instance deployments: share state through remote PostgreSQL, scale frontend and backend replicas horizontally, and configure connection pools. See the [deployment guide](docs/deployment.md) and [PostgreSQL setup guide](docs/postgresql-setup.md).
 - Console language switching for English, Chinese, and Japanese.
-- TokenHub can also connect OpenAI Codex subscription resources and route selected local Codex CLI or desktop sessions through an isolated, recoverable Codex profile. See the [Codex integration guides](docs/codex-tokenhub-profile-quick-start.md).
-- Gemini CLI can connect directly to TokenHub's native Gemini API and use GPT models backed by Codex subscription accounts, without CCswitch. See the [Gemini CLI guide](docs/gemini-cli-codex-subscription.md).
+
+## Provider Ecosystem
+
+Multi-provider support is one layer of TokenHub, not the core promise. Once enterprise token governance, routing, attribution, and audit controls are in place, TokenHub can connect those governed workflows to OpenAI, Azure OpenAI, Anthropic, Gemini, DeepSeek, Qwen, Codex subscriptions, local models, and custom OpenAI-compatible upstreams.
+
+TokenHub includes native adapters for OpenAI, Azure OpenAI, Anthropic, Gemini, DeepSeek, Qwen, Codex subscriptions, and local models, plus a catalog of 150+ provider templates. Popular integrations include:
+
+<p align="center">
+  <img src="docs/assets/provider-showcase.svg" alt="Popular TokenHub provider integrations across commercial, subscription, local, and custom upstreams." width="100%">
+</p>
+
+Provider templates use the matching native adapter when available; otherwise they connect through an OpenAI-compatible endpoint. Models and capabilities vary by upstream service and account.
 
 ## Quick Start
 
@@ -170,15 +186,15 @@ TokenHub grows through product feedback, gateway integrations, documentation, te
       </a>
     </td>
     <td align="center" valign="top" width="12.5%">
-      <a href="https://github.com/CLukeLi">
-        <img src="https://avatars.githubusercontent.com/u/252523101?v=4" width="80px" alt="CLukeLi" />
-        <br /><sub><b>CLukeLi</b></sub>
-      </a>
-    </td>
-    <td align="center" valign="top" width="12.5%">
       <a href="https://github.com/imaben">
         <img src="https://avatars.githubusercontent.com/u/3390195?v=4" width="80px" alt="imaben" />
         <br /><sub><b>imaben</b></sub>
+      </a>
+    </td>
+    <td align="center" valign="top" width="12.5%">
+      <a href="https://github.com/CLukeLi">
+        <img src="https://avatars.githubusercontent.com/u/252523101?v=4" width="80px" alt="CLukeLi" />
+        <br /><sub><b>CLukeLi</b></sub>
       </a>
     </td>
     <td align="center" valign="top" width="12.5%">

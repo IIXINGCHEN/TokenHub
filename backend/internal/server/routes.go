@@ -119,6 +119,7 @@ func (s *Server) routes() {
 		methodRoute{Method: http.MethodPatch, Handler: s.handleAdminAPIKeyPatch},
 		methodRoute{Method: http.MethodDelete, Handler: s.handleAdminAPIKeyDelete},
 	)
+	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/api-keys/{key_id}/usage", s.handleAdminAPIKeyUsageGet, s.adminAPIKeyMethodNotAllowed(http.MethodGet))
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/api-keys/{key_id}/rotate", s.handleAdminAPIKeyRotatePost, s.adminAPIKeyMethodNotAllowed(http.MethodPost))
 	s.mux.HandleFunc("/api/admin/api-keys/", s.handleAdminAPIKeyItem)
 	s.registerAdminAnalyticsCredentialRoutes()
@@ -239,6 +240,7 @@ func (s *Server) routes() {
 	s.registerDynamicGETRoute("/api/admin/export/{dataset}", s.handleAdminExportGet, s.adminMethodNotAllowed("usage", http.MethodGet))
 	s.mux.HandleFunc("/api/admin/export/", s.handleAdminExport)
 	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/usage/summary", s.handleAdminUsageSummary, s.adminMethodNotAllowed("usage", http.MethodGet))
+	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/usage/daily", s.handleAdminUsageDaily, s.adminMethodNotAllowed("usage", http.MethodGet))
 	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/usage/breakdown", s.handleAdminUsageBreakdown, s.adminMethodNotAllowed("usage", http.MethodGet))
 	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/usage/timeseries", s.handleAdminUsageTimeseries, s.adminMethodNotAllowed("usage", http.MethodGet))
 	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/audit/requests", s.handleAdminRequestLogs, s.adminMethodNotAllowed("audit", http.MethodGet))

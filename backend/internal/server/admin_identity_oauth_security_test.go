@@ -254,13 +254,13 @@ func TestSafeOAuthReturnURLIgnoresOriginAndReferer(t *testing.T) {
 	}
 
 	request.Host = "admin.internal.test:8080"
-	fallbackServer := &Server{config: Config{}}
-	if got := fallbackServer.safeOAuthReturnURL("https://attacker.example/steal", request); got != "http://admin.internal.test:8080/overview" {
+	unconfigured := &Server{}
+	if got := unconfigured.safeOAuthReturnURL("https://attacker.example/steal", request); got != "http://admin.internal.test:8080/overview" {
 		t.Fatalf("request Host fallback = %q", got)
 	}
 
 	loopbackRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/api/admin/auth/oauth/start", nil)
-	if got := fallbackServer.safeOAuthReturnURL("http://localhost:3000/settings", loopbackRequest); got != "http://127.0.0.1:8080/overview" {
+	if got := unconfigured.safeOAuthReturnURL("http://localhost:3000/settings", loopbackRequest); got != "http://127.0.0.1:8080/overview" {
 		t.Fatalf("unconfigured loopback return URL = %q", got)
 	}
 }

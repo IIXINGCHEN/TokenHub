@@ -19,18 +19,25 @@
   <a href="README.md">English</a> | 简体中文 | <a href="README.ja.md">日本語</a>
 </p>
 
-## 支持的 Provider
+## 企业级 Token 治理
 
-> [!TIP]
-> **支持接入 Codex 订阅：**可将 OpenAI Codex 订阅账号接入 TokenHub，与 API Provider 一样通过统一网关进行模型服务与治理。[查看 Codex 接入指南 →](docs/zh-CN/codex-tokenhub-profile-quick-start.md)
+企业接入 AI 模型时，难点通常不只是“能不能调通某个模型 API”。真正麻烦的是：如何把 Token 安全分发给不同团队而不泄露 Provider 密钥，如何在上游故障或价格变化时把请求路由到合适模型，如何把 Provider 账单和内部项目、团队、成本中心对齐。
 
-TokenHub 原生适配 Codex 订阅、OpenAI、Azure OpenAI、Anthropic、Gemini、DeepSeek、Qwen 和本地模型，并内置 150+ Provider 模板，也支持自定义 OpenAI-Compatible 上游。常用接入包括：
+TokenHub 将这些控制能力放到每一次模型调用之前：
 
-<p align="center">
-  <img src="docs/assets/provider-showcase.svg" alt="TokenHub 常用 Provider 接入，包括 Codex 订阅、OpenAI、Anthropic、Google Gemini、DeepSeek、Qwen、Llama 和自定义上游。" width="100%">
-</p>
+- 按项目发放 Key，让团队获得可用权限，而不是直接复制 Provider 密钥。
+- 通过统一策略管理模型渠道的优先级、权重、失败回退和健康诊断。
+- 用量统计和请求日志可归因到用户、项目、团队、模型和成本中心。
+- RBAC、OAuth/OIDC 身份源、审计追踪、额度和并发限制让私有化 AI 访问真正可治理。
 
-Provider 模板会优先使用对应的原生适配器，其余模板通过 OpenAI-Compatible 接口接入；实际可用模型和能力以对应上游服务及账号权限为准。
+## 为什么选择 TokenHub
+
+许多开源 AI 网关主要解决的是 Provider 聚合：用一个接口调用多个上游。这对开发者接入模型很有帮助，但单靠它并不能解决企业运营里的治理问题。TokenHub 关注的正是这层缺失的治理能力：
+
+- Token 分发按项目和团队管理，不需要把原始 Provider Key 散落到每个应用里。
+- 模型访问、路由和失败回退由管理员通过策略统一调整，不必改客户端代码。
+- 账单和请求记录可以回到内部归属关系中，帮助财务、平台和业务团队解释 AI 成本。
+- 普通用户、团队负责人和管理员拥有分离的工作台，让日常调用、审批、成本归因和平台运维各归其位。
 
 ## 产品截图
 
@@ -50,19 +57,28 @@ TokenHub 将日常模型使用、团队治理和平台运维拆成清晰的角�
 
 ## 平台能力
 
-- OpenAI-Compatible 模型 API：`/v1/chat/completions`、`/v1/responses`、`/v1/embeddings`；Anthropic Messages API：`/v1/messages`、`/v1/messages/count_tokens`。
-- OpenAI-Compatible 生图与参考图编辑 API：`/v1/images/generations`、`/v1/images/edits`，支持异步任务和服务端图片留存；`codex-gpt-image-2` 使用 Codex 订阅额度，`gpt-image-2` 使用 OpenAI API Provider。参见[生图 API 调用与测试指南](docs/zh-CN/codex-image-generation-api.md)。
-- Provider 渠道：OpenAI-Compatible、Azure OpenAI、Anthropic、Gemini、DeepSeek、Qwen、本地 vLLM/Ollama 和自定义上游。
-- 模型目录和路由策略：支持优先级、权重、失败回退顺序和路由健康诊断。
 - 按项目归属的 Key 管理：支持团队归属、成员权限、额度和并发限制。
+- 模型目录和路由策略：支持优先级、权重、失败回退顺序和路由健康诊断。
 - 用量统计和请求日志：可归因到用户、项目、团队、模型和成本中心。
 - 身份源配置：支持 OAuth/OIDC 企业登录，并配合 RBAC 和审计追踪。
+- OpenAI-Compatible 模型 API：`/v1/chat/completions`、`/v1/responses`、`/v1/embeddings`；Anthropic Messages API：`/v1/messages`、`/v1/messages/count_tokens`。
+- OpenAI-Compatible 生图与参考图编辑 API：`/v1/images/generations`、`/v1/images/edits`，支持异步任务和服务端图片留存。
 - 简洁控制台：分角色导航、全局搜索、黑白主题，以及左侧 API 导航 + 右侧详情的接口文档。
 - SQLite-first 私有化部署，提供原生 systemd 和 Docker Compose 两种方式。
 - PostgreSQL 支持多实例部署：通过远端 PostgreSQL 共享状态，实现前后端实例横向扩展，并提供连接池配置。参见[部署指南](docs/zh-CN/deployment.md)。
 - 管理后台支持英文、中文、日文切换。
-- TokenHub 还支持接入 OpenAI Codex 订阅账号资源，并通过可隔离、可恢复的 Codex Profile，让指定的本地 Codex CLI 或桌面端会话经过 TokenHub。参见 [Codex 接入指南](docs/zh-CN/codex-tokenhub-profile-quick-start.md)。
-- Gemini CLI 可以直接连接 TokenHub 的 Gemini 原生接口，并使用 Codex 订阅账号提供的 GPT 模型，不需要 CCswitch。参见 [Gemini CLI 接入指南](docs/zh-CN/gemini-cli-codex-subscription.md)。
+
+## Provider 生态
+
+多 Provider 支持只是 TokenHub 的其中一层能力，不是项目的核心卖点。当前面的企业级 Token 治理、路由、归因和审计机制就位之后，TokenHub 才把这些受控工作流连接到 OpenAI、Azure OpenAI、Anthropic、Gemini、DeepSeek、Qwen、Codex 订阅、本地模型和自定义 OpenAI-Compatible 上游。
+
+TokenHub 原生适配 OpenAI、Azure OpenAI、Anthropic、Gemini、DeepSeek、Qwen、Codex 订阅和本地模型，并内置 150+ Provider 模板。常用接入包括：
+
+<p align="center">
+  <img src="docs/assets/provider-showcase.svg" alt="TokenHub 常用 Provider 接入，覆盖商业模型、订阅模型、本地模型和自定义上游。" width="100%">
+</p>
+
+Provider 模板会优先使用对应的原生适配器，其余模板通过 OpenAI-Compatible 接口接入；实际可用模型和能力以对应上游服务及账号权限为准。
 
 ## 快速开始
 
@@ -170,15 +186,15 @@ TokenHub 的演进离不开真实企业场景里的使用反馈、网关集成�
       </a>
     </td>
     <td align="center" valign="top" width="12.5%">
-      <a href="https://github.com/CLukeLi">
-        <img src="https://avatars.githubusercontent.com/u/252523101?v=4" width="80px" alt="CLukeLi" />
-        <br /><sub><b>CLukeLi</b></sub>
-      </a>
-    </td>
-    <td align="center" valign="top" width="12.5%">
       <a href="https://github.com/imaben">
         <img src="https://avatars.githubusercontent.com/u/3390195?v=4" width="80px" alt="imaben" />
         <br /><sub><b>imaben</b></sub>
+      </a>
+    </td>
+    <td align="center" valign="top" width="12.5%">
+      <a href="https://github.com/CLukeLi">
+        <img src="https://avatars.githubusercontent.com/u/252523101?v=4" width="80px" alt="CLukeLi" />
+        <br /><sub><b>CLukeLi</b></sub>
       </a>
     </td>
     <td align="center" valign="top" width="12.5%">
