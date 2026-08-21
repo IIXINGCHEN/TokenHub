@@ -2,7 +2,7 @@
 
 Language: English | [简体中文](zh-CN/README.md) | [日本語](ja/README.md)
 
-TokenHub documentation is now organized around the three roles used in an enterprise AI gateway. The default documentation language is English. Localized Chinese and Japanese versions use the same English screenshots and the same English sample data set.
+TokenHub documentation is organized around the three roles used in enterprise Token Governance. The default documentation language is English. Localized Chinese and Japanese versions use the same English screenshots and the same English sample data set.
 
 ## Architecture and Deployment
 

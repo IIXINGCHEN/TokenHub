@@ -5,7 +5,7 @@
 <h1 align="center">TokenHub</h1>
 
 <p align="center">
-  TokenHub 让企业通过一个私有化网关统一接入和治理 AI 模型，让每一次调用都可控、可追踪、可归因。
+  TokenHub 是面向企业 AI 时代的 Token Governance 基础设施，专注模型路由、权限分配、Token 降本和 Provider 对账，而不是把账号转发作为核心产品。
 </p>
 
 <p align="center">
@@ -21,18 +21,18 @@
 
 ## 企业级 Token 治理
 
-企业接入 AI 模型时，难点通常不只是“能不能调通某个模型 API”。真正麻烦的是：如何把 Token 安全分发给不同团队而不泄露 Provider 密钥，如何在上游故障或价格变化时把请求路由到合适模型，如何把 Provider 账单和内部项目、团队、成本中心对齐。
+TokenHub 不想做一个“账号转发工具”。账号转发这类能力已经有很多成熟插件和方案，TokenHub 会把它们收敛到 Provider 抽象和插件化接入层，而不是让它们成为产品核心。
 
-TokenHub 将这些控制能力放到每一次模型调用之前：
+真正需要解决的是：当企业里的 AI 应用越来越多、模型越来越多之后，Token 到底应该怎么管。TokenHub 将这些治理能力放到每一次模型调用之前：
 
-- 按项目发放 Key，让团队获得可用权限，而不是直接复制 Provider 密钥。
-- 通过统一策略管理模型渠道的优先级、权重、失败回退和健康诊断。
-- 用量统计和请求日志可归因到用户、项目、团队、模型和成本中心。
-- RBAC、OAuth/OIDC 身份源、审计追踪、额度和并发限制让私有化 AI 访问真正可治理。
+- 模型怎么路由：根据场景、成本、性能、健康状态和失败回退策略选择合适模型。
+- 权限怎么管：控制 Token 在不同人、团队、项目和应用之间如何分配和使用。
+- Token 怎么省：通过缓存、模型选择、额度和调用策略降低企业 AI 成本。
+- 怎么和 Provider 对账：把内部真实用量和 Provider 账单对齐，让财务、平台和业务团队都能解释 AI 花费。
 
 ## 为什么选择 TokenHub
 
-许多开源 AI 网关主要解决的是 Provider 聚合：用一个接口调用多个上游。这对开发者接入模型很有帮助，但单靠它并不能解决企业运营里的治理问题。TokenHub 关注的正是这层缺失的治理能力：
+许多开源 AI 网关主要解决的是 Provider 聚合或账号转发：用一个接口调用多个上游，或者把订阅账号、渠道账号包装成统一入口。这对开发者接入模型很有帮助，但单靠它并不能解决企业运营里的治理问题。TokenHub 关注的正是这层缺失的治理能力：
 
 - Token 分发按项目和团队管理，不需要把原始 Provider Key 散落到每个应用里。
 - 模型访问、路由和失败回退由管理员通过策略统一调整，不必改客户端代码。
@@ -58,8 +58,9 @@ TokenHub 将日常模型使用、团队治理和平台运维拆成清晰的角�
 ## 平台能力
 
 - 按项目归属的 Key 管理：支持团队归属、成员权限、额度和并发限制。
-- 模型目录和路由策略：支持优先级、权重、失败回退顺序和路由健康诊断。
+- 模型目录和路由策略：支持优先级、权重、失败回退顺序、场景化选择和路由健康诊断。
 - 用量统计和请求日志：可归因到用户、项目、团队、模型和成本中心。
+- 成本治理：支持 Token 预算、Provider 花费对比、模型选择和未来基于缓存的降本策略。
 - 身份源配置：支持 OAuth/OIDC 企业登录，并配合 RBAC 和审计追踪。
 - OpenAI-Compatible 模型 API：`/v1/chat/completions`、`/v1/responses`、`/v1/embeddings`；Anthropic Messages API：`/v1/messages`、`/v1/messages/count_tokens`。
 - OpenAI-Compatible 生图与参考图编辑 API：`/v1/images/generations`、`/v1/images/edits`，支持异步任务和服务端图片留存。
@@ -70,7 +71,9 @@ TokenHub 将日常模型使用、团队治理和平台运维拆成清晰的角�
 
 ## Provider 生态
 
-多 Provider 支持只是 TokenHub 的其中一层能力，不是项目的核心卖点。当前面的企业级 Token 治理、路由、归因和审计机制就位之后，TokenHub 才把这些受控工作流连接到 OpenAI、Azure OpenAI、Anthropic、Gemini、DeepSeek、Qwen、Codex 订阅、本地模型和自定义 OpenAI-Compatible 上游。
+Provider 是接入边界，不是产品重心。账号转发、订阅渠道、托管 API、本地模型和自定义上游都应该进入 Provider 抽象之后，让 TokenHub 的中心始终放在企业 Token 治理上。
+
+当路由、权限、Token 降本、归因、审计和对账机制就位之后，TokenHub 再把这些受控工作流连接到 OpenAI、Azure OpenAI、Anthropic、Gemini、DeepSeek、Qwen、Codex 订阅、本地模型和自定义 OpenAI-Compatible 上游。
 
 TokenHub 原生适配 OpenAI、Azure OpenAI、Anthropic、Gemini、DeepSeek、Qwen、Codex 订阅和本地模型，并内置 150+ Provider 模板。常用接入包括：
 
@@ -78,7 +81,7 @@ TokenHub 原生适配 OpenAI、Azure OpenAI、Anthropic、Gemini、DeepSeek、Qw
   <img src="docs/assets/provider-showcase.svg" alt="TokenHub 常用 Provider 接入，覆盖商业模型、订阅模型、本地模型和自定义上游。" width="100%">
 </p>
 
-Provider 模板会优先使用对应的原生适配器，其余模板通过 OpenAI-Compatible 接口接入；实际可用模型和能力以对应上游服务及账号权限为准。
+Provider 模板会优先使用对应的原生适配器，其余模板通过 OpenAI-Compatible 接口接入；实际可用模型和能力以对应上游服务及账号权限为准，企业侧策略始终由 TokenHub 统一治理。
 
 ## 快速开始
 
