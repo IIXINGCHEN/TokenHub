@@ -205,9 +205,9 @@ function QuotaOverview({ usage }: { usage: APIKeyUsageResponse }) {
         <QuotaCard label="本月成本" used={usage.quota.month.usage.cost_usd} limit={limits.monthly_cost_usd} money />
       </div>
       <div className="api-key-effective-limits">
-        <span>RPM <strong>{limitText(limits.rate_limit_rpm)}</strong></span>
-        <span>TPM <strong>{limitText(limits.token_limit_tpm)}</strong></span>
-        <span>{tx("最大并发")} <strong>{limitText(limits.max_concurrency)}</strong></span>
+        <span>{formatTranslationTemplate(tx("RPM {limit}"), { limit: limitText(limits.rate_limit_rpm) })}</span>
+        <span>{formatTranslationTemplate(tx("TPM {limit}"), { limit: limitText(limits.token_limit_tpm) })}</span>
+        <span>{formatTranslationTemplate(tx("最大并发 {limit}"), { limit: limitText(limits.max_concurrency) })}</span>
       </div>
     </DataSection>
   );
@@ -340,7 +340,11 @@ function APIKeyRequestExplorer({ api, data, user, keyID, range, modelOptions }: 
       </div>
       <div className="request-history-layout">
         <div className="request-list-panel">
-          <div className="request-list-summary"><span>{tx("请求")} {formatNumber(payload.summary.all)}</span><span>{tx("失败")} {formatNumber(payload.summary.error)}</span><span>{tx("平均延迟")} {formatDuration(payload.summary.average_latency_ms)}</span></div>
+          <div className="request-list-summary">
+            <span>{formatTranslationTemplate(tx("请求 {count}"), { count: formatNumber(payload.summary.all) })}</span>
+            <span>{formatTranslationTemplate(tx("失败 {count}"), { count: formatNumber(payload.summary.error) })}</span>
+            <span>{formatTranslationTemplate(tx("平均延迟 {latency}"), { latency: formatDuration(payload.summary.average_latency_ms) })}</span>
+          </div>
           {error ? <div className="status-line error">{error}</div> : null}
           {loading && !payload.data.length ? <div className="compact-empty">{tx("正在加载请求明细...")}</div> : null}
           {!loading && !payload.data.length ? <div className="compact-empty">{tx("所选条件下暂无请求")}</div> : null}
