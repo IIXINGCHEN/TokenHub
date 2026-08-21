@@ -169,11 +169,11 @@ sudo env TOKENHUB_RELEASE_REPOSITORY=your-account/TokenHub \
 cp deploy/.env.example deploy/.env
 ```
 
-起動前に `deploy/.env` を編集してください。
+起動前に `deploy/.env` を確認してください。
 
-- `TOKENHUB_ADMIN_TOKEN`: Admin API の初期 Token。32 バイト以上のランダム値を使用してください。
-- `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD`: 初期 `admin` ユーザーの作成時にのみ使用するパスワード。12 バイト以上にしてください。
-- `TOKENHUB_SECRET_KEY`: バックエンド秘密鍵。32 バイト以上のランダム値を使用し、安定して保持してください。
+- `TOKENHUB_ADMIN_TOKEN`: 任意の Admin API 静的 Token。運用自動化で必要な場合は 32 バイト以上のランダム値を設定し、不要な場合はプレースホルダーのままにして無効化します。
+- `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD`: 任意の初期 `admin` パスワード。12 バイト以上の値を設定するか、プレースホルダーのままにして TokenHub に生成させます。
+- `TOKENHUB_SECRET_KEY`: バックエンド暗号化ルートキー。PostgreSQL と既存の SQLite データベースでは、32 バイト以上の安定した値が必須です。新規のファイル型 SQLite デプロイでは、プレースホルダーのままにするとデータベースの隣に権限 `0600` のキーファイルを生成します。
 - `TOKENHUB_IMAGE_TAG`: 管理対象 TokenHub イメージのタグ。デフォルトは `latest`。
 - `TOKENHUB_PUBLIC_BASE_URL`: ユーザーに表示するバックエンド URL。
 - `TOKENHUB_API_BASE_URL`: ブラウザの管理コンソールが使用するバックエンド URL。フロントエンドサーバーが実行時に読み取ります。非推奨の `NEXT_PUBLIC_API_BASE_URL` は、1 回の互換期間に限りフォールバックとして残します。
@@ -281,9 +281,18 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps
 初回管理者ログイン:
 
 - ユーザー名: `admin`
-- パスワード: 設定した `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD`
+- パスワード: 設定した `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD`、または次のコマンドで取得する自動生成値:
 
-`prod`、`production`、ステージングなどの非開発環境では、プレースホルダー値、32 バイト未満の Admin Token または秘密鍵、12 バイト未満の初期パスワードを拒否します。
+```bash
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml \
+  exec tokenhub-backend /opt/tokenhub/current/bin/tokenhub initial-admin-password
+```
+
+自動生成パスワードは暗号文としてのみ保存され、初回ログイン成功後またはパスワードリセット後は取得できません。ログイン後に変更してください。Kubernetes では `kubectl exec <pod> -- ...` から同じコマンドを実行できます。
+
+`prod`、`production`、ステージングなどの非開発環境では、既知の Admin Token と初期パスワードのプレースホルダーを未設定として扱い、それ以外の空でない弱い値は拒否します。暗号化ルートキーは、新規のファイル型 SQLite データベースで一度だけ生成する場合を除いて必須です。既存データベースに対して代替キーを自動生成することはありません。
+
+安全に起動できない構成では、プロセスは `/livez` に応答し続けますが、`/readyz`、`/healthz`、アプリケーションルートは `503` を返します。これによりオーケストレーターの liveness 再起動ループを防ぎながら、Pod をサービス対象から外します。構成を修正して TokenHub を再起動してください。liveness probe には `/livez`、readiness probe には `/readyz` を使用します。
 
 ログを手動で確認または追跡します。
 
@@ -345,9 +354,9 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_PROVIDER_UPSTREAM_NAT64_PREFIX` | 空 | 埋め込まれた IPv4 宛先を分類するための任意の RFC 6052 DNS64/NAT64 プレフィックス。32、40、48、56、64、96 ビット長をサポートします。`64:ff9b:1::/48` などのネットワーク固有プレフィックスを使用する場合に設定します。標準の `64:ff9b::/96` は設定不要です |
 | `TOKENHUB_PROVIDER_UPSTREAM_ALLOW_LOOPBACK` | `false` | ローカルの Ollama/LM Studio 開発用に、provider base URL の `localhost`、`127.0.0.1`、`::1`（HTTP URL を含む）を明示的に許可します。公開プロバイダー URL には HTTPS が必須です。本番環境では無効のままにしてください |
 | `TOKENHUB_CORS_ALLOWED_ORIGINS` | 公開 URL | バックエンドを呼び出せる正確なブラウザー Origin（カンマ区切り）。設定時は同じ一覧が OAuth コンソールの戻り先 Origin の完全一致 allowlist にもなります。各値には scheme、host、任意の port だけを含め、path は含めません |
-| `TOKENHUB_ADMIN_TOKEN` | `change-me-tokenhub-admin-token` | Admin API 用の初期 Token |
-| `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD` | `change-me-tokenhub-admin-password` | 初期 `admin` ユーザーのパスワード。本番起動前に変更が必要 |
-| `TOKENHUB_SECRET_KEY` | `change-me-tokenhub-secret-key` | バックエンド秘密鍵 |
+| `TOKENHUB_ADMIN_TOKEN` | `change-me-tokenhub-admin-token` | 任意の Admin API 静的 Token。既知のプレースホルダーは無効化を意味します |
+| `TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD` | `change-me-tokenhub-admin-password` | 任意の初期 `admin` パスワード。既知のプレースホルダーは初回起動時のランダム生成を意味します |
+| `TOKENHUB_SECRET_KEY` | `change-me-tokenhub-secret-key` | 安定した暗号化ルートキー。新規のファイル型 SQLite データベースでのみ自動生成できます |
 | `TOKENHUB_DATABASE_URL` | `sqlite:///app/data/tokenhub.db` | コンテナ内 SQLite データベースパス |
 | `TOKENHUB_DB_HOST` | 空 | PostgreSQL ホスト。設定すると `TOKENHUB_DATABASE_URL` ではなく `TOKENHUB_DB_*` の各フィールドから DSN を組み立てるため、パスワードに `#`、`?`、`/`、`%` が含まれる場合の URL エンコードを回避できます。両方設定した場合は `TOKENHUB_DATABASE_URL` が優先されます |
 | `TOKENHUB_DB_PORT` | `5432` | PostgreSQL ポート。`TOKENHUB_DB_HOST` を設定した場合にのみ使用されます |

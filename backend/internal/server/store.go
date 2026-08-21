@@ -240,6 +240,8 @@ type Store interface {
 	GetApprovalRequest(id string) (ApprovalRequest, error)
 	UpdateApprovalRequestStatus(id string, status string, decidedBy string, reason string) (ApprovalRequest, error)
 	CreateAdminUser(user AdminUser, password string) (AdminUser, error)
+	CreateBootstrapAdmin(user AdminUser, password string, retainInitialPassword bool) (AdminUser, bool, error)
+	InitialAdminPassword() (string, bool, error)
 	ListAdminUsers() []AdminUser
 	UpdateAdminUser(id string, patch AdminUser, password string) (AdminUser, error)
 	DeleteAdminUser(id string) error

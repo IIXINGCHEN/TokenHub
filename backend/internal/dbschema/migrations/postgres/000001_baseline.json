@@ -233,6 +233,7 @@
     "CREATE TABLE \"admin_password_reset_tokens\" (\"id\" text,\"user_id\" text,\"token_hash\" text,\"expires_at\" timestamptz,\"used_at\" timestamptz,\"created_by\" text,\"created_at\" timestamptz,PRIMARY KEY (\"id\"))",
     "CREATE UNIQUE INDEX IF NOT EXISTS \"idx_admin_password_reset_tokens_token_hash\" ON \"admin_password_reset_tokens\" (\"token_hash\")",
     "CREATE INDEX IF NOT EXISTS \"idx_admin_password_reset_tokens_user_id\" ON \"admin_password_reset_tokens\" (\"user_id\")",
+    "CREATE TABLE \"bootstrap_credentials\" (\"name\" text,\"ciphertext\" text,\"created_at\" timestamptz,PRIMARY KEY (\"name\"))",
     "CREATE TABLE \"sq_lite_backup_records\" (\"id\" text,\"name\" text,\"file_name\" text,\"file_path\" text,\"status\" text,\"trigger\" text,\"size_bytes\" bigint,\"checksum_sha256\" text,\"created_by\" text,\"created_at\" timestamptz,\"expires_at\" timestamptz,\"restored_by\" text,\"restored_at\" timestamptz,\"error\" text,PRIMARY KEY (\"id\"))",
     "CREATE INDEX IF NOT EXISTS \"idx_sq_lite_backup_records_created_by\" ON \"sq_lite_backup_records\" (\"created_by\")",
     "CREATE INDEX IF NOT EXISTS \"idx_sq_lite_backup_records_status\" ON \"sq_lite_backup_records\" (\"status\")",

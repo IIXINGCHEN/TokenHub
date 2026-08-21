@@ -166,6 +166,21 @@ TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD=strong-admin-password
 EOF
 )
 
+placeholder_environment=$(cat <<'EOF'
+TOKENHUB_ENV=prod
+TOKENHUB_ADMIN_TOKEN=change-me-tokenhub-admin-token
+TOKENHUB_SECRET_KEY=change-me-tokenhub-secret-key
+TOKENHUB_BOOTSTRAP_ADMIN_PASSWORD=change-me-tokenhub-admin-password
+EOF
+)
+
+: >"$CALL_LOG"
+FAKE_COMPOSE_ENVIRONMENT="$placeholder_environment"
+output="$(run_install --check-only 2>&1)"
+assert_contains "$output" "deployment configuration is valid for prod"
+assert_not_contains "$(<"$CALL_LOG")" " pull"
+assert_not_contains "$(<"$CALL_LOG")" " build"
+
 : >"$CALL_LOG"
 FAKE_COMPOSE_ENVIRONMENT="$strong_environment"
 output="$(run_install --check-only 2>&1)"

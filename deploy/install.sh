@@ -263,10 +263,16 @@ elif [[ "$environment" != "dev" && "$environment" != "development" && "$environm
     local blocked
     for blocked in "$@"; do
       if [ "$value" = "$blocked" ]; then
-        validation_errors+=("$name must not use a default placeholder value")
-        return
+        # Known defaults are interpreted by the backend as an unset bootstrap
+        # value. A new SQLite deployment generates and persists the root key and
+        # initial admin password; custom non-empty weak values remain errors.
+        return 0
       fi
     done
+
+    if [ -z "$value" ]; then
+      return 0
+    fi
 
     if [ "$(byte_length "$value")" -lt "$minimum_length" ]; then
       validation_errors+=("$name must be at least $minimum_length bytes after trimming whitespace")

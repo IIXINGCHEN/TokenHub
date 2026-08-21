@@ -834,6 +834,15 @@ type AdminPasswordResetToken struct {
 	CreatedAt time.Time  `json:"created_at"`
 }
 
+// BootstrapCredential retains a generated first-run credential only long
+// enough for an operator with database/config access to retrieve it. The
+// plaintext never enters the database.
+type BootstrapCredential struct {
+	Name       string    `json:"-" gorm:"primaryKey"`
+	Ciphertext string    `json:"-" gorm:"type:text"`
+	CreatedAt  time.Time `json:"-"`
+}
+
 type SQLiteBackupRecord struct {
 	ID             string     `json:"id" gorm:"primaryKey"`
 	Name           string     `json:"name"`
