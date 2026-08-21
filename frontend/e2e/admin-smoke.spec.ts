@@ -73,6 +73,6 @@ test("admin can issue an API Key and open its usage page", async ({ page }) => {
   await keyRow.getByRole("link", { name: "用量" }).click();
   await expect(page).toHaveURL(/\/api-keys\/[^/]+\/usage$/);
   await expect(page.getByRole("heading", { name: "E2E Regression Key" })).toBeVisible();
-  await expect(page.getByText("当前有效额度", { exact: true })).toBeVisible();
+  await expect(page.getByText("当前 Key 有效额度", { exact: true })).toBeVisible();
   await expect(page.getByText("所选条件下暂无请求", { exact: true })).toBeVisible();
 });

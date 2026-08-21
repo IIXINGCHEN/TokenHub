@@ -195,7 +195,7 @@ function UsageKPI({ label, value, detail }: { label: string; value: string; deta
 function QuotaOverview({ usage }: { usage: APIKeyUsageResponse }) {
   const limits = usage.quota.effective_limits;
   return (
-    <DataSection title="当前有效额度">
+    <DataSection title="当前 Key 有效额度">
       <div className="api-key-quota-grid">
         <QuotaCard label="今日请求" used={usage.quota.day.usage.requests} limit={limits.daily_requests} />
         <QuotaCard label="本月请求" used={usage.quota.month.usage.requests} limit={limits.monthly_requests} />

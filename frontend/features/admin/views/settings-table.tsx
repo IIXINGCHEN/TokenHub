@@ -329,7 +329,7 @@ export function EntityTable<T>({
                   {(config.actions ?? [])
                     .filter((action) => action.visible?.(item) ?? true)
                     .map((action) => action.href ? (
-                      <Link className="text-button" href={action.href(item)} key={action.label} title={tx(action.title ?? action.label)}>
+                      <Link className="text-button row-action-link" href={action.href(item)} key={action.label} title={tx(action.title ?? action.label)}>
                         {tx(action.label)}
                       </Link>
                     ) : (

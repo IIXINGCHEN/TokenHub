@@ -315,7 +315,7 @@ func (s *GormStore) apiKeyQuotaSnapshot(tx *gorm.DB, key APIKey, project Project
 	if key.TokenLimitTPM != nil {
 		keyLimits.TokenLimitTPM = *key.TokenLimitTPM
 	}
-	policyLimits, _, err := quotaPolicyLimits(tx, project, key)
+	policyLimits, _, _, err := quotaPolicyLimits(tx, project, key)
 	if err != nil {
 		return APIKeyQuotaSnapshot{}, err
 	}

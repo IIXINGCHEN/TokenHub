@@ -73,11 +73,11 @@ func containsJSONField(body, field string, want any) bool {
 	return summary[field] == want
 }
 
-func TestQueryAPIKeyUsageScopesMetricsAndReadsEffectiveQuota(t *testing.T) {
+func TestQueryAPIKeyUsageScopesMetricsAndReadsEffectiveKeyQuota(t *testing.T) {
 	store := NewMemoryStore()
 	project := store.CreateProject(Project{Name: "API Key Usage Project", Status: StatusActive})
 	key, _, err := store.CreateAPIKey(project.ID, APIKey{
-		Name: "Observed Key", Status: StatusActive,
+		Name: "Observed Key", Status: StatusActive, OwnerUserID: "usr_key_usage_owner",
 		Limits: QuotaLimits{DailyRequests: 10, MonthlyTokens: 1000},
 	}, "thk_api_key_usage")
 	if err != nil {
@@ -90,6 +90,10 @@ func TestQueryAPIKeyUsageScopesMetricsAndReadsEffectiveQuota(t *testing.T) {
 	store.CreateResource("quota-policies", AdminResource{
 		ID: "quota_key_usage", Name: "Key Usage Quota", Status: StatusActive,
 		Fields: map[string]any{"scope": "api_key", "scope_id": key.ID, "daily_requests": 5},
+	})
+	store.CreateResource("quota-policies", AdminResource{
+		ID: "quota_user_usage", Name: "Aggregate User Quota", Status: StatusActive,
+		Fields: map[string]any{"scope": "user", "scope_id": key.OwnerUserID, "daily_requests": 1},
 	})
 
 	now := time.Now().UTC().Truncate(time.Second)

@@ -2,6 +2,7 @@ export const apiKeyUsageTranslations = {
   en: {
     "Key 用量加载失败": "Failed to load API key usage",
     "Key 用量详情": "API Key Usage Details",
+    "当前 Key 有效额度": "Current API key effective quota",
     "上限": "Limit",
     "全部状态": "All statuses",
     "包含在输出和总 Token 中": "Included in output and total tokens",
@@ -37,6 +38,7 @@ export const apiKeyUsageTranslations = {
   ja: {
     "Key 用量加载失败": "API Key の利用量を読み込めませんでした",
     "Key 用量详情": "API Key 利用量の詳細",
+    "当前 Key 有效额度": "現在の API Key 実効クォータ",
     "上限": "上限",
     "全部状态": "すべてのステータス",
     "包含在输出和总 Token 中": "出力 Token と合計 Token に含まれます",
