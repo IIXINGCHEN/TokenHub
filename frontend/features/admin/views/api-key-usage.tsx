@@ -6,7 +6,7 @@ import { apiKeyCustomUsageRange, apiKeyUsageRangeForDays, type APIKeyUsageRange,
 import { auditRequestPagePath, type AuditRequestStatus } from "../domain/audit-request-page";
 import { findProvider, projectName, providerResourceAuditLabel, usageMemberLabel } from "../domain/entities";
 import { formatNumber, formatTime } from "../domain/formatting";
-import { languageLocale, tx } from "../i18n/runtime";
+import { formatTranslationTemplate, languageLocale, tx } from "../i18n/runtime";
 import { adminFetch, isAuthExpiredError, readAdminError } from "../resources/payloads";
 import { PaginationControls, type PaginationState } from "../shared/pagination";
 import { DataSection, SimpleTable, StatusPill } from "../shared/ui";
@@ -71,7 +71,7 @@ export function APIKeyUsageView({ api, data, user, keyID, onBack }: { api: ApiCo
       <header className="api-key-usage-head">
         <button className="secondary-button" type="button" onClick={onBack}><ArrowLeft size={16} />{tx("返回 Key 管理")}</button>
         <div>
-          <p className="eyebrow">API Key Usage</p>
+          <p className="eyebrow">{tx("API Key 用量")}</p>
           <h1>{key?.name || tx("Key 用量详情")}</h1>
           <p>{tx("查看单个 Key 的请求、Token、成本、额度和错误明细。")}</p>
         </div>
@@ -161,7 +161,7 @@ function UsageRangeToolbar({ rangeOption, customFrom, customTo, error, onPreset,
   return (
     <div className="api-key-range-toolbar">
       <div className="api-key-range-presets">
-        {([7, 30, 90] as const).map((days) => <button className={rangeOption === String(days) ? "active" : ""} key={days} onClick={() => onPreset(days)} type="button">{days} {tx("天")}</button>)}
+        {([7, 30, 90] as const).map((days) => <button className={rangeOption === String(days) ? "active" : ""} key={days} onClick={() => onPreset(days)} type="button">{formatUsageDays(days)}</button>)}
       </div>
       <div className="api-key-custom-range">
         <label><span>{tx("开始日期")}</span><input aria-label={tx("开始日期")} type="date" value={customFrom} onChange={(event) => onCustomFrom(event.target.value)} /></label>
@@ -178,10 +178,10 @@ function UsageSummary({ metrics }: { metrics: APIKeyUsageMetrics }) {
   const successCount = Math.max(0, metrics.request_count - metrics.error_count);
   return (
     <section className="api-key-usage-kpis">
-      <UsageKPI label="请求总数" value={formatNumber(metrics.request_count)} detail={`${tx("成功")} ${formatNumber(successCount)} · ${tx("失败")} ${formatNumber(metrics.error_count)}`} />
-      <UsageKPI label="成功率" value={formatPercent(successCount, metrics.request_count)} detail={`${tx("平均延迟")} ${formatDuration(metrics.average_latency_ms)}`} />
-      <UsageKPI label="总 Token" value={formatNumber(metrics.total_tokens)} detail={`${tx("输入")} ${formatNumber(metrics.input_tokens)} · ${tx("输出")} ${formatNumber(metrics.output_tokens)}`} />
-      <UsageKPI label="缓存 Token" value={formatNumber(metrics.cached_input_tokens + metrics.cache_write_input_tokens)} detail={`${tx("缓存读")} ${formatNumber(metrics.cached_input_tokens)} · ${tx("缓存写")} ${formatNumber(metrics.cache_write_input_tokens)}`} />
+      <UsageKPI label="请求总数" value={formatNumber(metrics.request_count)} detail={formatTranslationTemplate(tx("成功 {success} · 失败 {failure}"), { success: formatNumber(successCount), failure: formatNumber(metrics.error_count) })} />
+      <UsageKPI label="成功率" value={formatPercent(successCount, metrics.request_count)} detail={formatTranslationTemplate(tx("平均延迟 {latency}"), { latency: formatDuration(metrics.average_latency_ms) })} />
+      <UsageKPI label="总 Token" value={formatNumber(metrics.total_tokens)} detail={formatTranslationTemplate(tx("输入 {input} · 输出 {output}"), { input: formatNumber(metrics.input_tokens), output: formatNumber(metrics.output_tokens) })} />
+      <UsageKPI label="缓存 Token" value={formatNumber(metrics.cached_input_tokens + metrics.cache_write_input_tokens)} detail={formatTranslationTemplate(tx("缓存读 {read} · 缓存写 {write}"), { read: formatNumber(metrics.cached_input_tokens), write: formatNumber(metrics.cache_write_input_tokens) })} />
       <UsageKPI label="推理 Token" value={formatNumber(metrics.reasoning_output_tokens)} detail={tx("包含在输出和总 Token 中")} />
       <UsageKPI label="预估成本" value={formatUSD(metrics.estimated_cost_usd)} detail={tx("按对外模型价格估算")} />
     </section>
@@ -219,7 +219,7 @@ function QuotaCard({ label, used, limit, money = false }: { label: string; used:
   const limitValue = limit > 0 ? (money ? formatUSD(limit) : formatNumber(limit)) : tx("不限");
   return (
     <article className="api-key-quota-card">
-      <span>{tx(label)}</span><strong>{value}</strong><small>{tx("上限")} {limitValue}</small>
+      <span>{tx(label)}</span><strong>{value}</strong><small>{formatTranslationTemplate(tx("上限 {limit}"), { limit: limitValue })}</small>
       {limit > 0 ? <div className="api-key-quota-track"><span style={{ width: `${Math.min(100, percent)}%` }} /></div> : null}
       {limit > 0 ? <em>{formatStandalonePercent(percent)}</em> : null}
     </article>
@@ -363,6 +363,7 @@ function APIKeyRequestExplorer({ api, data, user, keyID, range, modelOptions }: 
 
 function limitText(value: number | undefined) { return value && value > 0 ? formatNumber(value) : tx("不限"); }
 function keyLimitText(value: number | undefined) { return value == null ? tx("继承上级") : value > 0 ? formatNumber(value) : tx("不额外限制"); }
+function formatUsageDays(days: number) { return formatTranslationTemplate(tx("最近 {days} 天"), { days: formatNumber(days) }); }
 function formatDuration(value: number) { return new Intl.NumberFormat(languageLocale(), { maximumFractionDigits: 0 }).format(value || 0) + " ms"; }
 function formatUSD(value: number) { return new Intl.NumberFormat(languageLocale(), { style: "currency", currency: "USD", minimumFractionDigits: value >= 1 ? 2 : 4, maximumFractionDigits: value >= 1 ? 2 : 6 }).format(value || 0); }
 function formatPercent(numerator: number, denominator: number) { return formatStandalonePercent(denominator > 0 ? numerator / denominator * 100 : 0); }
