@@ -222,6 +222,28 @@ func TestUserQuotaIncludesUsageBeforePolicyCreation(t *testing.T) {
 	}
 }
 
+func TestInterruptedStreamUsageAppliesToPoliciesCreatedLater(t *testing.T) {
+	store, project, keyA, keyB := setupUserQuotaTest(t, map[string]any{})
+	keyA, err := store.UpdateAPIKey(keyA.ID, APIKey{TokenLimitSet: true, TokenLimitTPM: int64Pointer(5)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, err := store.StartCall(context.Background(), project, keyA, "user-quota-model", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call.StreamOutputCommitted = true
+	store.FinishCall(call, RouteSelection{}, Usage{}, http.StatusBadGateway, "provider_stream_interrupted", "127.0.0.1", "user-quota-test")
+
+	store.CreateResource("quota-policies", AdminResource{
+		ID: "quota_user_quota_after_interrupted_stream", Name: "User quota after interrupted stream", Status: StatusActive,
+		Fields: map[string]any{"scope": "user", "scope_id": "usr_user_quota", "daily_tokens": int64(5)},
+	})
+	if _, err := store.StartCall(context.Background(), project, keyB, "user-quota-model", 0); err == nil || AsHTTPError(err).Code != "quota_exceeded" {
+		t.Fatalf("interrupted stream reservation should count toward a later user quota policy, got %v", err)
+	}
+}
+
 func TestUserQuotaHistoryUsesSettlementAttributionAfterKeyOwnerChanges(t *testing.T) {
 	store, project, keyA, keyB := setupUserQuotaTest(t, map[string]any{})
 	call, err := store.StartCall(context.Background(), project, keyA, "user-quota-model", 0)

@@ -670,6 +670,8 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 		if call.StreamOutputCommitted && providerTokens == 0 && actualTokens < call.ReservedTokens {
 			actualTokens = call.ReservedTokens
 		}
+		quotaUsage := usage
+		quotaUsage.TotalTokens = actualTokens
 		if err := s.reconcileAPIKeyMinuteTokens(tx, call, actualTokens); err != nil {
 			return err
 		}
@@ -712,7 +714,7 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 			{scope: "day", bucket: dayBucket(admittedAt)},
 			{scope: "month", bucket: monthBucket(admittedAt)},
 		} {
-			if err := s.addAttributedQuotaUsage(tx, call.Key.ID, period.scope, period.bucket, attributedUserID, usage); err != nil {
+			if err := s.addAttributedQuotaUsage(tx, call.Key.ID, period.scope, period.bucket, attributedUserID, quotaUsage); err != nil {
 				return err
 			}
 		}
@@ -730,8 +732,6 @@ func (s *GormStore) finishCallTransaction(tx *gorm.DB, call CallContext, route R
 			if err != nil {
 				return err
 			}
-			quotaUsage := usage
-			quotaUsage.TotalTokens = actualTokens
 			refundQuotaReservation(&userDayCounter.QuotaCounter, call.ReservedTokens)
 			refundQuotaReservation(&userMonthCounter.QuotaCounter, call.ReservedTokens)
 			addUsage(&userDayCounter.QuotaCounter, quotaUsage)
