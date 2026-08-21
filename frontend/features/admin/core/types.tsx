@@ -829,6 +829,7 @@ export type UsageBreakdown = {
   providers: UsageBreakdownRow[];
   provider_resources: UsageBreakdownRow[];
   cost_centers: UsageBreakdownRow[];
+  api_keys?: UsageBreakdownRow[];
 };
 
 export type UsagePoint = {
@@ -839,6 +840,15 @@ export type UsagePoint = {
   output_tokens: number;
   total_tokens: number;
   estimated_cost_usd: number;
+};
+
+export type UsageDaily = {
+  timezone: string;
+  date: string;
+  window_start: string;
+  window_end: string;
+  summary: Summary;
+  breakdown: UsageBreakdown;
 };
 
 export type ViewKey =
@@ -1031,6 +1041,7 @@ export type AppData = {
   sqliteBackups: SQLiteBackup[];
   users: AdminUser[];
   breakdown: UsageBreakdown;
+  dailyUsage: UsageDaily;
   timeseries: UsagePoint[];
   resources: Record<string, AdminResource[]>;
   providerCatalog: ProviderCatalogEntry[];
