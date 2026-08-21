@@ -60,7 +60,7 @@ The per-Key **Usage** page uses the saved Key ID as an exact boundary for trends
 
 ## Daily Usage Dashboard
 
-Open **Usage** to see the current day's usage above the longer-range executive report. The daily section shows today's tokens, requests, estimated cost, cache reads, and tables for token type, model, project, API Key, Provider, and Provider Resource. Team leaders also see member usage for their team, and governance roles see cost-center attribution.
+Open **Usage** to see the current day's usage above the longer-range executive report. The daily section shows today's tokens, requests, estimated cost, cache reads, and tables for token type, model, project, and API Key. Platform administrators also see Provider and Provider Resource tables; other roles receive only the remaining scoped dimensions. Team leaders also see member usage for their team, and governance roles see cost-center attribution.
 
 The day boundary comes from **System Settings > Gateway Base Settings > Dashboard Timezone**. Use an IANA timezone such as `UTC`, `Asia/Shanghai`, or `America/New_York`. TokenHub stores this setting centrally, so all administrators see the same daily window and the dashboard resets at that timezone's local midnight. The usage view refreshes the daily section every 30 seconds while it is open.
 
