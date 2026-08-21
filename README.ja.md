@@ -19,18 +19,25 @@
   <a href="README.md">English</a> | <a href="README.zh-CN.md">简体中文</a> | 日本語
 </p>
 
-## 対応 Provider
+## エンタープライズ Token ガバナンス
 
-> [!TIP]
-> **Codex サブスクリプションに対応：**OpenAI Codex のサブスクリプションアカウントを TokenHub に接続し、API Provider と同じ統合ゲートウェイでモデルを提供・管理できます。[Codex 接続ガイド →](docs/ja/codex-tokenhub-profile-quick-start.md)
+企業が AI モデルを導入するときの課題は、単に特定のモデル API を呼び出せるかどうかだけではありません。Provider の認証情報を露出せずに各チームへ Token を配布すること、上流障害や価格変動に応じて適切なモデルへルーティングすること、Provider の請求を社内のプロジェクト、チーム、コストセンターと照合することが難しくなります。
 
-TokenHub は、Codex サブスクリプション、OpenAI、Azure OpenAI、Anthropic、Gemini、DeepSeek、Qwen、ローカルモデル向けのネイティブアダプターに加え、150 以上の Provider テンプレートとカスタム OpenAI-Compatible 上流接続を備えています。主な接続先：
+TokenHub は、これらの制御をすべてのモデル呼び出しの手前に置きます。
 
-<p align="center">
-  <img src="docs/assets/provider-showcase.svg" alt="Codex サブスクリプション、OpenAI、Anthropic、Google Gemini、DeepSeek、Qwen、Llama、カスタム上流を含む TokenHub の主な Provider 接続先。" width="100%">
-</p>
+- プロジェクト単位の Key により、Provider のシークレットを渡さずにチームへ利用権限を付与できます。
+- ルーティングポリシーでモデルチャネルの優先度、重み、フェイルオーバー、ヘルス診断を一元管理できます。
+- 利用分析とリクエストログを、ユーザー、プロジェクト、チーム、モデル、コストセンターへ紐づけられます。
+- RBAC、OAuth/OIDC ID ソース、監査証跡、クォータ、並行数制限により、プライベート環境の AI アクセスを管理可能にします。
 
-Provider テンプレートは、利用可能な場合は対応するネイティブアダプターを使用し、それ以外は OpenAI-Compatible エンドポイントへ接続します。利用可能なモデルと機能は、上流サービスおよびアカウントによって異なります。
+## TokenHub が選ばれる理由
+
+多くのオープンソース AI ゲートウェイは Provider の集約に重点を置いています。つまり、1 つのエンドポイントから複数の上流を呼び出す仕組みです。これは開発者のモデル接続には役立ちますが、企業運用の課題をそれだけで解決できるわけではありません。TokenHub は、その不足しているガバナンス層を中心に設計されています。
+
+- Token 配布をプロジェクトとチームで管理し、生の Provider Key を各アプリケーションへ散在させません。
+- モデルアクセス、ルーティング、フェイルオーバーを管理者がポリシーとして変更でき、クライアントコードの変更を抑えられます。
+- 請求とリクエスト履歴を社内の所有関係へ紐づけ、財務、プラットフォーム、事業チームが AI コストを説明できます。
+- ユーザー、チームリーダー、管理者のワークスペースを分け、日常利用、承認、コスト配賦、プラットフォーム運用を責任ごとに整理します。
 
 ## スクリーンショット
 
@@ -50,19 +57,28 @@ TokenHub は、日常的なモデル利用、チームガバナンス、プラ�
 
 ## プラットフォーム機能
 
-- OpenAI-Compatible モデル API: `/v1/chat/completions`、`/v1/responses`、`/v1/embeddings`。Anthropic Messages API: `/v1/messages`、`/v1/messages/count_tokens`。
-- OpenAI-Compatible の画像生成および参照画像編集 API: `/v1/images/generations`、`/v1/images/edits`。非同期ジョブとサーバー側の画像保持に対応し、`codex-gpt-image-2` は Codex サブスクリプション枠、`gpt-image-2` は OpenAI API Provider を使用します。[画像生成ガイド](docs/ja/user-guide.md#codex-サブスクリプション画像生成)を参照してください。
-- Provider チャネル: OpenAI-Compatible、Azure OpenAI、Anthropic、Gemini、DeepSeek、Qwen、ローカル vLLM/Ollama、カスタム上流。
-- モデルカタログとルーティングポリシー: 優先度、重み、フェイルオーバー順序、ルートヘルス診断に対応。
 - プロジェクト単位の Key 管理: チーム所有、メンバー権限、クォータ、並行数制限に対応。
+- モデルカタログとルーティングポリシー: 優先度、重み、フェイルオーバー順序、ルートヘルス診断に対応。
 - ユーザー、プロジェクト、チーム、モデル、コストセンターに紐づく利用分析とリクエストログ。
 - OAuth/OIDC によるエンタープライズサインイン、RBAC、監査証跡に対応する ID ソース設定。
+- OpenAI-Compatible モデル API: `/v1/chat/completions`、`/v1/responses`、`/v1/embeddings`。Anthropic Messages API: `/v1/messages`、`/v1/messages/count_tokens`。
+- OpenAI-Compatible の画像生成および参照画像編集 API: `/v1/images/generations`、`/v1/images/edits`。非同期ジョブとサーバー側の画像保持に対応します。
 - クリーンなコンソール: ロール別ナビゲーション、グローバル検索、ライト/ダーク切り替え、左ナビ + 右詳細の API ドキュメント。
 - SQLite-first のプライベートデプロイ向けに、ネイティブ systemd と Docker Compose の両方をサポート。
 - PostgreSQL はマルチインスタンス構成に対応します。リモート PostgreSQL で状態を共有し、フロントエンドとバックエンドのレプリカを水平スケールできるほか、コネクションプールも設定できます。[デプロイガイド](docs/ja/deployment.md)を参照してください。
 - 管理コンソールは英語、中国語、日本語の切り替えに対応。
-- TokenHub は OpenAI Codex のサブスクリプションアカウントリソースにも接続できます。分離および復旧が可能な Codex Profile を使用し、指定したローカル Codex CLI またはデスクトップセッションを TokenHub 経由で実行できます。[Codex 接続ガイド](docs/ja/codex-tokenhub-profile-quick-start.md)を参照してください。
-- Gemini CLI は TokenHub の Gemini ネイティブ API に直接接続し、Codex サブスクリプションアカウントの GPT モデルを CCswitch なしで使用できます。[Gemini CLI 接続ガイド](docs/ja/gemini-cli-codex-subscription.md)を参照してください。
+
+## Provider エコシステム
+
+複数 Provider への対応は TokenHub の一機能であり、中心的な約束ではありません。エンタープライズ Token ガバナンス、ルーティング、利用主体の特定、監査制御を先に整えたうえで、TokenHub はその管理されたワークフローを OpenAI、Azure OpenAI、Anthropic、Gemini、DeepSeek、Qwen、Codex サブスクリプション、ローカルモデル、カスタム OpenAI-Compatible 上流へ接続します。
+
+TokenHub は、OpenAI、Azure OpenAI、Anthropic、Gemini、DeepSeek、Qwen、Codex サブスクリプション、ローカルモデル向けのネイティブアダプターに加え、150 以上の Provider テンプレートを備えています。主な接続先：
+
+<p align="center">
+  <img src="docs/assets/provider-showcase.svg" alt="商用モデル、サブスクリプションモデル、ローカルモデル、カスタム上流を含む TokenHub の主な Provider 接続先。" width="100%">
+</p>
+
+Provider テンプレートは、利用可能な場合は対応するネイティブアダプターを使用し、それ以外は OpenAI-Compatible エンドポイントへ接続します。利用可能なモデルと機能は、上流サービスおよびアカウントによって異なります。
 
 ## クイックスタート
 
