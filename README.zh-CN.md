@@ -5,7 +5,7 @@
 <h1 align="center">TokenHub</h1>
 
 <p align="center">
-  TokenHub 是面向企业 AI 时代的 Token Governance 基础设施，专注模型路由、权限分配、Token 降本和 Provider 对账，而不是把账号转发作为核心产品。
+  TokenHub 是面向企业 AI 时代的 Token Governance 基础设施，专注模型路由、权限分配、Token 降本、Provider 对账，以及对所有上游模型服务的统一治理。
 </p>
 
 <p align="center">
@@ -21,7 +21,7 @@
 
 ## 企业级 Token 治理
 
-TokenHub 不想做一个“账号转发工具”。账号转发这类能力已经有很多成熟插件和方案，TokenHub 会把它们收敛到 Provider 抽象和插件化接入层，而不是让它们成为产品核心。
+TokenHub 为企业提供 AI 模型生命周期里的治理层：从 Provider 接入、项目 Key、路由策略，到用量归因、预算控制和账单对账。
 
 真正需要解决的是：当企业里的 AI 应用越来越多、模型越来越多之后，Token 到底应该怎么管。TokenHub 将这些治理能力放到每一次模型调用之前：
 
@@ -32,7 +32,7 @@ TokenHub 不想做一个“账号转发工具”。账号转发这类能力已�
 
 ## 为什么选择 TokenHub
 
-许多开源 AI 网关主要解决的是 Provider 聚合或账号转发：用一个接口调用多个上游，或者把订阅账号、渠道账号包装成统一入口。这对开发者接入模型很有帮助，但单靠它并不能解决企业运营里的治理问题。TokenHub 关注的正是这层缺失的治理能力：
+许多开源 AI 网关主要解决的是 Provider 聚合：用一个接口调用多个上游。这对开发者接入模型很有帮助，但单靠它并不能解决企业运营里的治理问题。TokenHub 关注的正是这层缺失的治理能力：
 
 - Token 分发按项目和团队管理，不需要把原始 Provider Key 散落到每个应用里。
 - 模型访问、路由和失败回退由管理员通过策略统一调整，不必改客户端代码。
@@ -71,7 +71,7 @@ TokenHub 将日常模型使用、团队治理和平台运维拆成清晰的角�
 
 ## Provider 生态
 
-Provider 是接入边界，不是产品重心。账号转发、订阅渠道、托管 API、本地模型和自定义上游都应该进入 Provider 抽象之后，让 TokenHub 的中心始终放在企业 Token 治理上。
+Provider 是 TokenHub 的接入边界。托管 API、订阅渠道、本地模型和自定义上游都通过 Provider 抽象接入，让同一套企业策略治理每一条模型调用路径。
 
 当路由、权限、Token 降本、归因、审计和对账机制就位之后，TokenHub 再把这些受控工作流连接到 OpenAI、Azure OpenAI、Anthropic、Gemini、DeepSeek、Qwen、Codex 订阅、本地模型和自定义 OpenAI-Compatible 上游。
 

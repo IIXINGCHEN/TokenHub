@@ -5,7 +5,7 @@
 <h1 align="center">TokenHub</h1>
 
 <p align="center">
-  TokenHub is enterprise Token Governance infrastructure for AI: model routing, access control, token cost optimization, and provider reconciliation without making account forwarding the core product.
+  TokenHub is enterprise Token Governance infrastructure for AI: model routing, access control, token cost optimization, provider reconciliation, and governed access to every upstream model provider.
 </p>
 
 <p align="center">
@@ -21,7 +21,7 @@
 
 ## Enterprise Token Governance
 
-TokenHub is not trying to be an account-forwarding tool. Mature plugins and gateways already cover that need well; TokenHub treats those integrations as Provider capabilities that can be attached behind a governance layer instead of becoming the product's center of gravity.
+TokenHub gives enterprises a governance layer for the AI model lifecycle, from provider access and project keys to routing policy, usage attribution, budget control, and bill reconciliation.
 
 The core problem is what happens after every team, application, and workflow starts consuming more models and more tokens. TokenHub puts governance controls in front of every model call:
 
@@ -32,7 +32,7 @@ The core problem is what happens after every team, application, and workflow sta
 
 ## Why TokenHub
 
-Many open source AI gateways focus on provider fan-out or account forwarding: one endpoint that can call many upstreams, sometimes through borrowed accounts or subscription channels. That helps developers connect models, but it does not solve the enterprise operating problem by itself. TokenHub is built around the missing governance layer:
+Many open source AI gateways focus on provider fan-out: one endpoint that can call many upstreams. That helps developers connect models, but it does not solve the enterprise operating problem by itself. TokenHub is built around the missing governance layer:
 
 - Token distribution is managed by project and team instead of by copying raw provider keys into every application.
 - Model access, routing, and fallback are policy decisions that administrators can change without rewriting client code.
@@ -71,7 +71,7 @@ TokenHub separates everyday model usage, team governance, and platform administr
 
 ## Provider Ecosystem
 
-Provider support is the integration boundary, not the core promise. Account forwarding, subscription channels, hosted APIs, local models, and custom upstreams all belong behind the Provider abstraction so TokenHub can keep its center on enterprise token governance.
+Provider support is TokenHub's integration boundary. Hosted APIs, subscription channels, local models, and custom upstreams connect through the Provider abstraction so the same enterprise policies can govern every model path.
 
 Once routing, permissions, token savings, attribution, audit, and reconciliation controls are in place, TokenHub can connect those governed workflows to OpenAI, Azure OpenAI, Anthropic, Gemini, DeepSeek, Qwen, Codex subscriptions, local models, and custom OpenAI-compatible upstreams.
 
