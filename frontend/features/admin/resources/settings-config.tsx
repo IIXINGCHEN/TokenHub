@@ -1,9 +1,9 @@
 import { type AdminResource, type FieldConfig, notificationChannelTypes, type ResourceConfig, type SQLiteBackup, type ViewKey } from "../core/types";
 import { notificationChannelLabel, notificationChannelTargetSummary, notificationChannelType, notificationChannelUsesEmail, notificationChannelUsesIncomingWebhook, notificationChannelUsesTelegram, notificationChannelUsesWhatsApp, notificationCredentialSummary } from "../domain/catalog";
-import { costCenterLabel, costCenterSelectOptions, oauthDefaultProjectRoleOptions, ownerUserLabel, projectMemberProjectSelectOptions, stringifyValue, teamMemberCount, teamSelectOptions, userSelectOptions } from "../domain/entities";
+import { apiKeyOwnerSelectOptions, costCenterLabel, costCenterSelectOptions, oauthDefaultProjectRoleOptions, ownerUserLabel, projectMemberProjectSelectOptions, stringifyValue, teamMemberCount, teamSelectOptions, userSelectOptions } from "../domain/entities";
 import { formatBytes, formatNumber, formatTime } from "../domain/formatting";
 import { boolLabel, dataScopeLabel, identityProviderDefaultGrantLabel, identityProviderLoginEntryLabel, identityProviderTypeLabel, monitorTargetLabel, numberFromUnknown, numberOr } from "../domain/labels";
-import { tx } from "../i18n/runtime";
+import { formatTranslationTemplate, languageLocale, tx } from "../i18n/runtime";
 import { genericResourceConfig } from "./generic-config";
 import { adminUserConfig, alertDeliveryConfig, alertEventConfig, alertRuleConfig, approvalConfig, approvalFlowConfig, costCenterConfig, downloadSQLiteBackup, reportConfig, restoreSQLiteBackup } from "./governance-config";
 import { adminDelete, adminFetch, adminMutate, identityProviderPayload, notificationChannelPayload } from "./payloads";
@@ -31,19 +31,7 @@ function createResourceConfigs(): Partial<Record<ViewKey, ResourceConfig<any>>> 
   "api-keys": apiKeyConfig(),
   teams: teamConfig(),
   users: adminUserConfig(),
-  "quota-policies": genericResourceConfig("quota-policies", "项目额度", "项目、Key、用户维度的请求、Token、成本与并发上限", [
-    { key: "scope", label: "作用域", type: "select", options: ["global", "project", "api_key", "team"], required: true },
-    { key: "scope_id", label: "作用域 ID" },
-    { key: "rate_limit_rpm", label: "每分钟请求数（RPM）", type: "number" },
-    { key: "token_limit_tpm", label: "每分钟 Token 数（TPM）", type: "number" },
-    { key: "daily_requests", label: "日请求", type: "number" },
-    { key: "monthly_requests", label: "月请求", type: "number" },
-    { key: "daily_tokens", label: "日 Token", type: "number" },
-    { key: "monthly_tokens", label: "月 Token", type: "number" },
-    { key: "daily_cost_usd", label: "日成本 USD", type: "number" },
-    { key: "monthly_cost_usd", label: "月成本 USD", type: "number" },
-    { key: "max_concurrency", label: "最大并发", type: "number" },
-  ]),
+  "quota-policies": quotaPolicyConfig(),
   "cost-centers": costCenterConfig(),
   "approval-flows": approvalFlowConfig(),
   reports: reportConfig(),
@@ -71,6 +59,67 @@ function createResourceConfigs(): Partial<Record<ViewKey, ResourceConfig<any>>> 
   "identity-providers": identityProviderConfig(),
   settings: systemSettingConfig(),
   };
+}
+
+function quotaPolicyConfig(): ResourceConfig<AdminResource> {
+  const base = genericResourceConfig("quota-policies", "额度策略", "按全局、项目、团队、API Key 或用户聚合请求、Token、成本与并发上限", [
+    { key: "scope", label: "作用域", type: "select", options: ["global", "project", "api_key", "team", "user"], required: true },
+    {
+      key: "scope_id",
+      label: "作用域对象",
+      type: "select",
+      optionsFromData: (data, currentUser, values) => {
+        switch (values?.scope) {
+          case "global":
+            return [{ value: "global", label: "全局" }];
+          case "project":
+            return projectMemberProjectSelectOptions(data);
+          case "api_key":
+            return data.keys.map((key) => ({ value: key.id, label: `${key.name || key.id} / ${key.key_prefix}...${key.key_suffix}` }));
+          case "team":
+            return teamSelectOptions(data);
+          case "user":
+            return apiKeyOwnerSelectOptions(data, currentUser);
+          default:
+            return [];
+        }
+      },
+      required: true,
+      help: "用户作用域会合并该用户所有归属 Key 的用量，Key 轮换不会重置额度。",
+    },
+    { key: "rate_limit_rpm", label: "每分钟请求数（RPM）", type: "number" },
+    { key: "token_limit_tpm", label: "每分钟 Token 数（TPM）", type: "number" },
+    { key: "daily_requests", label: "日请求", type: "number" },
+    { key: "monthly_requests", label: "月请求", type: "number" },
+    { key: "daily_tokens", label: "日 Token", type: "number" },
+    { key: "monthly_tokens", label: "月 Token", type: "number" },
+    { key: "daily_cost_usd", label: "日成本 USD", type: "number" },
+    { key: "monthly_cost_usd", label: "月成本 USD", type: "number" },
+    { key: "max_concurrency", label: "最大并发", type: "number" },
+  ]);
+  return {
+    ...base,
+    columns: [
+      ...base.columns.slice(0, 3),
+      {
+        key: "current_usage",
+        label: "用量统计",
+        render: (item) => item.current_usage
+          ? `${formatQuotaUsage(tx("日：{requests} 次请求 · {tokens} Token · {cost}"), item.current_usage.daily)} / ${formatQuotaUsage(tx("月：{requests} 次请求 · {tokens} Token · {cost}"), item.current_usage.monthly)}`
+          : "-",
+      },
+      ...base.columns.slice(3),
+    ],
+  };
+}
+
+function formatQuotaUsage(template: string, usage: { requests: number; total_tokens: number; cost_usd: number }) {
+  const locale = languageLocale();
+  return formatTranslationTemplate(template, {
+    requests: new Intl.NumberFormat(locale).format(usage.requests || 0),
+    tokens: new Intl.NumberFormat(locale).format(usage.total_tokens || 0),
+    cost: new Intl.NumberFormat(locale, { style: "currency", currency: "USD", maximumFractionDigits: 6 }).format(usage.cost_usd || 0),
+  });
 }
 
 export function systemSettingConfig(): ResourceConfig<AdminResource> {

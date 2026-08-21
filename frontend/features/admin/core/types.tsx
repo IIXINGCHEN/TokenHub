@@ -590,6 +590,10 @@ export type AdminResource = {
   description?: string;
   status: string;
   fields?: Record<string, unknown>;
+  current_usage?: {
+    daily: { requests: number; total_tokens: number; cost_usd: number };
+    monthly: { requests: number; total_tokens: number; cost_usd: number };
+  };
   created_at?: string;
   updated_at?: string;
 };

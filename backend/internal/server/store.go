@@ -17,9 +17,10 @@ const (
 )
 
 type QuotaBucket struct {
-	KeyID  string `gorm:"primaryKey;index"`
-	Scope  string `gorm:"primaryKey"`
-	Bucket string `gorm:"primaryKey;index"`
+	KeyID            string `gorm:"primaryKey;index"`
+	Scope            string `gorm:"primaryKey"`
+	Bucket           string `gorm:"primaryKey;index"`
+	AttributedUserID string `gorm:"primaryKey;index;default:__tokenhub_unattributed__"`
 	QuotaCounter
 }
 
@@ -230,6 +231,7 @@ type Store interface {
 	ListResourcesContext(ctx context.Context, kind string) ([]AdminResource, error)
 	UpdateResource(kind string, id string, patch AdminResource) (AdminResource, error)
 	DeleteResource(kind string, id string) error
+	GetQuotaPolicyUsage(scope string, scopeID string) (QuotaPolicyUsage, bool, error)
 	DeleteTeam(id string) error
 	RunMonitor(id string) (MonitorRunResult, error)
 	CreateApprovalRequest(request ApprovalRequest) ApprovalRequest

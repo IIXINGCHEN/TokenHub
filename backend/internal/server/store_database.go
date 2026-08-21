@@ -256,6 +256,9 @@ func newStoreWithDialect(databaseURL string, config Config, publishHeartbeat boo
 		if err := backfillRequestLogAttribution(db, driver); err != nil {
 			return err
 		}
+		if err := backfillQuotaBucketAttribution(db); err != nil {
+			return err
+		}
 		return backfillRoutingPolicyBindingKeys(db)
 	}
 	var instanceHeartbeatID string
@@ -319,6 +322,111 @@ func newStoreWithDialect(databaseURL string, config Config, publishHeartbeat boo
 		clusterLockTTL:       time.Duration(defaultInt(config.ClusterLockTTLSeconds, 180)) * time.Second,
 		imageCapabilityRetry: time.Duration(defaultInt(config.ImageCapabilityRetrySecs, 86400)) * time.Second,
 	}, nil
+}
+
+type quotaBucketColumnInfo struct {
+	Name string
+	PK   int
+}
+
+// ensureQuotaBucketAttributionSchema upgrades the pre-attribution three-column
+// primary key before GORM inspects the model. Existing counters remain in the
+// canonical unattributed row; no historical usage is guessed to belong to an
+// owner.
+func ensureQuotaBucketAttributionSchema(db *gorm.DB, driver string) error {
+	if !db.Migrator().HasTable(&QuotaBucket{}) {
+		return nil
+	}
+	if driver == "sqlite" {
+		var columns []quotaBucketColumnInfo
+		if err := db.Raw("PRAGMA table_info(quota_buckets)").Scan(&columns).Error; err != nil {
+			return err
+		}
+		hasAttribution := false
+		attributionInPK := false
+		for _, column := range columns {
+			if column.Name == "attributed_user_id" {
+				hasAttribution = true
+				attributionInPK = column.PK > 0
+			}
+		}
+		if attributionInPK {
+			return nil
+		}
+		return db.Transaction(func(tx *gorm.DB) error {
+			if !hasAttribution {
+				if err := tx.Exec("ALTER TABLE quota_buckets ADD COLUMN attributed_user_id TEXT").Error; err != nil {
+					return err
+				}
+			}
+			if err := tx.Exec("ALTER TABLE quota_buckets RENAME TO quota_buckets_legacy").Error; err != nil {
+				return err
+			}
+			if err := tx.Exec("DROP INDEX IF EXISTS idx_quota_buckets_attributed_user_id").Error; err != nil {
+				return err
+			}
+			if err := tx.Exec(`CREATE TABLE quota_buckets (
+key_id TEXT NOT NULL,
+scope TEXT NOT NULL,
+bucket TEXT NOT NULL,
+attributed_user_id TEXT NOT NULL DEFAULT '__tokenhub_unattributed__',
+requests INTEGER NOT NULL DEFAULT 0,
+prompt_tokens INTEGER NOT NULL DEFAULT 0,
+completion_tokens INTEGER NOT NULL DEFAULT 0,
+total_tokens INTEGER NOT NULL DEFAULT 0,
+cost_usd REAL NOT NULL DEFAULT 0,
+PRIMARY KEY (key_id, scope, bucket, attributed_user_id)
+)`).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec("INSERT INTO quota_buckets (key_id, scope, bucket, attributed_user_id, requests, prompt_tokens, completion_tokens, total_tokens, cost_usd) SELECT key_id, scope, bucket, CASE WHEN key_id LIKE 'user:%' THEN SUBSTR(key_id, 6) ELSE COALESCE(NULLIF(attributed_user_id, ''), ?) END, requests, prompt_tokens, completion_tokens, total_tokens, cost_usd FROM quota_buckets_legacy", unattributedQuotaUserID).Error; err != nil {
+				return err
+			}
+			return tx.Exec("DROP TABLE quota_buckets_legacy").Error
+		})
+	}
+	// PostgreSQL can replace the primary-key constraint in place. Add the new
+	// column before backfilling it because this helper runs before AutoMigrate;
+	// legacy databases do not have attributed_user_id yet.
+	if err := db.Exec("ALTER TABLE quota_buckets ADD COLUMN IF NOT EXISTS attributed_user_id TEXT").Error; err != nil {
+		return err
+	}
+	if err := db.Exec("UPDATE quota_buckets SET attributed_user_id = CASE WHEN key_id LIKE 'user:%' THEN SUBSTRING(key_id FROM 6) ELSE ? END WHERE attributed_user_id IS NULL OR attributed_user_id = ''", unattributedQuotaUserID).Error; err != nil {
+		return err
+	}
+	if err := db.Exec("ALTER TABLE quota_buckets ALTER COLUMN attributed_user_id SET DEFAULT '__tokenhub_unattributed__'").Error; err != nil {
+		return err
+	}
+	var pkColumns []struct {
+		Column string `gorm:"column:column_name"`
+	}
+	if err := db.Raw(`SELECT kcu.column_name FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema WHERE tc.table_schema = current_schema() AND tc.table_name = 'quota_buckets' AND tc.constraint_type = 'PRIMARY KEY' ORDER BY kcu.ordinal_position`).Scan(&pkColumns).Error; err != nil {
+		return err
+	}
+	wantPK := []string{"key_id", "scope", "bucket", "attributed_user_id"}
+	primaryKeyMatches := len(pkColumns) == len(wantPK)
+	for index := range pkColumns {
+		if index >= len(wantPK) || pkColumns[index].Column != wantPK[index] {
+			primaryKeyMatches = false
+			break
+		}
+	}
+	if primaryKeyMatches {
+		return nil
+	}
+	if err := db.Exec("ALTER TABLE quota_buckets DROP CONSTRAINT IF EXISTS quota_buckets_pkey").Error; err != nil {
+		return err
+	}
+	return db.Exec("ALTER TABLE quota_buckets ADD PRIMARY KEY (key_id, scope, bucket, attributed_user_id)").Error
+}
+
+// backfillQuotaBucketAttribution preserves legacy API-key counters as
+// unattributed canonical rows. They cannot be safely assigned to the current
+// owner because ownership may have changed since the usage was recorded.
+func backfillQuotaBucketAttribution(db *gorm.DB) error {
+	return db.Model(&QuotaBucket{}).
+		Where("attributed_user_id IS NULL OR attributed_user_id = ''").
+		Update("attributed_user_id", gorm.Expr("CASE WHEN key_id LIKE 'user:%' THEN SUBSTR(key_id, 6) ELSE ? END", unattributedQuotaUserID)).Error
 }
 
 // Close releases the primary and analytics database pools owned by the store.
@@ -869,6 +977,13 @@ func schemaModels() []any {
 // snapshot (store_schema_ledger.go) reuses this function on a scratch database
 // to derive its expectations.
 func migrateSchemaObjects(db *gorm.DB, driver string) error {
+	// Upgrade the pre-attribution quota table before GORM inspects the model.
+	// This is part of the frozen legacy flow as well as the schema reference
+	// builder, so old databases are upgraded safely while fresh databases are
+	// created directly from the current model shape.
+	if err := ensureQuotaBucketAttributionSchema(db, driver); err != nil {
+		return err
+	}
 	if err := db.AutoMigrate(schemaModels()...); err != nil {
 		return err
 	}

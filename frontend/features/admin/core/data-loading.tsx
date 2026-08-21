@@ -195,6 +195,12 @@ export function loadPlanForView(user: AdminUser, view: ViewKey): LoadPlan {
       addResourceDependency(plan, "security-policies");
       break;
     case "quota-policies":
+      plan.overview = true;
+      plan.keys = true;
+      plan.users = true;
+      addResourceDependency(plan, "teams");
+      addResourceDependency(plan, view);
+      break;
     case "cost-centers":
     case "approval-flows":
     case "reports":
