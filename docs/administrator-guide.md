@@ -56,6 +56,8 @@ When issuing an API Key, select the actual user in **Owner User**. The issuer re
 
 Each new usage record snapshots the attributed user, so later ownership changes or Key deletion do not rewrite that recorded history. Records created before this field existed use only attribution that can be proven from their immutable usage record or request history; otherwise they remain `unknown`. Legacy quota buckets are retained as unattributed canonical history and are never silently assigned to the current owner during upgrade. The individual ranking shows distinct used Keys and currently owned non-revoked Keys separately.
 
+The per-Key **Usage** page uses the saved Key ID as an exact boundary for trends, model and error breakdowns, and request details. Rotation links are informational and do not combine predecessor and successor usage. Its current day and month quota cards use UTC buckets and the same effective limit resolution as gateway admission. Platform administrators additionally receive Provider and Resource performance breakdowns; other roles retain the existing scoped request-detail visibility, and Provider cost remains restricted to platform administrators.
+
 ## Read-only Cost Access for Local Agents
 
 Do not give an automation agent an administrator session or a model-invocation API Key merely to collect usage. Create a dedicated `tha_` analytics credential, restrict it to one Project whenever possible, and revoke it independently. The [Agent Token Cost API guide](agent-token-cost-api.md) documents credential lifecycle, filters, aggregation, JSON/CSV schemas, snapshot pagination, incremental watermarks, audit behavior, and query limits.

@@ -118,6 +118,7 @@ func (s *Server) routes() {
 		methodRoute{Method: http.MethodPatch, Handler: s.handleAdminAPIKeyPatch},
 		methodRoute{Method: http.MethodDelete, Handler: s.handleAdminAPIKeyDelete},
 	)
+	s.registerSingleMethodRoute(http.MethodGet, "/api/admin/api-keys/{key_id}/usage", s.handleAdminAPIKeyUsageGet, s.adminAPIKeyMethodNotAllowed(http.MethodGet))
 	s.registerSingleMethodRoute(http.MethodPost, "/api/admin/api-keys/{key_id}/rotate", s.handleAdminAPIKeyRotatePost, s.adminAPIKeyMethodNotAllowed(http.MethodPost))
 	s.mux.HandleFunc("/api/admin/api-keys/", s.handleAdminAPIKeyItem)
 	s.registerAdminAnalyticsCredentialRoutes()

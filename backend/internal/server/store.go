@@ -204,6 +204,7 @@ type Store interface {
 	GetImageAsset(id string) (ImageAsset, bool)
 	ListUsageRecords() []UsageRecord
 	QueryUsageSummary(ctx context.Context, query UsageSummaryQuery) (UsageSummary, error)
+	QueryAPIKeyUsage(ctx context.Context, query APIKeyUsageQuery) (APIKeyUsage, error)
 	CreateAnalyticsCredential(credential AnalyticsCredential, rawSecret string) (AnalyticsCredential, string, error)
 	ListAnalyticsCredentials() []AnalyticsCredential
 	RevokeAnalyticsCredential(id string) (AnalyticsCredential, error)
