@@ -215,8 +215,15 @@ func seedDefaultModelCatalog(store Store, catalogFile string) error {
 		if existing, ok := existingByName[model.Name]; ok {
 			model.InputPriceUSDPer1M = existing.InputPriceUSDPer1M
 			model.CacheReadPriceUSDPer1M = existing.CacheReadPriceUSDPer1M
+			model.CacheWritePriceUSDPer1M = existing.CacheWritePriceUSDPer1M
+			model.CacheWritePriceConfigured = existing.CacheWritePriceConfigured
+			model.CacheWrite5mPriceUSDPer1M = existing.CacheWrite5mPriceUSDPer1M
+			model.CacheWrite5mPriceConfigured = existing.CacheWrite5mPriceConfigured
+			model.CacheWrite1hPriceUSDPer1M = existing.CacheWrite1hPriceUSDPer1M
+			model.CacheWrite1hPriceConfigured = existing.CacheWrite1hPriceConfigured
 			model.OutputPriceUSDPer1M = existing.OutputPriceUSDPer1M
 			model.EmbeddingPriceUSDPer1M = existing.EmbeddingPriceUSDPer1M
+			model.PricingPeriods = append([]ModelPricingPeriod(nil), existing.PricingPeriods...)
 		}
 		if _, err := store.CreateModelWithRoutes(model, nil); err != nil {
 			return fmt.Errorf("seed catalog model %q: %w", model.Name, err)

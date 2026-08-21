@@ -83,6 +83,7 @@ type Config struct {
 	UpstreamStreamIdleTimeoutSeconds int
 	InFlightLeaseTTLSeconds          int
 	ClusterLockTTLSeconds            int
+	BillingRedisURL                  string
 	GracefulShutdownSeconds          int
 	DBMaxOpenConns                   int
 	DBMaxIdleConns                   int
@@ -158,6 +159,7 @@ func ConfigFromEnv() Config {
 		UpstreamStreamIdleTimeoutSeconds: getenvInt("TOKENHUB_UPSTREAM_STREAM_IDLE_TIMEOUT_SECONDS", defaultUpstreamStreamIdleTimeoutSeconds),
 		InFlightLeaseTTLSeconds:          getenvInt("TOKENHUB_IN_FLIGHT_LEASE_TTL_SECONDS", 300),
 		ClusterLockTTLSeconds:            getenvInt("TOKENHUB_CLUSTER_LOCK_TTL_SECONDS", 180),
+		BillingRedisURL:                  getenv("TOKENHUB_BILLING_REDIS_URL", ""),
 		GracefulShutdownSeconds:          getenvInt("TOKENHUB_GRACEFUL_SHUTDOWN_SECONDS", 150),
 		DBMaxOpenConns:                   getenvInt("TOKENHUB_DB_MAX_OPEN_CONNS", 25),
 		DBMaxIdleConns:                   getenvInt("TOKENHUB_DB_MAX_IDLE_CONNS", 5),

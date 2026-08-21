@@ -390,6 +390,7 @@ Options: `--rebuild`, `--reset` to drop the local database, `--backend-port N`, 
 | `TOKENHUB_NGINX_CLIENT_MAX_BODY_SIZE` | `32m` | Only the bundled multi-instance nginx load balancer reads this. It is nginx size syntax (`32m`, `512k`), not the backend byte format, and must be at least as large as `TOKENHUB_MAX_MULTIMODAL_REQUEST_BYTES` |
 | `TOKENHUB_IN_FLIGHT_LEASE_TTL_SECONDS` | `300` | Expiry and renewal basis for cluster-wide concurrency leases |
 | `TOKENHUB_CLUSTER_LOCK_TTL_SECONDS` | `180` | Expiry and renewal basis for cluster coordination locks |
+| `TOKENHUB_BILLING_REDIS_URL` | empty | Optional Redis URL for high-concurrency billing admission. When set, Redis handles minute RPM/TPM reservations and API Key/user concurrency leases; the database remains the durable billing ledger |
 | `TOKENHUB_GRACEFUL_SHUTDOWN_SECONDS` | `150` | Maximum time to drain in-flight requests during shutdown |
 | `TOKENHUB_STOP_GRACE_PERIOD` | `180s` | Compose grace period before Docker force-stops the backend |
 | `TOKENHUB_CACHE_AFFINITY_ENABLED` | `false` | For Chat Completions, Anthropic Messages, and Responses, pin a session to one upstream account so the provider's prompt cache keeps hitting. Off by default because it changes routing behaviour |
@@ -414,6 +415,14 @@ Options: `--rebuild`, `--reset` to drop the local database, `--backend-port N`, 
 | `TOKENHUB_DB_MAX_IDLE_CONNS` | `5` | Maximum idle database connections (PostgreSQL only) |
 | `TOKENHUB_DB_CONN_MAX_LIFETIME_MINUTES` | `30` | Maximum connection lifetime in minutes (PostgreSQL only) |
 | `TOKENHUB_API` | empty | Target Admin API for the `tokenhub-migrate` CLI. Read only by that CLI, never by the running server; overridden by `--to` |
+
+To run the optional Redis billing component with Compose, add the overlay file to the normal command:
+
+```bash
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.redis.yml up -d --remove-orphans
+```
 
 Provider egress can also be changed without restarting under **System Settings → Base Settings → Provider Egress Mode**. `Inherit Environment Proxy` (the upgrade default) reads `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` captured at process startup; `Direct Connection` bypasses them; `Use Global Proxy` applies one HTTP or HTTPS forward proxy to every Provider upstream channel, including inference, streaming, images, model discovery, provider catalog refresh, quota calls, and Provider credential refresh. Identity login, notifications, tracing, and version updates are not routed through this setting.
 

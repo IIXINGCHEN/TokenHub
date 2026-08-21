@@ -77,6 +77,7 @@ func TestConfigParsesClusterCoordinationSettings(t *testing.T) {
 	t.Setenv("TOKENHUB_CORS_ALLOWED_ORIGINS", "https://console.example.com,https://admin.example.com")
 	t.Setenv("TOKENHUB_IN_FLIGHT_LEASE_TTL_SECONDS", "45")
 	t.Setenv("TOKENHUB_CLUSTER_LOCK_TTL_SECONDS", "60")
+	t.Setenv("TOKENHUB_BILLING_REDIS_URL", "redis://redis.example.test:6379/2")
 	t.Setenv("TOKENHUB_GRACEFUL_SHUTDOWN_SECONDS", "90")
 
 	config := ConfigFromEnv()
@@ -85,6 +86,9 @@ func TestConfigParsesClusterCoordinationSettings(t *testing.T) {
 	}
 	if config.InFlightLeaseTTLSeconds != 45 || config.ClusterLockTTLSeconds != 60 || config.GracefulShutdownSeconds != 90 {
 		t.Fatalf("unexpected cluster settings: %+v", config)
+	}
+	if config.BillingRedisURL != "redis://redis.example.test:6379/2" {
+		t.Fatalf("unexpected Redis billing URL: %+v", config)
 	}
 }
 

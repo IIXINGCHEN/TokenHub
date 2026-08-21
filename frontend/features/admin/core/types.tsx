@@ -346,7 +346,14 @@ export type ProviderCatalogModel = {
   max_output_tokens?: number;
   input_price_usd_per_1m?: number;
   cache_read_price_usd_per_1m?: number;
+  cache_write_price_usd_per_1m?: number;
+  cache_write_price_configured?: boolean;
+  cache_write_5m_price_usd_per_1m?: number;
+  cache_write_5m_price_configured?: boolean;
+  cache_write_1h_price_usd_per_1m?: number;
+  cache_write_1h_price_configured?: boolean;
   output_price_usd_per_1m?: number;
+  pricing_periods?: ModelPricingPeriod[];
   input_modalities?: string[];
   output_modalities?: string[];
   capabilities?: string[];
@@ -381,7 +388,14 @@ export type ProviderModel = {
   context_window?: number;
   input_price_usd_per_1m?: number;
   cache_read_price_usd_per_1m?: number;
+  cache_write_price_usd_per_1m?: number;
+  cache_write_price_configured?: boolean;
+  cache_write_5m_price_usd_per_1m?: number;
+  cache_write_5m_price_configured?: boolean;
+  cache_write_1h_price_usd_per_1m?: number;
+  cache_write_1h_price_configured?: boolean;
   output_price_usd_per_1m?: number;
+  pricing_periods?: ModelPricingPeriod[];
   input_modalities?: string[];
   output_modalities?: string[];
   capabilities?: string[];
@@ -423,6 +437,17 @@ export type ProviderResource = {
   updated_at?: string;
 };
 
+export type ModelPricingPeriod = {
+  name?: string;
+  timezone?: string;
+  start_time?: string;
+  end_time?: string;
+  effective_from?: string;
+  effective_until?: string;
+  input_price_usd_per_1m?: number;
+  output_price_usd_per_1m?: number;
+};
+
 export type Model = {
   id: string;
   name: string;
@@ -433,8 +458,15 @@ export type Model = {
   status: string;
   input_price_usd_per_1m?: number;
   cache_read_price_usd_per_1m?: number;
+  cache_write_price_usd_per_1m?: number;
+  cache_write_price_configured?: boolean;
+  cache_write_5m_price_usd_per_1m?: number;
+  cache_write_5m_price_configured?: boolean;
+  cache_write_1h_price_usd_per_1m?: number;
+  cache_write_1h_price_configured?: boolean;
   output_price_usd_per_1m?: number;
   embedding_price_usd_per_1m?: number;
+  pricing_periods?: ModelPricingPeriod[];
   input_modalities?: string[];
   output_modalities?: string[];
   capabilities?: string[];
@@ -712,6 +744,10 @@ export type RequestLog = {
   accepted_prediction_tokens?: number;
   rejected_prediction_tokens?: number;
   total_tokens?: number;
+  input_cost_usd?: number;
+  cache_read_cost_usd?: number;
+  cache_write_cost_usd?: number;
+  output_cost_usd?: number;
   estimated_cost_usd?: number;
   provider_cost_usd?: number;
   usage_record_count?: number;
@@ -756,6 +792,10 @@ export type UsageRecord = {
   accepted_prediction_tokens?: number;
   rejected_prediction_tokens?: number;
   total_tokens: number;
+  input_cost_usd?: number;
+  cache_read_cost_usd?: number;
+  cache_write_cost_usd?: number;
+  output_cost_usd?: number;
   estimated_cost_usd: number;
   provider_cost_usd?: number;
   created_at: string;

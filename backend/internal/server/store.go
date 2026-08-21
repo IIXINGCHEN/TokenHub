@@ -309,6 +309,7 @@ type GormStore struct {
 	inFlightLeaseTTL     time.Duration
 	clusterLockTTL       time.Duration
 	imageCapabilityRetry time.Duration
+	billingRedis         *redisBillingCoordinator
 }
 type leaseHeartbeat struct {
 	ctx    context.Context

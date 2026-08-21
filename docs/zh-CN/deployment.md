@@ -390,6 +390,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_NGINX_CLIENT_MAX_BODY_SIZE` | `32m` | 仅内置的多实例 nginx 负载均衡器读取该值。它使用 nginx 尺寸语法（`32m`、`512k`），不是后端的字节格式，且应不小于 `TOKENHUB_MAX_MULTIMODAL_REQUEST_BYTES` |
 | `TOKENHUB_IN_FLIGHT_LEASE_TTL_SECONDS` | `300` | 集群并发租约的过期时间及续租周期基准 |
 | `TOKENHUB_CLUSTER_LOCK_TTL_SECONDS` | `180` | 集群协调锁的过期时间及续租周期基准 |
+| `TOKENHUB_BILLING_REDIS_URL` | 空 | 可选 Redis URL，用于高并发计费准入。设置后，Redis 处理每分钟 RPM/TPM 预留以及 API Key/用户并发租约；数据库仍是持久计费账本 |
 | `TOKENHUB_GRACEFUL_SHUTDOWN_SECONDS` | `150` | 停机时等待在途请求完成的最长秒数 |
 | `TOKENHUB_STOP_GRACE_PERIOD` | `180s` | Docker 强制停止后端前的 Compose 宽限时间 |
 | `TOKENHUB_CACHE_AFFINITY_ENABLED` | `false` | 对 Chat Completions、Anthropic Messages 和 Responses，将同一会话固定到同一个上游账号，使上游 prompt cache 持续命中。默认关闭，因为它会改变路由行为 |
@@ -409,8 +410,16 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_RESPONSE_JOB_TIMEOUT_SECONDS` | `300` | 单个后台 Responses 任务的执行超时 |
 | `TOKENHUB_RESPONSE_LEASE_TTL_SECONDS` | `30` | 多实例间隔离后台 Responses Worker 的租约时长 |
 | `TOKENHUB_RESPONSE_RESULT_TTL_SECONDS` | `3600` | 任务完成后加密请求与结果载荷的保留时长 |
-| `TOKENHUB_RESPONSE_MAX_QUEUED_JOBS` | `1000` | 单个部署接受的排队中与运行中后台 Responses 任务总上限 |
+| `TOKENHUB_RESPONSE_MAX_QUEUED_JOBS` | `1000` | 单个部署接受的后台 Responses 排队和运行任务上限 |
 | `TOKENHUB_API` | 空 | `tokenhub-migrate` CLI 的目标 Admin API 地址。仅由该 CLI 读取，后端服务不会读取；可被 `--to` 覆盖 |
+
+如需通过 Compose 运行可选 Redis 计费组件，请在常规命令中追加 overlay 文件：
+
+```bash
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.redis.yml up -d --remove-orphans
+```
 
 无需重启也可以在「系统设置 → 基础设置 → Provider 出口模式」切换出口。升级默认使用「继承环境变量代理」，读取进程启动时捕获的 `HTTP_PROXY`、`HTTPS_PROXY` 和 `NO_PROXY`；「直接连接」忽略这些变量；「使用统一代理」把一个 HTTP 或 HTTPS forward proxy 用于全部 Provider 上游通道，包括推理、流式、图片、模型发现、Provider catalog 刷新、额度查询和 Provider 凭据刷新。身份登录、通知、Tracing 和版本更新不受这项设置影响。
 
