@@ -288,6 +288,44 @@ sqlite_database_file_path() {
   printf '%s' "$database_path"
 }
 
+sqlite_secret_key_file_is_safe() {
+  local key_path="$1"
+  local permissions
+  local key
+
+  if permissions="$(stat -c '%a' -- "$key_path" 2>/dev/null)"; then
+    :
+  elif permissions="$(stat -f '%Lp' "$key_path" 2>/dev/null)"; then
+    :
+  else
+    return 1
+  fi
+  case "$permissions" in
+    *[!0-7]*)
+      return 1
+      ;;
+    *00)
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  if [ ! -r "$key_path" ]; then
+    return 1
+  fi
+  if ! key="$(<"$key_path")"; then
+    return 1
+  fi
+  key="$(trim_whitespace "$key")"
+  case "$key" in
+    dev_tokenhub_secret_key|change-me-tokenhub-secret-key)
+      return 1
+      ;;
+  esac
+  [ "$(byte_length "$key")" -ge 32 ]
+}
+
 # A placeholder root key is safe only when the backend can create a sidecar for
 # a new database or reuse the sidecar already paired with an existing database.
 sqlite_root_key_can_be_unset() {
@@ -296,6 +334,8 @@ sqlite_root_key_can_be_unset() {
   local volume_names
   local volume_mountpoint
   local backend_id
+  local database_file
+  local key_file
 
   if ! database_path="$(sqlite_database_file_path "$1")"; then
     return 1
@@ -326,17 +366,53 @@ sqlite_root_key_can_be_unset() {
 
   if volume_mountpoint="$("$DOCKER_BIN" volume inspect --format '{{.Mountpoint}}' tokenhub-data 2>/dev/null)" &&
     [ -d "$volume_mountpoint" ]; then
-    if [ ! -s "$volume_mountpoint/$relative_path" ] ||
-      [ -s "$volume_mountpoint/$relative_path.secret-key" ]; then
-      return 0
+    database_file="$volume_mountpoint/$relative_path"
+    key_file="$database_file.secret-key"
+    if [ -e "$key_file" ] || [ -L "$key_file" ]; then
+      if sqlite_secret_key_file_is_safe "$key_file"; then
+        return 0
+      fi
+    else
+      if [ -L "$database_file" ]; then
+        return 1
+      fi
+      if [ ! -e "$database_file" ] || [ ! -s "$database_file" ]; then
+        return 0
+      fi
     fi
-    return 1
   fi
 
   if backend_id="$("${compose[@]}" ps -a -q tokenhub-backend 2>/dev/null)" &&
     [ -n "$backend_id" ]; then
-    if "$DOCKER_BIN" exec "$backend_id" test ! -s "$database_path" >/dev/null 2>&1 ||
-      "$DOCKER_BIN" exec "$backend_id" test -s "$database_path.secret-key" >/dev/null 2>&1; then
+    if "$DOCKER_BIN" exec "$backend_id" node -e '
+const fs = require("node:fs");
+const databasePath = process.argv[1];
+const keyPath = databasePath + ".secret-key";
+let keyInfo;
+try {
+  keyInfo = fs.statSync(keyPath);
+} catch (error) {
+  if (error.code !== "ENOENT") process.exit(1);
+}
+if (keyInfo) {
+  if ((keyInfo.mode & 0o77) !== 0) process.exit(1);
+  let key;
+  try {
+    key = fs.readFileSync(keyPath, "utf8").replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
+  } catch {
+    process.exit(1);
+  }
+  const blocked = new Set(["dev_tokenhub_secret_key", "change-me-tokenhub-secret-key"]);
+  process.exit(Buffer.byteLength(key) >= 32 && !blocked.has(key) ? 0 : 1);
+}
+let databaseInfo;
+try {
+  databaseInfo = fs.lstatSync(databasePath);
+} catch (error) {
+  if (error.code !== "ENOENT") process.exit(1);
+}
+process.exit(!databaseInfo || (!databaseInfo.isSymbolicLink() && databaseInfo.size === 0) ? 0 : 1);
+' "$database_path" >/dev/null 2>&1; then
       return 0
     fi
   fi

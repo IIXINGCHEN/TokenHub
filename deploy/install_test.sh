@@ -50,6 +50,16 @@ case "$*" in
     fi
     printf '%s\n' "$FAKE_DATA_VOLUME_MOUNTPOINT"
     ;;
+  "exec "*)
+    shift 2
+    if [ "$#" -ne 4 ] || [ "$1" != "node" ] || [ "$2" != "-e" ] ||
+      [ -z "${FAKE_CONTAINER_DATA_DIR:-}" ]; then
+      exit 99
+    fi
+    container_database_path="$4"
+    host_database_path="$FAKE_CONTAINER_DATA_DIR/${container_database_path#/app/data/}"
+    exec node -e "$3" "$host_database_path"
+    ;;
   *" pull")
     exit "${FAKE_PULL_STATUS:-0}"
     ;;
@@ -124,6 +134,7 @@ run_install() {
     FAKE_BACKEND_STARTED_AT="${FAKE_BACKEND_STARTED_AT:-2026-07-22T00:00:00Z}" \
     FAKE_DATA_VOLUME_EXISTS="${FAKE_DATA_VOLUME_EXISTS:-false}" \
     FAKE_DATA_VOLUME_MOUNTPOINT="${FAKE_DATA_VOLUME_MOUNTPOINT:-}" \
+    FAKE_CONTAINER_DATA_DIR="${FAKE_CONTAINER_DATA_DIR:-}" \
     "$INSTALL_SCRIPT" --env-file "$ENV_FILE" "$@"
 }
 
@@ -233,10 +244,56 @@ if [ "$status" -ne 1 ]; then
 fi
 assert_contains "$output" "TOKENHUB_SECRET_KEY must not use a default placeholder value"
 
-printf '%064d\n' 0 >"$DATA_VOLUME_DIR/tokenhub.db.secret-key"
-chmod 600 "$DATA_VOLUME_DIR/tokenhub.db.secret-key"
+sidecar_path="$DATA_VOLUME_DIR/tokenhub.db.secret-key"
+for sidecar_case in empty short placeholder group_readable; do
+  case "$sidecar_case" in
+    empty)
+      printf ' \t\n' >"$sidecar_path"
+      chmod 600 "$sidecar_path"
+      ;;
+    short)
+      printf 'short-key\n' >"$sidecar_path"
+      chmod 600 "$sidecar_path"
+      ;;
+    placeholder)
+      printf 'change-me-tokenhub-secret-key\n' >"$sidecar_path"
+      chmod 600 "$sidecar_path"
+      ;;
+    group_readable)
+      printf '%064d\n' 0 >"$sidecar_path"
+      chmod 640 "$sidecar_path"
+      ;;
+  esac
+  : >"$CALL_LOG"
+  set +e
+  output="$(FAKE_DATA_VOLUME_EXISTS=true FAKE_DATA_VOLUME_MOUNTPOINT="$DATA_VOLUME_DIR" run_install --check-only 2>&1)"
+  status=$?
+  set -e
+  if [ "$status" -ne 1 ]; then
+    printf 'expected %s SQLite root-key sidecar to exit 1, got %d\n' "$sidecar_case" "$status" >&2
+    exit 1
+  fi
+  assert_contains "$output" "TOKENHUB_SECRET_KEY must not use a default placeholder value"
+done
+
+printf '%064d\n' 0 >"$sidecar_path"
+chmod 600 "$sidecar_path"
 : >"$CALL_LOG"
 output="$(FAKE_DATA_VOLUME_EXISTS=true FAKE_DATA_VOLUME_MOUNTPOINT="$DATA_VOLUME_DIR" run_install --check-only 2>&1)"
+assert_contains "$output" "deployment configuration is valid for prod"
+
+chmod 640 "$sidecar_path"
+: >"$CALL_LOG"
+set +e
+output="$(FAKE_DATA_VOLUME_EXISTS=true FAKE_DATA_VOLUME_MOUNTPOINT="$TEST_DIR/unavailable-volume" FAKE_BACKEND_ID_BEFORE=backend-existing FAKE_CONTAINER_DATA_DIR="$DATA_VOLUME_DIR" run_install --check-only 2>&1)"
+status=$?
+set -e
+if [ "$status" -ne 1 ]; then
+  printf 'expected container-visible unsafe SQLite root-key sidecar to exit 1, got %d\n' "$status" >&2
+  exit 1
+fi
+chmod 600 "$sidecar_path"
+output="$(FAKE_DATA_VOLUME_EXISTS=true FAKE_DATA_VOLUME_MOUNTPOINT="$TEST_DIR/unavailable-volume" FAKE_BACKEND_ID_BEFORE=backend-existing FAKE_CONTAINER_DATA_DIR="$DATA_VOLUME_DIR" run_install --check-only 2>&1)"
 assert_contains "$output" "deployment configuration is valid for prod"
 
 optional_placeholder_environment=$(cat <<'EOF'
