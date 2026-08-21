@@ -298,59 +298,66 @@ export function EntityTable<T>({
           </tr>
         </thead>
         <tbody>
-          {items.map((item) => (
-            <tr
-              className={`${onRowClick ? "clickable-row" : ""} ${selectedRowID === rowID(item) ? "selected-row" : ""}`}
-              key={rowID(item)}
-              onClick={onRowClick ? () => onRowClick(item) : undefined}
-            >
-              {config.columns.map((column) => (
-                <td key={column.key}>
-                  {config.view === "api-keys" && column.key === "status" ? (
-                    <APIKeyStatusSwitch
-                      item={item as APIKey}
-                      onToggle={(nextStatus) => onAction(apiKeyStatusAction(nextStatus) as unknown as ResourceAction<T>, item)}
-                    />
-                  ) : column.render ? (
-                    translatedCell(column.render(item, data))
-                  ) : (
-                    displayCellValue(readPath(item, column.key))
-                  )}
-                </td>
-              ))}
-              <td>
-                <div className="row-actions" onClick={(event) => event.stopPropagation()}>
-                  {config.view === "api-keys" && apiBaseURL ? <APIKeyDownloadMenu baseURL={apiBaseURL} data={data} item={item as APIKey} /> : null}
-                  {onRowClick && rowOpenLabel ? (
-                    <button className="text-button" onClick={() => onRowClick(item)} type="button">
-                      {tx(rowOpenLabel)}
-                    </button>
-                  ) : null}
-                  {(config.actions ?? [])
-                    .filter((action) => action.visible?.(item) ?? true)
-                    .map((action) => action.href ? (
-                      <Link className="text-button row-action-link" href={action.href(item)} key={action.label} title={tx(action.title ?? action.label)}>
-                        {tx(action.label)}
-                      </Link>
+          {items.map((item) => {
+            const canUpdate = config.canUpdate?.(item, currentUser, data) ?? true;
+            return (
+              <tr
+                className={`${onRowClick ? "clickable-row" : ""} ${selectedRowID === rowID(item) ? "selected-row" : ""}`}
+                key={rowID(item)}
+                onClick={onRowClick ? () => onRowClick(item) : undefined}
+              >
+                {config.columns.map((column) => (
+                  <td key={column.key}>
+                    {config.view === "api-keys" && column.key === "status" ? (
+                      canUpdate ? (
+                        <APIKeyStatusSwitch
+                          item={item as APIKey}
+                          onToggle={(nextStatus) => onAction(apiKeyStatusAction(nextStatus) as unknown as ResourceAction<T>, item)}
+                        />
+                      ) : (
+                        <StatusPill status={(item as APIKey).status} />
+                      )
+                    ) : column.render ? (
+                      translatedCell(column.render(item, data))
                     ) : (
-                      <button className="text-button" key={action.label} onClick={() => onAction(action, item)} title={tx(action.title ?? action.label)} type="button">
-                        {tx(action.label)}
+                      displayCellValue(readPath(item, column.key))
+                    )}
+                  </td>
+                ))}
+                <td>
+                  <div className="row-actions" onClick={(event) => event.stopPropagation()}>
+                    {config.view === "api-keys" && apiBaseURL ? <APIKeyDownloadMenu baseURL={apiBaseURL} data={data} item={item as APIKey} /> : null}
+                    {onRowClick && rowOpenLabel ? (
+                      <button className="text-button" onClick={() => onRowClick(item)} type="button">
+                        {tx(rowOpenLabel)}
                       </button>
-                    ))}
-                  {config.update ? (
-                    <button className="text-button" onClick={() => onEdit(item)} type="button">
-                      {tx("编辑")}
-                    </button>
-                  ) : null}
-                  {config.remove && (config.canRemove?.(item, currentUser) ?? true) ? (
-                    <button className="danger-button" onClick={() => onDelete(item)} type="button" title={tx("删除")}>
-                      <Trash2 size={15} />
-                    </button>
-                  ) : null}
-                </div>
-              </td>
-            </tr>
-          ))}
+                    ) : null}
+                    {(config.actions ?? [])
+                      .filter((action) => action.visible?.(item, currentUser, data) ?? true)
+                      .map((action) => action.href ? (
+                        <Link className="text-button row-action-link" href={action.href(item)} key={action.label} title={tx(action.title ?? action.label)}>
+                          {tx(action.label)}
+                        </Link>
+                      ) : (
+                        <button className="text-button" key={action.label} onClick={() => onAction(action, item)} title={tx(action.title ?? action.label)} type="button">
+                          {tx(action.label)}
+                        </button>
+                      ))}
+                    {config.update && canUpdate ? (
+                      <button className="text-button" onClick={() => onEdit(item)} type="button">
+                        {tx("编辑")}
+                      </button>
+                    ) : null}
+                    {config.remove && (config.canRemove?.(item, currentUser, data) ?? true) ? (
+                      <button className="danger-button" onClick={() => onDelete(item)} type="button" title={tx("删除")}>
+                        <Trash2 size={15} />
+                      </button>
+                    ) : null}
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

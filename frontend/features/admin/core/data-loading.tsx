@@ -174,9 +174,7 @@ export function loadPlanForView(user: AdminUser, view: ViewKey): LoadPlan {
       plan.overview = true;
       plan.keys = true;
       plan.users = can("users") || appRole(user.role) === "team_leader";
-      if (appRole(user.role) !== "user") {
-        addResourceDependency(plan, "teams");
-      }
+      addResourceDependency(plan, "teams");
       addResourceDependency(plan, "project-members");
       break;
     case "teams":

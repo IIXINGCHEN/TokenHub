@@ -1055,7 +1055,8 @@ export type ResourceConfig<T> = {
   create?: (ctx: ApiContext, values: Record<string, string>, data?: AppData) => Promise<void>;
   update?: (ctx: ApiContext, item: T, values: Record<string, string>) => Promise<void>;
   remove?: (ctx: ApiContext, item: T) => Promise<void>;
-  canRemove?: (item: T, currentUser: AdminUser | null) => boolean;
+  canUpdate?: (item: T, currentUser: AdminUser | null, data: AppData) => boolean;
+  canRemove?: (item: T, currentUser: AdminUser | null, data: AppData) => boolean;
   actions?: ResourceAction<T>[];
   toolbarActions?: ToolbarAction[];
   toForm?: (item: T) => Record<string, string>;
@@ -1064,7 +1065,7 @@ export type ResourceConfig<T> = {
 export type ResourceAction<T> = {
   label: string;
   title?: string;
-  visible?: (item: T) => boolean;
+  visible?: (item: T, currentUser: AdminUser | null, data: AppData) => boolean;
   href?: (item: T) => string;
   navigate?: (item: T) => ViewKey;
   run?: (ctx: ApiContext, item: T) => Promise<void>;
