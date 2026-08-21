@@ -123,6 +123,12 @@ func (s *GormStore) admitCallTransaction(ctx context.Context, tx *gorm.DB, key A
 		}
 		userMinuteCounter, err = s.consumeAPIKeyMinuteRequest(tx, userQuotaID, userPolicy.Limits, userMinuteScopes, tokenReservation, now, userPolicy.UserID)
 		if err != nil {
+			httpErr := AsHTTPError(err)
+			if httpErr.Code == "api_key_rpm_exceeded" || httpErr.Code == "api_key_tpm_exceeded" {
+				quotaErr := scopedHTTPError(ErrQuotaExceeded, "user")
+				quotaErr.Headers = httpErr.Headers
+				return admission, quotaErr
+			}
 			return admission, err
 		}
 	}
@@ -168,7 +174,7 @@ func (s *GormStore) admitCallTransaction(ctx context.Context, tx *gorm.DB, key A
 		confirmedFor, err := s.acquireInFlightLease(tx, "user", userPolicy.UserID, userPolicy.Limits.MaxConcurrency, userConcurrencyLeaseID(requestID))
 		if err != nil {
 			if AsHTTPError(err).Code == ErrRateLimitExceeded.Code {
-				return admission, scopedHTTPError(ErrRateLimitExceeded, "user")
+				return admission, quotaExceededError("user")
 			}
 			return admission, err
 		}

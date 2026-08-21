@@ -148,6 +148,33 @@ func TestUserQuotaRateLimitHeadersUseStrictestMinuteScopes(t *testing.T) {
 	}
 }
 
+func TestUserMinuteQuotaRejectionsUseGenericQuotaError(t *testing.T) {
+	tests := []struct {
+		name             string
+		limits           map[string]any
+		tokenReservation int64
+	}{
+		{name: "RPM", limits: map[string]any{"rate_limit_rpm": int64(1)}},
+		{name: "TPM", limits: map[string]any{"token_limit_tpm": int64(1)}, tokenReservation: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store, project, key, _ := setupUserQuotaTest(t, test.limits)
+			call, err := store.StartCall(context.Background(), project, key, "user-quota-model", test.tokenReservation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store.FinishCall(call, RouteSelection{}, Usage{TotalTokens: test.tokenReservation}, http.StatusOK, "", "127.0.0.1", "user-quota-test")
+
+			_, err = store.StartCall(context.Background(), project, key, "user-quota-model", test.tokenReservation)
+			httpErr := AsHTTPError(err)
+			if httpErr.Status != http.StatusTooManyRequests || httpErr.Code != "quota_exceeded" || !reflect.DeepEqual(httpErr.Details, map[string]string{"scope": "user"}) {
+				t.Fatalf("user %s rejection = %+v, want 429 quota_exceeded with user scope", test.name, httpErr)
+			}
+		})
+	}
+}
+
 func TestUserQuotaSettlementIsIdempotent(t *testing.T) {
 	store, project, key, _ := setupUserQuotaTest(t, map[string]any{"daily_tokens": 10})
 	call, err := store.StartCall(context.Background(), project, key, "user-quota-model", 5)
@@ -358,7 +385,7 @@ func TestQuotaSettlementSurvivesAPIKeyDeletionDuringCall(t *testing.T) {
 		t.Fatalf("remaining minute quota should admit exact reservation: %v", err)
 	}
 	defer store.FinishCall(exact, RouteSelection{}, Usage{TotalTokens: 2}, http.StatusOK, "", "127.0.0.1", "user-quota-test")
-	if _, err := store.StartCall(context.Background(), project, keyB, "user-quota-model", 1); err == nil || AsHTTPError(err).Code != "api_key_tpm_exceeded" || !reflect.DeepEqual(AsHTTPError(err).Details, map[string]string{"scope": "user"}) {
+	if _, err := store.StartCall(context.Background(), project, keyB, "user-quota-model", 1); err == nil || AsHTTPError(err).Code != "quota_exceeded" || !reflect.DeepEqual(AsHTTPError(err).Details, map[string]string{"scope": "user"}) {
 		t.Fatalf("settled usage should leave no additional minute quota, got %v", err)
 	}
 }
@@ -479,7 +506,7 @@ func TestUserQuotaEnforcesUserAndAPIKeyConcurrencyTogether(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.FinishCall(callB, RouteSelection{}, Usage{}, http.StatusOK, "", "127.0.0.1", "user-quota-test")
-	if _, err := store.StartCall(context.Background(), project, keyC, "user-quota-model", 0); err == nil || AsHTTPError(err).Code != "rate_limit_exceeded" {
+	if _, err := store.StartCall(context.Background(), project, keyC, "user-quota-model", 0); err == nil || AsHTTPError(err).Code != "quota_exceeded" {
 		t.Fatalf("third key should hit the aggregate user concurrency limit, got %v", err)
 	} else if !reflect.DeepEqual(AsHTTPError(err).Details, map[string]string{"scope": "user"}) {
 		t.Fatalf("user concurrency rejection should identify the user scope, got %#v", AsHTTPError(err).Details)
