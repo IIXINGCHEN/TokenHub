@@ -365,7 +365,7 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
       queue(plan.alertDeliveries, "alert-deliveries", "/api/admin/alert-deliveries");
       queue(plan.approvals, "approvals", "/api/admin/approvals");
       queue(plan.sqliteBackups, "sqlite-backups", "/api/admin/sqlite/backups");
-      queue(plan.dailyUsage, "daily-usage", `/api/admin/usage/daily?timezone=${encodeURIComponent(dashboardTimezone())}`);
+      queue(plan.dailyUsage, "daily-usage", "/api/admin/usage/daily");
       queue(plan.breakdown, "breakdown", "/api/admin/usage/breakdown");
       queue(plan.timeseries, "timeseries", "/api/admin/usage/timeseries");
       queue(plan.users, "users", "/api/admin/users");
@@ -1244,8 +1244,4 @@ export function AdminConsole({ defaultBaseURL }: { defaultBaseURL: string }) {
       setLoading(false);
     }
   }
-}
-
-function dashboardTimezone() {
-  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 }

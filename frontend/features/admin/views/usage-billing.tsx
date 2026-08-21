@@ -2,7 +2,7 @@ import { CirclePause, CirclePlay, Pencil, Plus, RefreshCw, TestTube2, X } from "
 import { type FormEvent, useState } from "react";
 import { appRole } from "../core/navigation";
 import { type AdminUser, type ApiContext, type AppData, type BillingConnector, type UsageBreakdownRow } from "../core/types";
-import { apiKeyAuditLabel, costCenterLabel, projectName, providerCostDetailRows, teamLabel, usageMemberLabel } from "../domain/entities";
+import { apiKeyAuditLabel, costCenterLabel, findProvider, projectName, providerCostDetailRows, providerResourceAuditLabel, teamLabel, usageMemberLabel } from "../domain/entities";
 import { compactNumber, formatMoney, formatNumber } from "../domain/formatting";
 import { countWithUnit, displayText, formatTranslationTemplate, languageLocale, tx } from "../i18n/runtime";
 import { adminFetch, readAdminError } from "../resources/payloads";
@@ -70,7 +70,9 @@ export function UsageView({ data, user }: { data: AppData; user: AdminUser }) {
 export function DailyUsageSection({ data, user }: { data: AppData; user: AdminUser }) {
   const daily = data.dailyUsage;
   const summary = daily.summary;
-  const showMemberBreakdown = appRole(user.role) === "team_leader";
+  const role = appRole(user.role);
+  const showMemberBreakdown = role === "team_leader";
+  const showGovernanceBreakdown = role !== "user";
   const tokenDetail = dailyUsageTokenDetail(summary.input_tokens, summary.cached_input_tokens ?? 0, summary.output_tokens);
   const tokenTypeRows = dailyUsageTokenTypeRows(summary);
   return (
@@ -101,6 +103,9 @@ export function DailyUsageSection({ data, user }: { data: AppData; user: AdminUs
         {showMemberBreakdown ? <DailyUsageTable title="今日成员用量" label="成员" rows={daily.breakdown.members ?? []} nameForRow={(row) => usageMemberLabel(data, row.id)} paginationKey="daily-usage-members" /> : null}
         <DailyUsageTable title="今日项目归因" label="项目" rows={daily.breakdown.projects ?? []} nameForRow={(row) => projectName(data, row.id)} paginationKey="daily-usage-projects" />
         <DailyUsageTable title="今日 API Key 用量" label="API Key" rows={daily.breakdown.api_keys ?? []} nameForRow={(row) => apiKeyAuditLabel(data, row.id)} paginationKey="daily-usage-api-keys" />
+        <DailyUsageTable title="今日 Provider 用量" label="Provider" rows={daily.breakdown.providers ?? []} nameForRow={(row) => findProvider(data, row.id)?.name || row.id} paginationKey="daily-usage-providers" />
+        <DailyUsageTable title="今日资源账号用量" label="资源账号" rows={daily.breakdown.provider_resources ?? []} nameForRow={(row) => providerResourceAuditLabel(data, row.id)} paginationKey="daily-usage-provider-resources" />
+        {showGovernanceBreakdown ? <DailyUsageTable title="今日成本中心用量" label="成本中心" rows={daily.breakdown.cost_centers ?? []} nameForRow={(row) => costCenterLabel(data, row.id)} paginationKey="daily-usage-cost-centers" /> : null}
       </div>
     </section>
   );

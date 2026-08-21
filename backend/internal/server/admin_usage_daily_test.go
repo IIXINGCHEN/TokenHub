@@ -123,10 +123,51 @@ func TestUsageDailyUsesRequestedTimezoneWindow(t *testing.T) {
 	}
 }
 
+func TestUsageDailyUsesConfiguredDashboardTimezone(t *testing.T) {
+	store := NewMemoryStore()
+	server := New(store)
+	store.CreateResource("settings", AdminResource{
+		ID:     gatewaySettingsID,
+		Status: StatusActive,
+		Fields: map[string]any{dashboardTimezoneField: "Asia/Shanghai"},
+	})
+
+	daily, err := server.usageDailyForUser(t.Context(), AdminUser{ID: "usr_daily_admin", Role: "admin", Status: StatusActive}, "", time.Date(2026, 3, 6, 2, 30, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := daily["timezone"]; got != "Asia/Shanghai" {
+		t.Fatalf("timezone = %#v, want Asia/Shanghai", got)
+	}
+	if got := daily["window_start"]; got != "2026-03-05T16:00:00Z" {
+		t.Fatalf("window_start = %#v, want dashboard timezone start", got)
+	}
+}
+
 func TestUsageDailyRejectsInvalidTimezone(t *testing.T) {
 	app := New(NewMemoryStore()).Handler()
 	response := doJSON(t, app, http.MethodGet, "/api/admin/usage/daily?timezone=Nope/Nowhere", nil, "")
 	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body, "invalid_usage_timezone") {
 		t.Fatalf("invalid timezone response = %d %s, want invalid_usage_timezone", response.Code, response.Body)
+	}
+}
+
+func TestGatewaySettingsRejectInvalidDashboardTimezone(t *testing.T) {
+	store := NewMemoryStore()
+	setting := AdminResource{
+		ID:     gatewaySettingsID,
+		Name:   "Gateway settings",
+		Status: StatusActive,
+		Fields: map[string]any{
+			dashboardTimezoneField:        "Nope/Nowhere",
+			syntheticDNSEnabledField:      false,
+			syntheticDNSCIDRsField:        defaultSyntheticDNSCIDRs,
+			syntheticDNSAllowPrivateField: false,
+		},
+	}
+	response := doJSON(t, New(store).Handler(), http.MethodPatch, "/api/admin/resources/settings/"+gatewaySettingsID, setting, "")
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body, "invalid_dashboard_timezone") {
+		t.Fatalf("invalid dashboard timezone response = %d %s, want invalid_dashboard_timezone", response.Code, response.Body)
 	}
 }

@@ -8,6 +8,9 @@ import (
 )
 
 func (s *Server) usageDailyForUser(ctx context.Context, user AdminUser, timezone string, now time.Time) (map[string]any, error) {
+	if strings.TrimSpace(timezone) == "" {
+		timezone = s.dashboardTimezone()
+	}
 	location, timezoneName, err := usageDailyLocation(timezone)
 	if err != nil {
 		return nil, err
@@ -48,6 +51,18 @@ func (s *Server) usageDailyForUser(ctx context.Context, user AdminUser, timezone
 		"summary":      usageSummaryPayload(summary),
 		"breakdown":    breakdown,
 	}, nil
+}
+
+func (s *Server) dashboardTimezone() string {
+	for _, setting := range s.store.ListResources("settings") {
+		if setting.ID != gatewaySettingsID || setting.Status != StatusActive {
+			continue
+		}
+		if timezone := strings.TrimSpace(stringField(setting.Fields, dashboardTimezoneField)); timezone != "" {
+			return timezone
+		}
+	}
+	return "UTC"
 }
 
 func usageDailyLocation(timezone string) (*time.Location, string, error) {

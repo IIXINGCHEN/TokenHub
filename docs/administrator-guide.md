@@ -56,6 +56,12 @@ When issuing an API Key, select the actual user in **Owner User**. The issuer re
 
 Each new usage record snapshots the attributed user, so later ownership changes or Key deletion do not rewrite that recorded history. Records created before this field existed use only attribution that can be proven from their immutable usage record or request history; otherwise they remain `unknown`. Legacy quota buckets are retained as unattributed canonical history and are never silently assigned to the current owner during upgrade. The individual ranking shows distinct used Keys and currently owned non-revoked Keys separately.
 
+## Daily Usage Dashboard
+
+Open **Usage** to see the current day's usage above the longer-range executive report. The daily section shows today's tokens, requests, estimated cost, cache reads, and tables for token type, model, project, API Key, Provider, and Provider Resource. Team leaders also see member usage for their team, and governance roles see cost-center attribution.
+
+The day boundary comes from **System Settings > Gateway Base Settings > Dashboard Timezone**. Use an IANA timezone such as `UTC`, `Asia/Shanghai`, or `America/New_York`. TokenHub stores this setting centrally, so all administrators see the same daily window and the dashboard resets at that timezone's local midnight. The usage view refreshes the daily section every 30 seconds while it is open.
+
 ## Read-only Cost Access for Local Agents
 
 Do not give an automation agent an administrator session or a model-invocation API Key merely to collect usage. Create a dedicated `tha_` analytics credential, restrict it to one Project whenever possible, and revoke it independently. The [Agent Token Cost API guide](agent-token-cost-api.md) documents credential lifecycle, filters, aggregation, JSON/CSV schemas, snapshot pagination, incremental watermarks, audit behavior, and query limits.
