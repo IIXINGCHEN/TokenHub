@@ -845,20 +845,14 @@
 }
 
 .text-button {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	height: 26px;
-	border-radius: 7px;
-	padding: 0 7px;
-	border: 0;
-	background: #f4f4f5;
-	color: #303035;
-	cursor: pointer;
-	font-size: 12px;
-	font-weight: 650;
-	line-height: 1;
-	text-decoration: none;
+  height: 26px;
+  border-radius: 7px;
+  padding: 0 7px;
+  background: #f4f4f5;
+  color: #303035;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .danger-button {
