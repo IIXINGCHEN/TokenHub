@@ -448,7 +448,7 @@ function formatMetric(value: number, metric: UsageMetricKey) {
 }
 function formatAxisTick(value: number, metric: UsageMetricKey) {
   if (metric === "estimated_cost_usd") return `$${formatMoney(value)}`;
-  if (metric === "total_tokens") return compactNumber(value);
+  if (metric === "total_tokens") return compactNumber(Math.round(value || 0));
   return formatNumber(Math.round(value || 0));
 }
 function inclusiveRangeEnd(value: string) { return new Date(new Date(value).getTime() - 1).toISOString(); }
