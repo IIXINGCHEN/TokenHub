@@ -104,6 +104,62 @@ func TestRedisBillingResponseJobAdmissionRollsBackCommitFailure(t *testing.T) {
 	store.FinishCall(call, RouteSelection{}, Usage{TotalTokens: 10}, http.StatusOK, "", "127.0.0.1", "redis-billing-test")
 }
 
+func TestRedisBillingImageJobAdmissionRollsBackCreateFailure(t *testing.T) {
+	store, _, project, key := newRedisBillingCommitFailureStore(t)
+	jobID := "img_redis_duplicate"
+	if _, err := store.CreateImageJob(ImageJob{
+		ID:        jobID,
+		ProjectID: project.ID,
+		APIKeyID:  key.ID,
+		Model:     "redis-billing-model",
+		Action:    "generate",
+	}, "existing image prompt"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := store.CreateImageJobWithAdmission(context.Background(), project, key, "redis-billing-model", 5, ImageJob{
+		ID:        jobID,
+		ProjectID: project.ID,
+		APIKeyID:  key.ID,
+		Model:     "redis-billing-model",
+		Action:    "generate",
+	}, "duplicate image prompt")
+	if err == nil {
+		t.Fatal("expected duplicate image job creation to fail after Redis admission")
+	}
+	call, err := store.StartCall(context.Background(), project, key, "redis-billing-model", 10)
+	if err != nil {
+		t.Fatalf("create-failed Redis image admission retained quota or concurrency: %v", err)
+	}
+	store.FinishCall(call, RouteSelection{}, Usage{TotalTokens: 10}, http.StatusOK, "", "127.0.0.1", "redis-billing-test")
+}
+
+func TestRedisBillingImageJobAdmissionRollsBackCommitFailure(t *testing.T) {
+	store, failCommit, project, key := newRedisBillingCommitFailureStore(t)
+	jobID := "img_redis_commit_failure"
+
+	failCommit.Store(true)
+	_, _, err := store.CreateImageJobWithAdmission(context.Background(), project, key, "redis-billing-model", 5, ImageJob{
+		ID:        jobID,
+		ProjectID: project.ID,
+		APIKeyID:  key.ID,
+		Model:     "redis-billing-model",
+		Action:    "generate",
+	}, "commit failure image prompt")
+	failCommit.Store(false)
+	if err == nil || !strings.Contains(err.Error(), errInjectedRedisBillingCommitFailure.Error()) {
+		t.Fatalf("expected injected image job commit failure after Redis admission, got %v", err)
+	}
+	if _, ok := store.GetImageJob(jobID); ok {
+		t.Fatal("commit-failed image job admission left a durable job row")
+	}
+	call, err := store.StartCall(context.Background(), project, key, "redis-billing-model", 10)
+	if err != nil {
+		t.Fatalf("commit-failed Redis image admission retained quota or concurrency: %v", err)
+	}
+	store.FinishCall(call, RouteSelection{}, Usage{TotalTokens: 10}, http.StatusOK, "", "127.0.0.1", "redis-billing-test")
+}
+
 func newRedisBillingCommitFailureStore(t *testing.T) (*GormStore, *atomic.Bool, Project, APIKey) {
 	t.Helper()
 	redisServer := miniredis.RunT(t)
@@ -192,11 +248,7 @@ type commitFailureConn struct {
 }
 
 func (c commitFailureConn) Begin() (driver.Tx, error) {
-	tx, err := c.Conn.Begin()
-	if err != nil {
-		return nil, err
-	}
-	return commitFailureTx{Tx: tx, failCommit: c.failCommit}, nil
+	return c.BeginTx(context.Background(), driver.TxOptions{})
 }
 
 func (c commitFailureConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
@@ -207,7 +259,7 @@ func (c commitFailureConn) BeginTx(ctx context.Context, opts driver.TxOptions) (
 		}
 		return commitFailureTx{Tx: tx, failCommit: c.failCommit}, nil
 	}
-	return c.Begin()
+	return nil, errors.New("commit failure test driver requires driver.ConnBeginTx")
 }
 
 func (c commitFailureConn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {

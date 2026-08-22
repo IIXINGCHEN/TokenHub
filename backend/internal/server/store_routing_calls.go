@@ -1183,6 +1183,7 @@ func (s *GormStore) CreateImageJobWithAdmission(ctx context.Context, project Pro
 		return err
 	})
 	if err != nil {
+		s.rollbackRedisBilling("image job admission", admission.call)
 		return ImageJob{}, CallContext{}, err
 	}
 	return persisted, s.startAdmittedCallHeartbeat(ctx, admission), nil
