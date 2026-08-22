@@ -454,6 +454,7 @@ func (s *GormStore) StartCall(ctx context.Context, project Project, key APIKey, 
 		return err
 	})
 	if err != nil {
+		s.rollbackRedisBilling("request admission", admission.call)
 		return CallContext{}, err
 	}
 	return s.startAdmittedCallHeartbeat(ctx, admission), nil

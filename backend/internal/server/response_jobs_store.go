@@ -386,9 +386,11 @@ func (s *GormStore) AdmitResponseJob(ctx context.Context, id string, owner strin
 	})
 	s.mu.Unlock()
 	if err == gorm.ErrRecordNotFound {
+		s.rollbackRedisBilling("response job admission", admission.call)
 		return CallContext{}, false, nil
 	}
 	if err != nil {
+		s.rollbackRedisBilling("response job admission", admission.call)
 		return CallContext{}, retained, err
 	}
 	return s.startAdmittedCallHeartbeat(ctx, admission), true, nil

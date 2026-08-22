@@ -119,26 +119,29 @@ return 1
 `)
 
 var redisBillingRollbackScript = redis.NewScript(`
-local key_requests = tonumber(ARGV[1]) or 0
-local key_tokens = tonumber(ARGV[2]) or 0
-local user_requests = tonumber(ARGV[3]) or 0
-local user_tokens = tonumber(ARGV[4]) or 0
-local key_lease_id = ARGV[5]
-local user_lease_id = ARGV[6]
+if redis.call("SET", KEYS[1], "1", "PX", ARGV[1], "NX") == false then
+  return 0
+end
+local key_requests = tonumber(ARGV[2]) or 0
+local key_tokens = tonumber(ARGV[3]) or 0
+local user_requests = tonumber(ARGV[4]) or 0
+local user_tokens = tonumber(ARGV[5]) or 0
+local key_lease_id = ARGV[6]
+local user_lease_id = ARGV[7]
 if key_requests ~= 0 then
-  redis.call("HINCRBY", KEYS[1], "requests", -key_requests)
+  redis.call("HINCRBY", KEYS[2], "requests", -key_requests)
 end
 if key_tokens ~= 0 then
-  redis.call("HINCRBY", KEYS[1], "tokens", -key_tokens)
+  redis.call("HINCRBY", KEYS[2], "tokens", -key_tokens)
 end
 if user_requests ~= 0 then
-  redis.call("HINCRBY", KEYS[2], "requests", -user_requests)
+  redis.call("HINCRBY", KEYS[3], "requests", -user_requests)
 end
 if user_tokens ~= 0 then
-  redis.call("HINCRBY", KEYS[2], "tokens", -user_tokens)
+  redis.call("HINCRBY", KEYS[3], "tokens", -user_tokens)
 end
-redis.call("ZREM", KEYS[3], key_lease_id)
-redis.call("ZREM", KEYS[4], user_lease_id)
+redis.call("ZREM", KEYS[4], key_lease_id)
+redis.call("ZREM", KEYS[5], user_lease_id)
 return 1
 `)
 
@@ -300,11 +303,13 @@ func (c *redisBillingCoordinator) rollback(ctx context.Context, call CallContext
 		userTokens = maxInt64(call.ReservedTokens, 0)
 	}
 	if err := redisBillingRollbackScript.Run(ctx, c.client, []string{
+		redisBillingSettledKey(call.RequestID),
 		redisBillingMinuteKey(call.Key.ID, call.TokenLimitBucket),
 		redisBillingMinuteKey(call.UserQuotaID, call.UserTokenLimitBucket),
 		redisBillingLeaseKey("api_key", call.Key.ID),
 		redisBillingLeaseKey("user", call.AttributedUserID),
 	},
+		(24 * time.Hour).Milliseconds(),
 		keyRequests,
 		keyTokens,
 		userRequests,

@@ -514,10 +514,3 @@ func (r *Runner) verifyApplied(applied []Applied) error {
 func (m Migration) appliesTo(dialect Dialect) bool {
 	return m.Dialect == "" || m.Dialect == dialect
 }
-
-func (m Migration) applicableDialects() []Dialect {
-	if m.Dialect != "" {
-		return []Dialect{m.Dialect}
-	}
-	return []Dialect{DialectSQLite, DialectPostgres}
-}
