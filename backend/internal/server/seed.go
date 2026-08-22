@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -172,15 +173,17 @@ func seedBootstrapAdmin(store Store, password string) error {
 		TeamID:   "team_platform",
 		Status:   StatusActive,
 	}
-	for _, existing := range store.ListAdminUsers() {
-		if existing.ID == admin.ID || existing.Username == admin.Username || existing.Email == admin.Email {
-			return nil
+	retainInitialPassword := false
+	if strings.TrimSpace(password) == "" {
+		var err error
+		password, err = randomHex(24)
+		if err != nil {
+			return fmt.Errorf("generate initial admin password: %w", err)
 		}
+		retainInitialPassword = true
 	}
-	if _, err := store.CreateAdminUser(admin, password); err != nil {
-		if AsHTTPError(err).Code != "admin_user_conflict" {
-			return err
-		}
+	if _, _, err := store.CreateBootstrapAdmin(admin, password, retainInitialPassword); err != nil {
+		return err
 	}
 	return nil
 }

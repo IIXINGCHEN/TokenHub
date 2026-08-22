@@ -967,6 +967,7 @@ func schemaModels() []any {
 		&adminOAuthFlowRecord{},
 		&adminOAuthExchangeRecord{},
 		&AdminPasswordResetToken{},
+		&BootstrapCredential{},
 		&SQLiteBackupRecord{},
 	}
 }
