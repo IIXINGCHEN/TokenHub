@@ -390,6 +390,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_NGINX_CLIENT_MAX_BODY_SIZE` | `32m` | 同梱のマルチインスタンス nginx ロードバランサーのみが読み取ります。バックエンドのバイト形式ではなく nginx のサイズ構文（`32m`、`512k`）を使用し、`TOKENHUB_MAX_MULTIMODAL_REQUEST_BYTES` 以上に設定してください |
 | `TOKENHUB_IN_FLIGHT_LEASE_TTL_SECONDS` | `300` | クラスター全体の同時実行リースの期限と更新間隔の基準 |
 | `TOKENHUB_CLUSTER_LOCK_TTL_SECONDS` | `180` | クラスター調整ロックの期限と更新間隔の基準 |
+| `TOKENHUB_BILLING_REDIS_URL` | 空 | 高同時実行の課金 admission 用の任意 Redis URL。設定すると、分単位 RPM/TPM 予約と API Key/ユーザー同時実行リースを Redis が処理し、データベースは永続的な課金台帳として残ります |
 | `TOKENHUB_GRACEFUL_SHUTDOWN_SECONDS` | `150` | 停止時に処理中リクエストを待機する最大秒数 |
 | `TOKENHUB_STOP_GRACE_PERIOD` | `180s` | Docker がバックエンドを強制停止するまでの Compose 猶予時間 |
 | `TOKENHUB_CACHE_AFFINITY_ENABLED` | `false` | Chat Completions、Anthropic Messages、Responses で同一セッションを同一の上流アカウントに固定し、上流の prompt cache が継続的にヒットするようにします。ルーティング挙動を変えるため既定では無効 |
@@ -409,8 +410,16 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml down -v
 | `TOKENHUB_RESPONSE_JOB_TIMEOUT_SECONDS` | `300` | 1 件のバックグラウンド Responses ジョブの実行タイムアウト |
 | `TOKENHUB_RESPONSE_LEASE_TTL_SECONDS` | `30` | 複数レプリカ間でバックグラウンド Responses Worker を保護するリース期間 |
 | `TOKENHUB_RESPONSE_RESULT_TTL_SECONDS` | `3600` | 完了後に暗号化されたリクエストと結果 payload を保持する期間 |
-| `TOKENHUB_RESPONSE_MAX_QUEUED_JOBS` | `1000` | 1 つのデプロイが受け付ける待機中および実行中のバックグラウンド Responses ジョブ上限 |
+| `TOKENHUB_RESPONSE_MAX_QUEUED_JOBS` | `1000` | 1 つのデプロイで受け付ける待機中および実行中のバックグラウンド Responses ジョブの上限 |
 | `TOKENHUB_API` | 空 | `tokenhub-migrate` CLI が対象とする Admin API の URL。この CLI のみが読み取り、バックエンドサーバーは読み取りません。`--to` で上書きされます |
+
+Compose で任意の Redis 課金コンポーネントを実行する場合は、通常のコマンドに overlay ファイルを追加します。
+
+```bash
+docker compose --env-file deploy/.env \
+  -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.redis.yml up -d --remove-orphans
+```
 
 再起動せずに **システム設定 → 基本設定 → Provider エグレスモード** で送信経路を変更できます。アップグレード時の既定値である「環境変数のプロキシを継承」は、プロセス起動時に取得した `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` を使用します。「直接接続」はこれらを無視し、「統一プロキシを使用」は 1 つの HTTP または HTTPS forward proxy を推論、ストリーミング、画像、モデル検出、Provider catalog 更新、Quota、Provider 資格情報更新を含むすべての Provider 上流チャネルに適用します。ID ログイン、通知、Tracing、バージョン更新には適用されません。
 

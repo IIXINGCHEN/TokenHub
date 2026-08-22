@@ -340,22 +340,30 @@ func normalizeProviderCatalogModel(raw map[string]any) ProviderCatalogModel {
 		}
 	}
 	model := ProviderCatalogModel{
-		ID:                     id,
-		Name:                   name,
-		DisplayName:            displayName,
-		CanonicalName:          canonicalName,
-		Category:               inferModelCategory(id, displayName),
-		Family:                 firstNonEmpty(catalogStringField(raw, "family"), inferModelFamily(id)),
-		Type:                   modelType,
-		ContextWindow:          int64(catalogNumberField(limit, "context")),
-		MaxOutputTokens:        int64(catalogNumberField(limit, "output")),
-		InputPriceUSDPer1M:     catalogNumberField(cost, "input"),
-		CacheReadPriceUSDPer1M: catalogNumberField(cost, "cache_read"),
-		OutputPriceUSDPer1M:    catalogNumberField(cost, "output"),
-		InputModalities:        catalogStringSliceField(modalities, "input"),
-		OutputModalities:       catalogStringSliceField(modalities, "output"),
-		LastUpdated:            catalogStringField(raw, "last_updated"),
-		Metadata:               metadata,
+		ID:                        id,
+		Name:                      name,
+		DisplayName:               displayName,
+		CanonicalName:             canonicalName,
+		Category:                  inferModelCategory(id, displayName),
+		Family:                    firstNonEmpty(catalogStringField(raw, "family"), inferModelFamily(id)),
+		Type:                      modelType,
+		ContextWindow:             int64(catalogNumberField(limit, "context")),
+		MaxOutputTokens:           int64(catalogNumberField(limit, "output")),
+		InputPriceUSDPer1M:        catalogNumberField(cost, "input"),
+		CacheReadPriceUSDPer1M:    catalogNumberField(cost, "cache_read"),
+		CacheWritePriceUSDPer1M:   catalogNumberField(cost, "cache_write"),
+		CacheWrite5mPriceUSDPer1M: catalogNumberField(cost, "cache_write_5m"),
+		CacheWrite1hPriceUSDPer1M: catalogNumberField(cost, "cache_write_1h"),
+		OutputPriceUSDPer1M:       catalogNumberField(cost, "output"),
+		CacheWritePriceConfiguration: CacheWritePriceConfiguration{
+			CacheWritePriceConfigured:   catalogNumberFieldConfigured(cost, "cache_write"),
+			CacheWrite5mPriceConfigured: catalogNumberFieldConfigured(cost, "cache_write_5m"),
+			CacheWrite1hPriceConfigured: catalogNumberFieldConfigured(cost, "cache_write_1h"),
+		},
+		InputModalities:  catalogStringSliceField(modalities, "input"),
+		OutputModalities: catalogStringSliceField(modalities, "output"),
+		LastUpdated:      catalogStringField(raw, "last_updated"),
+		Metadata:         metadata,
 	}
 	model.Capabilities = catalogModelCapabilities(raw, model)
 	model.SupportedParameters = catalogModelParameters(raw, model)
@@ -1059,6 +1067,18 @@ func catalogNumberField(raw map[string]any, key string) float64 {
 		return parsed
 	default:
 		return 0
+	}
+}
+
+func catalogNumberFieldConfigured(raw map[string]any, key string) bool {
+	if raw == nil {
+		return false
+	}
+	switch raw[key].(type) {
+	case float64, int, json.Number:
+		return true
+	default:
+		return false
 	}
 }
 

@@ -11,9 +11,11 @@ import { providerAnthropicAuthType } from "../domain/provider-custom-upstream";
 import { initialModelRoutes } from "../domain/provider-model-selection";
 import { modelMetadataPayload } from "../domain/model-display-name";
 import { defaultDisplayName } from "../domain/form-defaults";
+import { configuredPriceEntered } from "../domain/configured-pricing";
 import { providerReasoningOptions, providerReasoningOverrideFormValues } from "../domain/provider-reasoning";
 import { providerEgressTestPayload } from "../domain/provider-egress";
 import { providerHeadersFormValue, providerHeadersPayload } from "../domain/provider-headers";
+import { modelPricingPeriodsInvalidPeriodError, modelPricingPeriodsJSONError, modelPricingPeriodsObjectArrayError, parseModelPricingPeriods } from "../domain/model-pricing-periods";
 import { activeLanguage, tx } from "../i18n/runtime";
 import { handleApprovalOrJSON } from "./governance-config";
 import { projectQuotaFields, type ProjectQuotaValues } from "../domain/project-quota";
@@ -196,20 +198,50 @@ export function modelPayload(values: Record<string, string>, existingMetadata?: 
       context_window: values.context_window,
       input_price_usd_per_1m: values.input_price_usd_per_1m,
       cache_read_price_usd_per_1m: values.cache_read_price_usd_per_1m,
+      cache_write_price_usd_per_1m: values.cache_write_price_usd_per_1m,
+      cache_write_5m_price_usd_per_1m: values.cache_write_5m_price_usd_per_1m,
+      cache_write_1h_price_usd_per_1m: values.cache_write_1h_price_usd_per_1m,
       output_price_usd_per_1m: values.output_price_usd_per_1m,
       embedding_price_usd_per_1m: values.embedding_price_usd_per_1m,
       status: values.status,
     },
-    ["context_window", "input_price_usd_per_1m", "cache_read_price_usd_per_1m", "output_price_usd_per_1m", "embedding_price_usd_per_1m"],
+    [
+      "context_window",
+      "input_price_usd_per_1m",
+      "cache_read_price_usd_per_1m",
+      "cache_write_price_usd_per_1m",
+      "cache_write_5m_price_usd_per_1m",
+      "cache_write_1h_price_usd_per_1m",
+      "output_price_usd_per_1m",
+      "embedding_price_usd_per_1m",
+    ],
   );
   if (values.modality === "embedding") {
     payload.cache_read_price_usd_per_1m = 0;
+    payload.cache_write_price_usd_per_1m = 0;
+    payload.cache_write_price_configured = false;
+    payload.cache_write_5m_price_usd_per_1m = 0;
+    payload.cache_write_5m_price_configured = false;
+    payload.cache_write_1h_price_usd_per_1m = 0;
+    payload.cache_write_1h_price_configured = false;
+  } else {
+    payload.cache_write_price_configured = configuredPriceEntered(values.cache_write_price_usd_per_1m);
+    payload.cache_write_5m_price_configured = configuredPriceEntered(values.cache_write_5m_price_usd_per_1m);
+    payload.cache_write_1h_price_configured = configuredPriceEntered(values.cache_write_1h_price_usd_per_1m);
   }
   payload.category = values.category || inferModelCategoryText(values.name || values.family || "");
   payload.capabilities = splitList(values.capabilities);
   payload.supported_parameters = splitList(values.supported_parameters);
   payload.input_modalities = splitList(values.input_modalities);
   payload.output_modalities = splitList(values.output_modalities);
+  try {
+    payload.pricing_periods = parseModelPricingPeriods(values.pricing_periods);
+  } catch (err) {
+    if (err instanceof Error && err.message === modelPricingPeriodsJSONError) throw new Error(tx("分时价格配置必须是 JSON 数组"));
+    if (err instanceof Error && err.message === modelPricingPeriodsObjectArrayError) throw new Error(tx("分时价格配置必须是 JSON 对象数组"));
+    if (err instanceof Error && err.message === modelPricingPeriodsInvalidPeriodError) throw new Error(tx("分时价格配置包含无效时间、时区或生效日期"));
+    throw err;
+  }
   Object.assign(payload, modelMetadataPayload(existingMetadata, values.display_name ?? ""));
   const routes = initialModelRoutes(values.initial_provider_models);
   if (routes.length > 0) payload.routes = routes;
